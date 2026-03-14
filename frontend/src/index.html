@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StockPy - 大盘情绪监控系统</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 导航栏 -->
+    <nav class="navbar">
+      <div class="navbar-brand">
+        <h1>📈 StockPy</h1>
+        <p>大盘情绪监控系统</p>
+      </div>
+      <ul class="navbar-nav">
+        <li><a href="#dashboard">仪表板</a></li>
+        <li><a href="#kline">K线分析</a></li>
+        <li><a href="#sentiment">情绪监控</a></li>
+        <li><a href="#backtest">回测中心</a></li>
+        <li><a href="#about">关于</a></li>
+      </ul>
+    </nav>
+
+    <!-- 主容器 -->
+    <div class="container">
+      <!-- 仪表板部分 -->
+      <section id="dashboard" class="section">
+        <h2>📊 市场仪表板</h2>
+        
+        <div class="dashboard-grid">
+          <!-- 情绪卡片 -->
+          <div class="card sentiment-card">
+            <h3>大盘情绪</h3>
+            <div class="sentiment-score" id="sentimentScore">--</div>
+            <div class="sentiment-level" id="sentimentLevel">--</div>
+            <div class="last-update" id="sentimentUpdate">更新时间：--</div>
+          </div>
+
+          <!-- 市场统计卡片 -->
+          <div class="card market-card">
+            <h3>沪深两市</h3>
+            <div class="market-stats">
+              <div class="stat-item">
+                <label>上涨：</label>
+                <span id="upCount" class="up-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>下跌：</label>
+                <span id="downCount" class="down-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>平盘：</label>
+                <span id="unchangedCount">--</span>
+              </div>
+              <div class="stat-item">
+                <label>成交额：</label>
+                <span id="turnover">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 特殊涨跌卡片 -->
+          <div class="card special-card">
+            <h3>特殊涨跌</h3>
+            <div class="special-stats">
+              <div class="stat-item">
+                <label>涨幅5%+：</label>
+                <span id="up5Percent" class="up-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>跌幅5%+：</label>
+                <span id="down5Percent" class="down-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>涨停：</label>
+                <span id="limitUp" class="up-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>跌停：</label>
+                <span id="limitDown" class="down-text">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- K线分析部分 -->
+      <section id="kline" class="section">
+        <h2>📊 K线分析</h2>
+        <div class="kline-container">
+          <div class="search-box">
+            <input type="text" id="stockCode" placeholder="输入股票代码（如：sh000001）">
+            <select id="period">
+              <option value="D">日线</option>
+              <option value="W">周线</option>
+              <option value="M">月线</option>
+            </select>
+            <button onclick="searchKlines()">查询</button>
+          </div>
+          
+          <div class="chart-container">
+            <div id="klineChart" class="chart"></div>
+            <p class="placeholder">点击"查询"按钮加载K线数据</p>
+          </div>
+
+          <div class="kline-stats">
+            <h3>K线统计</h3>
+            <div id="klineStatistics">暂无数据</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 情绪监控部分 -->
+      <section id="sentiment" class="section">
+        <h2>💡 情绪监控</h2>
+        <div class="sentiment-container">
+          <div class="sentiment-chart">
+            <h3>情绪指数历史</h3>
+            <div id="sentimentChart" class="chart"></div>
+          </div>
+
+          <div class="sentiment-analysis">
+            <h3>情绪分析</h3>
+            <div class="analysis-grid">
+              <div class="analysis-item">
+                <label>趋势方向：</label>
+                <span id="trendDirection">--</span>
+              </div>
+              <div class="analysis-item">
+                <label>波动性：</label>
+                <span id="volatility">--</span>
+              </div>
+              <div class="analysis-item">
+                <label>近期平均：</label>
+                <span id="trendAverage">--</span>
+              </div>
+              <div class="analysis-item">
+                <label>历史最高：</label>
+                <span id="highestScore" class="up-text">--</span>
+              </div>
+              <div class="analysis-item">
+                <label>历史最低：</label>
+                <span id="lowestScore" class="down-text">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 回测中心部分 -->
+      <section id="backtest" class="section">
+        <h2>🧪 回测中心</h2>
+        <div class="backtest-container">
+          <div class="backtest-form">
+            <h3>创建回测任务</h3>
+            <form id="backtestForm">
+              <div class="form-group">
+                <label>策略名称：</label>
+                <input type="text" id="strategyName" placeholder="输入策略名称" required>
+              </div>
+              <div class="form-group">
+                <label>股票代码：</label>
+                <input type="text" id="testCode" placeholder="输入股票代码" required>
+              </div>
+              <div class="form-group">
+                <label>开始日期：</label>
+                <input type="date" id="startDate" required>
+              </div>
+              <div class="form-group">
+                <label>结束日期：</label>
+                <input type="date" id="endDate" required>
+              </div>
+              <button type="submit" class="btn-submit">开始回测</button>
+            </form>
+          </div>
+
+          <div class="backtest-results">
+            <h3>回测结果</h3>
+            <div id="backtestResults" class="results-table">
+              <p class="placeholder">暂无回测结果</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 关于部分 -->
+      <section id="about" class="section">
+        <h2>ℹ️ 关于</h2>
+        <div class="about-content">
+          <h3>StockPy - 大盘情绪监控系统</h3>
+          <p>一个集成实时市场数据、技术分析、自动回测和情绪监控的A股量化交易平台。</p>
+          
+          <h4>核心功能</h4>
+          <ul>
+            <li>📊 A股K线数据管理（多周期）</li>
+            <li>📈 大盘情绪指标计算</li>
+            <li>⏰ 定时数据更新任务</li>
+            <li>🔧 技术指标分析框架</li>
+            <li>🧪 回测系统架构</li>
+            <li>🔔 WebSocket 实时推送</li>
+          </ul>
+
+          <h4>计划功能</h4>
+          <ul>
+            <li>接入真实市场数据API（腾讯财经、东方财富）</li>
+            <li>添加技术指标分析（MA、MACD、RSI等）</li>
+            <li>实现告警机制（情绪突变提醒）</li>
+            <li>支持自定义指标权重</li>
+            <li>用户认证和权限管理</li>
+            <li>数据导出（CSV、Excel）</li>
+          </ul>
+
+          <h4>技术栈</h4>
+          <p><strong>后端：</strong>FastAPI + SQLAlchemy + APScheduler</p>
+          <p><strong>前端：</strong>HTML + CSS + JavaScript + ECharts</p>
+          <p><strong>数据库：</strong>SQLite / MySQL</p>
+
+          <h4>API文档</h4>
+          <p>完整API文档可访问：<a href="/docs" target="_blank">API文档</a></p>
+
+          <hr>
+          <p><small>版本 0.1.0 | 开发中 🚧</small></p>
+        </div>
+      </section>
+    </div>
+
+    <!-- 页脚 -->
+    <footer class="footer">
+      <p>&copy; 2024 StockPy. 大盘情绪监控系统. All rights reserved.</p>
+      <p><a href="/health/check" target="_blank">健康检查</a> | <a href="/docs" target="_blank">API文档</a></p>
+    </footer>
+  </div>
+
+  <!-- ECharts库（用于图表） -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.0/dist/echarts.min.js"></script>
+  
+  <!-- 应用脚本 -->
+  <script src="js/app.js"></script>
+</body>
+</html>

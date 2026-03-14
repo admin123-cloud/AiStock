@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StockPy - 大盘仪表盘</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 导航栏 -->
+    <nav class="navbar">
+      <div class="navbar-brand">
+        <h1>📈 StockPy</h1>
+        <p>大盘情绪监控系统</p>
+      </div>
+      <ul class="navbar-nav">
+        <li><a href="dashboard.html" class="active">仪表盘</a></li>
+        <li><a href="index.html#kline">K线分析</a></li>
+        <li><a href="index.html#sentiment">情绪监控</a></li>
+        <li><a href="index.html#backtest">回测中心</a></li>
+        <li><a href="index.html#about">关于</a></li>
+      </ul>
+    </nav>
+
+    <!-- 主容器 -->
+    <div class="container">
+      <h1>📊 大盘仪表盘</h1>
+      <p class="subtitle" id="marketDate">--</p>
+
+      <!-- 主要指数卡片 -->
+      <div class="indices-grid">
+        <!-- 上证综指 -->
+        <div class="index-card">
+          <div class="index-header">
+            <h3>上证综指</h3>
+            <span class="index-code">sh000001</span>
+          </div>
+          <div class="index-data">
+            <div class="index-value">
+              <span class="value" id="sh000001Value">--</span>
+              <span class="change" id="sh000001Change">--</span>
+            </div>
+            <div class="index-details">
+              <div class="detail-item">
+                <label>开盘：</label>
+                <span id="sh000001Open">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最高：</label>
+                <span id="sh000001High">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最低：</label>
+                <span id="sh000001Low">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交量：</label>
+                <span id="sh000001Volume">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交额：</label>
+                <span id="sh000001Amount">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 深证成指 -->
+        <div class="index-card">
+          <div class="index-header">
+            <h3>深证成指</h3>
+            <span class="index-code">sz399001</span>
+          </div>
+          <div class="index-data">
+            <div class="index-value">
+              <span class="value" id="sz399001Value">--</span>
+              <span class="change" id="sz399001Change">--</span>
+            </div>
+            <div class="index-details">
+              <div class="detail-item">
+                <label>开盘：</label>
+                <span id="sz399001Open">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最高：</label>
+                <span id="sz399001High">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最低：</label>
+                <span id="sz399001Low">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交量：</label>
+                <span id="sz399001Volume">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交额：</label>
+                <span id="sz399001Amount">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 沪深300 -->
+        <div class="index-card">
+          <div class="index-header">
+            <h3>沪深300</h3>
+            <span class="index-code">sh000300</span>
+          </div>
+          <div class="index-data">
+            <div class="index-value">
+              <span class="value" id="sh000300Value">--</span>
+              <span class="change" id="sh000300Change">--</span>
+            </div>
+            <div class="index-details">
+              <div class="detail-item">
+                <label>开盘：</label>
+                <span id="sh000300Open">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最高：</label>
+                <span id="sh000300High">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最低：</label>
+                <span id="sh000300Low">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交量：</label>
+                <span id="sh000300Volume">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交额：</label>
+                <span id="sh000300Amount">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 创业板指 -->
+        <div class="index-card">
+          <div class="index-header">
+            <h3>创业板指</h3>
+            <span class="index-code">sz399006</span>
+          </div>
+          <div class="index-data">
+            <div class="index-value">
+              <span class="value" id="sz399006Value">--</span>
+              <span class="change" id="sz399006Change">--</span>
+            </div>
+            <div class="index-details">
+              <div class="detail-item">
+                <label>开盘：</label>
+                <span id="sz399006Open">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最高：</label>
+                <span id="sz399006High">--</span>
+              </div>
+              <div class="detail-item">
+                <label>最低：</label>
+                <span id="sz399006Low">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交量：</label>
+                <span id="sz399006Volume">--</span>
+              </div>
+              <div class="detail-item">
+                <label>成交额：</label>
+                <span id="sz399006Amount">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 市场统计概览 -->
+      <div class="market-summary">
+        <h2>📊 市场统计</h2>
+
+        <div class="summary-cards">
+          <!-- 涨跌统计 -->
+          <div class="summary-card">
+            <h3>涨跌分布</h3>
+            <div class="summary-stats">
+              <div class="stat-item">
+                <label>上涨：</label>
+                <span id="upCount" class="up-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>下跌：</label>
+                <span id="downCount" class="down-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>平盘：</label>
+                <span id="flatCount">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 特殊涨跌 -->
+          <div class="summary-card">
+            <h3>特殊涨跌</h3>
+            <div class="summary-stats">
+              <div class="stat-item">
+                <label>涨幅5%+：</label>
+                <span id="up5Percent" class="up-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>跌幅5%-：</label>
+                <span id="down5Percent" class="down-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>涨停：</label>
+                <span id="limitUp" class="up-text">--</span>
+              </div>
+              <div class="stat-item">
+                <label>跌停：</label>
+                <span id="limitDown" class="down-text">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 成交统计 -->
+          <div class="summary-card">
+            <h3>成交统计</h3>
+            <div class="summary-stats">
+              <div class="stat-item">
+                <label>成交额：</label>
+                <span id="totalAmount">--</span>
+              </div>
+              <div class="stat-item">
+                <label>股票总数：</label>
+                <span id="totalStocks">--</span>
+              </div>
+              <div class="stat-item">
+                <label>平均涨跌：</label>
+                <span id="avgChange">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 更新时间 -->
+      <div class="update-time">
+        <span>数据更新时间：</span>
+        <span id="updateTime">--</span>
+        <button onclick="refreshData()" class="refresh-btn">🔄 刷新</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ECharts库（用于图表） -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.0/dist/echarts.min.js"></script>
+
+  <!-- 仪表盘脚本 -->
+  <script src="js/dashboard.js"></script>
+</body>
+</html>

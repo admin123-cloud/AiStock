@@ -1,0 +1,19 @@
+{
+  "name": "stockpy-frontend",
+  "version": "0.1.0",
+  "description": "StockPy - 大盘情绪监控系统前端",
+  "main": "src/index.html",
+  "scripts": {
+    "dev": "python -m http.server 3000 --directory src",
+    "serve": "python -m http.server 8080 --directory src"
+  },
+  "keywords": [
+    "stock",
+    "sentiment",
+    "market",
+    "monitoring",
+    "trading"
+  ],
+  "author": "",
+  "license": "MIT"
+}

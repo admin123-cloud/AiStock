@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # MySQL数据库服务
+  mysql:
+    image: mysql:8.0
+    container_name: stockpy-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: stockpy
+      MYSQL_USER: stockpy
+      MYSQL_PASSWORD: stockpy123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - stockpy-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 5s
+      retries: 5
+
+  # Redis缓存服务（可选）
+  redis:
+    image: redis:7-alpine
+    container_name: stockpy-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - stockpy-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 5s
+      retries: 5
+
+  # FastAPI后端服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stockpy-backend
+    restart: always
+    environment:
+      DATABASE_URL: mysql+pymysql://stockpy:stockpy123@mysql:3306/stockpy
+      Redis_URL: redis://redis:6379
+      DEBUG: "false"
+      UPDATE_SCHEDULE_TIME: "16:00"
+      UPDATE_TIMEZONE: "Asia/Shanghai"
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+    networks:
+      - stockpy-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/check"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Nginx前端和代理
+  nginx:
+    image: nginx:alpine
+    container_name: stockpy-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./frontend/src:/usr/share/nginx/html
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+    networks:
+      - stockpy-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  stockpy-network:
+    driver: bridge
