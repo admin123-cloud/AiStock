@@ -92,12 +92,9 @@ GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_REPORT = REPO_ROOT / "docs" / "strategy-g2-alph
 GEN2_CURRENT_SHADOW_LEDGER = report_path("gen2_risk_cool_shadow_ledger", "shadow_ledger.csv")
 GEN2_CURRENT_SHADOW_SUMMARY = report_path("gen2_risk_cool_shadow_ledger", "summary.csv")
 GEN2_CURRENT_TARGET_SOURCE = (
-    REPO_ROOT
-    / "reports"
-    / "gen2_intraday_normal_signal_filters_tday_context"
-    / "signals_intraday_normal_30m_before_confirm.parquet"
+    report_path("gen2_intraday_normal_signal_filters_tday_context", "signals_intraday_normal_30m_before_confirm.parquet")
 )
-GEN2_CURRENT_V4_EVENT_DATASET = REPO_ROOT / "reports" / "gen2_event_study_full" / "v4_event_dataset.parquet"
+GEN2_CURRENT_V4_EVENT_DATASET = report_path("gen2_event_study_full", "v4_event_dataset.parquet")
 GEN2_TIMING_INDEX_OPTIONS = {
     "999999.SH": {"code": "999999.SH", "name": "上证指数"},
     "399006.SZ": {"code": "399006.SZ", "name": "创业板指"},
@@ -170,9 +167,9 @@ GEN2_BACKTEST_RUNS = {
         "strategy_display_name": "第二代完整版：volume5主线 + 突破主线 + 板块扩散",
         "status": "main_execution_candidate",
         "run_dir": GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_RUN_DIR,
-        "summary_report": REPO_ROOT / "reports" / "gen2_v2_complete_strategy" / "summary.md",
+        "summary_report": report_path("gen2_v2_complete_strategy", "summary.md"),
         "state_report": REPO_ROOT / "docs" / "strategy-g2-alpha191-volume5-light-constraints.md",
-        "explanation_report": REPO_ROOT / "reports" / "gen2_v2_complete_strategy" / "summary.md",
+        "explanation_report": report_path("gen2_v2_complete_strategy", "summary.md"),
         "rule_lines": [
             "主线一：volume5_keep80_runup 保留全部候选；当 l3_rt_strong3_ratio >= 0.05 时，给排序分数加 0.05。",
             "主线二：只接入 big_bull 二次突破，必须同时满足盘中个股强度和细分板块扩散 l3_rt_strong3_ratio >= 0.05。",
@@ -187,9 +184,9 @@ GEN2_BACKTEST_RUNS = {
         "strategy_name": "G2 Attack V1 PrevLow",
         "strategy_display_name": "第二代进攻策略 V1：昨日低点 30m 确认离场",
         "status": "frozen_research",
-        "run_dir": REPO_ROOT / "reports" / "gen2_prev_low_exit_fill_compare" / "runs" / "gap_confirm_30m_close__intraday_30m_close",
-        "summary_report": REPO_ROOT / "reports" / "gen2_prev_low_exit_fill_compare" / "fill_compare_report.md",
-        "state_report": REPO_ROOT / "reports" / "gen2_open_v1_state_only_sweep_all" / "state_only_conclusion.md",
+        "run_dir": report_path("gen2_prev_low_exit_fill_compare", "runs", "gap_confirm_30m_close__intraday_30m_close"),
+        "summary_report": report_path("gen2_prev_low_exit_fill_compare", "fill_compare_report.md"),
+        "state_report": report_path("gen2_open_v1_state_only_sweep_all", "state_only_conclusion.md"),
         "explanation_report": REPO_ROOT / "docs" / "strategy-g2-attack-v1-prev-low-30m-confirm.md",
         "rule_lines": [
             "固定名称：第二代进攻策略 V1（G2 Attack V1 PrevLow）。",
@@ -208,9 +205,9 @@ GEN2_BACKTEST_RUNS = {
         "strategy_code": "g2_open_v1_sl5",
         "strategy_name": "G2 Open V1 SL5",
         "status": "frozen_research",
-        "run_dir": REPO_ROOT / "reports" / "gen2_open_v1_attack_drawdown" / "runs" / "attack_tp10_sl5_tr_none",
-        "summary_report": REPO_ROOT / "reports" / "gen2_open_v1_attack_drawdown_conclusion.md",
-        "state_report": REPO_ROOT / "reports" / "gen2_open_v1_state_only_sweep_all" / "state_only_conclusion.md",
+        "run_dir": report_path("gen2_open_v1_attack_drawdown", "runs", "attack_tp10_sl5_tr_none"),
+        "summary_report": report_path("gen2_open_v1_attack_drawdown_conclusion.md"),
+        "state_report": report_path("gen2_open_v1_state_only_sweep_all", "state_only_conclusion.md"),
         "rule_lines": [
             "市场状态固定为 NORMAL。",
             "股票池来自 V4 参考池，要求 pullback_restart_rank100。",

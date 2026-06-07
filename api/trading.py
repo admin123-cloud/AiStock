@@ -3059,7 +3059,7 @@ def _freshness_pipeline_checks(signal_date: str, now: Optional[datetime] = None)
         )
 
     def _has_new_official_trigger_rows(after_date: str) -> bool:
-        path = REPO_ROOT / "reports" / "gen2_30m_fractal_restart_realistic_d1_w2" / "fractal_triggers.parquet"
+        path = report_path("gen2_30m_fractal_restart_realistic_d1_w2", "fractal_triggers.parquet")
         if not path.exists():
             return False
         try:

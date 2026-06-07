@@ -26,6 +26,7 @@ import yaml
 
 from utils.logger import get_logger
 from utils.config import config as app_config
+from utils.paths import report_path
 
 router = APIRouter(prefix="/system", tags=["系统配置"])
 logger = get_logger("system_config")
@@ -768,7 +769,7 @@ def _refresh_gen2_v4_event_dataset_for_date(
         return {"ok": False, "skipped": True, "reason": "refresh_already_running", "trade_date": normalized_date}
     try:
         script = REPO_ROOT / "scripts" / "gen2_refresh_v4_event_dataset.py"
-        output_dir = REPO_ROOT / "reports" / "gen2_event_study_full"
+        output_dir = report_path("gen2_event_study_full")
         if not script.exists():
             return {"ok": False, "skipped": True, "reason": f"script_missing: {script}", "trade_date": normalized_date}
         task_manager.update_progress(
