@@ -1,0 +1,24 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: aistock-clickhouse
+    restart: unless-stopped
+    cpus: "1.5"
+    mem_limit: 12g
+    memswap_limit: 12g
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: stock
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ./config/clickhouse/config.d/aistock-throttle.xml:/etc/clickhouse-server/config.d/aistock-throttle.xml:ro
+      - ./config/clickhouse/users.d/aistock-throttle.xml:/etc/clickhouse-server/users.d/aistock-throttle.xml:ro
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_log:/var/log/clickhouse-server
+
+volumes:
+  clickhouse_data:
+  clickhouse_log:

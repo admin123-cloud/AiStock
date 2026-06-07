@@ -1,0 +1,8 @@
+<clickhouse>
+    <max_server_memory_usage>10737418240</max_server_memory_usage>
+    <max_concurrent_queries>20</max_concurrent_queries>
+    <background_pool_size>13</background_pool_size>
+    <background_fetches_pool_size>2</background_fetches_pool_size>
+    <background_schedule_pool_size>32</background_schedule_pool_size>
+    <max_thread_pool_size>512</max_thread_pool_size>
+</clickhouse>

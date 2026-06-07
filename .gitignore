@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.log
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+config/settings.local.yaml
+
+# Runtime/data/research outputs live outside this repo.
+/data/
+/artifacts/
+/logs/
+/reports/
+/output*/
+*.parquet
+*.csv
+!/docs/**/*.csv
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+
+# Local IDE/system files
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Runtime/vendor bundles should not be tracked in core.
+/Libs/

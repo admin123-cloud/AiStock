@@ -1,0 +1,95 @@
+app:
+  name: AiStock
+  version: 1.0.0
+  debug: true
+  timezone: Asia/Shanghai
+api:
+  title: AiStock API
+  version: 1.0.0
+  prefix: /api/v1
+  host: 0.0.0.0
+  port: 8000
+  reload: true
+  cors_origins:
+  - http://localhost:3000
+  - http://localhost:8080
+  - '*'
+  cors_allow_credentials: true
+  cors_allow_methods:
+  - '*'
+  cors_allow_headers:
+  - '*'
+database:
+  type: clickhouse
+  host: 127.0.0.1
+  port: 8123
+  username: default
+  password: ''
+  database: stock
+  required_version_prefix: ''
+  enforce_version: false
+  pool_size: 2
+  max_overflow: 1
+  pool_timeout: 60
+  startup_test_retries: 90
+  startup_test_retry_interval_sec: 2
+  echo: false
+clickhouse:
+  host: 127.0.0.1
+  port: 8123
+  user: default
+  password: ''
+  database: stock
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+  password: ''
+logging:
+  level: DEBUG
+  format: '{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}'
+  rotation: 100 MB
+  retention: 7 days
+  compression: zip
+  dir: logs
+  files:
+  - logs/aistock.log
+  - logs/error.log
+cache:
+  enabled: true
+  type: memory
+  ttl: 3600
+  max_size: 1000
+proxy:
+  enabled: false
+  http: ''
+  https: ''
+paths:
+  data_root: ${AISTOCK_DATA_ROOT:F:\Stock\AiStockData\data}
+  reports_root: ${AISTOCK_REPORTS_ROOT:F:\Stock\AiStockResearchArchive\reports}
+  artifacts_root: ${AISTOCK_ARTIFACTS_ROOT:F:\Stock\AiStockData\artifacts}
+  logs_root: ${AISTOCK_LOGS_ROOT:F:\Stock\AiStockData\logs}
+startup:
+  enable_reference_data_sync_on_launch: false
+email:
+  enabled: false
+  smtp_server: ''
+  smtp_port: 465
+  smtp_user: ''
+  from_email: ''
+  use_ssl: true
+  to_emails: []
+  smtp_password: ''
+strategy_daily_runner:
+  enabled: true
+  hour: 17
+  minute: 0
+  weekdays_only: true
+data_sync:
+  preferred_source: tdxquant
+  external_fallback_enabled: true
+  external_fallback_periods:
+  - 1d
+  external_fallback_providers:
+  - akshare
+  - tushare

@@ -1,0 +1,154 @@
+# 数据源与密钥管理配置文件
+# ⚠️ 重要：此文件包含敏感信息（API密钥），请勿提交到版本控制！
+# 建议：复制此文件为 datasources.yaml 并填入实际的密钥
+
+# ============================================
+# 数据源配置
+# ============================================
+
+# 数据源优先级配置
+# priority 数字越小优先级越高
+# enabled 为 false 的数据源不会被使用
+
+data_sources:
+  # 通达信量化平台（官方数据源）
+  tdxquant:
+    enabled: true
+    priority: 0
+    name: "通达信量化平台"
+    description: "通达信量化平台官方API数据源"
+
+    timeout: 30
+    max_retries: 3
+    retry_delay: 1
+
+    # SDK 配置
+    auth:
+      # ⚠️ 重要：通达信量化平台 SDK 不是通过 PyPI 安装的
+      # 安装步骤：
+      # 1. 下载并安装通达信金融终端
+      # 2. 登录通达信软件，开通量化交易权限
+      # 3. 在QMT客户端的"知识库"板块下载 xtquant 工具包
+      # 4. 解压 xtquant 压缩包，将 xtquant 文件夹放入 Python 环境
+      # 5. 重启通达信客户端
+      # 
+      # Python 环境路径示例：
+      # - Anaconda: C:\Users\用户名\anaconda3\Lib\site-packages
+      # - 虚拟环境: venv\Lib\site-packages
+      # 
+      # 官方文档：https://help.tdx.com.cn/quant/
+
+    supported_types:
+      - "stock_quote"
+      - "stock_history"
+      - "stock_info"
+      - "stock_list"
+      - "sector_data"
+
+    # 数据获取配置
+    data_config:
+      # 复权类型：none不复权、front前复权、back后复权
+      dividend_type: "front"
+      # 是否填充缺失数据
+      fill_data: true
+      # 单次最大返回条数（最多24000）
+      max_count: 24000
+
+    rate_limit:
+      enabled: true
+      requests_per_second: 2
+      burst: 5
+
+  # 通达信量化平台（池化版本）
+  tdxquant_pool:
+    enabled: true
+    priority: 1
+    name: "通达信量化平台（池化）"
+    description: "通达信量化平台官方API数据源（池化版本）"
+
+    timeout: 30
+    max_retries: 3
+    retry_delay: 1
+
+    # 池化配置
+    pool_config:
+      pool_size: 5
+      max_connections: 10
+      connection_timeout: 10
+
+    supported_types:
+      - "stock_quote"
+      - "stock_history"
+      - "stock_info"
+      - "stock_list"
+      - "sector_data"
+
+    # 数据获取配置
+    data_config:
+      # 复权类型：none不复权、front前复权、back后复权
+      dividend_type: "front"
+      # 是否填充缺失数据
+      fill_data: true
+      # 单次最大返回条数（最多24000）
+      max_count: 24000
+
+    rate_limit:
+      enabled: true
+      requests_per_second: 5
+      burst: 10
+
+# ============================================
+# 故障转移配置
+# ============================================
+failover:
+  enabled: true
+  max_failures: 3  # 连续失败次数达到此值后禁用该数据源
+  cooldown_time: 300  # 禁用后冷却时间（秒）
+
+# ============================================
+# 数据源健康检查
+# ============================================
+health_check:
+  enabled: true
+  interval: 60  # 检查间隔（秒）
+  timeout: 5  # 检查超时（秒）
+
+# ============================================
+# 其他服务密钥配置
+# ============================================
+
+# 阿里云/腾讯云等云服务密钥
+cloud:
+  aliyun:
+    access_key_id: ""
+    access_key_secret: ""
+  tencent:
+    secret_id: ""
+    secret_key: ""
+
+# 邮件服务配置
+email:
+  smtp_server: ""
+  smtp_port: 587
+  username: ""
+  password: ""  # 邮箱授权码，不是登录密码
+
+# 微信/钉钉通知配置
+notification:
+  wechat:
+    corpid: ""
+    agentid: ""
+    secret: ""
+  dingtalk:
+    access_token: ""
+    secret: ""
+
+# 其他第三方服务密钥
+services:
+  # 百度统计
+  baidu_tongji:
+    api_key: ""
+  # 友盟统计
+  umeng:
+    app_key: ""
+    app_secret: ""
