@@ -442,7 +442,10 @@ def _build_shadow_tickets(selected: pd.DataFrame, summary: dict[str, Any]) -> pd
         if risk_scale is None or risk_scale <= 0:
             risk_scale = 1.0
         market_heat_scale = _safe_num(item.get("market_heat_position_scale"))
+        heat_state = str(item.get("index_mom60_heat_state") or "")
         if market_heat_scale is None:
+            market_heat_scale = 1.0
+        if heat_state == "high_heat_reduce_position" and 0 < market_heat_scale < 1.0:
             market_heat_scale = 1.0
         risk_scale = risk_scale * market_heat_scale
         reference_close = _safe_num(item.get("reference_close")) or _safe_num(item.get("close"))
@@ -1309,7 +1312,7 @@ def _strategy_contract() -> dict[str, Any]:
                 "label": "机构主升浪",
                 "activation": "非恐慌优先场景下，出现机构主升浪确认候选",
                 "source": "institutional_mainwave_current_builder_v1",
-                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m close>=MA20; index_mom60<=5% uses 50% slot, 5%-10% keeps candidate but reduces slot to 25%, >10% blocks new open; rolling_240d_institutional_avg_ret is observation only",
+                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m close>=MA20; index_mom60 is observation at 5%-10% and only >10% blocks new open; rolling_240d_institutional_avg_ret is observation only",
                 "regime_gate": "past exited institutional_mainwave trades within 240 calendar days: count>=2, avg_ret>0, big_loss_rate<=34%, worst_ret>=-25%",
                 "failure_exit_audit_target": "historical upper-bound audit supports studying failed exit near -15%; not yet treated as executable stop without path replay",
             },

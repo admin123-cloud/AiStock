@@ -127,7 +127,7 @@
           <div>
             <span>市场热度上限</span>
             <strong>{{ pct(summary.max_index_mom60) }}</strong>
-            <small>5%-10% 保留候选但降仓</small>
+            <small>5%-10% 仅观察，>10% 不开新仓</small>
           </div>
         </div>
 

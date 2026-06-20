@@ -65,7 +65,7 @@ STRATEGY_CONTRACT = [
         "label": "机构主升Score120",
         "role": "core_offense",
         "default_enabled": True,
-        "activation": "存在 institutional_mainwave 原生候选，score>=120，主线扩散/30m确认满足；index_mom60<=5%正常，5%-10%降仓，>10%不开新仓。",
+        "activation": "存在 institutional_mainwave 原生候选，score>=120，主线扩散/30m确认满足；index_mom60 5%-10%仅观察，>10%不开新仓。",
         "priority": 10,
         "default_slot_pct": 0.50,
         "max_slot_pct": 0.50,

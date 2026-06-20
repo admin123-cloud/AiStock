@@ -208,6 +208,7 @@
           </div>
           <div class="decision-note">{{ opportunityText(selectedTicket) }}</div>
           <div class="decision-note">{{ selectedTicketExplainText }}</div>
+          <div class="decision-note">{{ naturalDisciplineText(selectedTicket) }}</div>
         </div>
         <div class="risk-strip">
           <div>
@@ -281,6 +282,14 @@
         <el-table-column label="合同仓位" width="92" align="right">
           <template #default="{ row }">{{ pct(row.position_pct) }}</template>
         </el-table-column>
+        <el-table-column label="自然纪律" width="132">
+          <template #default="{ row }">
+            <el-tag size="small" :type="naturalActionTagType(row)">
+              {{ row.natural_action_label || '观察' }}
+            </el-tag>
+            <small class="natural-position">{{ pct(row.natural_position_pct) }}</small>
+          </template>
+        </el-table-column>
         <el-table-column label="可买仓位" width="92" align="right">
           <template #default="{ row }">{{ pct(executablePositionPct(row)) }}</template>
         </el-table-column>
@@ -302,6 +311,9 @@
         </el-table-column>
         <el-table-column label="状态" width="190" show-overflow-tooltip>
           <template #default="{ row }">{{ compactStatusWithZh(row.shadow_status) }}</template>
+        </el-table-column>
+        <el-table-column label="自然说明" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ naturalDisciplineText(row) }}</template>
         </el-table-column>
       </el-table>
 
@@ -594,7 +606,7 @@
       <div class="metric-card accent">
         <span>默认合同</span>
         <strong>2槽 / 50%</strong>
-        <small>五策略统一调度；市场偏热时单槽减半</small>
+        <small>五策略统一调度；市场热度仅观察，极端热度禁开</small>
       </div>
       <div class="metric-card">
         <span>账户风控</span>
@@ -1275,24 +1287,35 @@ function m30Text(row) {
 function tradeDecisionExplain(row) {
   if (!row?.code && !row?.code_raw) return '当前没有可展示的买入票据。'
   const finalPct = Number(row?.position_pct || 0)
-  const heatScale = Number(row?.market_heat_position_scale)
-  const basePct = Number.isFinite(heatScale) && heatScale > 0 && heatScale < 1
-    ? finalPct / heatScale
-    : Number(row?.max_position_pct || row?.slot_pct || row?.position_pct || 0)
   const heatState = String(row?.index_mom60_heat_state || '')
   const parts = []
   if (afterhoursShadowTickets.value.length) {
     parts.push(`这是 ${afterhoursTicketDate.value || '--'} 盘后最新候选，不代表已经替换当前影子持仓。`)
   }
-  if (heatState === 'high_heat_reduce_position' || (Number.isFinite(heatScale) && heatScale > 0 && heatScale < 1)) {
-    const baseText = Number.isFinite(basePct) && basePct > 0 ? pct(basePct) : '50.0%'
-    const scaleText = Number.isFinite(heatScale) ? `${fmt(heatScale, 2)}倍` : '减半'
-    parts.push(`仓位从 ${baseText} 降到 ${pct(finalPct)}，原因是市场热度偏高，触发${scaleText}降仓。`)
+  if (heatState === 'high_heat_reduce_position' || heatState === 'high_heat_observe') {
+    parts.push(`市场热度偏高仅作为观察项，仓位按当前策略合同计算为 ${pct(finalPct)}。`)
   } else {
     parts.push(`仓位按当前策略合同计算为 ${pct(finalPct)}。`)
   }
   parts.push(`策略为 ${row.trade_strategy_label || routeLabel(row.trade_strategy || row.route)}。`)
   return parts.join(' ')
+}
+
+function naturalActionTagType(row) {
+  const action = String(row?.natural_action || '')
+  if (action === 'skip') return 'danger'
+  if (action === 'allow_reduced') return 'warning'
+  if (action === 'allow') return 'success'
+  return 'info'
+}
+
+function naturalDisciplineText(row) {
+  if (!row?.code && !row?.code_raw) return '自然纪律：暂无候选。'
+  const label = row.natural_action_label || '观察'
+  const naturalPct = Number(row.natural_position_pct)
+  const pctText = Number.isFinite(naturalPct) ? `，自然仓位 ${pct(naturalPct)}` : ''
+  const reason = row.natural_reason || '符合当前自然交易观察合同'
+  return `自然纪律：${label}${pctText}；${reason}`
 }
 
 function opportunityText(row) {
@@ -2157,6 +2180,14 @@ onMounted(async () => {
 
 .paper-table {
   margin-top: 12px;
+}
+
+.natural-position {
+  display: block;
+  margin-top: 4px;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .ptrade-execution-head {

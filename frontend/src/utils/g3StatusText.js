@@ -33,7 +33,8 @@ const STATUS_LABELS = {
   current_rebuilt_route_candidate: '当日重建候选',
   daily_candidate_no_intraday_data: '日线候选，缺少盘中确认',
   panic_wait_intraday_confirm_or_no_intraday_data: '等待盘中确认或暂无盘中数据',
-  high_heat_reduce_position: '市场偏热，仓位减半',
+  high_heat_reduce_position: '市场偏热，仅观察',
+  high_heat_observe: '市场偏热，仅观察',
   shadow_only_current_rebuilt_requires_live_observation: '仅影子重建，需实盘观察',
 }
 

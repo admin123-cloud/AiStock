@@ -35,6 +35,24 @@ export function getGen3StateAlphaCurrent(params) {
   })
 }
 
+export function getGen3StateAlphaRealtimeReadinessReview(params) {
+  return request({
+    url: '/gen3-state-alpha/realtime-readiness-review',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function runGen3StateAlphaRealtimeReadinessReview(data) {
+  return request({
+    url: '/gen3-state-alpha/realtime-readiness-review/run',
+    method: 'post',
+    data,
+    timeout: 180000
+  })
+}
+
 export function getGen3StateAlphaMainwaveOpportunities(params) {
   return request({
     url: '/gen3-state-alpha/mainwave-opportunities',
@@ -153,6 +171,51 @@ export function runGen3StateAlphaShadowMonitorOnce(data) {
 export function saveGen3StateAlphaShadowVerification(data) {
   return request({
     url: '/gen3-state-alpha/shadow-verification',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaPretradeTicketReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/pretrade-ticket-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaPretradeTicketReview(data) {
+  return request({
+    url: '/gen3-state-alpha/pretrade-ticket-review',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function startGen3StateAlphaPretradePaperWatchBatch(data) {
+  return request({
+    url: '/gen3-state-alpha/pretrade-paper-watch-batch',
+    method: 'post',
+    data,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaPaperWatchReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/paper-watch-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaPaperWatchReview(data) {
+  return request({
+    url: '/gen3-state-alpha/paper-watch-review',
     method: 'post',
     data,
     timeout: 120000

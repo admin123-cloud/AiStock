@@ -260,7 +260,7 @@ def _build_guardrails() -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
         max_index_mom60 >= 0.10 or inst_rows == 0,
         "fail",
         f"rows={inst_rows}, max_index_mom60={_pct(max_index_mom60)}, heat_state={heat_state or '--'}",
-        "必须执行 <=5%正常、5%-10%降仓、>10%阻断的新合同。",
+        "必须执行 <=5%正常、5%-10%观察、>10%阻断的新合同。",
         max_index_mom60,
         ">= 10% hard gate",
     )

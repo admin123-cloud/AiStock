@@ -110,10 +110,21 @@
         <el-table-column label="仓位" width="82" align="right">
           <template #default="{ row }">{{ pct(row.position_pct || row.slot_pct) }}</template>
         </el-table-column>
+        <el-table-column label="自然纪律" width="132">
+          <template #default="{ row }">
+            <el-tag size="small" :type="naturalActionTagType(row)">
+              {{ row.natural_action_label || '观察' }}
+            </el-tag>
+            <small class="natural-position">{{ pct(row.natural_position_pct) }}</small>
+          </template>
+        </el-table-column>
         <el-table-column prop="planned_entry_ts" label="计划时间" width="160" show-overflow-tooltip />
         <el-table-column prop="confirm_datetime" label="确认时间" width="160" show-overflow-tooltip />
         <el-table-column label="影子状态" width="190" show-overflow-tooltip>
           <template #default="{ row }">{{ compactStatusWithZh(row.shadow_status) }}</template>
+        </el-table-column>
+        <el-table-column label="自然说明" min-width="240" show-overflow-tooltip>
+          <template #default="{ row }">{{ naturalDisciplineText(row) }}</template>
         </el-table-column>
         <el-table-column prop="block_reason" label="阻断/说明" min-width="260" show-overflow-tooltip />
       </el-table>
@@ -139,6 +150,14 @@
           </el-table-column>
           <el-table-column label="仓位" width="82" align="right">
             <template #default="{ row }">{{ pct(row.position_pct) }}</template>
+          </el-table-column>
+          <el-table-column label="自然纪律" width="132">
+            <template #default="{ row }">
+              <el-tag size="small" :type="naturalActionTagType(row)">
+                {{ row.natural_action_label || '观察' }}
+              </el-tag>
+              <small class="natural-position">{{ pct(row.natural_position_pct) }}</small>
+            </template>
           </el-table-column>
           <el-table-column label="硬止损" width="90" align="right">
             <template #default="{ row }">{{ price(row.hard_stop) }}</template>
@@ -267,6 +286,23 @@ function opportunityText(row) {
     return `${details.join('；')}。`
   }
   return `非机构主升路线；板块${sector}只用于重复暴露检查。`
+}
+
+function naturalActionTagType(row) {
+  const action = String(row?.natural_action || '')
+  if (action === 'skip') return 'danger'
+  if (action === 'allow_reduced') return 'warning'
+  if (action === 'allow') return 'success'
+  return 'info'
+}
+
+function naturalDisciplineText(row) {
+  if (!row?.code && !row?.code_raw) return '自然纪律：暂无候选。'
+  const label = row.natural_action_label || '观察'
+  const naturalPct = Number(row.natural_position_pct)
+  const pctText = Number.isFinite(naturalPct) ? `，自然仓位 ${pct(naturalPct)}` : ''
+  const reason = row.natural_reason || '符合当前自然交易观察合同'
+  return `自然纪律：${label}${pctText}；${reason}`
 }
 
 function checkType(status) {
@@ -469,6 +505,14 @@ h2 {
 .check-row strong {
   font-size: 14px;
   font-weight: 700;
+}
+
+.natural-position {
+  display: block;
+  margin-top: 4px;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .two-col {

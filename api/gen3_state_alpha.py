@@ -85,17 +85,21 @@ MONITOR_EVENTS_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_monitor_events.json"
 REPLACEMENT_ASSESSMENT_PATH = STATE_ALPHA_RUNTIME_DIR / "replacement_assessment.json"
 PAPER_EXECUTIONS_PATH = STATE_ALPHA_RUNTIME_DIR / "paper_executions.json"
 OBSERVATION_SNAPSHOTS_PATH = STATE_ALPHA_RUNTIME_DIR / "observation_snapshots.json"
+PRETRADE_TICKET_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "pretrade_ticket_reviews.json"
+PAPER_WATCH_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "paper_watch_reviews.json"
 BROKER_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_state.json"
 BROKER_SYNC_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_sync_state.json"
 PRETRADE_SMOKE_DIR = report_path("gen3_pretrade_smoke_test_v1")
 PRETRADE_SMOKE_PATH = PRETRADE_SMOKE_DIR / "latest_pretrade_smoke.json"
 PRETRADE_SMOKE_GATES_PATH = PRETRADE_SMOKE_DIR / "latest_pretrade_gates.csv"
+REALTIME_READINESS_REVIEW_DIR = report_path("g3_realtime_readiness_review_v1")
 PTRADE_E2E_ACCEPTANCE_PATH = report_path("gen3_ptrade_e2e_acceptance") / "latest.json"
 PTRADE_INTERNAL_ACCEPTANCE_PATH = report_path("gen3_ptrade_internal_strategy_acceptance") / "latest.json"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATE_ROUTER_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_state_router_shadow_daily_v1.py"
 STATE_ROUTER_RESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_market_state_router_v1.py"
 PRETRADE_SMOKE_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_pretrade_smoke_test_v1.py"
+REALTIME_READINESS_REVIEW_SCRIPT = PROJECT_ROOT / "scripts" / "audit_g3_realtime_readiness_review_v1.py"
 REFRESH_TASKS: dict[str, dict[str, Any]] = {}
 REFRESH_TASK_LOCK = threading.Lock()
 _monitor_scheduler: BackgroundScheduler | None = None
@@ -1535,6 +1539,253 @@ def _save_verification(payload: dict[str, Any]) -> dict[str, Any]:
     verifications[key] = item
     _write_json(VERIFICATION_PATH, verifications)
     return {"ok": True, "key": key, "verification": item, "count": len(verifications)}
+
+
+def _load_pretrade_ticket_reviews() -> dict[str, Any]:
+    data = _read_json(PRETRADE_TICKET_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _save_pretrade_ticket_review(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _verification_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing ticket review key"}
+    action = str(payload.get("review_action") or payload.get("action") or "").strip()
+    allowed_actions = {"", "paper_watch", "manual_approved", "skip", "wait_refresh", "reject"}
+    if action not in allowed_actions:
+        return {"ok": False, "error": f"unsupported review_action: {action}", "allowed_actions": sorted(allowed_actions)}
+    rows = _load_pretrade_ticket_reviews()
+    if not action:
+        rows.pop(key, None)
+        _write_json(PRETRADE_TICKET_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    confirmation_items = payload.get("confirmation_items")
+    if isinstance(confirmation_items, str):
+        confirmation_items = [x.strip() for x in confirmation_items.replace("；", "\n").replace(";", "\n").splitlines() if x.strip()]
+    elif not isinstance(confirmation_items, list):
+        confirmation_items = []
+    confirmation_items = [str(x or "").strip() for x in confirmation_items if str(x or "").strip()]
+    checked_items = payload.get("checked_items")
+    if isinstance(checked_items, str):
+        checked_items = [x.strip() for x in checked_items.replace("；", "\n").replace(";", "\n").splitlines() if x.strip()]
+    elif not isinstance(checked_items, list):
+        checked_items = []
+    checked_items = [str(x or "").strip() for x in checked_items if str(x or "").strip()]
+    missing_items = [item for item in confirmation_items if item not in set(checked_items)]
+    review_evidence = payload.get("review_evidence")
+    review_evidence = review_evidence if isinstance(review_evidence, dict) else {}
+    item = {
+        "key": key,
+        "ticket_key": str(payload.get("ticket_key") or payload.get("candidate_key") or payload.get("trade_key") or key).strip(),
+        "review_action": action,
+        "review_label": {
+            "paper_watch": "纸面观察",
+            "manual_approved": "人工放行",
+            "skip": "跳过",
+            "wait_refresh": "等待刷新",
+            "reject": "否决",
+        }.get(action, action),
+        "review_confidence": str(payload.get("review_confidence") or payload.get("confidence") or "medium").strip(),
+        "risk_acknowledged": _truthy(payload.get("risk_acknowledged")),
+        "note": str(payload.get("note") or "").strip(),
+        "code": str(payload.get("code") or payload.get("code_raw") or "").strip(),
+        "name": str(payload.get("name") or payload.get("stock_name") or "").strip(),
+        "entry_date": str(payload.get("entry_date") or "").strip(),
+        "route": str(payload.get("route") or "").strip(),
+        "natural_action": str(payload.get("natural_action") or "").strip(),
+        "natural_reason": str(payload.get("natural_reason") or "").strip(),
+        "confirmation_items": confirmation_items,
+        "checked_items": checked_items,
+        "missing_confirmation_items": missing_items,
+        "confirmation_complete": bool(confirmation_items) and not missing_items,
+        "execution_posture": str(payload.get("execution_posture") or "").strip(),
+        "decision_level": str(payload.get("decision_level") or "").strip(),
+        "consistency_grade": str(payload.get("consistency_grade") or "").strip(),
+        "consistency_score": _as_float(payload.get("consistency_score"), None),
+        "operational_readiness_score": _as_float(payload.get("operational_readiness_score"), None),
+        "downgrade_rule": str(payload.get("downgrade_rule") or "").strip(),
+        "required_confirmation": str(payload.get("required_confirmation") or "").strip(),
+        "review_decision_reason": str(payload.get("review_decision_reason") or "").strip(),
+        "next_review_trigger": str(payload.get("next_review_trigger") or "").strip(),
+        "review_evidence": review_evidence,
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(PRETRADE_TICKET_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
+
+
+def _pretrade_paper_watch_payload_from_ticket(ticket: dict[str, Any], *, batch_id: str, reason: str = "") -> dict[str, Any]:
+    code = str(ticket.get("code") or ticket.get("code_raw") or "").strip()
+    name = str(ticket.get("name") or ticket.get("stock_name") or "").strip()
+    review_reason = reason or "实战启动批次：先进入纸面观察，从买点、选股、策略切换和卖点合同逐票复盘"
+    return {
+        "ticket_key": ticket.get("ticket_key") or ticket.get("candidate_key") or ticket.get("trade_key"),
+        "code": code,
+        "name": name,
+        "entry_date": ticket.get("entry_date"),
+        "route": ticket.get("route"),
+        "natural_action": ticket.get("natural_action"),
+        "natural_reason": ticket.get("natural_reason") or ticket.get("notes"),
+        "review_action": "paper_watch",
+        "review_confidence": "medium",
+        "risk_acknowledged": False,
+        "execution_posture": ticket.get("pretrade_review_execution_posture") or ticket.get("natural_action"),
+        "decision_level": ticket.get("pretrade_review_decision_level"),
+        "consistency_grade": ticket.get("pretrade_review_consistency_grade"),
+        "consistency_score": ticket.get("pretrade_review_consistency_score"),
+        "operational_readiness_score": ticket.get("pretrade_review_operational_readiness_score"),
+        "review_decision_reason": f"{code} {name} {review_reason}".strip(),
+        "next_review_trigger": "收盘后记录纸面观察后评估，归因到买点、选股、策略切换或卖点合同",
+        "review_evidence": {
+            "batch_id": batch_id,
+            "strategy": ticket.get("strategy") or ticket.get("trade_strategy_label"),
+            "route": ticket.get("route"),
+            "natural_action": ticket.get("natural_action"),
+            "natural_reason": ticket.get("natural_reason") or ticket.get("notes"),
+            "warnings": ticket.get("warnings"),
+        },
+        "note": f"{review_reason}；batch_id={batch_id}",
+    }
+
+
+def _attach_pretrade_reviews_to_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not records:
+        return []
+    reviews = _load_pretrade_ticket_reviews()
+    out: list[dict[str, Any]] = []
+    for row in records:
+        item = dict(row)
+        key = _verification_key(item)
+        review = reviews.get(key) if key else None
+        if isinstance(review, dict):
+            item["pretrade_review_action"] = review.get("review_action")
+            item["pretrade_review_label"] = review.get("review_label")
+            item["pretrade_review_confidence"] = review.get("review_confidence")
+            item["pretrade_review_note"] = review.get("note")
+            item["pretrade_review_updated_at"] = review.get("updated_at")
+            item["pretrade_review_risk_acknowledged"] = review.get("risk_acknowledged")
+            item["pretrade_review_confirmation_items"] = review.get("confirmation_items") if isinstance(review.get("confirmation_items"), list) else []
+            item["pretrade_review_checked_items"] = review.get("checked_items") if isinstance(review.get("checked_items"), list) else []
+            item["pretrade_review_missing_confirmation_items"] = review.get("missing_confirmation_items") if isinstance(review.get("missing_confirmation_items"), list) else []
+            item["pretrade_review_confirmation_complete"] = _truthy(review.get("confirmation_complete"))
+            item["pretrade_review_execution_posture"] = review.get("execution_posture")
+            item["pretrade_review_decision_level"] = review.get("decision_level")
+            item["pretrade_review_consistency_grade"] = review.get("consistency_grade")
+            item["pretrade_review_consistency_score"] = review.get("consistency_score")
+            item["pretrade_review_operational_readiness_score"] = review.get("operational_readiness_score")
+            item["pretrade_review_downgrade_rule"] = review.get("downgrade_rule")
+            item["pretrade_review_required_confirmation"] = review.get("required_confirmation")
+            item["pretrade_review_decision_reason"] = review.get("review_decision_reason")
+            item["pretrade_review_next_review_trigger"] = review.get("next_review_trigger")
+            item["pretrade_review_evidence"] = review.get("review_evidence") if isinstance(review.get("review_evidence"), dict) else {}
+        else:
+            item["pretrade_review_action"] = ""
+            item["pretrade_review_label"] = "未复盘"
+            item["pretrade_review_confidence"] = ""
+            item["pretrade_review_note"] = ""
+            item["pretrade_review_updated_at"] = ""
+            item["pretrade_review_risk_acknowledged"] = False
+            item["pretrade_review_confirmation_items"] = []
+            item["pretrade_review_checked_items"] = []
+            item["pretrade_review_missing_confirmation_items"] = []
+            item["pretrade_review_confirmation_complete"] = False
+            item["pretrade_review_execution_posture"] = ""
+            item["pretrade_review_decision_level"] = ""
+            item["pretrade_review_consistency_grade"] = ""
+            item["pretrade_review_consistency_score"] = None
+            item["pretrade_review_operational_readiness_score"] = None
+            item["pretrade_review_downgrade_rule"] = ""
+            item["pretrade_review_required_confirmation"] = ""
+            item["pretrade_review_decision_reason"] = ""
+            item["pretrade_review_next_review_trigger"] = ""
+            item["pretrade_review_evidence"] = {}
+        out.append(item)
+    return out
+
+
+def _load_paper_watch_reviews() -> dict[str, Any]:
+    data = _read_json(PAPER_WATCH_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _paper_watch_result_label(result: str) -> str:
+    return {
+        "as_expected": "符合预期",
+        "buy_point_too_early": "买点偏早",
+        "buy_point_chasing": "买点追高",
+        "selection_issue": "选股隐患",
+        "model_switch_issue": "策略切换隐患",
+        "risk_exit_issue": "风控/卖点隐患",
+        "missed_opportunity": "可能误杀",
+        "invalid_signal": "信号失效",
+        "continue_watch": "继续观察",
+    }.get(result, result)
+
+
+def _paper_watch_issue_area(result: str) -> str:
+    if result in {"buy_point_too_early", "buy_point_chasing"}:
+        return "buy_point"
+    if result == "selection_issue":
+        return "selection"
+    if result == "model_switch_issue":
+        return "model_switch"
+    if result == "risk_exit_issue":
+        return "sell_exit"
+    if result in {"invalid_signal", "missed_opportunity"}:
+        return "signal_validation"
+    return "observation"
+
+
+def _save_paper_watch_review(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _verification_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing paper watch review key"}
+    result = str(payload.get("watch_result") or payload.get("result") or "").strip()
+    allowed_results = {
+        "",
+        "as_expected",
+        "buy_point_too_early",
+        "buy_point_chasing",
+        "selection_issue",
+        "model_switch_issue",
+        "risk_exit_issue",
+        "missed_opportunity",
+        "invalid_signal",
+        "continue_watch",
+    }
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported watch_result: {result}", "allowed_results": sorted(allowed_results)}
+    rows = _load_paper_watch_reviews()
+    if not result:
+        rows.pop(key, None)
+        _write_json(PAPER_WATCH_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    item = {
+        "key": key,
+        "ticket_key": str(payload.get("ticket_key") or payload.get("candidate_key") or payload.get("trade_key") or key).strip(),
+        "code": str(payload.get("code") or payload.get("code_raw") or "").strip(),
+        "name": str(payload.get("name") or payload.get("stock_name") or "").strip(),
+        "entry_date": str(payload.get("entry_date") or "").strip(),
+        "route": str(payload.get("route") or "").strip(),
+        "watch_result": result,
+        "watch_result_label": _paper_watch_result_label(result),
+        "issue_area": str(payload.get("issue_area") or _paper_watch_issue_area(result)).strip(),
+        "observed_date": str(payload.get("observed_date") or "").strip(),
+        "observed_price": _as_float(payload.get("observed_price"), None),
+        "max_gain_pct": _as_float(payload.get("max_gain_pct"), None),
+        "max_drawdown_pct": _as_float(payload.get("max_drawdown_pct"), None),
+        "naturalness_score": _as_float(payload.get("naturalness_score"), None),
+        "hidden_risk": str(payload.get("hidden_risk") or "").strip(),
+        "optimization_suggestion": str(payload.get("optimization_suggestion") or "").strip(),
+        "review_note": str(payload.get("review_note") or payload.get("note") or "").strip(),
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(PAPER_WATCH_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
 
 
 def _load_paper_executions() -> list[dict[str, Any]]:
@@ -4378,6 +4629,87 @@ def _fill_natural_policy_shadow_fallback(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _natural_trade_key_from_record(row: dict[str, Any]) -> str:
+    for key in ("trade_key", "candidate_key", "ticket_key"):
+        text = str(row.get(key) or "").strip()
+        if not text:
+            continue
+        parts = [part.strip() for part in text.split("|") if part.strip()]
+        if len(parts) >= 4 and parts[0].startswith(("g3_", "G3")):
+            return "|".join(parts[-3:])
+        if len(parts) >= 3:
+            return "|".join(parts[-3:])
+        return text
+    code = str(row.get("code") or row.get("code_raw") or "").strip()
+    entry_date = _date_text(row.get("entry_date") or row.get("planned_entry_ts") or row.get("confirm_datetime"))
+    route = str(row.get("route") or row.get("mode") or "").strip()
+    strategy = str(row.get("trade_strategy") or "").strip()
+    if not route and strategy == "institutional_score120_mainwave":
+        route = "institutional_mainwave"
+    if route == "score120_core":
+        route = "institutional_mainwave"
+    if route and entry_date and code:
+        return f"{route}|{entry_date}|{code}"
+    return ""
+
+
+def _attach_natural_policy_shadow_to_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not records:
+        return []
+    df = pd.DataFrame(records)
+    if df.empty:
+        return records
+    if "trade_key" not in df.columns:
+        df["trade_key"] = ""
+    missing = df["trade_key"].isna() | df["trade_key"].astype(str).eq("")
+    if missing.any():
+        df.loc[missing, "trade_key"] = [
+            _natural_trade_key_from_record(row) for row in df.loc[missing].to_dict("records")
+        ]
+    df = _attach_natural_policy_shadow_fields(df)
+    df = df.astype(object).where(pd.notna(df), None)
+    return json.loads(df.to_json(orient="records", force_ascii=False))
+
+
+def _open_position_code_entries(rows: list[dict[str, Any]]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or row.get("code_raw") or "").strip()
+        if not code:
+            continue
+        entry_date = _date_text(row.get("entry_date") or row.get("planned_entry_ts") or row.get("confirm_datetime"))
+        out.setdefault(code, entry_date)
+    return out
+
+
+def _apply_natural_same_stock_open_guard(
+    records: list[dict[str, Any]],
+    open_code_entries: dict[str, str],
+) -> list[dict[str, Any]]:
+    if not records or not open_code_entries:
+        return records
+    out: list[dict[str, Any]] = []
+    for row in records:
+        item = dict(row)
+        code = str(item.get("code") or item.get("code_raw") or "").strip()
+        open_entry = open_code_entries.get(code)
+        entry_date = _date_text(item.get("entry_date") or item.get("planned_entry_ts") or item.get("confirm_datetime"))
+        if code and open_entry and entry_date and entry_date != open_entry:
+            existing_rules = str(item.get("natural_rule_hits") or "").strip()
+            rules = [part for part in existing_rules.split(",") if part]
+            if "N1" not in rules:
+                rules.insert(0, "N1")
+            item["natural_action"] = "skip"
+            item["natural_action_label"] = "跳过"
+            item["natural_position_pct"] = 0.0
+            item["natural_rule_hits"] = ",".join(rules)
+            item["natural_reason"] = f"同一股票已有未退出仓位（入场日 {open_entry}）；当前候选不应伪装成独立二槽"
+        out.append(item)
+    return out
+
+
 def _read_natural_policy_shadow() -> dict[str, Any]:
     return {
         "summary": _read_json(NATURAL_POLICY_SHADOW_DIR / "summary.json"),
@@ -4390,6 +4722,56 @@ def _read_natural_policy_shadow() -> dict[str, Any]:
             "candidate_shadow_labels": _path_status(NATURAL_POLICY_SHADOW_DIR / "candidate_shadow_labels.csv"),
             "closed_trade_shadow_actions": _path_status(NATURAL_POLICY_SHADOW_DIR / "closed_trade_shadow_actions.csv"),
             "report": _path_status(NATURAL_POLICY_SHADOW_DIR / "REPORT_CN.md"),
+        },
+    }
+
+
+def _read_realtime_readiness_review() -> dict[str, Any]:
+    return {
+        "summary": _read_json(REALTIME_READINESS_REVIEW_DIR / "summary.json"),
+        "readiness_gates": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "readiness_gates.csv"),
+        "pretrade_action_checklist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "pretrade_action_checklist.csv"),
+        "formal_launch_checklist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "formal_launch_checklist.csv"),
+        "execution_mode_matrix": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "execution_mode_matrix.csv"),
+        "formal_launch_action_queue": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "formal_launch_action_queue.csv"),
+        "pretrade_review_evidence": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "pretrade_review_evidence.csv"),
+        "paper_watch_followup": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "paper_watch_followup.csv"),
+        "premarket_execution_playbook": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "premarket_execution_playbook.csv"),
+        "next_trade_ticket_review": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "next_trade_ticket_review.csv"),
+        "ticket_review_checklist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "ticket_review_checklist.csv"),
+        "holding_exit_review": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "holding_exit_review.csv"),
+        "holding_exit_checklist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "holding_exit_checklist.csv"),
+        "holding_refresh_evidence": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "holding_refresh_evidence.csv"),
+        "candidate_hidden_risk_review": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "candidate_hidden_risk_review.csv"),
+        "candidate_omission_checklist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "candidate_omission_checklist.csv"),
+        "natural_trade_consistency_review": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "natural_trade_consistency_review.csv"),
+        "natural_execution_decision_matrix": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "natural_execution_decision_matrix.csv"),
+        "hazard_register": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "hazard_register.csv"),
+        "artifacts": {
+            "summary": _path_status(REALTIME_READINESS_REVIEW_DIR / "summary.json"),
+            "report": _path_status(REALTIME_READINESS_REVIEW_DIR / "REPORT_CN.md"),
+            "pretrade_action_checklist_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "PRETRADE_ACTION_CHECKLIST_CN.md"),
+            "ticket_review_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "TICKET_REVIEW_BRIEF_CN.md"),
+            "holding_exit_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "HOLDING_EXIT_BRIEF_CN.md"),
+            "candidate_omission_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "CANDIDATE_OMISSION_BRIEF_CN.md"),
+            "readiness_gates": _path_status(REALTIME_READINESS_REVIEW_DIR / "readiness_gates.csv"),
+            "pretrade_action_checklist": _path_status(REALTIME_READINESS_REVIEW_DIR / "pretrade_action_checklist.csv"),
+            "formal_launch_checklist": _path_status(REALTIME_READINESS_REVIEW_DIR / "formal_launch_checklist.csv"),
+            "execution_mode_matrix": _path_status(REALTIME_READINESS_REVIEW_DIR / "execution_mode_matrix.csv"),
+            "formal_launch_action_queue": _path_status(REALTIME_READINESS_REVIEW_DIR / "formal_launch_action_queue.csv"),
+            "pretrade_review_evidence": _path_status(REALTIME_READINESS_REVIEW_DIR / "pretrade_review_evidence.csv"),
+            "paper_watch_followup": _path_status(REALTIME_READINESS_REVIEW_DIR / "paper_watch_followup.csv"),
+            "premarket_execution_playbook": _path_status(REALTIME_READINESS_REVIEW_DIR / "premarket_execution_playbook.csv"),
+            "next_trade_ticket_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "next_trade_ticket_review.csv"),
+            "ticket_review_checklist": _path_status(REALTIME_READINESS_REVIEW_DIR / "ticket_review_checklist.csv"),
+            "holding_exit_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "holding_exit_review.csv"),
+            "holding_exit_checklist": _path_status(REALTIME_READINESS_REVIEW_DIR / "holding_exit_checklist.csv"),
+            "holding_refresh_evidence": _path_status(REALTIME_READINESS_REVIEW_DIR / "holding_refresh_evidence.csv"),
+            "candidate_hidden_risk_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "candidate_hidden_risk_review.csv"),
+            "candidate_omission_checklist": _path_status(REALTIME_READINESS_REVIEW_DIR / "candidate_omission_checklist.csv"),
+            "natural_trade_consistency_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "natural_trade_consistency_review.csv"),
+            "natural_execution_decision_matrix": _path_status(REALTIME_READINESS_REVIEW_DIR / "natural_execution_decision_matrix.csv"),
+            "hazard_register": _path_status(REALTIME_READINESS_REVIEW_DIR / "hazard_register.csv"),
         },
     }
 
@@ -5244,7 +5626,7 @@ def _default_contract() -> dict[str, Any]:
                 "source_strategies": ["机构主升浪Score120核心"],
                 "trading_assumption": "机构主线扩散和 Score120 强确认后的主升延续。",
                 "default_position_pct": 0.50,
-                "risk_note": "允许主线/板块共振，但高热度和主线退潮时优先降仓或禁开。",
+                "risk_note": "允许主线/板块共振；index_mom60 5%-10% 仅作热度观察，>10% 才禁止新开。",
             },
             {
                 "trade_strategy": "old_g3_strong_breakout",
@@ -5340,7 +5722,7 @@ def _default_contract() -> dict[str, Any]:
                 "mode": "institutional_mainwave",
                 "label_cn": "机构主升",
                 "status": "shadow_current",
-                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m_confirmed; index_mom60<=5% uses 50% slot, 5%-10% keeps candidate but reduces slot to 25%, >10% blocks new open",
+                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m_confirmed; index_mom60 5%-10% is observation only, >10% blocks new open",
                 "route_health_observation": "最近 240 天已退出 institutional_mainwave 样本健康度只记录观察，不阻断买入",
             },
             {
@@ -5876,6 +6258,44 @@ async def get_gen3_state_alpha_contract() -> dict[str, Any]:
     )
 
 
+@router.get("/realtime-readiness-review")
+async def get_gen3_state_alpha_realtime_readiness_review() -> dict[str, Any]:
+    review = _read_realtime_readiness_review()
+    return _wrap_guardrails(
+        {
+            "ok": bool(review.get("summary")),
+            "mode": "g3_realtime_readiness_review_v1",
+            **review,
+        }
+    )
+
+
+@router.post("/realtime-readiness-review/run")
+async def run_gen3_state_alpha_realtime_readiness_review() -> dict[str, Any]:
+    started = datetime.now()
+    proc = subprocess.run(
+        [sys.executable, str(REALTIME_READINESS_REVIEW_SCRIPT)],
+        cwd=str(PROJECT_ROOT),
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    review = _read_realtime_readiness_review()
+    return _wrap_guardrails(
+        {
+            "ok": proc.returncode == 0 and bool(review.get("summary")),
+            "mode": "g3_realtime_readiness_review_v1",
+            "run": {
+                "returncode": proc.returncode,
+                "duration_seconds": round((datetime.now() - started).total_seconds(), 1),
+                "stdout_tail": proc.stdout[-2000:],
+                "stderr_tail": proc.stderr[-2000:],
+            },
+            **review,
+        }
+    )
+
+
 @router.get("/current")
 async def get_gen3_state_alpha_current(
     limit: int = Query(default=30, ge=1, le=200, description="Maximum candidate rows returned."),
@@ -5914,8 +6334,13 @@ async def get_gen3_state_alpha_current(
     if isinstance(summary, dict):
         summary = dict(summary)
         summary["g2_gap_supplement_status"] = _extract_g2_gap_supplement_status(summary)
-    tickets = _enrich_trade_strategy_records(_read_csv_records(tickets_path, limit=limit))
-    afterhours_tickets = _enrich_trade_strategy_records(_read_csv_records(afterhours_tickets_path, limit=limit))
+    natural_policy_shadow = _read_natural_policy_shadow()
+    tickets = _attach_natural_policy_shadow_to_records(
+        _enrich_trade_strategy_records(_read_csv_records(tickets_path, limit=limit))
+    )
+    afterhours_tickets = _attach_natural_policy_shadow_to_records(
+        _enrich_trade_strategy_records(_read_csv_records(afterhours_tickets_path, limit=limit))
+    )
     broker_snapshot = _broker_snapshot()
     broker_trades = broker_snapshot.get("broker_trades") if isinstance(broker_snapshot.get("broker_trades"), list) else []
     ledger = _attach_exit_advice(
@@ -5924,15 +6349,31 @@ async def get_gen3_state_alpha_current(
         updated_at=summary.get("generated_at") if isinstance(summary, dict) else None,
         broker_trades=broker_trades,
     )
-    selected_candidates = _enrich_trade_strategy_records(_read_csv_records(selected_path, limit=limit))
-    all_source_candidates = _enrich_trade_strategy_records(_read_csv_records(all_path, limit=limit))
+    selected_candidates = _attach_natural_policy_shadow_to_records(
+        _enrich_trade_strategy_records(_read_csv_records(selected_path, limit=limit))
+    )
+    all_source_candidates = _attach_natural_policy_shadow_to_records(
+        _enrich_trade_strategy_records(_read_csv_records(all_path, limit=limit))
+    )
     route_diagnostics = _read_csv_records(diagnostics_path, limit=50)
+    real_exit_rows = broker_snapshot.get("holdings") if isinstance(broker_snapshot.get("holdings"), list) else []
+    qualified_tickets = [item for item in tickets if _truthy(item.get("qualified_shadow_buy"))]
+    open_code_entries = _open_position_code_entries([*real_exit_rows, *ledger])
+    afterhours_tickets = _apply_natural_same_stock_open_guard(afterhours_tickets, open_code_entries)
+    selected_candidates = _apply_natural_same_stock_open_guard(selected_candidates, open_code_entries)
+    all_source_candidates = _apply_natural_same_stock_open_guard(all_source_candidates, open_code_entries)
     blocked_candidates = [
         item for item in all_source_candidates
         if not _truthy(item.get("router_eligible")) or item.get("block_reason")
     ][:limit]
-    qualified_tickets = [item for item in tickets if _truthy(item.get("qualified_shadow_buy"))]
-    next_trade_buy_tickets = _filter_next_trade_buy_tickets(afterhours_tickets, summary, tickets)
+    next_trade_buy_tickets = _apply_natural_same_stock_open_guard(
+        _filter_next_trade_buy_tickets(afterhours_tickets, summary, tickets),
+        open_code_entries,
+    )
+    next_trade_buy_tickets = _attach_pretrade_reviews_to_records(next_trade_buy_tickets)
+    afterhours_tickets = _attach_pretrade_reviews_to_records(afterhours_tickets)
+    selected_candidates = _attach_pretrade_reviews_to_records(selected_candidates)
+    all_source_candidates = _attach_pretrade_reviews_to_records(all_source_candidates)
     date_display_analysis = _build_date_display_analysis(
         summary,
         tickets,
@@ -5940,7 +6381,6 @@ async def get_gen3_state_alpha_current(
         afterhours_tickets,
         next_trade_buy_tickets,
     )
-    real_exit_rows = broker_snapshot.get("holdings") if isinstance(broker_snapshot.get("holdings"), list) else []
     exit_rows = [*real_exit_rows, *ledger]
 
     return _wrap_guardrails(
@@ -5972,6 +6412,7 @@ async def get_gen3_state_alpha_current(
             "readiness_checks": _build_readiness(summary, tickets, ledger),
             "backtest_snapshot": _read_backtest_snapshot(),
             "strategy_contract": _contract(),
+            "natural_policy_shadow": natural_policy_shadow,
             "legacy_router_contract": _read_json(router_contract_path),
             "refresh": refresh_result,
             "artifacts": {
@@ -5989,6 +6430,9 @@ async def get_gen3_state_alpha_current(
                 "all_source_candidates": _path_status(all_path),
                 "route_diagnostics": _path_status(diagnostics_path),
                 "legacy_router_contract": _path_status(router_contract_path),
+                "natural_policy_shadow_summary": _path_status(NATURAL_POLICY_SHADOW_DIR / "summary.json"),
+                "natural_policy_shadow_contract": _path_status(NATURAL_POLICY_SHADOW_DIR / "natural_policy_contract.json"),
+                "natural_candidate_shadow_labels": _path_status(NATURAL_POLICY_SHADOW_DIR / "candidate_shadow_labels.csv"),
             },
         }
     )
@@ -6026,7 +6470,7 @@ async def get_gen3_state_alpha_mainwave_opportunities(
                 "source": "institutional_mainwave_current_builder_v1",
                 "source_script": "scripts/gen3_institutional_mainwave_current_v1.py",
                 "purpose": "识别机构集体主升、板块扩散和重要行业机会，并为下一交易日候选提供来源。",
-                "ranking_basis": "wave_style_score 主升分 + sector_diffusion_score 板块扩散 + 30m确认 + 市场热度降仓规则。",
+                "ranking_basis": "wave_style_score 主升分 + sector_diffusion_score 板块扩散 + 30m确认 + 市场热度观察。",
             },
             "summary": {
                 "entry_date": entry_date,
@@ -6042,7 +6486,7 @@ async def get_gen3_state_alpha_mainwave_opportunities(
                 "strongest_sector": strongest_sector.get("sector_name") or "",
                 "strongest_sector_state": strongest_sector.get("state_label") or "",
                 "index_mom60": index_mom60,
-                "index_heat_label": "高热度降仓" if index_mom60 is not None and index_mom60 > 0.05 else "正常热度",
+                "index_heat_label": "高热度观察" if index_mom60 is not None and index_mom60 > 0.05 else "正常热度",
                 "min_score": _to_float_or_none(source_meta.get("min_score")) or 120.0,
                 "min_sector_diffusion": _to_float_or_none(source_meta.get("min_sector_diffusion")) or 65.0,
                 "max_index_mom60": _to_float_or_none(source_meta.get("max_index_mom60")) or 0.1,
@@ -6638,6 +7082,153 @@ async def save_gen3_state_alpha_shadow_verification(payload: dict[str, Any] = Bo
             "ok": bool(result.get("ok")),
             "mode": "g3_state_alpha_shadow_verification",
             **result,
+        }
+    )
+
+
+@router.get("/pretrade-ticket-reviews")
+async def get_gen3_state_alpha_pretrade_ticket_reviews() -> dict[str, Any]:
+    reviews = _load_pretrade_ticket_reviews()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_pretrade_ticket_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "artifacts": {
+                "pretrade_ticket_reviews": _path_status(PRETRADE_TICKET_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/pretrade-ticket-review")
+async def save_gen3_state_alpha_pretrade_ticket_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _save_pretrade_ticket_review(payload if isinstance(payload, dict) else {})
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_state_alpha_pretrade_ticket_review",
+            "artifacts": {
+                "pretrade_ticket_reviews": _path_status(PRETRADE_TICKET_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/pretrade-paper-watch-batch")
+async def start_gen3_state_alpha_pretrade_paper_watch_batch(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    include_existing = _truthy(data.get("include_existing"))
+    run_review = data.get("run_readiness_review")
+    run_review = True if run_review is None else _truthy(run_review)
+    reason = str(data.get("reason") or "").strip()
+    batch_id = f"g3paperwatch_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
+
+    current = await get_gen3_state_alpha_current(limit=100, refresh=False, entry_date=None)
+    tickets = current.get("next_trade_buy_tickets") if isinstance(current, dict) else []
+    tickets = tickets if isinstance(tickets, list) else []
+    saved: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for ticket in tickets:
+        if not isinstance(ticket, dict):
+            continue
+        action = str(ticket.get("pretrade_review_action") or "").strip()
+        if action and not include_existing:
+            skipped.append(
+                {
+                    "code": ticket.get("code"),
+                    "name": ticket.get("name"),
+                    "entry_date": ticket.get("entry_date"),
+                    "reason": f"已有复盘状态 {ticket.get('pretrade_review_label') or action}",
+                }
+            )
+            continue
+        result = _save_pretrade_ticket_review(_pretrade_paper_watch_payload_from_ticket(ticket, batch_id=batch_id, reason=reason))
+        if result.get("ok"):
+            saved.append(result.get("review") or {})
+        else:
+            skipped.append(
+                {
+                    "code": ticket.get("code"),
+                    "name": ticket.get("name"),
+                    "entry_date": ticket.get("entry_date"),
+                    "reason": result.get("error") or "save_failed",
+                }
+            )
+
+    review: dict[str, Any] = {}
+    run: dict[str, Any] = {"ran": False}
+    if run_review:
+        started = datetime.now()
+        proc = subprocess.run(
+            [sys.executable, str(REALTIME_READINESS_REVIEW_SCRIPT)],
+            cwd=str(PROJECT_ROOT),
+            text=True,
+            capture_output=True,
+            timeout=180,
+        )
+        run = {
+            "ran": True,
+            "returncode": proc.returncode,
+            "duration_seconds": round((datetime.now() - started).total_seconds(), 1),
+            "stdout_tail": proc.stdout[-2000:],
+            "stderr_tail": proc.stderr[-2000:],
+        }
+        review = _read_realtime_readiness_review()
+
+    return _wrap_guardrails(
+        {
+            "ok": bool(saved) and (not run_review or run.get("returncode") == 0),
+            "mode": "g3_state_alpha_pretrade_paper_watch_batch",
+            "batch_id": batch_id,
+            "saved_count": len(saved),
+            "skipped_count": len(skipped),
+            "ticket_count": len(tickets),
+            "saved_reviews": saved,
+            "skipped": skipped,
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "next_action": "盘后或次日逐票填写纸面观察后评估，归因到买点、选股、策略切换或卖点合同",
+            "run": run,
+            "review_summary": review.get("summary") if isinstance(review, dict) else {},
+            "artifacts": {
+                "pretrade_ticket_reviews": _path_status(PRETRADE_TICKET_REVIEWS_PATH),
+                "paper_watch_followup": _path_status(REALTIME_READINESS_REVIEW_DIR / "paper_watch_followup.csv"),
+            },
+        }
+    )
+
+
+@router.get("/paper-watch-reviews")
+async def get_gen3_state_alpha_paper_watch_reviews() -> dict[str, Any]:
+    reviews = _load_paper_watch_reviews()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_paper_watch_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "artifacts": {
+                "paper_watch_reviews": _path_status(PAPER_WATCH_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/paper-watch-review")
+async def save_gen3_state_alpha_paper_watch_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _save_paper_watch_review(payload if isinstance(payload, dict) else {})
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_state_alpha_paper_watch_review",
+            "artifacts": {
+                "paper_watch_reviews": _path_status(PAPER_WATCH_REVIEWS_PATH),
+            },
         }
     )
 

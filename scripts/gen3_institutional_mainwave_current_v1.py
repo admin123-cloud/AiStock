@@ -423,8 +423,8 @@ def build_current_candidates(
         candidates["index_mom60_heat_state"] = "normal"
         candidates["market_heat_position_scale"] = 1.0
         if index_mom60 is not None and index_mom60 > 0.05:
-            candidates["index_mom60_heat_state"] = "high_heat_reduce_position"
-            candidates["market_heat_position_scale"] = 0.5
+            candidates["index_mom60_heat_state"] = "high_heat_observe"
+            candidates["market_heat_position_scale"] = 1.0
         if index_mom60 is not None and index_mom60 > float(max_index_mom60):
             candidates["index_mom60_heat_state"] = "extreme_heat_no_open"
             candidates["market_heat_position_scale"] = 0.0
