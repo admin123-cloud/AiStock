@@ -25,6 +25,11 @@ G3_CLOSED = report_path(
     "gen3_full_candidate_2slot_backtest_v1",
     "eligible_top2_sector_guard_mainwave_exempt_sector_for_distinct_closed_trades.csv",
 )
+G3_CLOSED_FALLBACKS = [
+    G3_CLOSED,
+    report_path("g2_g3_market_style_router_v1", "combined_trade_lots_with_prev_context.csv"),
+    report_path("g2_g3_market_style_router_v1", "g3_final_only_closed_trades.csv"),
+]
 MARKET_CONTEXT = report_path("gen3_four_path_independent_candidates", "market_context.csv")
 
 INITIAL_CAPITAL = 1_000_000.0
@@ -64,6 +69,28 @@ def _pct(value: Any) -> str:
     if not math.isfinite(x):
         return ""
     return f"{x:.2%}"
+
+
+def _format_ts(value: Any) -> str:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return ""
+    return pd.Timestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _date_at_time(values: Any, time_text: str) -> pd.Series:
+    dates = pd.to_datetime(values, errors="coerce").dt.normalize()
+    return pd.to_datetime(dates.dt.strftime("%Y-%m-%d") + f" {time_text}", errors="coerce")
+
+
+def _column(df: pd.DataFrame, name: str, default: Any = "") -> pd.Series:
+    if name in df.columns:
+        return df[name]
+    return pd.Series(default, index=df.index)
+
+
+def _numeric_column(df: pd.DataFrame, name: str, default: float = np.nan) -> pd.Series:
+    return pd.to_numeric(_column(df, name, default), errors="coerce")
 
 
 def _md_table(df: pd.DataFrame, pct_cols: set[str] | None = None, max_rows: int = 80) -> str:
@@ -106,6 +133,9 @@ def load_g2_lots() -> pd.DataFrame:
         net_ret = float((capital * returns).sum() / total_capital)
         exit_reasons = ",".join(group.get("exit_reason", pd.Series(dtype=str)).fillna("").astype(str).tolist())
         entry_dt = pd.Timestamp(item["buy_datetime"])
+        exit_dt = pd.to_datetime(group["sell_datetime"], errors="coerce").dropna().max()
+        if pd.isna(exit_dt):
+            exit_dt = pd.Timestamp(group["exit_date"].max()).normalize() + pd.Timedelta(hours=10)
         rows.append(
             {
                 "engine": "g2",
@@ -114,7 +144,10 @@ def load_g2_lots() -> pd.DataFrame:
                 "name": str(item["name"]),
                 "entry_date": pd.Timestamp(item["entry_date"]),
                 "entry_datetime": entry_dt,
+                "entry_ts": _format_ts(entry_dt),
                 "policy_exit_date": pd.Timestamp(group["exit_date"].max()),
+                "exit_datetime": pd.Timestamp(exit_dt),
+                "exit_ts": _format_ts(exit_dt),
                 "net_ret": net_ret,
                 "entry_price": _safe_float(item.get("buy_price"), np.nan),
                 "score": _safe_float(item.get("v4_score"), 0.0),
@@ -156,7 +189,12 @@ def enrich_g2_context(lots: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_g3_final_lots() -> pd.DataFrame:
-    d = _read_csv(G3_CLOSED)
+    source = next((path for path in G3_CLOSED_FALLBACKS if path.exists()), G3_CLOSED)
+    d = _read_csv(source)
+    if "engine" in d.columns:
+        d = d[d["engine"].fillna("").astype(str).isin(["", "g3_final"])].copy()
+    if "route" in d.columns:
+        d = d[~d["route"].fillna("").astype(str).eq("g2_buy_point")].copy()
     for col in ["entry_date", "policy_exit_date", "context_date", "decision_date"]:
         if col in d.columns:
             d[col] = pd.to_datetime(d[col], errors="coerce").dt.normalize()
@@ -167,7 +205,7 @@ def load_g3_final_lots() -> pd.DataFrame:
         d["net_ret"] = d["policy_net_ret"]
     d = d.dropna(subset=["entry_date", "policy_exit_date", "net_ret"]).copy()
     d["engine"] = "g3_final"
-    d["trade_key"] = d.get("trade_key", "").fillna("").astype(str)
+    d["trade_key"] = _column(d, "trade_key", "").fillna("").astype(str)
     missing_key = d["trade_key"].eq("")
     d.loc[missing_key, "trade_key"] = (
         "g3|"
@@ -177,11 +215,36 @@ def load_g3_final_lots() -> pd.DataFrame:
         + "|"
         + d.loc[missing_key, "mode"].astype(str)
     )
-    d["rank_key"] = -pd.to_numeric(d.get("mode_pick_rank", 99), errors="coerce").fillna(99) * 1000
-    d["rank_key"] += -pd.to_numeric(d.get("router_candidate_rank", 999), errors="coerce").fillna(999)
-    d["rank_key"] += pd.to_numeric(d.get("score", 0), errors="coerce").fillna(0)
+    d["rank_key"] = -_numeric_column(d, "mode_pick_rank", 99).fillna(99) * 1000
+    d["rank_key"] += -_numeric_column(d, "router_candidate_rank", 999).fillna(999)
+    d["rank_key"] += _numeric_column(d, "score", 0).fillna(0)
     if "sector_for_distinct" not in d.columns:
         d["sector_for_distinct"] = ""
+    if "entry_datetime" in d.columns:
+        d["entry_datetime"] = pd.to_datetime(d["entry_datetime"], errors="coerce")
+    else:
+        d["entry_datetime"] = pd.NaT
+    if "entry_ts" in d.columns:
+        entry_ts = pd.to_datetime(d["entry_ts"], errors="coerce")
+        d["entry_datetime"] = d["entry_datetime"].fillna(entry_ts)
+    missing_entry = d["entry_datetime"].isna() & d["entry_date"].notna()
+    d.loc[missing_entry, "entry_datetime"] = _date_at_time(d.loc[missing_entry, "entry_date"], "09:30:00")
+    d["entry_ts"] = d["entry_datetime"].map(_format_ts)
+
+    if "exit_datetime" in d.columns:
+        d["exit_datetime"] = pd.to_datetime(d["exit_datetime"], errors="coerce")
+    else:
+        d["exit_datetime"] = pd.NaT
+    if "exit_ts" in d.columns:
+        exit_ts = pd.to_datetime(d["exit_ts"], errors="coerce")
+        d["exit_datetime"] = d["exit_datetime"].fillna(exit_ts)
+    if "exit_date" in d.columns:
+        exit_date = pd.to_datetime(d["exit_date"], errors="coerce").dt.normalize()
+        missing_exit = d["exit_datetime"].isna() & exit_date.notna()
+        d.loc[missing_exit, "exit_datetime"] = _date_at_time(exit_date.loc[missing_exit], "10:00:00")
+    missing_exit = d["exit_datetime"].isna() & d["policy_exit_date"].notna()
+    d.loc[missing_exit, "exit_datetime"] = _date_at_time(d.loc[missing_exit, "policy_exit_date"], "10:00:00")
+    d["exit_ts"] = d["exit_datetime"].map(_format_ts)
     return d[
         [
             "engine",
@@ -189,7 +252,11 @@ def load_g3_final_lots() -> pd.DataFrame:
             "code",
             "name",
             "entry_date",
+            "entry_datetime",
+            "entry_ts",
             "policy_exit_date",
+            "exit_datetime",
+            "exit_ts",
             "net_ret",
             "entry_price",
             "score",
@@ -403,6 +470,34 @@ def simulate(candidates: pd.DataFrame, model: str, calendar: list[pd.Timestamp])
     if not candidates.empty:
         candidates["entry_date"] = pd.to_datetime(candidates["entry_date"], errors="coerce").dt.normalize()
         candidates["policy_exit_date"] = pd.to_datetime(candidates["policy_exit_date"], errors="coerce").dt.normalize()
+        if "entry_datetime" in candidates.columns:
+            candidates["entry_datetime"] = pd.to_datetime(candidates["entry_datetime"], errors="coerce")
+        else:
+            candidates["entry_datetime"] = pd.NaT
+        if "entry_ts" in candidates.columns:
+            candidates["entry_datetime"] = candidates["entry_datetime"].fillna(
+                pd.to_datetime(candidates["entry_ts"], errors="coerce")
+            )
+        missing_entry = candidates["entry_datetime"].isna() & candidates["entry_date"].notna()
+        candidates.loc[missing_entry, "entry_datetime"] = _date_at_time(
+            candidates.loc[missing_entry, "entry_date"],
+            "09:30:00",
+        )
+        candidates["entry_ts"] = candidates["entry_datetime"].map(_format_ts)
+        if "exit_datetime" in candidates.columns:
+            candidates["exit_datetime"] = pd.to_datetime(candidates["exit_datetime"], errors="coerce")
+        else:
+            candidates["exit_datetime"] = pd.NaT
+        if "exit_ts" in candidates.columns:
+            candidates["exit_datetime"] = candidates["exit_datetime"].fillna(
+                pd.to_datetime(candidates["exit_ts"], errors="coerce")
+            )
+        missing_exit = candidates["exit_datetime"].isna() & candidates["policy_exit_date"].notna()
+        candidates.loc[missing_exit, "exit_datetime"] = _date_at_time(
+            candidates.loc[missing_exit, "policy_exit_date"],
+            "10:00:00",
+        )
+        candidates["exit_ts"] = candidates["exit_datetime"].map(_format_ts)
     by_day = {day: _rank_day(group) for day, group in candidates.groupby("entry_date")} if not candidates.empty else {}
     cash = INITIAL_CAPITAL
     open_pos: list[dict[str, Any]] = []
@@ -421,6 +516,18 @@ def simulate(candidates: pd.DataFrame, model: str, calendar: list[pd.Timestamp])
                 realized_pnl += pnl
                 out = pos.copy()
                 out["exit_date"] = day
+                exit_dt = pd.to_datetime(out.get("exit_datetime"), errors="coerce")
+                if pd.isna(exit_dt):
+                    exit_dt = pd.Timestamp(day).normalize() + pd.Timedelta(hours=10)
+                out["exit_datetime"] = pd.Timestamp(exit_dt)
+                out["exit_ts"] = _format_ts(exit_dt)
+                entry_dt = pd.to_datetime(out.get("entry_datetime"), errors="coerce")
+                if pd.isna(entry_dt):
+                    entry_dt = pd.to_datetime(out.get("entry_ts"), errors="coerce")
+                if pd.isna(entry_dt):
+                    entry_dt = pd.Timestamp(out["entry_date"]).normalize() + pd.Timedelta(hours=9, minutes=30)
+                out["entry_datetime"] = pd.Timestamp(entry_dt)
+                out["entry_ts"] = _format_ts(entry_dt)
                 out["exit_value"] = exit_value
                 out["realized_pnl"] = pnl
                 out["account_ret"] = pnl / float(pos["entry_equity"]) if float(pos["entry_equity"]) else 0.0

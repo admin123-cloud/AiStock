@@ -337,9 +337,11 @@
         <el-table-column label="退出日" width="104">
           <template #default="{ row }">{{ row.trade_status === 'open_shadow' ? '持有中' : row.policy_exit_date }}</template>
         </el-table-column>
-        <el-table-column prop="entry_ts" label="买入时间" width="160" show-overflow-tooltip />
+        <el-table-column label="买入时间" width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ entryTimeText(row) }}</template>
+        </el-table-column>
         <el-table-column label="卖出时间" width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.trade_status === 'open_shadow' ? '持有中' : row.exit_ts }}</template>
+          <template #default="{ row }">{{ exitTimeText(row) }}</template>
         </el-table-column>
         <el-table-column label="状态" width="96">
           <template #default="{ row }">
@@ -792,6 +794,15 @@ function truthy(value) {
   if (typeof value === 'number') return value !== 0
   if (typeof value === 'string') return ['1', 'true', 'yes', 'ok'].includes(value.trim().toLowerCase())
   return false
+}
+
+function entryTimeText(row) {
+  return row?.entry_ts || row?.entry_datetime || row?.buy_datetime || row?.planned_entry_ts || row?.entry_date || '--'
+}
+
+function exitTimeText(row) {
+  if (row?.trade_status === 'open_shadow') return '持有中'
+  return row?.exit_ts || row?.exit_datetime || row?.sell_datetime || row?.policy_exit_datetime || row?.exit_date || row?.policy_exit_date || '--'
 }
 
 function routeName(route) {
