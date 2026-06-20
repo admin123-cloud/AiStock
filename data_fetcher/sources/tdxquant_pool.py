@@ -31,8 +31,12 @@ logger = get_logger("TdxQuantPool")
 
 
 def _tdxquant_init_path() -> str:
+    default_tdx_plugin_identity = r"D:\TDX\PYPlugins\user\aistock_gateway.py"
+    default_identity = default_tdx_plugin_identity if os.path.exists(default_tdx_plugin_identity) else os.path.join(
+        project_root, "scripts", "tdxquant_bridge.py"
+    )
     path = os.path.abspath(
-        os.environ.get("AISTOCK_TDXQ_INIT_PATH") or os.path.join(project_root, "api", "system_config.py")
+        os.environ.get("AISTOCK_TDXQ_INIT_PATH") or default_identity
     )
     if not path.endswith(".py") or not os.path.exists(path):
         raise RuntimeError(f"TdxQuant 初始化路径无效: {path}")
@@ -67,6 +71,7 @@ class TdxQuantPool:
         """初始化连接池"""
         self.tq = None
         self._initialized = False
+        self._initializing = False
         self._init_attempts = 0
         self._max_init_attempts = 5
         self._last_activity = None
@@ -77,6 +82,10 @@ class TdxQuantPool:
         self._api_lock = threading.Lock()
         self._supports_realtime_quotes = None
         self._realtime_quotes_fallback_logged = False
+        self._gateway_url = os.environ.get("AISTOCK_TDX_GATEWAY_URL", "").strip()
+        self._gateway = None
+        self._gateway_failure_cooldown_sec = int(os.environ.get("AISTOCK_TDX_GATEWAY_FAILURE_COOLDOWN_SEC", "15"))
+        self._gateway_next_request_at = None
         self._eager_init = os.environ.get("AISTOCK_TDXQ_EAGER_INIT", "0").strip().lower() in {"1", "true", "yes", "on"}
         self._init_cooldown_sec = int(os.environ.get("AISTOCK_TDXQ_INIT_COOLDOWN_SEC", "120"))
         self._next_init_retry_at = None
@@ -93,11 +102,109 @@ class TdxQuantPool:
             logger.info("TdxQuantPool initialized; eager TdxQuant initialization is enabled")
         else:
             logger.info("TdxQuantPool initialized; TdxQuant will initialize lazily on first use")
+
+    def _use_gateway(self) -> bool:
+        return bool(self._gateway_url)
+
+    def _gateway_client(self):
+        if not self._gateway:
+            from data_fetcher.sources.tdx_gateway_client import TdxGatewayClient
+
+            self._gateway = TdxGatewayClient(self._gateway_url)
+        return self._gateway
+
+    def _gateway_request_allowed(self) -> bool:
+        if not self._gateway_next_request_at:
+            return True
+        now = datetime.now()
+        if now >= self._gateway_next_request_at:
+            self._gateway_next_request_at = None
+            return True
+        wait_seconds = int((self._gateway_next_request_at - now).total_seconds())
+        logger.debug(f"TdxGateway request skipped during cooldown ({wait_seconds}s left).")
+        return False
+
+    def _mark_gateway_up(self) -> None:
+        self._initialized = True
+        self._status = DataSourceStatus.AVAILABLE
+        self._last_activity = datetime.now()
+        self._last_init_error = None
+        self._last_init_error_at = None
+        self._gateway_next_request_at = None
+
+    def _mark_gateway_down(self, reason: str) -> None:
+        self._initialized = False
+        self._status = DataSourceStatus.UNAVAILABLE
+        self._last_init_error = reason
+        self._last_init_error_at = datetime.now()
+        self._gateway_next_request_at = datetime.now() + timedelta(seconds=self._gateway_failure_cooldown_sec)
+        logger.warning(
+            f"TdxGateway request failed; suppressing gateway retries for "
+            f"{self._gateway_failure_cooldown_sec}s: {reason}"
+        )
+
+    @staticmethod
+    def _normalize_tdx_date(value: Optional[str]) -> Optional[str]:
+        if isinstance(value, str) and len(value) == 10 and value[4] == "-" and value[7] == "-":
+            return value.replace("-", "")
+        return value
+
+    @staticmethod
+    def _is_available_status(status: Any) -> bool:
+        if isinstance(status, DataSourceStatus):
+            return status == DataSourceStatus.AVAILABLE
+        return str(status or "").lower() == str(DataSourceStatus.AVAILABLE).lower()
+
+    def _reset_tq_client(self, reason: str = "") -> None:
+        """Drop the in-process TdxQuant handle before reconnecting after TDX restarts."""
+        if self.tq and hasattr(self.tq, "close"):
+            try:
+                with self._api_lock:
+                    self.tq.close()
+                logger.info(f"TdxQuant client closed before reconnect: {reason}")
+            except Exception as exc:
+                logger.warning(f"TdxQuant client close before reconnect failed: {exc}")
+        self.tq = None
+        self._initialized = False
+        self._status = DataSourceStatus.UNAVAILABLE
     
     def _initialize(self, force: bool = False):
         """初始化通达信量化平台客户端"""
         with self._init_lock:
-            if self._initialized:
+            if self._use_gateway():
+                try:
+                    if force:
+                        initialized = self._gateway_client().initialize()
+                    else:
+                        if not self._gateway_request_allowed():
+                            return False
+                        health = self._gateway_client().health()
+                        initialized = bool(health.get("ok")) and self._is_available_status(health.get("status"))
+                    if initialized:
+                        self._mark_gateway_up()
+                        self._next_init_retry_at = None
+                    else:
+                        self._initialized = False
+                        self._status = DataSourceStatus.UNAVAILABLE
+                    return self._initialized
+                except Exception as e:
+                    self._next_init_retry_at = datetime.now() + timedelta(seconds=self._init_cooldown_sec)
+                    self._mark_gateway_down(str(e))
+                    return False
+            if force:
+                if self._initialized and self.tq is not None:
+                    try:
+                        if self._probe_connection():
+                            self._last_activity = datetime.now()
+                            self._status = DataSourceStatus.AVAILABLE
+                            self._next_init_retry_at = None
+                            self._last_init_error = None
+                            return True
+                    except Exception as exc:
+                        logger.warning(f"TdxQuant existing handle probe before force initialize failed: {exc}")
+                self._reset_tq_client("force initialize")
+                self._next_init_retry_at = None
+            elif self._initialized:
                 return True
             now = datetime.now()
             if (not force) and self._next_init_retry_at and now < self._next_init_retry_at:
@@ -109,8 +216,11 @@ class TdxQuantPool:
                 return False
             
             attempt = 0
+            self._initializing = True
             while attempt < self._max_init_attempts:
                 try:
+                    if attempt > 0:
+                        self._reset_tq_client(f"retry initialize attempt {attempt + 1}")
                     from tqcenter import tq
                     
                     logger.info(f"尝试初始化 TdxQuant (尝试 {attempt+1}/{self._max_init_attempts})...")
@@ -130,6 +240,7 @@ class TdxQuantPool:
                         self._next_init_retry_at = None
                         self._last_init_error = None
                         self._last_init_error_at = None
+                        self._initializing = False
                         logger.info("TdxQuant 初始化成功并验证连接")
                         return True
                     else:
@@ -137,6 +248,7 @@ class TdxQuantPool:
                         self._last_init_error_at = datetime.now()
                         logger.warning("TdxQuant health probe returned no data; retrying after interval")
                         logger.warning("TdxQuant 初始化成功但连接验证失败")
+                        self._reset_tq_client("health probe returned no data")
                         attempt += 1
                         time.sleep(self._retry_interval)
                         
@@ -146,6 +258,7 @@ class TdxQuantPool:
                     self._last_init_error_at = datetime.now()
                     self._next_init_retry_at = datetime.now() + timedelta(seconds=self._init_cooldown_sec)
                     self._status = DataSourceStatus.UNAVAILABLE
+                    self._initializing = False
                     return False
                 except Exception as e:
                     attempt += 1
@@ -157,15 +270,17 @@ class TdxQuantPool:
             self._status = DataSourceStatus.UNAVAILABLE
             self._next_init_retry_at = datetime.now() + timedelta(seconds=self._init_cooldown_sec)
             logger.error(f"TdxQuant 初始化失败，已达到最大尝试次数")
+            self._initializing = False
             return False
 
-    def require_available_for_startup(self) -> bool:
+    def require_available_for_startup(self, notify: bool = True) -> bool:
         """服务启动硬依赖：TdxQuant 不可用时阻止 FastAPI 启动。"""
         self._next_init_retry_at = None
         if self._initialize(force=True):
             return True
         reason = self._last_init_error or "TdxQuant startup health check failed"
-        self._send_down_alert(reason, force=True)
+        if notify:
+            self._send_down_alert(reason, force=True)
         raise RuntimeError(f"TdxQuant startup check failed: {reason}")
     
     def _ensure_initialized(self):
@@ -183,8 +298,7 @@ class TdxQuantPool:
 
     def _mark_down(self, reason: str, notify: bool = True) -> None:
         was_available = self._status == DataSourceStatus.AVAILABLE
-        self._initialized = False
-        self._status = DataSourceStatus.UNAVAILABLE
+        self._reset_tq_client(reason)
         self._last_init_error = reason
         self._last_init_error_at = datetime.now()
         self._next_init_retry_at = datetime.now() + timedelta(seconds=self._init_cooldown_sec)
@@ -291,6 +405,9 @@ class TdxQuantPool:
     def _check_connection(self):
         """检查连接状态"""
         with self._lock:
+            if self._initializing:
+                logger.debug("TdxQuant initialization already in progress; keepalive skipped")
+                return
             if not self._initialized:
                 if not self._eager_init and self.tq is None:
                     logger.debug("TdxQuant 未初始化，等待首次业务调用触发懒初始化")
@@ -331,6 +448,8 @@ class TdxQuantPool:
         Returns:
             股票列表
         """
+        if self._use_gateway():
+            return self._gateway_client().get_stock_list(market=market, stock_type=stock_type, list_type=list_type)
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取股票列表")
             return None
@@ -363,6 +482,8 @@ class TdxQuantPool:
         Returns:
             股票详细信息
         """
+        if self._use_gateway():
+            return self._gateway_client().get_stock_info(stock_code)
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取股票详细信息")
             return None
@@ -405,6 +526,8 @@ class TdxQuantPool:
         """
         获取实时行情（优先 SDK 原生接口，不支持时自动回退到 1d 快照批量模式）。
         """
+        if self._use_gateway():
+            return self._gateway_client().get_realtime_quotes(stock_codes)
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取实时行情")
             return None
@@ -516,6 +639,30 @@ class TdxQuantPool:
         Returns:
             市场数据字典
         """
+        start_time = self._normalize_tdx_date(start_time)
+        end_time = self._normalize_tdx_date(end_time)
+        if self._use_gateway():
+            if not self._gateway_request_allowed():
+                return None
+            try:
+                result = self._gateway_client().get_market_data(
+                    field_list=field_list,
+                    stock_list=stock_list,
+                    period=period,
+                    start_time=start_time,
+                    end_time=end_time,
+                    count=count,
+                    dividend_type=dividend_type,
+                    fill_data=fill_data,
+                )
+                if result is None:
+                    self._mark_gateway_down("market-data returned no data")
+                    return None
+                self._mark_gateway_up()
+                return result
+            except Exception as e:
+                self._mark_gateway_down(str(e))
+                return None
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取市场数据")
             return None
@@ -542,6 +689,8 @@ class TdxQuantPool:
 
     def refresh_cache(self, force: bool = False, market: str = "") -> Optional[Any]:
         """Refresh TdxQuant quote/K-line cache through the native SDK."""
+        if self._use_gateway():
+            return self._gateway_client().refresh_cache(force=force, market=market)
         if not self._ensure_initialized():
             logger.warning("TdxQuant not initialized, cannot refresh cache")
             return None
@@ -558,6 +707,8 @@ class TdxQuantPool:
 
     def refresh_kline(self, stock_list: list, period: str) -> Optional[Any]:
         """Refresh TdxQuant historical K-line cache. SDK supports 1m/5m/1d."""
+        if self._use_gateway():
+            return self._gateway_client().refresh_kline(stock_list=stock_list, period=period)
         if not self._ensure_initialized():
             logger.warning("TdxQuant not initialized, cannot refresh kline")
             return None
@@ -576,6 +727,8 @@ class TdxQuantPool:
 
     def get_gb_info(self, stock_code: str, date_list: list, count: int = -1) -> Optional[list]:
         """Get share-capital history from the native TdxQuant SDK."""
+        if self._use_gateway():
+            return self._gateway_client().get_gb_info(stock_code=stock_code, date_list=date_list, count=count)
         if not self._ensure_initialized():
             logger.warning("TdxQuant not initialized, cannot fetch gb info")
             return None
@@ -602,6 +755,8 @@ class TdxQuantPool:
         prefers the documented API and falls back to explicit trading dates from local daily
         bars when needed.
         """
+        if self._use_gateway():
+            return self._gateway_client().get_gb_info_by_date(stock_code, start_date, end_date)
         if not self._ensure_initialized():
             logger.warning("TdxQuant not initialized, cannot fetch gb info by date")
             return None
@@ -657,6 +812,8 @@ class TdxQuantPool:
         Returns:
             财务数据字典
         """
+        if self._use_gateway():
+            return self._gateway_client().get_financial_data(stock_code, report_type, report_period)
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取财务数据")
             return None
@@ -686,6 +843,8 @@ class TdxQuantPool:
         Returns:
             板块数据字典或列表
         """
+        if self._use_gateway():
+            return self._gateway_client().get_sector_data(sector_code)
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取板块数据")
             return None
@@ -722,6 +881,8 @@ class TdxQuantPool:
         Returns:
             板块列表
         """
+        if self._use_gateway():
+            return self._gateway_client().get_sector_list()
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取板块列表")
             return None
@@ -755,6 +916,8 @@ class TdxQuantPool:
         Returns:
             板块成分股列表
         """
+        if self._use_gateway():
+            return self._gateway_client().get_stock_list_in_sector(sector_code)
         if not self._ensure_initialized():
             logger.warning("TdxQuant 未初始化，无法获取板块成分股")
             return None
@@ -778,6 +941,16 @@ class TdxQuantPool:
         Returns:
             连接池状态
         """
+        if self._use_gateway():
+            try:
+                health = self._gateway_client().health()
+                if health.get("ok") and self._is_available_status(health.get("status")):
+                    self._status = DataSourceStatus.AVAILABLE
+                    self._last_activity = datetime.now()
+                else:
+                    self._status = DataSourceStatus.UNAVAILABLE
+            except Exception:
+                self._status = DataSourceStatus.UNAVAILABLE
         return self._status
     
     def get_last_activity(self) -> Optional[datetime]:

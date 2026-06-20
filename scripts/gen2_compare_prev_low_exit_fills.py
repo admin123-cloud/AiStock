@@ -43,18 +43,27 @@ def _load_minute_bars(codes: List[str], start_date: str, end_date: str, period: 
     if not codes:
         return pd.DataFrame()
     table = {15: "kline_minute_15", 30: "kline_minute_30"}[int(period)]
-    quoted = ", ".join([f"'{code}'" for code in sorted(set(codes))])
     ch = clickhouse_client()
-    df = ch.query_df(
-        f"""
-        SELECT code, datetime, open, high, low, close, volume
-        FROM {table}
-        WHERE code IN ({quoted})
-          AND datetime >= toDateTime('{start_date} 09:30:00')
-          AND datetime <= toDateTime('{end_date} 15:00:00')
-        ORDER BY code, datetime
-        """
-    )
+    frames: list[pd.DataFrame] = []
+    unique_codes = sorted(set(codes))
+    # ClickHouse + pandas can spike memory when decoding a long nullable result set.
+    # Chunking by symbol keeps the strategy logic unchanged while lowering peak memory.
+    chunk_size = 80
+    for i in range(0, len(unique_codes), chunk_size):
+        quoted = ", ".join([f"'{code}'" for code in unique_codes[i : i + chunk_size]])
+        part = ch.query_df(
+            f"""
+            SELECT code, datetime, open, high, low, close, volume
+            FROM {table}
+            WHERE code IN ({quoted})
+              AND datetime >= toDateTime('{start_date} 09:30:00')
+              AND datetime <= toDateTime('{end_date} 15:00:00')
+            ORDER BY code, datetime
+            """
+        )
+        if not part.empty:
+            frames.append(part)
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if df.empty:
         return df
     df["datetime"] = pd.to_datetime(df["datetime"])

@@ -177,7 +177,7 @@ class MonitoringService:
     def _send_alert_notification(self, alert: Dict):
         """发送告警通知。"""
         email_config = config.get("email", {})
-        enabled = email_config.get("enabled", False)
+        enabled = email_config.get("enabled", True)
 
         if not enabled:
             return

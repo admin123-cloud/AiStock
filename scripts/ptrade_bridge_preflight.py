@@ -16,9 +16,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.ptrade_bridge_readiness_audit import run_audit, write_json
+from utils.paths import runtime_path
 
 
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+DEFAULT_BRIDGE_DIR = runtime_path("ptrade_bridge")
 DEFAULT_STRATEGY_FILE = ROOT / "scripts" / "ptrade_file_bridge_strategy.py"
 DEFAULT_REPORT = ROOT / "reports" / "ptrade_bridge_preflight" / "latest.json"
 REQUIRED_DIRS = [
@@ -69,6 +70,8 @@ def _extract_strategy_bridge_dir(text: str) -> Optional[str]:
     raw = _extract_strategy_value(text, "BRIDGE_DIR")
     if not raw:
         return None
+    if raw.split("#", 1)[0].strip() == "_default_bridge_dir()":
+        return str(runtime_path("ptrade_bridge"))
     match = re.match(r"""[rRuUbBfF]*(['"])(.*)\1""", raw)
     return match.group(2) if match else raw
 

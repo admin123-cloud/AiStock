@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any, Dict
 
 
 DB_PATH = Path(r"C:\xczq\ptrade_yfz\Users\Default\Strategy\FLYSERVER_610007046_persist.db")
@@ -16,12 +17,40 @@ def main() -> int:
         print(json.dumps({"ok": False, "reason": "db_missing", "path": str(DB_PATH)}, ensure_ascii=False, indent=2))
         return 1
 
-    con = sqlite3.connect(str(DB_PATH))
+    out: Dict[str, Any] = {"ok": False, "path": str(DB_PATH), "tables": [], "keyword_hits": []}
+    try:
+        header = DB_PATH.read_bytes()[:64]
+        out["size"] = DB_PATH.stat().st_size
+        out["header_hex"] = header.hex(" ")
+        out["sqlite_header"] = header.startswith(b"SQLite format 3\x00")
+    except Exception as exc:  # noqa: BLE001 - diagnostic script
+        out["header_error"] = repr(exc)
+
+    if not out.get("sqlite_header"):
+        out["reason"] = "not_sqlite_database"
+        out["message"] = "PTrade local strategy persistence file is not a plain SQLite database; do not write it directly."
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 2
+
+    try:
+        con = sqlite3.connect(str(DB_PATH))
+    except sqlite3.DatabaseError as exc:
+        out["reason"] = "sqlite_open_failed"
+        out["message"] = str(exc)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 2
     cur = con.cursor()
-    tables = cur.execute(
-        "select name,type from sqlite_master where type in ('table','view') order by name"
-    ).fetchall()
-    out = {"ok": True, "path": str(DB_PATH), "tables": [], "keyword_hits": []}
+    try:
+        tables = cur.execute(
+            "select name,type from sqlite_master where type in ('table','view') order by name"
+        ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        con.close()
+        out["reason"] = "sqlite_schema_read_failed"
+        out["message"] = str(exc)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 2
+    out["ok"] = True
     for name, typ in tables:
         entry = {"name": name, "type": typ, "columns": [], "row_count": None}
         try:

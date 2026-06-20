@@ -1,59 +1,64 @@
 @echo off
+setlocal
 
-REM AiStock Service Restart Script
-REM ================================
+REM AiStock-core service restart script
+REM ==================================
+
+set "ROOT_DIR=%~dp0"
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
+set "FRONTEND_DIR=%ROOT_DIR%\frontend"
+set "BACKEND_PORT=8000"
+set "FRONTEND_PORT=3000"
 
 echo ================================
-echo AiStock Service Restart Script
+echo AiStock-core Service Restart
+echo Root: %ROOT_DIR%
 echo ================================
 
-REM Check backend service port (8000)
-echo Checking backend service status...
-netstat -ano | findstr :8000 > nul
-if %errorlevel% equ 0 (
-    echo Backend service is running, stopping...
-    REM Find and kill process occupying port 8000
-    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000') do (
-        taskkill /pid %%a /f > nul
-        echo Backend process %%a stopped
+call :stop_port %BACKEND_PORT% "Backend"
+call :stop_port %FRONTEND_PORT% "Frontend"
+
+if not exist "%FRONTEND_DIR%\node_modules" (
+    echo Frontend dependencies missing, installing...
+    pushd "%FRONTEND_DIR%"
+    call npm install
+    if errorlevel 1 (
+        popd
+        echo Frontend dependency install failed
+        exit /b 1
     )
-) else (
-    echo Backend service is not running
+    popd
 )
 
-REM Check frontend service port (5173, Vite default port)
-echo Checking frontend service status...
-netstat -ano | findstr :5173 > nul
-if %errorlevel% equ 0 (
-    echo Frontend service is running, stopping...
-    REM Find and kill process occupying port 5173
-    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5173') do (
-        taskkill /pid %%a /f > nul
-        echo Frontend process %%a stopped
-    )
-) else (
-    echo Frontend service is not running
-)
-
-REM Start backend service
 echo Starting backend service...
-start "AiStock Backend" cmd /c "cd /d f:\Stock\AiStock && uvicorn api.main:app"
+start "AiStock-core Backend" cmd /k "cd /d %ROOT_DIR% && python -m uvicorn api.main:app --host 0.0.0.0 --port %BACKEND_PORT%"
 
-REM Wait 2 seconds for backend to start
 echo Waiting for backend to start...
-timeout /t 2 /nobreak > nul
+timeout /t 3 /nobreak > nul
 
-REM Start frontend service
 echo Starting frontend service...
-start "AiStock Frontend" cmd /c "cd /d f:\Stock\AiStock\frontend && npm run dev"
+start "AiStock-core Frontend" cmd /k "cd /d %FRONTEND_DIR% && npm run dev"
 
 echo ================================
-echo Services started successfully!
-echo Backend: http://localhost:8000
-echo Frontend: http://localhost:3000
-echo API Docs: http://localhost:8000/docs
+echo Services started successfully
+echo Backend: http://localhost:%BACKEND_PORT%
+echo Frontend: http://localhost:%FRONTEND_PORT%
+echo API Docs: http://localhost:%BACKEND_PORT%/docs
 echo ================================
+exit /b 0
 
-REM Wait for user input before exit
-echo Press any key to exit...
-pause > nul
+:stop_port
+set "TARGET_PORT=%~1"
+set "TARGET_NAME=%~2"
+echo Checking %TARGET_NAME% port %TARGET_PORT%...
+netstat -ano | findstr :%TARGET_PORT% > nul
+if errorlevel 1 (
+    echo %TARGET_NAME% is not running
+    goto :eof
+)
+
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :%TARGET_PORT%') do (
+    taskkill /pid %%a /f > nul 2>nul
+    echo %TARGET_NAME% process %%a stopped
+)
+goto :eof

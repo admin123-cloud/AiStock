@@ -18,8 +18,11 @@ frontend/*.log
 .env.local
 .env.*.local
 config/settings.local.yaml
+config/settings.docker-app.yaml
+config/settings.docker-dev.yaml
 
 # Runtime/data/research outputs live outside this repo.
+/runtime/
 /data/
 /artifacts/
 /logs/

@@ -10,8 +10,13 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "reports" / "gen3_combo_panic_strong_execution_stress_v1" / "base_30bps_closed_trades.csv"
-OUT_DIR = ROOT / "reports" / "gen3_shadow_live_daily_update_v1"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path
+
+SOURCE = report_path("gen3_market_state_router_strategy_v1", "g3_route_execution_mandate_candidate_closed_trades.csv")
+OUT_DIR = report_path("gen3_shadow_live_daily_update_v1")
 
 
 def _run(cmd: list[str]) -> dict:
@@ -84,6 +89,54 @@ def main() -> None:
         str(payload_out),
     ]
     commands.append(_run(build_cmd))
+    if not commands[-1]["ok"]:
+        command_log = pd.DataFrame(commands)
+        command_log.to_csv(out / "g3_shadow_daily_command_log.csv", index=False, encoding="utf-8-sig")
+        diag = pd.DataFrame(
+            [
+                {
+                    "as_of": as_of.strftime("%Y-%m-%d %H:%M:%S"),
+                    "as_of_date": as_of_date,
+                    "diagnosis_code": "PAYLOAD_BUILD_FAILED",
+                    "diagnosis": "G3 live payload 生成失败，已停止 shadow entry，避免沿用旧 payload。",
+                    "source_rows": 0,
+                    "payload_rows": 0,
+                    "display_candidates": 0,
+                    "blocked_rows": 0,
+                    "auto_order_allowed_rows": 0,
+                }
+            ]
+        )
+        diag.to_csv(out / "g3_shadow_daily_diagnosis.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(entry_out / "g3_shadow_live_candidates.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(entry_out / "g3_shadow_live_blocked.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame().to_csv(entry_out / "g3_shadow_live_recent_signal_dates.csv", index=False, encoding="utf-8-sig")
+        pd.DataFrame(
+            [
+                {
+                    "as_of": as_of.strftime("%Y-%m-%d %H:%M:%S"),
+                    "as_of_date": as_of_date,
+                    "input_rows": 0,
+                    "today_payload_rows": 0,
+                    "display_candidates": 0,
+                    "blocked_rows": 0,
+                    "auto_order_allowed_rows": 0,
+                    "latest_entry_date": "",
+                    "after_close": False,
+                    "allow_after_close": bool(args.allow_after_close),
+                }
+            ]
+        ).to_csv(entry_out / "g3_shadow_live_summary.csv", index=False, encoding="utf-8-sig")
+        print(
+            {
+                "out_dir": str(out),
+                "diagnosis_code": "PAYLOAD_BUILD_FAILED",
+                "display_candidates": 0,
+                "blocked_rows": 0,
+                "auto_order_allowed_rows": 0,
+            }
+        )
+        return
 
     entry_cmd = [
         sys.executable,

@@ -2,22 +2,27 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "reports" / "gen3_guarded_live_safe_payload_v1"
-RUNTIME_DIR = ROOT / "data" / "runtime" / "gen3_guarded_live_safe"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-SELECTED_PATH = ROOT / "reports" / "gen3_guarded_candidate_package_v1" / "g3_guarded_candidate_closed_trades.csv"
-PANIC_SOURCE = ROOT / "reports" / "gen3_panic_v2_research" / "final_candidate_v1" / "m30_close5_full_nextopen_cost30_closed_trades.csv"
-PANIC_CONTEXT_SOURCE = ROOT / "reports" / "gen3_panic_v2_research" / "panic_v2_candidates.csv"
-RANGE_SOURCE = ROOT / "reports" / "gen3_range_v3_mtm_pressure_v1" / "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv"
-STRONG_SOURCE = ROOT / "reports" / "gen3_strong_v2_independent_source_v1" / "strong_v2_main_up_only_hold5_closed_trades.csv"
+from utils.paths import report_path, runtime_path
+
+OUT_DIR = report_path("gen3_guarded_live_safe_payload_v1")
+RUNTIME_DIR = runtime_path("gen3_guarded_live_safe")
+
+SELECTED_PATH = report_path("gen3_guarded_candidate_package_v1", "g3_guarded_candidate_closed_trades.csv")
+PANIC_SOURCE = report_path("gen3_panic_v2_research", "final_candidate_v1", "m30_close5_full_nextopen_cost30_closed_trades.csv")
+PANIC_CONTEXT_SOURCE = report_path("gen3_panic_v2_research", "panic_v2_candidates.csv")
+RANGE_SOURCE = report_path("gen3_range_v3_mtm_pressure_v1", "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv")
+STRONG_SOURCE = report_path("gen3_strong_v2_independent_source_v1", "strong_v2_main_up_only_hold5_closed_trades.csv")
 
 FORBIDDEN_PATTERNS = [
     r"^fwd_ret",

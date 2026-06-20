@@ -1,6 +1,6 @@
 """Minimal PTrade heartbeat smoke strategy.
 
-This file intentionally avoids os/pathlib and order APIs. It only proves that
+This file intentionally avoids os/pathlib/utils and order APIs. It only proves that
 PTrade can execute a strategy and write to the AiStock bridge status file.
 """
 
@@ -8,7 +8,7 @@ import json
 import time
 
 
-STATUS_FILE = r"F:\Stock\AiStock\data\runtime\ptrade_bridge\status\latest.json"
+STATUS_FILE = r"F:\Stock\AiStockData\data\runtime\ptrade_bridge\status\latest.json"
 
 
 def _write_status(event):

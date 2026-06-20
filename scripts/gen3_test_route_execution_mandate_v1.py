@@ -23,10 +23,10 @@ from scripts.gen3_audit_guarded_execution_stress_v1 import (  # noqa: E402
 )
 from scripts.gen3_backtest_strong_volume5_slot_resim_v1 import _trade_calendar  # noqa: E402
 from scripts.gen3_build_dynamic_router_combo_v1 import md_table, pct  # noqa: E402
+from utils.paths import report_path  # noqa: E402
 
-
-OUT_DIR = ROOT / "reports" / "gen3_route_execution_mandate_v1"
-CANDIDATES = ROOT / "reports" / "gen3_combo_range_filter_v1" / "range_conservative_combo_b_candidates.csv"
+OUT_DIR = report_path("gen3_route_execution_mandate_v1")
+CANDIDATES = report_path("gen3_combo_range_filter_v1", "range_conservative_combo_b_candidates.csv")
 VARIANT = "range_conservative_combo_b"
 
 SPEC_CLOSE_30 = {"profile": "close_30bps", "cost_bps": 30.0, "exit_mode": "close", "limit_delay": True, "open_haircut": 0.0}

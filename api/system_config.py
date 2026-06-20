@@ -8,13 +8,15 @@
 
 from collections import defaultdict
 from typing import Optional, Dict, Any, List, Union
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 from datetime import datetime, time as dt_time, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import json
+import os
 import re
+import requests
 import ssl
 import smtplib
 import threading
@@ -45,6 +47,7 @@ _core_maintenance_job_ids = {
     "sector_list_sync": "core_sector_list_sync",
     "stock_intraday": "core_market_intraday_daily_snapshot",
     "market_intraday_minutes": "core_market_intraday_minute_snapshot",
+    "market_intraday_kline_refresh": "core_market_intraday_kline_refresh",
     "minute_kline_daily_repair_validate": "core_minute_kline_daily_repair_validate",
     "sector_intraday_stats_refresh": "core_sector_intraday_stats_refresh",
     "official_daily": "core_official_daily_close_sync",
@@ -57,6 +60,7 @@ _core_maintenance_task_map = {
     "sector_list_sync": "sync_sectors",
     "stock_intraday": "update_stock_today_data",
     "market_intraday_minutes": "update_market_today_minute_data",
+    "market_intraday_kline_refresh": "sync_today_intraday_kline",
     "minute_kline_daily_repair_validate": "minute_kline_daily_repair_validate",
     "market_minute_history_repair": "market_minute_history_repair",
     "sector_intraday_stats_refresh": "update_sector_intraday_stats",
@@ -125,6 +129,20 @@ def _save_settings_yaml(mutator):
     with open(settings_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     mutator(data)
+    with open(settings_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+    app_config.reload("settings.yaml")
+
+
+def _save_settings_local_yaml(mutator):
+    settings_path = app_config._config_dir / "settings.local.yaml"
+    if settings_path.exists():
+        with open(settings_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    else:
+        data = {}
+    mutator(data)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
     with open(settings_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
     app_config.reload("settings.yaml")
@@ -495,9 +513,82 @@ def _load_persisted_task_runs(task_names: List[str], limit: int = 500) -> Dict[s
     return payload
 
 
+_SYSTEM_TASK_TERMINAL_STATUSES = {"success", "failed", "error", "completed"}
+
+
+def _timeline_dt(item: Dict[str, Any], *keys: str) -> Optional[datetime]:
+    for key in keys:
+        parsed = _to_datetime(item.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
+def _same_timeline_run(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    a_started = _timeline_dt(a, "started_at", "last_run_at")
+    b_started = _timeline_dt(b, "started_at", "last_run_at")
+    if a_started and b_started:
+        return abs((a_started - b_started).total_seconds()) < 1
+    return True
+
+
+def _dedupe_timeline_events(timeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for item in timeline:
+        task_name = str(item.get("task_name") or "")
+        status = str(item.get("status") or "").lower()
+        event_time = _timeline_dt(item, "started_at", "last_run_at", "created_at")
+        event_key = event_time.isoformat(timespec="seconds") if event_time else str(item.get("created_at") or "")
+        key = (task_name, status, event_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _filter_stale_running_timeline(
+    timeline: List[Dict[str, Any]],
+    task_status_by_name: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Hide start markers once a terminal record for the same run is visible."""
+    terminal_by_task: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for item in timeline:
+        status = str(item.get("status") or "").lower()
+        if status in _SYSTEM_TASK_TERMINAL_STATUSES:
+            terminal_by_task[str(item.get("task_name") or "")].append(item)
+
+    filtered: List[Dict[str, Any]] = []
+    for item in timeline:
+        task_name = str(item.get("task_name") or "")
+        status = str(item.get("status") or "").lower()
+        if status != "running":
+            filtered.append(item)
+            continue
+
+        item_created = _timeline_dt(item, "created_at", "started_at", "last_run_at")
+        has_later_terminal = False
+        for terminal in terminal_by_task.get(task_name, []):
+            terminal_created = _timeline_dt(terminal, "created_at", "finished_at", "last_success_at", "last_error_at")
+            if item_created and terminal_created and terminal_created < item_created:
+                continue
+            if _same_timeline_run(item, terminal):
+                has_later_terminal = True
+                break
+        if has_later_terminal:
+            continue
+
+        current_task = task_status_by_name.get(task_name) or {}
+        if not current_task.get("is_running"):
+            continue
+        filtered.append(item)
+    return filtered
+
+
 def _load_system_alert_email_config() -> Dict[str, Any]:
     email_cfg = app_config.get("email", default=None, config_file="settings.yaml") or {}
-    if not email_cfg.get("enabled"):
+    if email_cfg.get("enabled", True) is False:
         raise RuntimeError("email.enabled is not enabled")
 
     smtp_server = str(email_cfg.get("smtp_server") or "").strip()
@@ -737,8 +828,10 @@ def _is_intraday_auto_update_window(now_dt: Optional[datetime] = None) -> bool:
     )
 
 
-def _skip_intraday_auto_update_if_closed(task_name: str) -> bool:
+def _skip_intraday_auto_update_if_closed(task_name: str, force: bool = False) -> bool:
     now_dt = datetime.now()
+    if force:
+        return False
     if _is_intraday_auto_update_window(now_dt):
         return False
     msg = f"skip intraday auto update outside trading window; now={now_dt.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -945,10 +1038,137 @@ class RepairKlinesRequest(BaseModel):
     """修复K线数据请求模型"""
     periods: Optional[List[str]] = None
     type: Optional[Union[str, List[str]]] = None
+    force: bool = False
 
 
 class StartupReferenceSyncToggleRequest(BaseModel):
     enabled: bool
+
+
+class PTradeAccountConfigRequest(BaseModel):
+    account_type: str = "simulation"
+    broker_name: Optional[str] = "PTrade"
+    username: Optional[str] = ""
+    password: Optional[str] = None
+    trade_endpoint: Optional[str] = ""
+    enabled: bool = True
+    notes: Optional[str] = ""
+
+
+def _mask_secret(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "*" * len(text)
+    return f"{text[:2]}{'*' * max(4, len(text) - 4)}{text[-2:]}"
+
+
+def _ptrade_account_config_public() -> Dict[str, Any]:
+    cfg = app_config.get("ptrade.account", default={}, config_file="settings.yaml") or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    password = str(cfg.get("password") or "")
+    username = str(cfg.get("username") or "")
+    return {
+        "enabled": bool(cfg.get("enabled", True)),
+        "account_type": str(cfg.get("account_type") or "simulation"),
+        "broker_name": str(cfg.get("broker_name") or "PTrade"),
+        "username": username,
+        "username_masked": _mask_secret(username),
+        "password_configured": bool(password),
+        "password_masked": _mask_secret(password),
+        "trade_endpoint": str(cfg.get("trade_endpoint") or ""),
+        "notes": str(cfg.get("notes") or ""),
+        "updated_at": cfg.get("updated_at"),
+        "storage": "config/settings.local.yaml",
+    }
+
+
+def _save_ptrade_account_config(request: PTradeAccountConfigRequest) -> Dict[str, Any]:
+    account_type = str(request.account_type or "simulation").strip().lower()
+    if account_type not in {"simulation", "real"}:
+        raise HTTPException(status_code=400, detail="account_type must be simulation or real")
+
+    def _mutate(data: Dict[str, Any]):
+        ptrade_cfg = data.setdefault("ptrade", {})
+        account_cfg = ptrade_cfg.setdefault("account", {})
+        account_cfg["enabled"] = bool(request.enabled)
+        account_cfg["account_type"] = account_type
+        account_cfg["broker_name"] = str(request.broker_name or "PTrade").strip() or "PTrade"
+        account_cfg["username"] = str(request.username or "").strip()
+        if request.password is not None and str(request.password) != "":
+            account_cfg["password"] = str(request.password)
+        elif "password" not in account_cfg:
+            account_cfg["password"] = ""
+        account_cfg["trade_endpoint"] = str(request.trade_endpoint or "").strip()
+        account_cfg["notes"] = str(request.notes or "").strip()
+        account_cfg["updated_at"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+
+    _save_settings_local_yaml(_mutate)
+    return _ptrade_account_config_public()
+
+
+def _tdx_gateway_url() -> str:
+    return str(os.environ.get("AISTOCK_TDX_GATEWAY_URL") or "http://host.docker.internal:8765").rstrip("/")
+
+
+def _tdx_gateway_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None, timeout: int = 15) -> Dict[str, Any]:
+    url = f"{_tdx_gateway_url()}{path}"
+    try:
+        response = requests.request(method, url, json=payload, timeout=timeout)
+        body: Any
+        try:
+            body = response.json()
+        except Exception:
+            body = {"text": response.text[-2000:]}
+        return {
+            "ok": response.ok,
+            "status_code": response.status_code,
+            "url": url,
+            "body": body,
+        }
+    except Exception as exc:
+        return {"ok": False, "url": url, "error": str(exc)}
+
+
+def _tdx_gateway_market_probe() -> Dict[str, Any]:
+    result = _tdx_gateway_request(
+        "POST",
+        "/market-data",
+        {
+            "field_list": [],
+            "stock_list": ["999999.SH"],
+            "period": "1d",
+            "count": 1,
+            "dividend_type": "none",
+            "fill_data": False,
+        },
+        timeout=30,
+    )
+    body = result.get("body") if isinstance(result, dict) else None
+    data = (body or {}).get("data") if isinstance(body, dict) else None
+    result["fields"] = list(data.keys())[:12] if isinstance(data, dict) else []
+    result["probe_ok"] = bool(result.get("ok") and result["fields"])
+    return result
+
+
+def _build_tdx_gateway_diagnostics(run_probe: bool = True) -> Dict[str, Any]:
+    admin = _tdx_gateway_request("GET", "/admin/diagnostics?run_probe=false", timeout=12)
+    market_probe = _tdx_gateway_market_probe() if run_probe else None
+    health = _tdx_gateway_request("GET", "/health", timeout=8)
+    return {
+        "gateway_url": _tdx_gateway_url(),
+        "backend": {
+            "strict_startup": str(os.environ.get("AISTOCK_STRICT_TDXQ_STARTUP") or ""),
+            "gateway_url": str(os.environ.get("AISTOCK_TDX_GATEWAY_URL") or ""),
+            "checked_from": "aistock-backend-dev",
+        },
+        "health": health,
+        "host_diagnostics": admin,
+        "market_data_probe": market_probe,
+        "checked_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
 
 
 def _ensure_strategy_daily_scheduler():
@@ -1119,6 +1339,13 @@ class SystemTaskManager:
                 "results": None,
                 "error": None
             },
+            "sync_today_intraday_kline": {
+                "is_running": False,
+                "started_at": None,
+                "progress": {"current": 0, "total": 0, "message": ""},
+                "results": None,
+                "error": None
+            },
             "update_sector_intraday_stats": {
                 "is_running": False,
                 "started_at": None,
@@ -1201,6 +1428,13 @@ class SystemTaskManager:
                 "error": None
             },
             "core_data_manual_sync": {
+                "is_running": False,
+                "started_at": None,
+                "progress": {"current": 0, "total": 0, "message": ""},
+                "results": None,
+                "error": None
+            },
+            "today_full_market_refresh": {
                 "is_running": False,
                 "started_at": None,
                 "progress": {"current": 0, "total": 0, "message": ""},
@@ -1389,10 +1623,10 @@ def update_index_list_task():
         task_manager.set_error(task_name, str(e))
 
 
-def update_sector_intraday_stats_task():
+def update_sector_intraday_stats_task(force: bool = False):
     task_name = "update_sector_intraday_stats"
 
-    if _skip_intraday_auto_update_if_closed(task_name):
+    if _skip_intraday_auto_update_if_closed(task_name, force=force):
         return
 
     if not data_update_lock.acquire(blocking=False):
@@ -2174,11 +2408,11 @@ def _legacy_update_today_data_task(periods=None):
             data_update_lock.release()
 
 
-def update_today_data_task(periods=None):
+def update_today_data_task(periods=None, force: bool = False):
     """更新当天最新数据的后台任务（只更新指数，含异常拦截）。"""
     task_name = "update_today_data"
 
-    if _skip_intraday_auto_update_if_closed(task_name):
+    if _skip_intraday_auto_update_if_closed(task_name, force=force):
         return
 
     if not data_update_lock.acquire(blocking=False):
@@ -3126,11 +3360,11 @@ def _get_intraday_minute_indices() -> List[Dict[str, Any]]:
         return []
 
 
-def update_market_today_minute_data_task(periods=None):
+def update_market_today_minute_data_task(periods=None, force: bool = False):
     """Collect one intraday quote snapshot for the stock pool and core indices."""
     task_name = "update_market_today_minute_data"
 
-    if _skip_intraday_auto_update_if_closed(task_name):
+    if _skip_intraday_auto_update_if_closed(task_name, force=force):
         return
 
     if not data_update_lock.acquire(blocking=False):
@@ -3248,11 +3482,118 @@ def update_market_today_minute_data_task(periods=None):
             data_update_lock.release()
 
 
-def update_stock_today_data_task(periods=None):
+def sync_today_intraday_kline_task(
+    task_already_started: bool = False,
+    periods: Optional[List[str]] = None,
+    target_date: Optional[str] = None,
+    timeout_seconds: int = 1800,
+):
+    """Refresh strategy-critical same-day 15m/30m K-lines into ClickHouse."""
+    task_name = "sync_today_intraday_kline"
+
+    if not data_update_lock.acquire(blocking=False):
+        msg = "已有其他数据更新任务正在执行，请稍后重试"
+        logger.warning(msg)
+        task_manager.set_error(task_name, msg)
+        return
+
+    try:
+        if not task_already_started:
+            if not task_manager.start_task(task_name):
+                task_manager.set_error(task_name, "当天分钟K线落库任务正在运行中，请稍后再试")
+                return
+
+        normalized_periods = [str(item).strip().lower() for item in (periods or ["15m", "30m"]) if str(item).strip()]
+        normalized_periods = [item for item in normalized_periods if item in {"15m", "30m"}]
+        if not normalized_periods:
+            normalized_periods = ["15m", "30m"]
+
+        normalized_date = (target_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+        script_path = REPO_ROOT / "scripts" / "sync_intraday_minutes_fast.py"
+        if not script_path.exists():
+            raise RuntimeError(f"script_not_found:{script_path}")
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--target-date",
+            normalized_date,
+            "--types",
+            "stock,index",
+            "--periods",
+            ",".join(normalized_periods),
+            "--batch-size",
+            "500",
+            "--min-complete-codes",
+            "3000",
+        ]
+        task_manager.update_progress(
+            task_name,
+            {
+                "current": 0,
+                "total": len(normalized_periods),
+                "message": f"开始同步当天全市场分钟K线: {normalized_date} {','.join(normalized_periods)}",
+            },
+        )
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=max(300, int(timeout_seconds or 1800)),
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"当天分钟K线落库超时: timeout={timeout_seconds}s")
+
+        stdout_tail = (proc.stdout or "")[-8000:]
+        stderr_tail = (proc.stderr or "")[-8000:]
+        tail_lines = [line.strip() for line in stdout_tail.splitlines() if line.strip()]
+        if tail_lines:
+            task_manager.update_progress(task_name, {"message": tail_lines[-1]})
+        parsed_summary: Dict[str, Any] = {}
+        json_start = stdout_tail.rfind("\n{")
+        if json_start >= 0:
+            json_text = stdout_tail[json_start + 1 :]
+        else:
+            json_text = stdout_tail[stdout_tail.find("{") :] if "{" in stdout_tail else ""
+        if json_text:
+            try:
+                parsed_summary = json.loads(json_text)
+            except Exception:
+                parsed_summary = {}
+
+        ok = proc.returncode == 0 and bool(parsed_summary.get("ok", proc.returncode == 0))
+        result = {
+            "message": "当天全市场15m/30m分钟K线落库完成" if ok else "当天全市场15m/30m分钟K线落库失败",
+            "target_date": normalized_date,
+            "periods": normalized_periods,
+            "returncode": int(proc.returncode or 0),
+            "cmd": cmd,
+            "summary": parsed_summary,
+            "stdout_tail": stdout_tail,
+            "stderr_tail": stderr_tail,
+            "validation_status": "passed" if ok else "failed",
+        }
+        task_manager.set_results(task_name, result, mark_success=ok)
+        if not ok:
+            task_manager.set_error(task_name, result["stderr_tail"] or result["stdout_tail"] or result["message"])
+    except Exception as exc:
+        logger.exception(f"当天全市场分钟K线落库失败: {exc}")
+        task_manager.set_error(task_name, str(exc))
+    finally:
+        if data_update_lock.locked():
+            data_update_lock.release()
+
+
+def update_stock_today_data_task(periods=None, force: bool = False):
     """更新当天最新股票数据的后台任务。"""
     task_name = "update_stock_today_data"
 
-    if _skip_intraday_auto_update_if_closed(task_name):
+    if _skip_intraday_auto_update_if_closed(task_name, force=force):
         return
 
     if not data_update_lock.acquire(blocking=False):
@@ -3306,6 +3647,8 @@ def update_stock_today_data_task(periods=None):
         minute_snapshot_result: Optional[Dict[str, Any]] = None
         minute_snapshot_error: Optional[str] = None
         v4_event_refresh_result: Optional[Dict[str, Any]] = None
+        daily_retry_failures: List[Dict[str, str]] = []
+        daily_batch_result: Optional[Dict[str, Any]] = None
 
         if any(period in minute_periods for period in sync_periods):
             try:
@@ -3320,7 +3663,10 @@ def update_stock_today_data_task(periods=None):
                     },
                 )
                 target_codes = [str(item.get("code")) for item in intraday_minute_stocks if item.get("code")]
-                minute_snapshot_result = collect_global_stock_snapshot(target_codes=target_codes)
+                # G2/G3 intraday logic needs broad market coverage. Passing
+                # None lets the collector fetch the full A-share spot table;
+                # target_codes is kept only for status/progress accounting.
+                minute_snapshot_result = collect_global_stock_snapshot(target_codes=None)
                 rows = int((minute_snapshot_result or {}).get("rows") or 0)
                 if rows <= 0:
                     minute_snapshot_error = "global snapshot returned zero rows"
@@ -3388,6 +3734,7 @@ def update_stock_today_data_task(periods=None):
             code_list = [s.get("code") for s in stocks if s.get("code")]
             total_batches = math.ceil(len(code_list) / batch_size)
             rows: List[Dict[str, Any]] = []
+            written_codes: set[str] = set()
             fetch_errors = 0
 
             def _extract_float(df: Optional[pd.DataFrame], row_idx: int, col_idx: int) -> float:
@@ -3458,6 +3805,7 @@ def update_stock_today_data_task(periods=None):
                                 "created_at": datetime.now().replace(tzinfo=timezone.utc),
                             }
                         )
+                        written_codes.add(str(code))
                 except Exception as exc:
                     fetch_errors += 1
                     logger.warning(f"daily batch get_market_data failed batch={i + 1}/{total_batches}: {exc}")
@@ -3465,7 +3813,13 @@ def update_stock_today_data_task(periods=None):
 
             if not rows:
                 reason = f"empty_daily_batch_rows fetch_errors={fetch_errors}"
-                return {"used": False, "completed": completed, "failed": total_codes, "reason": reason}
+                return {
+                    "used": False,
+                    "completed": completed,
+                    "failed": total_codes,
+                    "failed_codes": [str(code) for code in code_list],
+                    "reason": reason,
+                }
 
             from utils.market_warehouse import clickhouse_client
 
@@ -3539,12 +3893,19 @@ def update_stock_today_data_task(periods=None):
                 column_names=columns,
             )
             saved = len(rows)
-            failed_count = max(0, total_codes - saved)
+            failed_codes = [str(code) for code in code_list if str(code) not in written_codes]
+            failed_count = len(failed_codes)
             logger.info(
                 f"daily batch ClickHouse upsert done: total={total_codes}, written={saved}, "
                 f"failed={failed_count}, fetch_errors={fetch_errors}, date={query_date}"
             )
-            return {"used": True, "completed": completed + total_codes, "success": saved, "failed": failed_count}
+            return {
+                "used": True,
+                "completed": completed + total_codes,
+                "success": saved,
+                "failed": failed_count,
+                "failed_codes": failed_codes,
+            }
 
         def _try_batch_sync_minute(
             stocks: List[Dict[str, Any]],
@@ -3580,6 +3941,94 @@ def update_stock_today_data_task(periods=None):
                 "reason": reason,
             }
 
+        def _classify_missing_daily_codes(codes: List[str], trade_date: str) -> Dict[str, Any]:
+            normalized_trade_date = str(trade_date or "")[:10]
+            clean_codes = [str(code or "").strip() for code in codes if str(code or "").strip()]
+            if not clean_codes or not normalized_trade_date:
+                return {
+                    "skip_new_ipo": [],
+                    "skip_not_listed": [],
+                    "dirty_history": [],
+                    "retry_codes": clean_codes,
+                }
+
+            try:
+                from utils.market_warehouse import clickhouse_client
+
+                client = clickhouse_client()
+                quoted_codes = ", ".join("'" + code.replace("\\", "\\\\").replace("'", "\\'") + "'" for code in clean_codes)
+                rows = client.query(
+                    f"""
+                    SELECT
+                        s.code,
+                        s.name,
+                        s.list_date,
+                        min(k.trade_date) AS first_kline_date,
+                        max(k.trade_date) AS last_kline_date,
+                        countIf(k.trade_date = toDate('{normalized_trade_date}')) AS has_trade_date_row
+                    FROM stocks s
+                    LEFT JOIN kline_daily k ON s.code = k.code
+                    WHERE s.code IN ({quoted_codes})
+                    GROUP BY s.code, s.name, s.list_date
+                    """
+                ).result_rows
+            except Exception as exc:
+                logger.warning(f"classify missing daily codes failed, fallback to retry all: {exc}")
+                return {
+                    "skip_new_ipo": [],
+                    "skip_not_listed": [],
+                    "dirty_history": [],
+                    "retry_codes": clean_codes,
+                }
+
+            by_code: Dict[str, Dict[str, Any]] = {}
+            for code, name, list_date, first_kline_date, last_kline_date, has_trade_date_row in rows:
+                by_code[str(code)] = {
+                    "code": str(code),
+                    "name": str(name or code),
+                    "list_date": list_date.isoformat() if list_date else None,
+                    "first_kline_date": first_kline_date.isoformat() if first_kline_date else None,
+                    "last_kline_date": last_kline_date.isoformat() if last_kline_date else None,
+                    "has_trade_date_row": int(has_trade_date_row or 0),
+                }
+
+            skip_new_ipo: List[Dict[str, Any]] = []
+            skip_not_listed: List[Dict[str, Any]] = []
+            dirty_history: List[Dict[str, Any]] = []
+            retry_codes: List[str] = []
+
+            for code in clean_codes:
+                meta = by_code.get(code) or {"code": code, "name": code}
+                list_date = str(meta.get("list_date") or "")[:10]
+                first_kline_date = str(meta.get("first_kline_date") or "")[:10]
+                has_trade_date_row = int(meta.get("has_trade_date_row") or 0)
+                has_placeholder_first_kline = (not first_kline_date) or first_kline_date <= "1970-01-02"
+                if list_date and list_date > normalized_trade_date:
+                    meta["reason"] = "not_listed_yet"
+                    skip_not_listed.append(meta)
+                    continue
+                if list_date == normalized_trade_date:
+                    if has_trade_date_row <= 0 and has_placeholder_first_kline:
+                        meta["reason"] = "ipo_today_no_daily_bar"
+                        skip_new_ipo.append(meta)
+                        continue
+                    if first_kline_date and first_kline_date < list_date:
+                        meta["reason"] = "history_before_listing"
+                        dirty_history.append(meta)
+                        continue
+                    if has_trade_date_row <= 0:
+                        meta["reason"] = "ipo_today_no_daily_bar"
+                        skip_new_ipo.append(meta)
+                        continue
+                retry_codes.append(code)
+
+            return {
+                "skip_new_ipo": skip_new_ipo,
+                "skip_not_listed": skip_not_listed,
+                "dirty_history": dirty_history,
+                "retry_codes": retry_codes,
+            }
+
         for period in sync_periods:
             if period not in syncer.periods:
                 logger.warning(f"未知的周期: {period}，跳过")
@@ -3608,6 +4057,7 @@ def update_stock_today_data_task(periods=None):
             if period == "1d":
                 try:
                     batch_result = _try_batch_sync_daily(stocks, period_name, completed_tasks, total_tasks)
+                    daily_batch_result = dict(batch_result) if isinstance(batch_result, dict) else None
                     daily_batch_used = bool(batch_result.get("used"))
                     completed_tasks = int(batch_result.get("completed", completed_tasks))
                     if daily_batch_used:
@@ -3618,6 +4068,95 @@ def update_stock_today_data_task(periods=None):
                             f"daily batch snapshot incomplete: success={batch_result.get('success')}, "
                             f"failed={batch_result.get('failed')}"
                         )
+                        missing_code_classification = _classify_missing_daily_codes(
+                            [str(code) for code in (batch_result.get("failed_codes") or [])],
+                            _resolve_daily_trade_date(),
+                        )
+                        skipped_new_ipo = missing_code_classification.get("skip_new_ipo") or []
+                        skipped_not_listed = missing_code_classification.get("skip_not_listed") or []
+                        dirty_history_codes = missing_code_classification.get("dirty_history") or []
+                        retry_codes = [str(code) for code in (missing_code_classification.get("retry_codes") or [])]
+
+                        if skipped_new_ipo or skipped_not_listed or dirty_history_codes:
+                            exempt_count = len(skipped_new_ipo) + len(skipped_not_listed) + len(dirty_history_codes)
+                            failed_tasks = max(0, failed_tasks - exempt_count)
+                            logger.info(
+                                f"daily snapshot exempted non-actionable listing gaps: "
+                                f"new_ipo={len(skipped_new_ipo)}, not_listed={len(skipped_not_listed)}, "
+                                f"dirty_history={len(dirty_history_codes)}"
+                            )
+                        if dirty_history_codes:
+                            logger.warning(
+                                "daily snapshot found dirty history before listing: "
+                                f"{[item.get('code') for item in dirty_history_codes]}"
+                            )
+
+                        if retry_codes:
+                            retry_stock_map = {str(item.get('code') or ''): item for item in stocks if item.get('code')}
+                            retry_stocks = [retry_stock_map[code] for code in retry_codes if code in retry_stock_map]
+                            retry_success = 0
+                            retry_failed = 0
+                            for idx, stock in enumerate(retry_stocks, start=1):
+                                df = None
+                                code = str(stock.get("code") or "")
+                                name = stock.get("name") or code
+                                try:
+                                    today = datetime.now().strftime("%Y-%m-%d")
+                                    query_date = today
+                                    task_manager.update_progress(
+                                        task_name,
+                                        {
+                                            "current": completed_tasks,
+                                            "total": total_tasks,
+                                            "message": f"retry daily snapshot {code} ({idx}/{len(retry_stocks)})",
+                                        },
+                                    )
+                                    df = syncer.tdxquant.get_stock_history(
+                                        stock_code=code,
+                                        start_date=query_date,
+                                        end_date=query_date,
+                                        period=period,
+                                        dividend_type="front",
+                                    )
+                                    if df is None or df.empty:
+                                        now_dt = datetime.now()
+                                        previous_trading_day = TradingCalendar.get_previous_trading_day(now_dt).strftime("%Y-%m-%d")
+                                        if previous_trading_day != query_date:
+                                            query_date = previous_trading_day
+                                            df = syncer.tdxquant.get_stock_history(
+                                                stock_code=code,
+                                                start_date=query_date,
+                                                end_date=query_date,
+                                                period=period,
+                                                dividend_type="front",
+                                            )
+                                    if df is not None and not df.empty and int(syncer._save_kline_to_db(code, period, df) or 0) > 0:
+                                        retry_success += 1
+                                        success_tasks += 1
+                                        failed_tasks = max(0, failed_tasks - 1)
+                                        logger.info(f"daily snapshot retry success: code={code}, name={name}, date={query_date}")
+                                    else:
+                                        retry_failed += 1
+                                        daily_retry_failures.append({"code": code, "name": str(name), "reason": "empty_retry_result"})
+                                        logger.warning(f"daily snapshot retry empty: code={code}, name={name}")
+                                except Exception as exc:
+                                    retry_failed += 1
+                                    daily_retry_failures.append({"code": code, "name": str(name), "reason": str(exc)})
+                                    logger.warning(f"daily snapshot retry failed: code={code}, name={name}, error={exc}")
+                                finally:
+                                    if df is not None:
+                                        del df
+                                        gc.collect()
+                            logger.info(
+                                f"daily snapshot retry finished: total={len(retry_stocks)}, "
+                                f"success={retry_success}, failed={retry_failed}"
+                            )
+
+                        batch_result["skipped_new_ipo"] = skipped_new_ipo
+                        batch_result["skipped_not_listed"] = skipped_not_listed
+                        batch_result["dirty_history"] = dirty_history_codes
+                        batch_result["retry_codes"] = retry_codes
+                        daily_batch_result = dict(batch_result)
                 except Exception as e:
                     logger.warning(f"日线批量路径异常，回退逐股路径: {e}")
                     daily_batch_used = False
@@ -3816,10 +4355,24 @@ def update_stock_today_data_task(periods=None):
             "stats": {"total": total_tasks, "success": success_tasks, "failed": failed_tasks},
             "intraday_snapshot": minute_snapshot_result,
             "intraday_snapshot_error": minute_snapshot_error,
+            "daily_retry_failures": daily_retry_failures,
+            "daily_retry_failure_count": len(daily_retry_failures),
+            "daily_batch_result": daily_batch_result,
             "gen2_v4_event_refresh": v4_event_refresh_result,
             "validation_status": "passed" if failed_tasks == 0 else "failed",
             "validation_reason": "ok" if failed_tasks == 0 else f"failed_tasks={failed_tasks}",
         }
+        task_manager.update_progress(
+            task_name,
+            {
+                "current": completed_tasks,
+                "total": total_tasks,
+                "message": (
+                    f"daily snapshot finished: success={success_tasks}, failed={failed_tasks}, "
+                    f"retry_failures={len(daily_retry_failures)}"
+                ),
+            },
+        )
         task_manager.set_results(task_name, results)
         logger.info("当天个股数据更新完成")
         if failed_tasks > 0:
@@ -4099,7 +4652,11 @@ def minute_kline_daily_repair_validate_task(
 
         import os
 
-        tdx_root = Path(os.environ.get("AISTOCK_TDX_VIPDOC", r"D:\TDX\vipdoc"))
+        tdx_root = Path(
+            os.environ.get("AISTOCK_TDX_VIPDOC")
+            or os.environ.get("AISTOCK_LOCAL_TDX_ROOT")
+            or r"D:\TDX\vipdoc"
+        )
         builder_script = Path(__file__).resolve().parents[1] / "scripts" / "build_tdx_minute_periods.py"
         def _local_tdx_has_after_close_data(root: Path, target_date: str) -> Dict[str, Any]:
             cutoff = datetime.strptime(target_date[:10], "%Y-%m-%d").replace(hour=15, minute=1)
@@ -4481,7 +5038,7 @@ def market_minute_history_repair_task(task_already_started: bool = False, days: 
     )
 
 
-def repair_previous_daily_kline_task():
+def repair_previous_daily_kline_task(task_already_started: bool = False):
     task_name = "repair_previous_daily_kline"
 
     if not data_update_lock.acquire(blocking=False):
@@ -4493,7 +5050,10 @@ def repair_previous_daily_kline_task():
     try:
         from scripts.sync_all_klines import KlineSyncer
 
-        task_manager.start_task(task_name)
+        if not task_already_started:
+            if not task_manager.start_task(task_name):
+                task_manager.set_error(task_name, "次日巡检修复任务正在运行中，请稍后再试")
+                return
         task_manager.update_progress(task_name, {"message": "开始次日巡检并修复上一交易日日线..."})
 
         syncer = KlineSyncer()
@@ -4850,6 +5410,29 @@ def _run_manual_core_data_sync():
         ("update_stock_today_data", "同步股票/指数当日日K", lambda: update_stock_today_data_task(["1d"])),
         ("update_sector_intraday_stats", "刷新板块当日统计", lambda: update_sector_intraday_stats_task()),
     ]
+    now_dt = datetime.now()
+    if _is_intraday_auto_update_window(now_dt):
+        refresh_plan.insert(
+            5,
+            (
+                "update_market_today_minute_data",
+                "同步盘中股票/指数分钟快照",
+                lambda: update_market_today_minute_data_task(["5m", "15m", "30m", "60m"]),
+            ),
+        )
+    else:
+        refresh_plan = refresh_plan[:4] + [
+            (
+                "minute_kline_daily_repair_validate",
+                "朢?日分钟K线补全验?",
+                lambda: minute_kline_daily_repair_validate_task(task_already_started=True),
+            ),
+            (
+                "official_daily_close_sync",
+                "盘后正式日线写库",
+                lambda: official_daily_close_sync_task(task_already_started=True),
+            ),
+        ]
 
     if not task_manager.start_task(master_task_name, trigger_source="manual"):
         return
@@ -4915,6 +5498,190 @@ def _run_manual_core_data_sync():
             )
 
 
+def _run_manual_today_full_market_refresh():
+    master_task_name = "today_full_market_refresh"
+    now_dt = datetime.now()
+    after_close = now_dt.time() >= dt_time(15, 5)
+    refresh_plan = [
+        ("update_trade_calendar", "同步交易日历", lambda: update_trade_calendar_task(), True),
+        ("update_stock_list", "同步股票列表", lambda: update_stock_list_task(), True),
+        ("update_index_list", "同步指数列表", lambda: update_index_list_task(), True),
+        ("sync_sectors", "同步板块列表与成分", lambda: sync_sectors_task(), True),
+        ("update_stock_today_data", "同步当天股票/指数日线并刷新V4事件源", lambda: update_stock_today_data_task(["1d"], force=True), True),
+        (
+            "update_market_today_minute_data",
+            "同步当天股票/指数分钟快照",
+            lambda: update_market_today_minute_data_task(["5m", "15m", "30m", "60m"], force=True),
+            True,
+        ),
+        (
+            "sync_today_intraday_kline",
+            "同步当天全市场15m/30m分钟K线",
+            lambda: sync_today_intraday_kline_task(task_already_started=True),
+            True,
+        ),
+        ("update_sector_intraday_stats", "刷新当天板块统计", lambda: update_sector_intraday_stats_task(force=True), True),
+    ]
+    if after_close:
+        refresh_plan.extend(
+            [
+                (
+                    "official_daily_close_sync",
+                    "盘后正式日线写库与完整性校验",
+                    lambda: official_daily_close_sync_task(task_already_started=True),
+                    True,
+                ),
+                (
+                    "minute_kline_daily_repair_validate",
+                    "当天分钟K线补全自检",
+                    lambda: minute_kline_daily_repair_validate_task(task_already_started=True),
+                    True,
+                ),
+                (
+                    "repair_previous_daily_kline",
+                    "次日巡检修复复核",
+                    lambda: repair_previous_daily_kline_task(task_already_started=True),
+                    False,
+                ),
+            ]
+        )
+    else:
+        refresh_plan.append(
+            (
+                "minute_kline_daily_repair_validate",
+                "盘中分钟K线可用性自检",
+                lambda: minute_kline_daily_repair_validate_task(task_already_started=True, days=1),
+                False,
+            )
+        )
+
+    if not task_manager.start_task(master_task_name, trigger_source="manual"):
+        return
+
+    kickoff_message = "开始一键更新当天全市场数据并自检..."
+    if not after_close:
+        kickoff_message = "开始一键更新当天全市场数据，盘后完整性校验仅在 15:05 后执行..."
+    task_manager.update_progress(
+        master_task_name,
+        {"current": 0, "total": len(refresh_plan), "message": kickoff_message},
+    )
+
+    step_results: List[Dict[str, Any]] = []
+    failed_steps: List[Dict[str, Any]] = []
+    try:
+        for index, (task_name, label, task_fn, critical) in enumerate(refresh_plan, start=1):
+            current = task_manager.get_task_status(task_name)
+            if current.get("is_running"):
+                failure = {
+                    "task_name": task_name,
+                    "label": label,
+                    "success": False,
+                    "critical": bool(critical),
+                    "error": f"{label}正在运行，请稍后再试",
+                }
+                step_results.append(failure)
+                failed_steps.append(failure)
+                if critical:
+                    continue
+                continue
+            if not task_manager.start_task(task_name, trigger_source="manual"):
+                failure = {
+                    "task_name": task_name,
+                    "label": label,
+                    "success": False,
+                    "critical": bool(critical),
+                    "error": f"{label}启动失败，请稍后再试",
+                }
+                step_results.append(failure)
+                failed_steps.append(failure)
+                if critical:
+                    continue
+                continue
+
+            task_manager.update_progress(
+                master_task_name,
+                {"current": index - 1, "total": len(refresh_plan), "message": f"正在执行：{label}"},
+            )
+
+            try:
+                task_fn()
+            except Exception as exc:
+                logger.error(f"当天全市场更新执行 {task_name} 失败: {exc}")
+                task_manager.set_error(task_name, str(exc))
+
+            task_status = task_manager.get_task_status(task_name)
+            step_result = {
+                "task_name": task_name,
+                "label": label,
+                "success": not bool(task_status.get("error")),
+                "critical": bool(critical),
+                "error": task_status.get("error"),
+                "last_success_at": task_status.get("last_success_at"),
+                "message": (task_status.get("results") or {}).get("message") or task_status.get("progress", {}).get("message"),
+                "validation_status": (task_status.get("results") or {}).get("validation_status"),
+                "validation_reason": (task_status.get("results") or {}).get("validation_reason"),
+            }
+            step_results.append(step_result)
+            if task_status.get("error"):
+                failed_steps.append(step_result)
+
+            task_manager.update_progress(
+                master_task_name,
+                {"current": index, "total": len(refresh_plan), "message": f"已完成：{label}"},
+            )
+
+        critical_failed_steps = [item for item in failed_steps if item.get("critical")]
+        done_message = "当天所有核心数据源更新并自检完成"
+        if not after_close:
+            done_message = "当天所有核心数据源更新完成，盘后正式写库请在 15:05 后复核"
+        if failed_steps:
+            done_message = f"当天全市场更新完成但存在失败步骤: failed={len(failed_steps)}, critical_failed={len(critical_failed_steps)}"
+        results = {
+            "message": done_message,
+            "after_close_validation": after_close,
+            "total_steps": len(refresh_plan),
+            "success_steps": len([item for item in step_results if item.get("success")]),
+            "failed_steps": failed_steps,
+            "critical_failed_steps": critical_failed_steps,
+            "steps": step_results,
+            "coverage": {
+                "reference_data": ["trade_calendar", "stock_list", "index_list", "sectors", "sector_members"],
+                "today_market_data": [
+                    "stock_daily",
+                    "index_daily",
+                    "sector_intraday_stats",
+                    "intraday_minute_snapshot",
+                    "kline_minute_15",
+                    "kline_minute_30",
+                ],
+                "strategy_sources": ["gen2_v4_event_dataset"],
+                "after_close_checks": ["official_daily_close_sync", "minute_kline_daily_repair_validate"] if after_close else [],
+            },
+        }
+        task_manager.set_results(master_task_name, results, mark_success=not critical_failed_steps)
+        if critical_failed_steps:
+            task_manager.set_error(
+                master_task_name,
+                "; ".join(f"{item.get('label')}: {item.get('error')}" for item in critical_failed_steps[:3]),
+            )
+    except Exception as exc:
+        task_manager.set_error(master_task_name, str(exc))
+    finally:
+        task_status = task_manager.get_task_status(master_task_name)
+        if not task_status.get("error") and not task_status.get("results"):
+            fallback_message = "当天所有核心数据源更新并自检完成"
+            if not after_close:
+                fallback_message = "当天所有核心数据源更新完成，盘后正式写库请在 15:05 后复核"
+            task_manager.set_results(
+                master_task_name,
+                {
+                    "message": fallback_message,
+                    "after_close_validation": after_close,
+                    "steps": step_results,
+                },
+            )
+
+
 def kickoff_manual_core_data_sync() -> bool:
     global _core_data_manual_sync_thread
 
@@ -4924,6 +5691,21 @@ def kickoff_manual_core_data_sync() -> bool:
         _core_data_manual_sync_thread = threading.Thread(
             target=_run_manual_core_data_sync,
             name="core-data-manual-sync",
+            daemon=True,
+        )
+        _core_data_manual_sync_thread.start()
+        return True
+
+
+def kickoff_manual_today_full_market_refresh() -> bool:
+    global _core_data_manual_sync_thread
+
+    with _core_data_manual_sync_lock:
+        if _core_data_manual_sync_thread is not None and _core_data_manual_sync_thread.is_alive():
+            return False
+        _core_data_manual_sync_thread = threading.Thread(
+            target=_run_manual_today_full_market_refresh,
+            name="today-full-market-refresh",
             daemon=True,
         )
         _core_data_manual_sync_thread.start()
@@ -4950,7 +5732,7 @@ def start_core_data_maintenance_scheduler():
 
     scheduler.add_job(
         update_trade_calendar_task,
-        CronTrigger(hour=9, minute=0),
+        CronTrigger(hour=8, minute=45),
         id=_core_maintenance_job_ids["trade_calendar"],
         replace_existing=True,
         max_instances=1,
@@ -4982,7 +5764,10 @@ def start_core_data_maintenance_scheduler():
     )
     scheduler.add_job(
         lambda: update_stock_today_data_task(["1d"]),
-        CronTrigger(day_of_week="mon-fri", hour="9-11,13-14", minute="*/5"),
+        # Intraday 1d snapshots mainly serve UI freshness and same-day audit data.
+        # G2/G3 live confirmation depends on minute snapshots / completed 30m bars,
+        # so a 15-minute cadence is enough and reduces repeated TDX daily pulls.
+        CronTrigger(day_of_week="mon-fri", hour="9-11,13-14", minute="*/15"),
         id=_core_maintenance_job_ids["stock_intraday"],
         replace_existing=True,
         max_instances=1,
@@ -4992,6 +5777,16 @@ def start_core_data_maintenance_scheduler():
         lambda: update_market_today_minute_data_task(["5m", "15m", "30m", "60m"]),
         CronTrigger(day_of_week="mon-fri", hour="9-11,13-14", minute="3/5"),
         id=_core_maintenance_job_ids["market_intraday_minutes"],
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: sync_today_intraday_kline_task(task_already_started=False),
+        # Strategy refresh depends on ClickHouse 15m/30m bars, not only quote snapshots.
+        # Run shortly after 30-minute slots so G2/G3 can consume fresh same-day bars.
+        CronTrigger(day_of_week="mon-fri", hour="10-11,13-15", minute="2,32"),
+        id=_core_maintenance_job_ids["market_intraday_kline_refresh"],
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -5054,17 +5849,20 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, 
     jobs = _core_scheduler_jobs_status()
     results["jobs"] = jobs
     task_manager.tasks["core_data_maintenance"]["results"] = results
-    tracked_task_names = list(_core_maintenance_task_map.values()) + ["core_data_maintenance"]
+    extra_task_names = ["core_data_maintenance", "today_full_market_refresh"]
+    tracked_task_names = list(_core_maintenance_task_map.values()) + extra_task_names
     persisted_runs = _load_persisted_task_runs(tracked_task_names, limit=max(200, timeline_limit * 10))
     persisted_by_task = persisted_runs.get("by_task") or {}
 
+    status_task_names = dict(_core_maintenance_task_map)
+    status_task_names["today_full_market_refresh"] = "today_full_market_refresh"
     task_status = {
         key: task_manager.get_task_status(task_name)
-        for key, task_name in _core_maintenance_task_map.items()
+        for key, task_name in status_task_names.items()
     }
     task_status_normalized = {}
     for key, task in task_status.items():
-        task_name = _core_maintenance_task_map[key]
+        task_name = status_task_names[key]
         profile = _calc_duration_profile(task_name, recent_limit=10)
         persisted = persisted_by_task.get(task_name) or {}
         persisted_latest = persisted.get("latest") or {}
@@ -5076,7 +5874,7 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, 
         memory_status = _task_status_from_payload(task)
         persisted_status = persisted_latest.get("status")
         display_status = persisted_status if memory_status == "idle" and persisted_status in {"success", "failed"} else memory_status
-        task_status_normalized[key] = {
+        normalized_task = {
             "status": display_status,
             "is_running": bool(task.get("is_running")),
             "progress": task.get("progress") or {},
@@ -5104,6 +5902,20 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, 
             "recent_max_duration_sec": profile["recent_max_duration_sec"],
             "trigger_source": task.get("trigger_source"),
         }
+        if (
+            key == "official_daily"
+            and str(normalized_task.get("status") or "").lower() in {"failed", "error"}
+            and datetime.now().time() < dt_time(15, 5)
+        ):
+            normalized_task["status"] = "pending"
+            normalized_task["suppressed_last_error"] = normalized_task.get("last_error")
+            normalized_task["suppressed_last_error_at"] = normalized_task.get("last_error_at")
+            normalized_task["last_error"] = None
+            normalized_task["last_error_at"] = None
+            progress = dict(normalized_task.get("progress") or {})
+            progress["message"] = "after-close validation is not due yet; waiting for 15:05"
+            normalized_task["progress"] = progress
+        task_status_normalized[key] = normalized_task
     enabled = bool(results.get("enabled"))
     running_task = next((key for key, task in task_status.items() if task.get("is_running")), None)
 
@@ -5116,13 +5928,14 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, 
     for key, task in task_status.items():
         normalized = task_status_normalized.get(key) or {}
         last_run_at = _to_datetime(normalized.get("last_run_at") or task.get("last_run_at"))
-        if last_run_at and last_run_at.strftime("%Y-%m-%d") == today:
+        current_status = str(normalized.get("status") or "").strip().lower()
+        excluded_from_success_rate = bool(normalized.get("suppressed_last_error")) and current_status == "pending"
+        if last_run_at and last_run_at.strftime("%Y-%m-%d") == today and not excluded_from_success_rate:
             today_total += 1
             if normalized.get("last_success_at") and not normalized.get("last_error"):
                 today_success += 1
         last_error_at = _to_datetime(normalized.get("last_error_at") or task.get("last_error_at"))
         last_success_at = _to_datetime(normalized.get("last_success_at") or task.get("last_success_at"))
-        current_status = str(normalized.get("status") or "").strip().lower()
         if last_error_at and last_success_at and last_success_at >= last_error_at:
             last_error_at = None
         if current_status not in {"failed", "error"}:
@@ -5161,6 +5974,12 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, 
             seen.add(key)
             if len(timeline) >= timeline_limit:
                 break
+    task_status_by_name = {
+        status_task_names[key]: task
+        for key, task in task_status.items()
+    }
+    timeline = _dedupe_timeline_events(timeline)
+    timeline = _filter_stale_running_timeline(timeline, task_status_by_name)[:timeline_limit]
 
     return {
         "enabled": enabled,
@@ -5272,65 +6091,91 @@ async def run_official_daily_close_now(background_tasks: BackgroundTasks):
 
 
 @router.post("/core-data-maintenance/run-task/{task_key}")
-async def run_core_maintenance_task_now(task_key: str):
+async def run_core_maintenance_task_now(
+    task_key: str, force: bool = Query(default=False, description="Force intraday tasks even outside trading window")
+):
     """Manually trigger a single core maintenance task immediately."""
     task_configs = {
         "trade_calendar": {
             "task_name": "update_trade_calendar",
-            "runner": lambda: threading.Thread(target=update_trade_calendar_task, daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(target=update_trade_calendar_task, daemon=True).start(),
             "message": "交易日历同步任务已手动启动",
         },
         "stock_list_sync": {
             "task_name": "update_stock_list",
-            "runner": lambda: threading.Thread(target=update_stock_list_task, daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(target=update_stock_list_task, daemon=True).start(),
             "message": "股票列表同步任务已手动启动",
         },
         "index_list_sync": {
             "task_name": "update_index_list",
-            "runner": lambda: threading.Thread(target=update_index_list_task, daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(target=update_index_list_task, daemon=True).start(),
             "message": "指数列表同步任务已手动启动",
         },
         "sector_list_sync": {
             "task_name": "sync_sectors",
-            "runner": lambda: threading.Thread(target=sync_sectors_task, daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(target=sync_sectors_task, daemon=True).start(),
             "message": "板块列表同步任务已手动启动",
         },
         "stock_intraday": {
             "task_name": "update_stock_today_data",
-            "runner": lambda: threading.Thread(target=update_stock_today_data_task, args=(["1d"],), daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(
+                target=update_stock_today_data_task, args=(["1d"], force), daemon=True
+            ).start(),
             "message": "盘中股票/指数日线快照任务已手动启动",
         },
         "market_intraday_minutes": {
             "task_name": "update_market_today_minute_data",
-            "runner": lambda: threading.Thread(target=update_market_today_minute_data_task, args=(["5m", "15m", "30m", "60m"],), daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(
+                target=update_market_today_minute_data_task, args=(["5m", "15m", "30m", "60m"], force), daemon=True
+            ).start(),
             "message": "盘中股票/指数分钟级快照任务已手动启动",
+        },
+        "market_intraday_kline_refresh": {
+            "task_name": "sync_today_intraday_kline",
+            "runner": lambda force=False: threading.Thread(
+                target=sync_today_intraday_kline_task, kwargs={"task_already_started": True}, daemon=True
+            ).start(),
+            "message": "当天全市场15m/30m分钟K线落库任务已手动启动",
         },
         "minute_kline_daily_repair_validate": {
             "task_name": "minute_kline_daily_repair_validate",
-            "runner": lambda: threading.Thread(target=minute_kline_daily_repair_validate_task, args=(True,), daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(
+                target=minute_kline_daily_repair_validate_task, args=(True,), daemon=True
+            ).start(),
         "message": "最近2个交易日分钟K线补全验证任务已手动启动",
         },
         "market_minute_history_repair": {
             "task_name": "market_minute_history_repair",
-            "runner": lambda: threading.Thread(target=market_minute_history_repair_task, args=(True, 30), daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(
+                target=market_minute_history_repair_task, args=(True, 30), daemon=True
+            ).start(),
             "message": "股票/指数历史分钟级修复任务已手动启动",
         },
         "sector_intraday_stats_refresh": {
             "task_name": "update_sector_intraday_stats",
-            "runner": lambda: threading.Thread(target=update_sector_intraday_stats_task, daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(
+                target=update_sector_intraday_stats_task, kwargs={"force": force}, daemon=True
+            ).start(),
             "message": "板块当日统计刷新任务已手动启动",
         },
         "official_daily": {
             "task_name": "official_daily_close_sync",
-            "runner": lambda: threading.Thread(target=official_daily_close_sync_task, args=(True,), daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(
+                target=official_daily_close_sync_task, args=(True,), daemon=True
+            ).start(),
             "message": "盘后正式日线写库任务已手动启动",
         },
         "repair_daily": {
             "task_name": "repair_previous_daily_kline",
-            "runner": lambda: threading.Thread(target=repair_previous_daily_kline_task, daemon=True).start(),
+            "runner": lambda force=False: threading.Thread(
+                target=repair_previous_daily_kline_task, args=(True,), daemon=True
+            ).start(),
             "message": "次日自动巡检修复任务已手动启动",
         },
     }
+
+    force_tasks = {"stock_intraday", "market_intraday_minutes", "market_intraday_kline_refresh", "sector_intraday_stats_refresh"}
+    force_for_task = bool(force) or task_key in force_tasks
 
     config = task_configs.get(task_key)
     if not config:
@@ -5345,12 +6190,68 @@ async def run_core_maintenance_task_now(task_key: str):
         raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
     task_manager.update_progress(task_name, {"message": "任务已入队，准备执行..."})
 
-    config["runner"]()
+    config["runner"](force=force_for_task)
     return {
         "success": True,
         "message": config["message"],
         "task_name": task_name,
         "task": task_manager.get_task_status(task_name),
+    }
+
+
+@router.get("/ptrade-account-config")
+async def get_ptrade_account_config():
+    return {"success": True, "data": _ptrade_account_config_public()}
+
+
+@router.post("/ptrade-account-config")
+async def update_ptrade_account_config(request: PTradeAccountConfigRequest):
+    return {
+        "success": True,
+        "message": "PTrade账户配置已保存到本地私有配置",
+        "data": _save_ptrade_account_config(request),
+    }
+
+
+@router.get("/tdx-gateway/diagnostics")
+async def get_tdx_gateway_diagnostics(run_probe: bool = True):
+    return {"success": True, "data": _build_tdx_gateway_diagnostics(run_probe=run_probe)}
+
+
+@router.post("/tdx-gateway/initialize")
+async def initialize_tdx_gateway():
+    init_result = _tdx_gateway_request("POST", "/initialize", timeout=45)
+    init_body = init_result.get("body") if isinstance(init_result, dict) else {}
+    init_ok = bool(init_result.get("ok") and isinstance(init_body, dict) and init_body.get("ok"))
+    return {
+        "success": init_ok,
+        "message": "TDX Gateway initialize request finished",
+        "data": {
+            "initialize": init_result,
+            "diagnostics": _build_tdx_gateway_diagnostics(run_probe=True),
+        },
+    }
+
+
+@router.post("/tdx-gateway/restart")
+async def restart_tdx_gateway():
+    restart_result = _tdx_gateway_request("POST", "/admin/restart", timeout=10)
+    if not restart_result.get("ok"):
+        return {
+            "success": False,
+            "message": "TDX Gateway restart request failed; use scripts/start_tdx_gateway.bat or Windows scheduled task if Gateway is fully down.",
+            "data": {
+                "restart": restart_result,
+                "diagnostics": _build_tdx_gateway_diagnostics(run_probe=False),
+            },
+        }
+    return {
+        "success": True,
+        "message": "TDX Gateway restart has been requested. Wait a few seconds and refresh diagnostics.",
+        "data": {
+            "restart": restart_result,
+            "diagnostics": _build_tdx_gateway_diagnostics(run_probe=False),
+        },
     }
 
 
@@ -5369,6 +6270,24 @@ async def sync_core_assets_now():
         "message": "核心数据同步任务已启动，将按顺序同步股票、指数、板块的列表和当日日K",
         "task_name": "core_data_manual_sync",
         "task": task_manager.get_task_status("core_data_manual_sync"),
+    }
+
+
+@router.post("/core-data-maintenance/refresh-today-full-market")
+async def refresh_today_full_market_now():
+    """Refresh today's stock/index/sector data and run integrity checks when available."""
+    current = task_manager.get_task_status("today_full_market_refresh")
+    if current and current.get("is_running"):
+        raise HTTPException(status_code=400, detail="today full market refresh task is already running")
+
+    if not kickoff_manual_today_full_market_refresh():
+        raise HTTPException(status_code=400, detail="today full market refresh task is already running")
+
+    return {
+        "success": True,
+        "message": "当天股票、指数、板块数据一键更新任务已启动，将按顺序刷新并在盘后执行完整性自检",
+        "task_name": "today_full_market_refresh",
+        "task": task_manager.get_task_status("today_full_market_refresh"),
     }
 
 
@@ -5566,7 +6485,10 @@ async def trigger_update_stock_list(background_tasks: BackgroundTasks):
 
 
 @router.post("/update-sector-intraday-stats")
-async def trigger_update_sector_intraday_stats(background_tasks: BackgroundTasks):
+async def trigger_update_sector_intraday_stats(
+    background_tasks: BackgroundTasks,
+    force: bool = Query(default=False, description="Force intraday stats refresh even outside trading window"),
+):
     task_name = "update_sector_intraday_stats"
 
     logger.info("接收到刷新板块当日统计请求")
@@ -5574,7 +6496,7 @@ async def trigger_update_sector_intraday_stats(background_tasks: BackgroundTasks
     if not task_manager.start_task(task_name, trigger_source="manual"):
         raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
 
-    thread = threading.Thread(target=update_sector_intraday_stats_task, daemon=True)
+    thread = threading.Thread(target=update_sector_intraday_stats_task, kwargs={"force": force}, daemon=True)
     thread.start()
 
     return {
@@ -5593,19 +6515,36 @@ async def get_trade_calendar_status():
         from utils.database import db
 
         with db.engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    """
-                    SELECT
-                        COUNT(1) AS cnt,
-                        MIN(trade_date) AS min_date,
-                        MAX(trade_date) AS max_date,
-                        MAX(updated_at) AS last_updated_at
-                    FROM trade_calendar
-                    WHERE market = 'SH' AND is_trading = 1
-                    """
-                )
-            ).fetchone()
+            try:
+                row = conn.execute(
+                    text(
+                        """
+                        SELECT
+                            COUNT(1) AS cnt,
+                            MIN(trade_date) AS min_date,
+                            MAX(trade_date) AS max_date,
+                            MAX(updated_at) AS last_updated_at
+                        FROM trade_calendar
+                        WHERE market = 'SH' AND is_trading = 1
+                        """
+                    )
+                ).fetchone()
+            except Exception as exc:
+                if "updated_at" not in str(exc):
+                    raise
+                row = conn.execute(
+                    text(
+                        """
+                        SELECT
+                            COUNT(1) AS cnt,
+                            MIN(trade_date) AS min_date,
+                            MAX(trade_date) AS max_date,
+                            NULL AS last_updated_at
+                        FROM trade_calendar
+                        WHERE market = 'SH' AND is_trading = 1
+                        """
+                    )
+                ).fetchone()
 
         cnt = int(row[0] or 0) if row else 0
         min_date = row[1].isoformat() if row and row[1] else None
@@ -5648,7 +6587,7 @@ async def trigger_update_today_data(background_tasks: BackgroundTasks, request: 
         raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
     
     # 在后台线程中执行任务
-    thread = threading.Thread(target=update_today_data_task, args=(request.periods,), daemon=True)
+    thread = threading.Thread(target=update_today_data_task, args=(request.periods, request.force), daemon=True)
     thread.start()
     
     return {
@@ -5679,7 +6618,7 @@ async def trigger_update_stock_today_data(background_tasks: BackgroundTasks, req
         raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
     
     # 在后台线程中执行任务
-    thread = threading.Thread(target=update_stock_today_data_task, args=(request.periods,), daemon=True)
+    thread = threading.Thread(target=update_stock_today_data_task, args=(request.periods, request.force), daemon=True)
     thread.start()
     
     return {

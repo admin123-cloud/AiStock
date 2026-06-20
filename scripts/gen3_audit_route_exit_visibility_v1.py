@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,16 +10,15 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "reports" / "gen3_route_exit_visibility_audit_v1"
-CANDIDATES = ROOT / "reports" / "gen3_combo_range_filter_v1" / "range_conservative_combo_b_candidates.csv"
-PANIC_SOURCE = (
-    ROOT
-    / "reports"
-    / "gen3_panic_v2_research"
-    / "final_candidate_v1"
-    / "m30_close5_full_nextopen_cost30_closed_trades.csv"
-)
-RANGE_SOURCE = ROOT / "reports" / "gen3_range_v3_mtm_pressure_v1" / "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path
+
+OUT_DIR = report_path("gen3_route_exit_visibility_audit_v1")
+CANDIDATES = report_path("gen3_combo_range_filter_v1", "range_conservative_combo_b_candidates.csv")
+PANIC_SOURCE = report_path("gen3_panic_v2_research", "final_candidate_v1", "m30_close5_full_nextopen_cost30_closed_trades.csv")
+RANGE_SOURCE = report_path("gen3_range_v3_mtm_pressure_v1", "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv")
 
 
 def _date(s: pd.Series) -> pd.Series:

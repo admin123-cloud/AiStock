@@ -1,2 +1,4 @@
 #!/bin/sh
-python scripts/check_encoding_guard.py --staged
+set -e
+
+python scripts/check_text_health.py --staged

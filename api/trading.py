@@ -22,7 +22,7 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
 from sqlalchemy import text
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -69,6 +69,8 @@ GEN2_BACKTEST_UPDATE_TASKS: Dict[str, Dict[str, Any]] = {}
 GEN2_BACKTEST_UPDATE_TASK_LOCK = threading.Lock()
 GEN2_OFFICIAL_REBUILD_TASKS: Dict[str, Dict[str, Any]] = {}
 GEN2_OFFICIAL_REBUILD_TASK_LOCK = threading.Lock()
+GEN2_MAINLINE_UPDATE_TASKS: Dict[str, Dict[str, Any]] = {}
+GEN2_MAINLINE_UPDATE_TASK_LOCK = threading.Lock()
 PTRADE_ACCEPTANCE_TASKS: Dict[str, Dict[str, Any]] = {}
 PTRADE_ACCEPTANCE_TASK_LOCK = threading.Lock()
 PTRADE_LIVE_SUBMIT_TEST_TASKS: Dict[str, Dict[str, Any]] = {}
@@ -107,10 +109,18 @@ GEN2_V2_COMPLETE_SUMMARY_PATH = report_path("gen2_v2_complete_strategy", "summar
 GEN2_ALPHA191_TRAIN_SOURCE_PATH = report_path("gen2_alpha191_overlay_candidate_train_dirs", "sources", "risk_cool_base.parquet")
 GEN2_ALPHA191_TRAIN_VALUES_PATH = report_path("gen2_alpha191_candidate_core10_t1", "alpha191_core10_t1_signal_values.parquet")
 GEN2_OPEN_STATE_DAILY_PATH = report_path("gen2_open_state_research_full", "g2_open_state_daily.csv")
+GEN2_DAILY_TICKET_DIR = runtime_path("gen2_daily_trade_tickets")
+GEN2_DAILY_TICKET_LATEST_PATH = GEN2_DAILY_TICKET_DIR / "latest.json"
+GEN2_DAILY_EXECUTION_LEDGER_PATH = GEN2_DAILY_TICKET_DIR / "execution_ledger.json"
 GEN2_OPEN_STATE_TIMING_SCRIPT_PATH = REPO_ROOT / "scripts" / "gen2_timing_regime_research.py"
 GEN2_OPEN_STATE_RESEARCH_SCRIPT_PATH = REPO_ROOT / "scripts" / "gen2_build_open_state_research.py"
 GEN2_OPEN_STATE_TIMING_DIR = report_path("gen2_timing_research")
 GEN2_OPEN_STATE_RESEARCH_DIR = report_path("gen2_open_state_research_full")
+GEN2_MAINLINE_INTRADAY_FACTOR_DIR = report_path("mainline_intraday_diffusion_factor")
+GEN2_MAINLINE_INTRADAY_OVERLAY_DIR = report_path("mainline_intraday_candidate_overlay")
+GEN2_MAINLINE_THEME_POOL_DIR = report_path("mainline_theme_observation_pool_v1")
+GEN2_MAINLINE_THEME_OVERLAY_DIR = report_path("mainline_theme_strategy_overlay_v1")
+GEN2_MAINLINE_SECTOR_WATCHLIST_DIR = report_path("mainline_sector_watchlist")
 GEN2_OPEN_STATE_REBUILD_LOCK = threading.Lock()
 GEN2_OPEN_STATE_REBUILD_MAX_COOLDOWN_SECONDS = 300
 GEN2_OPEN_STATE_REBUILD_TIMEOUT_SECONDS = 1800
@@ -164,12 +174,25 @@ V4_MONITOR_DIR = runtime_path("v4_live_monitor")
 V4_MONITOR_STATE_PATH = V4_MONITOR_DIR / "monitor_state.json"
 V4_MONITOR_SIGNAL_PATH = V4_MONITOR_DIR / "signal_snapshot.json"
 GEN2_SHADOW_MONITOR_STATE_PATH = V4_MONITOR_DIR / "gen2_shadow_buy_monitor_state.json"
+GEN2_STRATEGY_REFRESH_STATE_PATH = V4_MONITOR_DIR / "gen2_strategy_refresh_state.json"
 GEN2_SHADOW_VERIFICATION_PATH = V4_MONITOR_DIR / "gen2_shadow_signal_verifications.json"
 THS_CAPITAL_HOLDINGS_CACHE_PATH = V4_MONITOR_DIR / "ths_capital_holdings_cache.json"
 _v4_monitor_scheduler: Optional[BackgroundScheduler] = None
 _v4_monitor_scheduler_lock = threading.Lock()
 _v4_monitor_job_id = "v4_manual_holdings_monitor"
 _gen2_shadow_monitor_job_id = "gen2_shadow_buy_monitor"
+_gen2_strategy_refresh_job_id = "gen2_strategy_refresh_30m"
+_gen2_strategy_refresh_lock = threading.Lock()
+GEN2_30M_BAR_CLOSE_TIMES = (
+    time(10, 0),
+    time(10, 30),
+    time(11, 0),
+    time(11, 30),
+    time(13, 30),
+    time(14, 0),
+    time(14, 30),
+    time(15, 0),
+)
 
 
 def _ensure_v4_monitor_dir() -> None:
@@ -246,10 +269,10 @@ def _get_ths_trade_window():
             continue
         candidates.append((title, win.handle))
     for title, win in candidates:
-        if "缃戜笂鑲＄エ浜ゆ槗绯荤粺" in title:
+        if "网上股票交易系统" in title:
             return app.window(handle=win)
     for title, win in candidates:
-        if "浜ゆ槗绯荤粺" in title or "xiadan" in title.lower():
+        if "交易系统" in title or "xiadan" in title.lower():
             return app.window(handle=win)
     raise RuntimeError("NO_XIADAN_WINDOW")
 
@@ -311,14 +334,14 @@ def _read_ths_current_table_text() -> Dict[str, Any]:
             raise RuntimeError(err)
     except Exception as exc:
         logger.warning(f"read ths current table failed: {exc}")
-        return {"ok": False, "message": f"璇诲彇鍚岃姳椤虹獥鍙ｅけ璐? {exc}"}
+        return {"ok": False, "message": f"读取同花顺窗口失? {exc}"}
 
     lines = [line.rstrip("\r") for line in str(raw_text or "").splitlines() if line.strip()]
     raw_text = "\n".join(lines)
     view_type = _detect_ths_table_view(raw_text)
     view_desc = {
-        "recent_trades": "鍘嗗彶鎴愪氦",
-        "holdings": "鎸佷粨",
+        "recent_trades": "历史成交",
+        "holdings": "持仓",
         "unknown": "鏈煡琛ㄦ牸",
     }.get(view_type, "鏈煡琛ㄦ牸")
     return {
@@ -750,10 +773,10 @@ def _read_ths_capital_holdings_text() -> Dict[str, Any]:
                     **cached,
                     "ok": True,
                     "fallback_cache": True,
-                    "message": f"瀹炴椂璇诲彇澶辫触锛屽凡鍥為€€鍒版渶杩戜竴娆℃垚鍔熷悓姝ョ殑璧勯噾鎸佽偂蹇収: {exc}",
+                    "message": f"实时读取失败，已回到最近一次成功同步的资金持股快照: {exc}",
                 }
             )
-        return {"ok": False, "message": f"璇诲彇鍚岃姳椤鸿祫閲戣偂绁ㄥけ璐? {exc}"}
+        return {"ok": False, "message": f"读取同花顺资金股票失? {exc}"}
 
     lines = [line.rstrip("\r") for line in str(raw_text or "").splitlines() if line.strip()]
     normalized = "\n".join(lines)
@@ -764,12 +787,97 @@ def _read_ths_capital_holdings_text() -> Dict[str, Any]:
         "ok": True,
         "raw_text": normalized,
         "view_type": "capital_holdings",
-        "view_type_desc": "璧勯噾鑲＄エ",
+        "view_type_desc": "资金股票",
         "preview_lines": lines[:16],
         "capital": parsed.get("capital") or {},
         "holdings": parsed.get("holdings") or [],
         "synced_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "fallback_cache": False,
+    }
+    _save_ths_capital_holdings_cache(result)
+    return result
+
+
+def _read_ths_capital_holdings_text() -> Dict[str, Any]:
+    first_error: Exception | None = None
+    try:
+        result = _read_ths_capital_holdings_without_copy()
+        _save_ths_capital_holdings_cache(result)
+        return result
+    except Exception as exc:
+        first_error = exc
+        logger.warning(f"read ths capital holdings without copy failed: {exc}")
+
+    try:
+        from pywinauto.keyboard import send_keys
+        import time as time_mod
+
+        win = _get_ths_trade_window()
+        win.set_focus()
+        time_mod.sleep(0.5)
+
+        holdings_item = win.child_window(title="资金持仓", control_type="TreeItem")
+        if not holdings_item.exists(timeout=3):
+            raise RuntimeError("NO_THS_CAPITAL_HOLDINGS_MENU")
+        holdings_item.click_input()
+        time_mod.sleep(1.0)
+
+        try:
+            grid_pane = win.child_window(title="Custom1", auto_id="1047", control_type="Pane")
+            if grid_pane.exists(timeout=1):
+                grid_pane.click_input(coords=(220, 36))
+                time_mod.sleep(0.4)
+        except Exception:
+            pass
+
+        send_keys("^a")
+        time_mod.sleep(0.2)
+        send_keys("^c")
+        time_mod.sleep(0.8)
+
+        clip_proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-STA",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::GetText()",
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+        )
+        raw_text = str(clip_proc.stdout or "").strip()
+        if clip_proc.returncode != 0 or not raw_text:
+            err = str(clip_proc.stderr or "").strip() or "EMPTY_CLIPBOARD_TEXT"
+            raise RuntimeError(err)
+    except Exception as exc:
+        logger.warning(f"read ths capital holdings clipboard fallback failed: {exc}")
+        combined = RuntimeError(f"ocr={first_error}; clipboard={exc}") if first_error else exc
+        return _ths_capital_holdings_cache_response(combined, "实时读取同花顺资金持仓失败")
+
+    lines = [line.rstrip("\r") for line in str(raw_text or "").splitlines() if line.strip()]
+    normalized = "\n".join(lines)
+    parsed = _parse_ths_capital_holdings(normalized)
+    if not _validate_ths_capital_holdings_result(parsed.get("holdings") or []):
+        return _ths_capital_holdings_cache_response(
+            RuntimeError("INVALID_THS_CAPITAL_HOLDINGS_PARSE"),
+            "实时解析同花顺资金持仓失败",
+        )
+    result = {
+        "ok": True,
+        "raw_text": normalized,
+        "view_type": "capital_holdings",
+        "view_type_desc": "资金持仓",
+        "preview_lines": lines[:16],
+        "capital": parsed.get("capital") or {},
+        "holdings": parsed.get("holdings") or [],
+        "synced_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "fallback_cache": False,
+        "source": "ths_clipboard",
     }
     _save_ths_capital_holdings_cache(result)
     return result
@@ -848,8 +956,8 @@ def _default_gen2_shadow_monitor_state() -> Dict[str, Any]:
         "heartbeat_enabled": True,
         "heartbeat_email_minutes": 30,
         "official_rebuild_enabled": True,
-        "official_rebuild_include_breakout": False,
-        "official_rebuild_timeout_seconds": 5400,
+        "official_rebuild_include_breakout": True,
+        "official_rebuild_timeout_seconds": 10800,
         "official_rebuild_retry_minutes": 10,
         "last_official_rebuild_date": None,
         "last_official_rebuild_at": None,
@@ -885,8 +993,9 @@ def _load_gen2_shadow_monitor_state() -> Dict[str, Any]:
     base["heartbeat_enabled"] = bool(base.get("heartbeat_enabled", True))
     base["heartbeat_email_minutes"] = max(30, _to_int(base.get("heartbeat_email_minutes"), 30))
     base["official_rebuild_enabled"] = bool(base.get("official_rebuild_enabled", True))
-    base["official_rebuild_include_breakout"] = bool(base.get("official_rebuild_include_breakout", False))
-    base["official_rebuild_timeout_seconds"] = max(300, _to_int(base.get("official_rebuild_timeout_seconds"), 5400))
+    base["official_rebuild_legacy_330"] = bool(base.get("official_rebuild_legacy_330", True))
+    base["official_rebuild_include_breakout"] = bool(base.get("official_rebuild_include_breakout", True))
+    base["official_rebuild_timeout_seconds"] = max(300, _to_int(base.get("official_rebuild_timeout_seconds"), 10800))
     base["official_rebuild_retry_minutes"] = max(1, _to_int(base.get("official_rebuild_retry_minutes"), 10))
     keys = base.get("last_alert_keys")
     base["last_alert_keys"] = keys if isinstance(keys, dict) else {}
@@ -897,11 +1006,79 @@ def _save_gen2_shadow_monitor_state(state: Dict[str, Any]) -> None:
     _save_json_file(GEN2_SHADOW_MONITOR_STATE_PATH, _sanitize(state))
 
 
+def _default_gen2_strategy_refresh_state() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "trading_hours_only": True,
+        "data_delay_minutes": 2,
+        "run_shadow_monitor": True,
+        "run_mainline_hotspots": True,
+        "mainline_mode": "sector",
+        "mainline_limit": 30,
+        "force_each_bar_once": True,
+        "last_bar_slot": None,
+        "last_run_at": None,
+        "last_success_at": None,
+        "last_skip_at": None,
+        "last_error": None,
+        "last_result": None,
+        "last_mainline_task_id": None,
+    }
+
+
+def _load_gen2_strategy_refresh_state() -> Dict[str, Any]:
+    state = _load_json_file(GEN2_STRATEGY_REFRESH_STATE_PATH, _default_gen2_strategy_refresh_state())
+    if not isinstance(state, dict):
+        state = _default_gen2_strategy_refresh_state()
+    base = _default_gen2_strategy_refresh_state()
+    base.update(state)
+    base["enabled"] = bool(base.get("enabled"))
+    base["trading_hours_only"] = bool(base.get("trading_hours_only"))
+    base["data_delay_minutes"] = min(20, max(0, _to_int(base.get("data_delay_minutes"), 2)))
+    base["run_shadow_monitor"] = bool(base.get("run_shadow_monitor", True))
+    base["run_mainline_hotspots"] = bool(base.get("run_mainline_hotspots", True))
+    mode = str(base.get("mainline_mode") or "sector").strip().lower()
+    base["mainline_mode"] = mode if mode in {"all", "sector", "theme"} else "sector"
+    base["mainline_limit"] = min(120, max(5, _to_int(base.get("mainline_limit"), 30)))
+    base["force_each_bar_once"] = bool(base.get("force_each_bar_once", True))
+    return base
+
+
+def _save_gen2_strategy_refresh_state(state: Dict[str, Any]) -> None:
+    _save_json_file(GEN2_STRATEGY_REFRESH_STATE_PATH, _sanitize(state))
+
+
+def _gen2_30m_bar_slot(now: datetime, data_delay_minutes: int = 2) -> Optional[str]:
+    if not TradingCalendar.is_trading_day(now):
+        return None
+    delay = timedelta(minutes=min(20, max(0, int(data_delay_minutes or 0))))
+    current = now.time()
+    selected: Optional[time] = None
+    for close_time in GEN2_30M_BAR_CLOSE_TIMES:
+        ready_at = (datetime.combine(now.date(), close_time) + delay).time()
+        if current >= ready_at:
+            selected = close_time
+    if selected is None:
+        return None
+    return f"{now.strftime('%Y-%m-%d')} {selected.strftime('%H:%M')}"
+
+
+def _gen2_strategy_refresh_triggers(data_delay_minutes: int) -> OrTrigger:
+    delay = timedelta(minutes=min(20, max(0, int(data_delay_minutes or 0))))
+    triggers = []
+    base_date = date(2000, 1, 1)
+    for close_time in GEN2_30M_BAR_CLOSE_TIMES:
+        run_at = datetime.combine(base_date, close_time) + delay
+        triggers.append(CronTrigger(hour=str(run_at.hour), minute=str(run_at.minute), timezone="Asia/Shanghai"))
+    return OrTrigger(triggers)
+
+
 def _run_gen2_official_latest_rebuild(
     signal_date: str,
     include_breakout: bool = False,
     breakout_only: bool = False,
-    timeout_seconds: int = 5400,
+    legacy_330: bool = False,
+    timeout_seconds: int = 10800,
 ) -> Dict[str, Any]:
     cmd = [
         sys.executable,
@@ -913,6 +1090,8 @@ def _run_gen2_official_latest_rebuild(
         cmd.append("--breakout-only")
     elif not include_breakout:
         cmd.append("--skip-breakout")
+    if legacy_330:
+        cmd.append("--legacy-330")
     started_at = datetime.now()
     try:
         proc = subprocess.run(
@@ -922,7 +1101,7 @@ def _run_gen2_official_latest_rebuild(
             encoding="utf-8",
             errors="replace",
             capture_output=True,
-            timeout=max(300, int(timeout_seconds or 5400)),
+            timeout=max(300, int(timeout_seconds or 10800)),
         )
     except subprocess.TimeoutExpired as exc:
         finished_at = datetime.now()
@@ -934,9 +1113,9 @@ def _run_gen2_official_latest_rebuild(
             "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
             "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
             "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
-            "timeout_seconds": max(300, int(timeout_seconds or 5400)),
+            "timeout_seconds": max(300, int(timeout_seconds or 10800)),
             "error": "timeout",
-            "message": f"G2 latest-driven姝ｅ紡涓婚摼閲嶅缓瓒呮椂锛?{max(300, int(timeout_seconds or 5400))}绉掞級",
+            "message": f"G2 latest-driven正式主链重建超时?{max(300, int(timeout_seconds or 5400))}秒）",
             "stdout_tail": "\n".join((exc.stdout or "").splitlines()[-20:]),
             "stderr_tail": "\n".join((exc.stderr or "").splitlines()[-20:]),
             "cmd": cmd,
@@ -952,8 +1131,11 @@ def _run_gen2_official_latest_rebuild(
             payload = parsed
     except Exception:
         payload = None
+    payload_ok: Optional[bool] = None
+    if isinstance(payload, dict) and "ok" in payload:
+        payload_ok = bool(payload.get("ok"))
     result = {
-        "ok": proc.returncode == 0,
+        "ok": proc.returncode == 0 and payload_ok is not False,
         "signal_date": signal_date,
         "include_breakout": include_breakout,
         "breakout_only": breakout_only,
@@ -968,8 +1150,16 @@ def _run_gen2_official_latest_rebuild(
     if payload is not None:
         result["payload"] = payload
         result["completed_steps"] = payload.get("completed_steps")
+        if payload_ok is False:
+            result["payload_ok"] = False
+            result["failed_steps"] = [
+                str(item.get("title") or item.get("name") or "")
+                for item in payload.get("results", [])
+                if isinstance(item, dict) and not bool(item.get("ok"))
+            ]
     if not result["ok"]:
-        result["message"] = f"G2 latest-driven姝ｅ紡涓婚摼閲嶅缓澶辫触锛宺eturncode={proc.returncode}"
+        reason = "payload ok=false" if payload_ok is False else f"returncode={proc.returncode}"
+        result["message"] = f"G2 latest-driven official rebuild failed: {reason}"
     return result
 
 
@@ -1005,7 +1195,7 @@ def _mark_gen2_official_rebuild_task_failed(task: Dict[str, Any], reason: str) -
     now = datetime.now()
     now_text = now.strftime("%Y-%m-%d %H:%M:%S")
     start_time = _parse_task_datetime(task.get("started_at") or task.get("created_at")) or now
-    timeout_seconds = int(task.get("timeout_seconds") or 5400)
+    timeout_seconds = int(task.get("timeout_seconds") or 10800)
     duration_seconds = round((now - start_time).total_seconds(), 1)
     failed_result = {
         "ok": False,
@@ -1058,7 +1248,7 @@ def _find_active_gen2_official_rebuild_task() -> Optional[Dict[str, Any]]:
             if status not in {"queued", "running"}:
                 continue
             start_time = _parse_task_datetime(task.get("started_at") or task.get("created_at"))
-            timeout_seconds = max(300, _to_int(task.get("timeout_seconds"), 5400))
+            timeout_seconds = max(300, _to_int(task.get("timeout_seconds"), 10800))
             if start_time and (datetime.now() - start_time).total_seconds() >= timeout_seconds + 120:
                 _mark_gen2_official_rebuild_task_failed(task, f"official rebuild task exceeded timeout guard: {timeout_seconds}s")
                 continue
@@ -1092,7 +1282,7 @@ def _reconcile_official_rebuild_state_if_needed(
                         "started_at": str(task_payload.get("started_at") or ""),
                         "finished_at": str(task_payload.get("completed_at") or now.strftime("%Y-%m-%d %H:%M:%S")),
                         "duration_seconds": task_payload.get("duration_seconds"),
-                        "timeout_seconds": _to_int(task_payload.get("timeout_seconds"), 5400),
+                        "timeout_seconds": _to_int(task_payload.get("timeout_seconds"), 10800),
                         "error": task_payload.get("error") or "official rebuild task exited",
                         "message": task_payload.get("error") or "official rebuild task exited",
                         "status": task_status or "failed",
@@ -1112,7 +1302,7 @@ def _reconcile_official_rebuild_state_if_needed(
                 _save_gen2_shadow_monitor_state(state)
                 return result
 
-    timeout_seconds = max(300, _to_int(state.get("official_rebuild_timeout_seconds"), 5400))
+    timeout_seconds = max(300, _to_int(state.get("official_rebuild_timeout_seconds"), 10800))
     state_result = state.get("last_official_rebuild_result")
     state_result = state_result if isinstance(state_result, dict) else {}
     started_text = str(
@@ -1137,7 +1327,7 @@ def _reconcile_official_rebuild_state_if_needed(
     failed_result = {
         "ok": False,
         "signal_date": str(state.get("last_official_rebuild_date") or ""),
-        "include_breakout": bool(state.get("official_rebuild_include_breakout", False)),
+        "include_breakout": bool(state.get("official_rebuild_include_breakout", True)),
         "breakout_only": False,
         "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
         "finished_at": now_text,
@@ -1165,6 +1355,7 @@ def _run_gen2_official_rebuild_task(
     signal_date: str,
     include_breakout: bool,
     breakout_only: bool,
+    legacy_330: bool,
     timeout_seconds: int,
 ) -> None:
     started_at = datetime.now()
@@ -1177,6 +1368,7 @@ def _run_gen2_official_rebuild_task(
             "signal_date": signal_date,
             "include_breakout": bool(include_breakout),
             "breakout_only": bool(breakout_only),
+            "legacy_330": bool(legacy_330),
             "timeout_seconds": int(timeout_seconds),
             "started_at": started_at.isoformat(timespec="seconds"),
         },
@@ -1194,6 +1386,7 @@ def _run_gen2_official_rebuild_task(
             signal_date,
             include_breakout=include_breakout,
             breakout_only=breakout_only,
+            legacy_330=legacy_330,
             timeout_seconds=timeout_seconds,
         )
     except Exception as exc:
@@ -1214,6 +1407,7 @@ def _run_gen2_official_rebuild_task(
             "stderr_tail": "",
             "cmd": [],
         }
+    finished_at = datetime.now()
     task_payload = {
         "status": "completed" if result.get("ok") else "failed",
         "progress": 100,
@@ -1244,6 +1438,7 @@ def _start_gen2_official_rebuild_task(
     include_breakout: bool,
     timeout_seconds: int,
     breakout_only: bool = False,
+    legacy_330: bool = False,
 ) -> Dict[str, Any]:
     active = _find_active_gen2_official_rebuild_task()
     if active:
@@ -1258,6 +1453,7 @@ def _start_gen2_official_rebuild_task(
             "signal_date": signal_date,
             "include_breakout": bool(include_breakout),
             "breakout_only": bool(breakout_only),
+            "legacy_330": bool(legacy_330),
             "timeout_seconds": int(timeout_seconds),
             "created_at": datetime.now().isoformat(timespec="seconds"),
         },
@@ -1269,7 +1465,7 @@ def _start_gen2_official_rebuild_task(
     _save_gen2_shadow_monitor_state(state)
     thread = threading.Thread(
         target=_run_gen2_official_rebuild_task,
-        args=(task_id, signal_date, bool(include_breakout), bool(breakout_only), int(timeout_seconds)),
+        args=(task_id, signal_date, bool(include_breakout), bool(breakout_only), bool(legacy_330), int(timeout_seconds)),
         name=f"gen2-official-rebuild-{task_id}",
         daemon=True,
     )
@@ -1570,6 +1766,35 @@ def _load_ths_capital_holdings_cache() -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _is_ths_capital_holdings_cache_fresh(data: Dict[str, Any], max_age_minutes: int = 30) -> bool:
+    synced_at = str((data or {}).get("synced_at") or "").strip()
+    if not synced_at:
+        return False
+    try:
+        ts = datetime.fromisoformat(synced_at.replace("/", "-"))
+    except Exception:
+        try:
+            ts = datetime.strptime(synced_at[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return False
+    return (datetime.now() - ts).total_seconds() <= max_age_minutes * 60
+
+
+def _ths_capital_holdings_cache_response(exc: Exception, message_prefix: str) -> Dict[str, Any]:
+    cached = _load_ths_capital_holdings_cache()
+    if not cached:
+        return {"ok": False, "message": f"{message_prefix}: {exc}"}
+    fresh = _is_ths_capital_holdings_cache_fresh(cached)
+    payload = {
+        **cached,
+        "ok": bool(fresh),
+        "fallback_cache": True,
+        "stale_cache": not fresh,
+        "message": f"{message_prefix}，{'已返回最近缓存' if fresh else '缓存已过期，禁止作为真实账户同步结果'}: {exc}",
+    }
+    return _sanitize(payload)
+
+
 def _save_ths_capital_holdings_cache(data: Dict[str, Any]) -> None:
     _save_json_file(THS_CAPITAL_HOLDINGS_CACHE_PATH, _sanitize(data))
 
@@ -1603,7 +1828,7 @@ def _monitor_state_for_row(row: Dict[str, Any]) -> str:
 
 def _load_smtp_config_for_monitor(recipient_override: Optional[str] = None) -> Dict[str, Any]:
     email_cfg = app_config.get("email", default=None, config_file="settings.yaml") or {}
-    if not email_cfg.get("enabled"):
+    if email_cfg.get("enabled", True) is False:
         raise RuntimeError("email.enabled 未启用，无法发送邮件")
     smtp_server = str(email_cfg.get("smtp_server") or "").strip()
     smtp_port = _to_int(email_cfg.get("smtp_port"), 0)
@@ -1812,12 +2037,12 @@ def _run_v4_manual_holdings_monitor(force_send: bool = False, recipient_override
     repeat_seconds = repeat_minutes * 60
     reminder_active = bool(state.get("reminder_active"))
     if changes:
-        subject = f"瀹炵洏鎸佷粨鐩戞帶淇″彿鎻愰啋 {now_text[:16]}"
+        subject = f"实盘持仓监控信号提醒 {now_text[:16]}"
         lines = [f"更新时间:{now_text}", f"通知数量:{len(changes)}", ""]
         for idx, item in enumerate(changes, start=1):
             pnl_text = "--" if _to_float(item.get("pnl_ratio")) is None else f"{float(item.get('pnl_ratio')):.2f}%"
             lines.append(
-                f"{idx}. {item.get('code')} {item.get('name')} | 鐩堜簭 {pnl_text} | 椋庨櫓 {item.get('risk_level')} | 15m鑳岀={item.get('rsi15')} 30m鑳岀={item.get('rsi30')}"
+                f"{idx}. {item.get('code')} {item.get('name')} | 盈亏 {pnl_text} | 风险 {item.get('risk_level')} | 15m背离={item.get('rsi15')} 30m背离={item.get('rsi30')}"
             )
             lines.append(f"   建议：{item.get('suggestion')}")
         _send_monitor_email(subject, "\n".join(lines).strip() + "\n", recipient_override=recipient_override or state.get("recipient_email"))
@@ -1845,14 +2070,14 @@ def _run_v4_manual_holdings_monitor(force_send: bool = False, recipient_override
             subject = f"实盘持仓监控持续提醒(每{repeat_minutes}分钟) {now_text[:16]}"
             lines = [
                 f"更新时间:{now_text}",
-                "鎻愰啋绫诲瀷锛氭寔缁彁閱掞紙鏉′欢鏈В闄わ紝闇€鎵嬪姩澶勭悊鎸佷粨鍒楄〃鍚庡仠姝級",
+                "提醒类型：持续提醒（条件未解除，霢手动处理持仓列表后停止）",
                 f"通知数量:{len(alert_rows)}",
                 "",
             ]
             for idx, item in enumerate(alert_rows, start=1):
                 pnl_text = "--" if _to_float(item.get("pnl_ratio")) is None else f"{float(item.get('pnl_ratio')):.2f}%"
                 lines.append(
-                    f"{idx}. {item.get('code')} {item.get('name')} | 鐩堜簭 {pnl_text} | 椋庨櫓 {item.get('risk_level')} | 15m鑳岀={item.get('rsi15')} 30m鑳岀={item.get('rsi30')}"
+                    f"{idx}. {item.get('code')} {item.get('name')} | 盈亏 {pnl_text} | 风险 {item.get('risk_level')} | 15m背离={item.get('rsi15')} 30m背离={item.get('rsi30')}"
                 )
                 lines.append(f"   建议：{item.get('suggestion')}")
             _send_monitor_email(
@@ -1872,7 +2097,7 @@ def _run_v4_manual_holdings_monitor(force_send: bool = False, recipient_override
     state["last_error"] = None
     state["last_alert_by_code"] = last_alert_by_code
     _save_v4_monitor_state(state)
-    return {"ok": True, "message": "鐩戞帶鎵ц瀹屾垚", "email_sent": email_sent, "changes": changes}
+    return {"ok": True, "message": "监控执行完成", "email_sent": email_sent, "changes": changes}
 
 
 def _monitor_job_wrapper() -> None:
@@ -1980,7 +2205,7 @@ def _read_csv_max_trade_date(path: Path, date_col: str) -> str:
     return str(dates.max()) if len(dates) else ""
 
 
-def _resolve_gen2_signal_date(signal_date: str) -> Dict[str, Any]:
+def _resolve_gen2_signal_date(signal_date: str, allow_fallback: bool = True) -> Dict[str, Any]:
     requested = _normalize_date_str(signal_date)
     if not requested:
         return {
@@ -2019,7 +2244,7 @@ def _resolve_gen2_signal_date(signal_date: str) -> Dict[str, Any]:
             "reason": "g2_open_state_daily has no usable data yet",
         }
 
-    if latest < requested:
+    if allow_fallback and latest < requested:
         fallback_status = _source_csv_date_rows_status(
             GEN2_OPEN_STATE_DAILY_PATH,
             "trade_date",
@@ -2067,6 +2292,10 @@ def _run_subprocess_checked(cmd: List[str], label: str, timeout_seconds: int) ->
 
 
 def _ensure_gen2_open_state_daily_upto_date(signal_date: str) -> Dict[str, Any]:
+    return _ensure_gen2_open_state_daily_upto_date_impl(signal_date, allow_fallback=True)
+
+
+def _ensure_gen2_open_state_daily_upto_date_impl(signal_date: str, allow_fallback: bool = True) -> Dict[str, Any]:
     normalized = _normalize_date_str(signal_date)
     if not normalized:
         return {"ok": False, "attempted": False, "message": "Invalid signal date for auto rebuild", "status": None}
@@ -2182,7 +2411,7 @@ def _ensure_gen2_open_state_daily_upto_date(signal_date: str) -> Dict[str, Any]:
                 "details": details,
             }
         fallback_date = _read_csv_max_trade_date(GEN2_OPEN_STATE_DAILY_PATH, "trade_date")
-        if fallback_date and fallback_date < normalized:
+        if allow_fallback and fallback_date and fallback_date < normalized:
             fallback_status = _source_csv_date_rows_status(
                 GEN2_OPEN_STATE_DAILY_PATH,
                 "trade_date",
@@ -2283,9 +2512,27 @@ def _collect_gen2_promotion_snapshots(signal_date: str, pool_rank: int) -> Dict[
 
 def _load_gen2_shadow_monitor_candidates(signal_date: str) -> List[Dict[str, Any]]:
     ledger_df = _load_gen2_risk_cool_shadow_ledger()
-    if ledger_df.empty or "entry_date" not in ledger_df.columns:
+    requested_date = _normalize_date_str(signal_date) if signal_date else None
+    if not requested_date:
         return []
-    day_df = ledger_df[ledger_df["entry_date"] == signal_date].copy()
+
+    candidate_source = "shadow_ledger"
+    day_df = pd.DataFrame()
+    if not ledger_df.empty and "entry_date" in ledger_df.columns:
+        day_df = ledger_df[ledger_df["entry_date"] == requested_date].copy()
+    if day_df.empty:
+        day_df = _load_gen2_live_update_frame(requested_date, "filtered_signals")
+        candidate_source = "live_filtered_signals"
+        if not day_df.empty:
+            day_df["shadow_status"] = "observable"
+            if "day_signal_rank" not in day_df.columns:
+                if "alpha191_volume5_rank_in_day" in day_df.columns:
+                    day_df["day_signal_rank"] = pd.to_numeric(day_df["alpha191_volume5_rank_in_day"], errors="coerce")
+                elif "v4_rank" in day_df.columns:
+                    day_df["day_signal_rank"] = pd.to_numeric(day_df["v4_rank"], errors="coerce")
+            if "execution_note" not in day_df.columns:
+                day_df["execution_note"] = day_df.get("signal_family", "live filtered G2 signal")
+
     if day_df.empty:
         return []
     if "shadow_status" in day_df.columns:
@@ -2297,6 +2544,10 @@ def _load_gen2_shadow_monitor_candidates(signal_date: str) -> List[Dict[str, Any
         return []
     if "day_signal_rank" not in day_df.columns:
         day_df["day_signal_rank"] = np.nan
+    if "confirm_datetime" not in day_df.columns:
+        day_df["confirm_datetime"] = ""
+    if "code" not in day_df.columns and "code6" in day_df.columns:
+        day_df["code"] = day_df["code6"]
     day_df = day_df.sort_values(["shadow_status", "day_signal_rank", "confirm_datetime"], na_position="last")
     rows: List[Dict[str, Any]] = []
     for _, item in day_df.iterrows():
@@ -2326,9 +2577,71 @@ def _load_gen2_shadow_monitor_candidates(signal_date: str) -> List[Dict[str, Any
                 "rt_return_pct": _pct_value(item.get("rt_return_from_d1_close")),
                 "amount_ratio": _to_float(item.get("rt_30m_amount_ratio")),
                 "reason_text": str(item.get("execution_note") or "").strip(),
+                "candidate_source": candidate_source,
             }
         )
     return rows
+
+
+def _load_gen2_pending_shadow_alerts_for_latest_trade_date(state: Dict[str, Any]) -> Dict[str, Any]:
+    last_alert_keys = state.get("last_alert_keys") if isinstance(state.get("last_alert_keys"), dict) else {}
+    latest_date = _normalize_date_str(_resolve_latest_stock_trade_date())
+    if not latest_date:
+        return {"signal_date": "", "rows": [], "new_rows": [], "last_alert_keys": last_alert_keys, "update_result": {}}
+
+    dates: List[str] = []
+    if GEN2_OPEN_STATE_DAILY_PATH.exists():
+        try:
+            state_df = pd.read_csv(GEN2_OPEN_STATE_DAILY_PATH, usecols=["trade_date"])
+            state_dates = pd.to_datetime(state_df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            dates = sorted([str(value) for value in state_dates.dropna().unique() if str(value) <= latest_date])[-7:]
+        except Exception as exc:
+            logger.warning(f"load gen2 open state dates for shadow alert backfill failed: {exc}")
+            dates = []
+    if not dates:
+        live_dates = []
+        for date_text in _gen2_live_update_dates():
+            try:
+                date_obj = datetime.strptime(date_text, "%Y-%m-%d")
+            except Exception:
+                continue
+            if date_text <= latest_date and TradingCalendar.is_trading_day(date_obj):
+                live_dates.append(date_text)
+        dates = sorted(set(live_dates + [latest_date]))[-7:]
+
+    rows: List[Dict[str, Any]] = []
+    update_result = {
+        "raw_candidates": 0,
+        "filtered_signals": 0,
+        "shadow_rows_for_date": 0,
+        "backfill_dates": dates,
+    }
+    for date_text in dates:
+        day_rows = _load_gen2_shadow_monitor_candidates(date_text)
+        rows.extend(day_rows)
+        summary = _load_gen2_live_update_summary(date_text)
+        if summary:
+            update_result["raw_candidates"] += _to_int(summary.get("raw_candidates"), default=0) or 0
+            update_result["filtered_signals"] += _to_int(summary.get("filtered_signals"), default=len(day_rows)) or 0
+            update_result["shadow_rows_for_date"] += _to_int(summary.get("shadow_rows_for_date"), default=len(day_rows)) or 0
+        else:
+            update_result["filtered_signals"] += len(day_rows)
+            update_result["shadow_rows_for_date"] += len(day_rows)
+
+    new_rows = [row for row in rows if row.get("alert_key") not in last_alert_keys]
+    if not dates:
+        signal_date = latest_date
+    elif len(dates) == 1:
+        signal_date = dates[0]
+    else:
+        signal_date = f"{dates[0]}..{dates[-1]}"
+    return {
+        "signal_date": signal_date,
+        "rows": rows,
+        "new_rows": new_rows,
+        "last_alert_keys": last_alert_keys,
+        "update_result": update_result,
+    }
 
 
 def _format_optional_number(value: Any, digits: int = 2, suffix: str = "") -> str:
@@ -2450,7 +2763,7 @@ def _gen2_monitor_selection_digest(signal_date: str, limit: int = 8) -> Dict[str
     try:
         pool = _build_gen2_selection_pool(signal_date, max(30, limit * 3))
         if not isinstance(pool, dict) or not pool.get("available"):
-            return {"available": False, "rows": [], "text": str((pool or {}).get("message") or "绛栫暐閫夎偂姹犱笉鍙敤")}
+            return {"available": False, "rows": [], "text": str((pool or {}).get("message") or "策略选股池不可用")}
         rows: List[Dict[str, Any]] = []
         seen: set[str] = set()
         for section in ["complete_rows", "trigger_rows", "quality_rows", "rows"]:
@@ -2487,7 +2800,7 @@ def _gen2_monitor_selection_digest(signal_date: str, limit: int = 8) -> Dict[str
         }
     except Exception as exc:
         logger.warning(f"build gen2 monitor selection digest failed: {exc}")
-        return {"available": False, "rows": [], "text": f"绛栫暐鍊欓€夎鍙栧け璐ワ細{exc}"}
+        return {"available": False, "rows": [], "text": f"策略候读取失败：{exc}"}
 
 
 def _send_gen2_shadow_heartbeat_email(
@@ -2620,7 +2933,7 @@ def _snapshot_bucket_end(ts: datetime, period_minutes: int) -> datetime:
     return anchor + timedelta(minutes=slots * period)
 
 
-def _gen2_intraday_snapshot_status(signal_date: str, required_dt: datetime, period_minutes: int) -> Dict[str, Any]:
+def _gen2_intraday_snapshot_status(signal_date: str, required_dt: datetime, period_minutes: int, min_codes: int = 3000) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "table": "intraday_quote_snapshot",
         "ok": False,
@@ -2629,6 +2942,7 @@ def _gen2_intraday_snapshot_status(signal_date: str, required_dt: datetime, peri
         "row_count": 0,
         "max_datetime": "",
         "max_bar_datetime": "",
+        "min_codes": int(min_codes),
     }
     if not clickhouse_table_exists("intraday_quote_snapshot"):
         result["reason"] = "intraday_quote_snapshot table missing"
@@ -2669,8 +2983,8 @@ def _gen2_intraday_snapshot_status(signal_date: str, required_dt: datetime, peri
         result["reason"] = (
             f"intraday_quote_snapshot reached {result['max_datetime']}, but required bar is {required_dt.strftime('%Y-%m-%d %H:%M:%S')}"
         )
-    elif not result["reason"] and code_count < 50:
-        result["reason"] = f"intraday_quote_snapshot snapshot coverage insufficient, code_count={code_count}"
+    elif not result["reason"] and code_count < int(min_codes):
+        result["reason"] = f"intraday_quote_snapshot snapshot coverage insufficient, code_count={code_count}, min_codes={int(min_codes)}"
     else:
         result["ok"] = True
     return result
@@ -2731,7 +3045,7 @@ def _gen2_minute_table_status(signal_date: str, period_minutes: int, now: dateti
     elif code_count < 3000:
         table_reason = f"{table_name} code coverage insufficient, code_count={code_count}"
     if table_reason:
-        snapshot_status = _gen2_intraday_snapshot_status(signal_date, required_dt, period_minutes)
+        snapshot_status = _gen2_intraday_snapshot_status(signal_date, required_dt, period_minutes, min_codes=3000)
         result["snapshot_status"] = snapshot_status
         if snapshot_status.get("ok"):
             result.update(
@@ -3579,16 +3893,66 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
     state = _load_gen2_shadow_monitor_state()
     now = datetime.now()
     now_text = now.strftime("%Y-%m-%d %H:%M:%S")
-    if state.get("trading_hours_only") and not _is_trading_session_now(now):
+    state["last_error"] = None
+    if state.get("trading_hours_only") and not force_send and not _is_trading_session_now(now):
+        pending_alerts = _load_gen2_pending_shadow_alerts_for_latest_trade_date(state)
+        pending_signal_date = str(pending_alerts.get("signal_date") or "")
+        rows = pending_alerts.get("rows") if isinstance(pending_alerts.get("rows"), list) else []
+        new_rows = pending_alerts.get("new_rows") if isinstance(pending_alerts.get("new_rows"), list) else []
+        last_alert_keys = pending_alerts.get("last_alert_keys") if isinstance(pending_alerts.get("last_alert_keys"), dict) else {}
+        if pending_signal_date and new_rows:
+            update_result = pending_alerts.get("update_result") if isinstance(pending_alerts.get("update_result"), dict) else {}
+            if not update_result:
+                update_result = {
+                    "raw_candidates": None,
+                    "filtered_signals": len(rows),
+                    "shadow_rows_for_date": len(rows),
+                }
+            _send_gen2_shadow_buy_email(
+                now_text,
+                pending_signal_date,
+                update_result,
+                new_rows,
+                recipient_override=recipient_override or state.get("recipient_email"),
+            )
+            for row in new_rows:
+                key = str(row.get("alert_key") or "")
+                if key:
+                    last_alert_keys[key] = now_text
+            if len(last_alert_keys) > 1000:
+                last_alert_keys = dict(list(last_alert_keys.items())[-1000:])
+            state["last_alert_keys"] = last_alert_keys
+            state["last_run_at"] = now_text
+            state["last_email_sent_at"] = now_text
+            state["last_error"] = None
+            state["last_result"] = {
+                "skipped": False,
+                "reason": "after_hours_pending_shadow_alert",
+                "after_hours_pending_check": True,
+                "signal_date": pending_signal_date,
+                "candidate_count": len(rows),
+                "new_count": len(new_rows),
+                "email_sent": True,
+            }
+            _save_gen2_shadow_monitor_state(state)
+            return {
+                "ok": True,
+                "message": "非交易时段，已发送影子候选补报",
+                "email_sent": True,
+                "new_rows": new_rows,
+                "candidate_count": len(rows),
+                "signal_date": pending_signal_date,
+            }
         state["last_run_at"] = now_text
-        state["last_result"] = {"skipped": True, "reason": "闈炰氦鏄撴棩鎴栭潪浜ゆ槗鏃舵"}
+        state["last_error"] = None
+        state["last_result"] = {"skipped": True, "reason": "非交易日或非交易时段"}
         _save_gen2_shadow_monitor_state(state)
-        return {"ok": True, "message": "闈炰氦鏄撴棩鎴栭潪浜ゆ槗鏃舵锛屽凡璺宠繃", "email_sent": False, "new_rows": []}
+        return {"ok": True, "message": "非交易日或非交易时段，已跳过", "email_sent": False, "new_rows": []}
 
     requested_signal_date = _normalize_date_str(_resolve_latest_stock_trade_date())
     if not requested_signal_date:
-        raise RuntimeError("鏃犳硶瑙ｆ瀽鏈€鏂颁氦鏄撴棩")
-    date_resolution = _resolve_gen2_signal_date(requested_signal_date)
+        raise RuntimeError("无法解析朢新交易日")
+    date_resolution = _resolve_gen2_signal_date(requested_signal_date, allow_fallback=False)
     date_resolution_reason = str(date_resolution.get("reason") or "").strip() or None
     date_resolution_status = date_resolution.get("status") if isinstance(date_resolution.get("status"), dict) else None
     pipeline_signal_date = requested_signal_date
@@ -3601,6 +3965,7 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
         )
 
     official_rebuild_result = state.get("last_official_rebuild_result") if isinstance(state.get("last_official_rebuild_result"), dict) else None
+    blocker_result: Optional[Dict[str, Any]] = None
     if state.get("official_rebuild_enabled", True):
         reconciled_rebuild_result = _reconcile_official_rebuild_state_if_needed(state)
         if reconciled_rebuild_result is not None:
@@ -3624,7 +3989,8 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
                 active_rebuild_task = _start_gen2_official_rebuild_task(
                     pipeline_signal_date,
                     include_breakout=bool(state.get("official_rebuild_include_breakout")),
-                    timeout_seconds=int(state.get("official_rebuild_timeout_seconds") or 5400),
+                    legacy_330=bool(state.get("official_rebuild_legacy_330")),
+                    timeout_seconds=int(state.get("official_rebuild_timeout_seconds") or 10800),
                 )
                 official_rebuild_result = active_rebuild_task
             else:
@@ -3641,11 +4007,11 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
         if last_rebuild_date != pipeline_signal_date or not bool(state.get("last_official_rebuild_ok")):
             task_status = str((official_rebuild_result or {}).get("status") or state.get("last_official_rebuild_task_status") or "").strip().lower()
             if task_status in {"queued", "running"}:
-                rebuild_message = "G2 latest-driven姝ｅ紡涓婚摼姝ｅ湪閲嶅缓锛屽綋鍓嶈疆璇㈠厛绛夊緟缁撴灉"
+                rebuild_message = "G2 latest-driven正式主链正在重建，当前轮询先等待结果"
             elif official_rebuild_result and official_rebuild_result.get("ok") is False:
                 rebuild_message = official_rebuild_result.get("message") or "G2 latest-driven 触发官方补建失败"
             else:
-                rebuild_message = "G2 latest-driven姝ｅ紡涓婚摼灏氭湭鍒锋柊鍒版渶鏂颁氦鏄撴棩"
+                rebuild_message = "G2 latest-driven正式主链尚未刷新到最新交易日"
             blocker_result = {
                 "ok": False,
                 "checked_at": now_text,
@@ -3665,53 +4031,54 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
                     }
                 ],
             }
-        blocker_email_sent = False
-        heartbeat_email_sent = False
-        if _is_gen2_official_rebuild_wait_only(blocker_result):
-            if _should_send_gen2_heartbeat(state, now, force_send=force_send):
-                _send_gen2_shadow_heartbeat_email(
-                    now_text,
-                    pipeline_signal_date,
-                    {},
-                    [],
-                    blocker_result,
-                    recipient_override=recipient_override or state.get("recipient_email"),
-                )
-                heartbeat_email_sent = True
-                state["last_heartbeat_sent_at"] = now_text
-            state["last_run_at"] = now_text
-            state["last_error"] = None
-        state["last_result"] = {
-                "signal_date": pipeline_signal_date,
-                "requested_signal_date": requested_signal_date,
-                "date_resolution_reason": date_resolution_reason,
-                "date_resolution_status": date_resolution_status,
-                "blocked": True,
-                "blocker_count": 1,
-                "blocker_check": blocker_result,
-                "promotion_snapshot": {},
-                "official_rebuild": official_rebuild_result,
-                "blocker_email_sent": blocker_email_sent,
-                "heartbeat_email_sent": heartbeat_email_sent,
+        if blocker_result is not None:
+            blocker_email_sent = False
+            heartbeat_email_sent = False
+            if _is_gen2_official_rebuild_wait_only(blocker_result):
+                if _should_send_gen2_heartbeat(state, now, force_send=force_send):
+                    _send_gen2_shadow_heartbeat_email(
+                        now_text,
+                        pipeline_signal_date,
+                        {},
+                        [],
+                        blocker_result,
+                        recipient_override=recipient_override or state.get("recipient_email"),
+                    )
+                    heartbeat_email_sent = True
+                    state["last_heartbeat_sent_at"] = now_text
+                state["last_run_at"] = now_text
+                state["last_error"] = None
+            state["last_result"] = {
+                    "signal_date": pipeline_signal_date,
+                    "requested_signal_date": requested_signal_date,
+                    "date_resolution_reason": date_resolution_reason,
+                    "date_resolution_status": date_resolution_status,
+                    "blocked": True,
+                    "blocker_count": 1,
+                    "blocker_check": blocker_result,
+                    "promotion_snapshot": {},
+                    "official_rebuild": official_rebuild_result,
+                    "blocker_email_sent": blocker_email_sent,
+                    "heartbeat_email_sent": heartbeat_email_sent,
+                }
+            _save_gen2_shadow_monitor_state(state)
+            return {
+                    "ok": False,
+                    "message": rebuild_message,
+                    "email_sent": False,
+                    "blocker_email_sent": blocker_email_sent,
+                    "heartbeat_email_sent": heartbeat_email_sent,
+                    "blocker_check": blocker_result,
+                    "promotion_snapshot": {},
+                    "official_rebuild": official_rebuild_result,
+                    "signal_date": pipeline_signal_date,
+                    "requested_signal_date": requested_signal_date,
+                    "date_resolution_reason": date_resolution_reason,
+                    "date_resolution_status": date_resolution_status,
+                "new_rows": [],
             }
-        _save_gen2_shadow_monitor_state(state)
-        return {
-                "ok": False,
-                "message": rebuild_message,
-                "email_sent": False,
-                "blocker_email_sent": blocker_email_sent,
-                "heartbeat_email_sent": heartbeat_email_sent,
-                "blocker_check": blocker_result,
-                "promotion_snapshot": {},
-                "official_rebuild": official_rebuild_result,
-                "signal_date": pipeline_signal_date,
-                "requested_signal_date": requested_signal_date,
-                "date_resolution_reason": date_resolution_reason,
-                "date_resolution_status": date_resolution_status,
-            "new_rows": [],
-        }
 
-    open_state_rebuild = _ensure_gen2_open_state_daily_upto_date(pipeline_signal_date)
+    open_state_rebuild = _ensure_gen2_open_state_daily_upto_date_impl(pipeline_signal_date, allow_fallback=False)
     if open_state_rebuild.get("ok"):
         effective_open_state_date = _normalize_date_str(open_state_rebuild.get("effective"))
         if effective_open_state_date:
@@ -3922,7 +4289,7 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
     _save_gen2_shadow_monitor_state(state)
     return {
         "ok": True,
-        "message": "G2褰卞瓙涔扮偣鎺㈡祴瀹屾垚",
+        "message": "G2影子买点探测完成",
         "email_sent": email_sent,
         "heartbeat_email_sent": heartbeat_email_sent,
         "blocker_email_sent": blocker_email_sent,
@@ -3951,6 +4318,200 @@ def _gen2_shadow_monitor_job_wrapper() -> None:
         state["last_error"] = str(exc)
         _save_gen2_shadow_monitor_state(state)
         logger.warning(f"gen2 shadow buy monitor job failed: {exc}")
+
+
+def _run_gen2_strategy_refresh_30m(force: bool = False, source: str = "scheduler") -> Dict[str, Any]:
+    state = _load_gen2_strategy_refresh_state()
+    now = datetime.now()
+    now_text = now.strftime("%Y-%m-%d %H:%M:%S")
+    bar_slot = _gen2_30m_bar_slot(now, int(state.get("data_delay_minutes") or 2))
+
+    if not force and not state.get("enabled"):
+        state["last_skip_at"] = now_text
+        state["last_result"] = {"ok": True, "skipped": True, "reason": "disabled", "source": source}
+        _save_gen2_strategy_refresh_state(state)
+        return state["last_result"]
+    if not force and state.get("trading_hours_only") and not bar_slot:
+        state["last_skip_at"] = now_text
+        state["last_result"] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "waiting_for_30m_bar_or_non_trading_day",
+            "source": source,
+        }
+        _save_gen2_strategy_refresh_state(state)
+        return state["last_result"]
+    if not force and state.get("force_each_bar_once") and bar_slot and state.get("last_bar_slot") == bar_slot:
+        state["last_skip_at"] = now_text
+        state["last_result"] = {"ok": True, "skipped": True, "reason": "bar_slot_already_refreshed", "bar_slot": bar_slot, "source": source}
+        _save_gen2_strategy_refresh_state(state)
+        return state["last_result"]
+    if not _gen2_strategy_refresh_lock.acquire(blocking=False):
+        state["last_skip_at"] = now_text
+        state["last_result"] = {"ok": True, "skipped": True, "reason": "previous_refresh_still_running", "bar_slot": bar_slot, "source": source}
+        _save_gen2_strategy_refresh_state(state)
+        return state["last_result"]
+
+    started_at = datetime.now()
+    selected_date = ""
+    mainline_task_id = None
+    try:
+        requested_signal_date = _normalize_date_str(_resolve_latest_stock_trade_date())
+        date_resolution = _resolve_gen2_signal_date(requested_signal_date, allow_fallback=False) if requested_signal_date else {}
+        selected_date = _normalize_date_str(date_resolution.get("effective")) or requested_signal_date or ""
+        steps: List[Dict[str, Any]] = []
+
+        if state.get("run_mainline_hotspots"):
+            active_mainline_task = _get_active_gen2_mainline_update_task()
+            if active_mainline_task:
+                steps.append(
+                    {
+                        "name": "mainline_hotspots",
+                        "skipped": True,
+                        "reason": "mainline_update_already_running",
+                        "active_task": active_mainline_task,
+                    }
+                )
+            else:
+                mainline_task_id = f"gen2_strategy_refresh_mainline_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
+                _run_gen2_mainline_update_task(
+                    mainline_task_id,
+                    selected_date or None,
+                    int(state.get("mainline_limit") or 30),
+                    str(state.get("mainline_mode") or "sector"),
+                )
+                steps.append({"name": "mainline_hotspots", "task_id": mainline_task_id, "task": _get_gen2_mainline_update_task(mainline_task_id)})
+
+        shadow_result: Dict[str, Any] = {}
+        if state.get("run_shadow_monitor"):
+            shadow_result = _run_gen2_shadow_buy_monitor(force_send=False)
+            steps.append(
+                {
+                    "name": "shadow_monitor",
+                    "ok": bool(shadow_result.get("ok", True)),
+                    "signal_date": shadow_result.get("signal_date"),
+                    "candidate_count": shadow_result.get("candidate_count"),
+                    "new_count": shadow_result.get("new_count"),
+                    "official_rebuild": shadow_result.get("official_rebuild"),
+                    "blocker_check": shadow_result.get("blocker_check"),
+                }
+            )
+
+        finished_at = datetime.now()
+        failed_steps = []
+        for step in steps:
+            if step.get("skipped"):
+                continue
+            if step.get("name") == "mainline_hotspots":
+                task_status = str((step.get("task") or {}).get("status") or "").strip().lower()
+                if task_status in {"failed", "error", "missing"}:
+                    failed_steps.append({"name": "mainline_hotspots", "reason": (step.get("task") or {}).get("error") or (step.get("task") or {}).get("message")})
+            elif step.get("ok") is False:
+                failed_steps.append({"name": step.get("name"), "reason": step.get("blocker_check") or step.get("official_rebuild") or "step returned ok=false"})
+        overall_ok = not failed_steps
+        result = {
+            "ok": overall_ok,
+            "skipped": False,
+            "source": source,
+            "bar_slot": bar_slot,
+            "signal_date": selected_date,
+            "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+            "steps": steps,
+            "failed_steps": failed_steps,
+        }
+        state = _load_gen2_strategy_refresh_state()
+        state["last_run_at"] = result["finished_at"]
+        if overall_ok:
+            state["last_success_at"] = result["finished_at"]
+            state["last_error"] = None
+        else:
+            state["last_error"] = "; ".join(
+                str(item.get("reason") or item.get("name") or "unknown")[:500]
+                for item in failed_steps[:3]
+            ) or "G2 strategy refresh failed"
+        state["last_result"] = result
+        state["last_mainline_task_id"] = mainline_task_id
+        if bar_slot:
+            state["last_bar_slot"] = bar_slot
+        _save_gen2_strategy_refresh_state(state)
+        return result
+    except Exception as exc:
+        logger.exception("G2 30m strategy refresh failed")
+        finished_at = datetime.now()
+        result = {
+            "ok": False,
+            "skipped": False,
+            "source": source,
+            "bar_slot": bar_slot,
+            "signal_date": selected_date,
+            "started_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": finished_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+            "error": str(exc),
+        }
+        state = _load_gen2_strategy_refresh_state()
+        state["last_run_at"] = result["finished_at"]
+        state["last_error"] = str(exc)
+        state["last_result"] = result
+        _save_gen2_strategy_refresh_state(state)
+        return result
+    finally:
+        _gen2_strategy_refresh_lock.release()
+
+
+def _gen2_strategy_refresh_job_wrapper() -> None:
+    try:
+        _run_gen2_strategy_refresh_30m(force=False, source="scheduler")
+    except Exception as exc:
+        state = _load_gen2_strategy_refresh_state()
+        state["last_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        state["last_error"] = str(exc)
+        _save_gen2_strategy_refresh_state(state)
+        logger.warning(f"gen2 30m strategy refresh job failed: {exc}")
+
+
+def _configure_gen2_strategy_refresh_scheduler() -> Dict[str, Any]:
+    scheduler = _ensure_v4_monitor_scheduler()
+    state = _load_gen2_strategy_refresh_state()
+    try:
+        scheduler.remove_job(_gen2_strategy_refresh_job_id)
+    except Exception:
+        pass
+    if state.get("enabled"):
+        scheduler.add_job(
+            _gen2_strategy_refresh_job_wrapper,
+            trigger=_gen2_strategy_refresh_triggers(int(state.get("data_delay_minutes") or 2)),
+            id=_gen2_strategy_refresh_job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=180,
+        )
+    job = scheduler.get_job(_gen2_strategy_refresh_job_id)
+    next_run_time = str(job.next_run_time) if job and job.next_run_time else None
+    current_bar_slot = _gen2_30m_bar_slot(datetime.now(), int(state.get("data_delay_minutes") or 2))
+    return {
+        "enabled": bool(state.get("enabled")),
+        "trading_hours_only": bool(state.get("trading_hours_only")),
+        "data_delay_minutes": int(state.get("data_delay_minutes") or 2),
+        "run_shadow_monitor": bool(state.get("run_shadow_monitor")),
+        "run_mainline_hotspots": bool(state.get("run_mainline_hotspots")),
+        "mainline_mode": str(state.get("mainline_mode") or "sector"),
+        "mainline_limit": int(state.get("mainline_limit") or 30),
+        "force_each_bar_once": bool(state.get("force_each_bar_once", True)),
+        "current_bar_slot": current_bar_slot,
+        "next_run_time": next_run_time,
+        "last_bar_slot": state.get("last_bar_slot"),
+        "last_run_at": state.get("last_run_at"),
+        "last_success_at": state.get("last_success_at"),
+        "last_skip_at": state.get("last_skip_at"),
+        "last_error": state.get("last_error"),
+        "last_result": state.get("last_result"),
+        "last_mainline_task_id": state.get("last_mainline_task_id"),
+        "state_path": str(GEN2_STRATEGY_REFRESH_STATE_PATH),
+    }
 
 
 def _configure_gen2_shadow_buy_monitor_scheduler() -> Dict[str, Any]:
@@ -3997,8 +4558,9 @@ def _configure_gen2_shadow_buy_monitor_scheduler() -> Dict[str, Any]:
         "heartbeat_enabled": bool(state.get("heartbeat_enabled", True)),
         "heartbeat_email_minutes": int(state.get("heartbeat_email_minutes") or 30),
         "official_rebuild_enabled": bool(state.get("official_rebuild_enabled", True)),
-        "official_rebuild_include_breakout": bool(state.get("official_rebuild_include_breakout", False)),
-        "official_rebuild_timeout_seconds": int(state.get("official_rebuild_timeout_seconds") or 5400),
+        "official_rebuild_legacy_330": bool(state.get("official_rebuild_legacy_330", True)),
+        "official_rebuild_include_breakout": bool(state.get("official_rebuild_include_breakout", True)),
+        "official_rebuild_timeout_seconds": int(state.get("official_rebuild_timeout_seconds") or 10800),
         "official_rebuild_retry_minutes": int(state.get("official_rebuild_retry_minutes") or 10),
         "recipient_email": str(state.get("recipient_email") or ""),
         "next_run_time": str(job.next_run_time) if job and job.next_run_time else None,
@@ -4019,7 +4581,14 @@ def _configure_gen2_shadow_buy_monitor_scheduler() -> Dict[str, Any]:
 
 
 def init_gen2_shadow_buy_monitor_scheduler_from_config() -> Dict[str, Any]:
-    return _configure_gen2_shadow_buy_monitor_scheduler()
+    return {
+        "shadow_monitor": _configure_gen2_shadow_buy_monitor_scheduler(),
+        "strategy_refresh_30m": _configure_gen2_strategy_refresh_scheduler(),
+    }
+
+
+def init_gen2_strategy_refresh_scheduler_from_config() -> Dict[str, Any]:
+    return _configure_gen2_strategy_refresh_scheduler()
 
 
 def _calc_rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -4079,26 +4648,148 @@ def _detect_bearish_divergence(df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
+def _detect_rsi_box_t_signal(df: pd.DataFrame) -> Dict[str, Any]:
+    if df.empty or len(df) < 40:
+        return {
+            "enabled": False,
+            "status": "data_missing",
+            "action": "observe",
+            "recommendation": "15m数据不足，暂不评估箱体做T。",
+        }
+    work = df.copy().sort_values("datetime").reset_index(drop=True)
+    for col in ["close", "high", "low"]:
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+    work = work.dropna(subset=["close", "high", "low"]).reset_index(drop=True)
+    if len(work) < 40:
+        return {
+            "enabled": False,
+            "status": "data_missing",
+            "action": "observe",
+            "recommendation": "15m有效K线不足，暂不评估箱体做T。",
+        }
+
+    work["rsi6"] = _calc_rsi(work["close"], 6)
+    box_window = 32
+    latest = work.iloc[-1]
+    prev = work.iloc[-2] if len(work) >= 2 else latest
+    prior = work.iloc[-(box_window + 1):-1].copy()
+    if len(prior) < 16:
+        return {
+            "enabled": False,
+            "status": "data_missing",
+            "action": "observe",
+            "recommendation": "箱体样本不足，暂不做T。",
+        }
+
+    upper = float(prior["high"].max())
+    lower = float(prior["low"].min())
+    close = float(latest["close"])
+    rsi = float(latest["rsi6"]) if pd.notna(latest.get("rsi6")) else None
+    prev_rsi = float(prev["rsi6"]) if pd.notna(prev.get("rsi6")) else None
+    mid = (upper + lower) / 2.0 if upper > 0 and lower > 0 else 0.0
+    width_pct = (upper - lower) / mid if mid > 0 else None
+    base_close = float(work.iloc[-(box_window + 1)]["close"]) if len(work) >= box_window + 1 else None
+    slope_abs = abs(close / base_close - 1.0) if base_close and base_close > 0 else None
+    breakout_up = close > upper * 1.005 if upper > 0 else False
+    breakdown_down = close < lower * 0.995 if lower > 0 else False
+    in_box = (
+        width_pct is not None
+        and 0.025 <= width_pct <= 0.18
+        and (slope_abs is None or slope_abs <= 0.10)
+        and close <= upper * 1.005
+        and close >= lower * 0.995
+    )
+
+    bearish_div = _detect_bearish_divergence(work[["datetime", "close", "high", "low"]].copy())
+    cross_down_80 = bool(prev_rsi is not None and rsi is not None and prev_rsi > 80 and rsi <= 80)
+    cross_up_20 = bool(prev_rsi is not None and rsi is not None and prev_rsi < 20 and rsi >= 20)
+
+    if breakout_up:
+        status = "breakout_up"
+        action = "hold_trend_no_t"
+        recommendation = "已向上跳出箱体，停止做T，按趋势持股观察。"
+    elif breakdown_down:
+        status = "breakdown_down"
+        action = "risk_control_no_t"
+        recommendation = "已跌破箱体下沿，停止做T，优先按风控处理。"
+    elif in_box and bearish_div.get("detected"):
+        status = "in_box_bearish_divergence"
+        action = "sell_half"
+        recommendation = "箱体震荡内出现15m RSI背离，建议至少减半仓做T。"
+    elif in_box and cross_down_80:
+        status = "in_box_rsi80_cross_down"
+        action = "sell_part"
+        recommendation = "箱体震荡内 RSI6 跌破80，建议卖出一部分做T。"
+    elif in_box and cross_up_20:
+        status = "in_box_rsi20_cross_up"
+        action = "buyback_t"
+        recommendation = "箱体震荡内 RSI6 从20下方回到20上方，可考虑买回做T仓位。"
+    elif in_box and rsi is not None and rsi < 20:
+        status = "in_box_oversold_wait"
+        action = "wait_buyback"
+        recommendation = "箱体震荡内 RSI6 低于20，等待重新上穿20再买回。"
+    elif in_box:
+        status = "in_box_wait"
+        action = "observe"
+        recommendation = "仍在箱体震荡内，等待 RSI 做T触发。"
+    else:
+        status = "not_box"
+        action = "observe"
+        recommendation = "当前不满足箱体震荡条件，不启用 RSI 做T。"
+
+    return {
+        "enabled": bool(in_box and not breakout_up and not breakdown_down),
+        "status": status,
+        "action": action,
+        "recommendation": recommendation,
+        "datetime": str(latest.get("datetime")),
+        "close": round(close, 3),
+        "box_upper": round(upper, 3),
+        "box_lower": round(lower, 3),
+        "box_width_pct": round(float(width_pct) * 100, 2) if width_pct is not None else None,
+        "box_slope_abs_pct": round(float(slope_abs) * 100, 2) if slope_abs is not None else None,
+        "rsi6": round(float(rsi), 2) if rsi is not None else None,
+        "prev_rsi6": round(float(prev_rsi), 2) if prev_rsi is not None else None,
+        "in_box": bool(in_box),
+        "breakout_up": bool(breakout_up),
+        "breakdown_down": bool(breakdown_down),
+        "bearish_divergence": bool(bearish_div.get("detected")),
+        "rsi80_cross_down": bool(cross_down_80),
+        "rsi20_cross_up": bool(cross_up_20),
+    }
+
+
 def _load_minute_bars_for_signal(code: str, period_minutes: int, limit: int = 240) -> pd.DataFrame:
     short_code = str(code or "").strip()[:6]
     if not short_code:
         return pd.DataFrame()
+    suffix = str(code or "").strip()[6:].upper()
+    if suffix in {".SH", ".SZ", ".BJ"}:
+        code_candidates = [f"{short_code}{suffix}"]
+    elif short_code.startswith(("6", "9")):
+        code_candidates = [f"{short_code}.SH"]
+    elif short_code.startswith(("0", "2", "3")):
+        code_candidates = [f"{short_code}.SZ"]
+    elif short_code.startswith(("4", "8")):
+        code_candidates = [f"{short_code}.BJ"]
+    else:
+        code_candidates = [f"{short_code}.SH", f"{short_code}.SZ", f"{short_code}.BJ"]
     table_name = f"kline_minute_{period_minutes}"
     if not clickhouse_available():
         return pd.DataFrame()
-    if not clickhouse_table_exists(table_name):
-        return pd.DataFrame()
     try:
+        if not clickhouse_table_exists(table_name):
+            return pd.DataFrame()
         raw_limit = max(int(limit), 1) * 4
         df = clickhouse_query_df(
             f"""
             SELECT code, datetime, close, high, low
             FROM {table_name}
-            WHERE code = ? OR substr(code, 1, 6) = ?
+            WHERE code IN ({",".join(["?"] * len(code_candidates))})
             ORDER BY datetime DESC
             LIMIT ?
             """,
-            [short_code, short_code, raw_limit],
+            [*code_candidates, raw_limit],
         )
     except Exception as exc:
         logger.warning(f"load minute bars from ClickHouse failed: code={short_code}, period={period_minutes}, error={exc}")
@@ -4493,6 +5184,535 @@ def _load_gen2_v2_complete_summary() -> Dict[str, Any]:
         return {}
 
 
+def _report_dir_candidates(base_dir: Path) -> List[Path]:
+    candidates = [base_dir]
+    if "reports" in base_dir.parts:
+        try:
+            idx = base_dir.parts.index("reports")
+            relative = Path(*base_dir.parts[idx + 1 :])
+            candidates.append(REPO_ROOT / "reports" / relative)
+        except Exception:
+            pass
+    out: List[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _report_file_candidates(base_dir: Path, *parts: str) -> List[Path]:
+    out: List[Path] = []
+    for root in _report_dir_candidates(base_dir):
+        out.append(root.joinpath(*parts))
+    return out
+
+
+def _choose_existing_path(paths: List[Path]) -> Optional[Path]:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def _load_csv_candidates(paths: List[Path]) -> tuple[pd.DataFrame, Optional[Path], Optional[str]]:
+    chosen = _choose_existing_path(paths)
+    if chosen is None:
+        return pd.DataFrame(), None, "missing"
+    try:
+        return pd.read_csv(chosen, encoding="utf-8-sig"), chosen, None
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(), chosen, None
+    except Exception as exc:
+        logger.warning(f"load csv failed: path={chosen}, error={exc}")
+        return pd.DataFrame(), chosen, str(exc)
+
+
+def _load_json_candidates(paths: List[Path]) -> tuple[Dict[str, Any], Optional[Path], Optional[str]]:
+    chosen = _choose_existing_path(paths)
+    if chosen is None:
+        return {}, None, "missing"
+    try:
+        return json.loads(chosen.read_text(encoding="utf-8-sig")), chosen, None
+    except Exception as exc:
+        logger.warning(f"load json failed: path={chosen}, error={exc}")
+        return {}, chosen, str(exc)
+
+
+def _iso_mtime(path: Optional[Path]) -> Optional[str]:
+    if path is None or not path.exists():
+        return None
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _extract_df_latest_date(df: pd.DataFrame, columns: List[str]) -> Optional[str]:
+    if df.empty:
+        return None
+    candidates: List[str] = []
+    for col in columns:
+        if col not in df.columns:
+            continue
+        vals = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d").dropna().tolist()
+        candidates.extend([str(x) for x in vals if str(x)])
+    return max(candidates) if candidates else None
+
+
+def _filter_df_by_date(df: pd.DataFrame, selected_date: Optional[str], columns: List[str]) -> pd.DataFrame:
+    if df.empty or not selected_date:
+        return df.copy()
+    for col in columns:
+        if col not in df.columns:
+            continue
+        normalized = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+        matched = df[normalized.eq(selected_date)].copy()
+        if not matched.empty:
+            return matched
+    return df.copy()
+
+
+def _pick_gen2_mainline_selected_date(
+    requested_date: Optional[str],
+    sector_factor: pd.DataFrame,
+    theme_pool: pd.DataFrame,
+    watchlist_dates: List[str],
+) -> tuple[Optional[str], Optional[str]]:
+    requested = _normalize_date_str(requested_date)
+    sector_dates: List[str] = []
+    for col in ["date_text", "trade_date"]:
+        if col in sector_factor.columns:
+            vals = pd.to_datetime(sector_factor[col], errors="coerce").dt.strftime("%Y-%m-%d").dropna().tolist()
+            sector_dates.extend([str(x) for x in vals if str(x)])
+    theme_dates: List[str] = []
+    if "trade_date" in theme_pool.columns:
+        vals = pd.to_datetime(theme_pool["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d").dropna().tolist()
+        theme_dates.extend([str(x) for x in vals if str(x)])
+    available = sorted(set(sector_dates + theme_dates + [str(x) for x in watchlist_dates if str(x)]))
+    if requested and requested in available:
+        return requested, "exact"
+    if requested and requested not in available and available:
+        return available[-1], "fallback_latest"
+    if available:
+        return available[-1], "latest"
+    return requested, "requested_only" if requested else None
+
+
+def _build_source_status(
+    name: str,
+    label: str,
+    path: Optional[Path],
+    error: Optional[str],
+    row_count: int,
+    latest_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    status = "ok" if path and not error else "missing" if path is None else "error"
+    return {
+        "name": name,
+        "label": label,
+        "status": status,
+        "path": str(path) if path else None,
+        "updated_at": _iso_mtime(path),
+        "row_count": int(row_count),
+        "latest_date": latest_date,
+        "error": None if error in {None, "missing"} else str(error),
+    }
+
+
+def _load_mainline_watchlist_snapshot(selected_date: Optional[str]) -> tuple[pd.DataFrame, Dict[str, Any], Optional[Path], Optional[Path], List[str]]:
+    roots = _report_dir_candidates(GEN2_MAINLINE_SECTOR_WATCHLIST_DIR)
+    available_dates: List[str] = []
+    chosen_dir: Optional[Path] = None
+    for root in roots:
+        if not root.exists():
+            continue
+        for child in root.iterdir():
+            if child.is_dir():
+                normalized = _normalize_date_str(child.name)
+                if normalized:
+                    available_dates.append(normalized)
+                    if selected_date and normalized == selected_date and chosen_dir is None:
+                        chosen_dir = child
+    available_dates = sorted(set(available_dates))
+    if chosen_dir is None and available_dates:
+        latest = available_dates[-1]
+        for root in roots:
+            candidate = root / latest
+            if candidate.exists():
+                chosen_dir = candidate
+                break
+    if chosen_dir is None:
+        return pd.DataFrame(), {}, None, None, available_dates
+    csv_path = chosen_dir / "watchlist.csv"
+    json_path = chosen_dir / "watchlist.json"
+    watch_df = pd.DataFrame()
+    watch_json: Dict[str, Any] = {}
+    if csv_path.exists():
+        try:
+            watch_df = pd.read_csv(csv_path, encoding="utf-8-sig")
+        except Exception as exc:
+            logger.warning(f"load watchlist csv failed: path={csv_path}, error={exc}")
+    if json_path.exists():
+        try:
+            watch_json = json.loads(json_path.read_text(encoding="utf-8-sig"))
+        except Exception as exc:
+            logger.warning(f"load watchlist json failed: path={json_path}, error={exc}")
+    return watch_df, watch_json, csv_path if csv_path.exists() else None, json_path if json_path.exists() else None, available_dates
+
+
+def _load_stock_daily_snapshot(trade_date: Optional[str], codes6: List[str]) -> pd.DataFrame:
+    normalized_date = _normalize_date_str(trade_date)
+    code_list = sorted({str(x).strip() for x in (codes6 or []) if str(x).strip()})
+    if not normalized_date or not code_list:
+        return pd.DataFrame(columns=["code6", "trade_date", "close", "change_pct", "amount"])
+    placeholders = ",".join(["?"] * len(code_list))
+    try:
+        df = clickhouse_query_df(
+            f"""
+            SELECT
+                substring(code, 1, 6) AS code6,
+                trade_date,
+                close,
+                change_pct,
+                amount
+            FROM kline_daily
+            WHERE trade_date = ?
+              AND substring(code, 1, 6) IN ({placeholders})
+            """,
+            [normalized_date, *code_list],
+        )
+    except Exception as exc:
+        logger.warning(f"load stock daily snapshot failed: trade_date={normalized_date}, error={exc}")
+        return pd.DataFrame(columns=["code6", "trade_date", "close", "change_pct", "amount"])
+    if df.empty:
+        return pd.DataFrame(columns=["code6", "trade_date", "close", "change_pct", "amount"])
+    df = df.copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    for col in ["close", "change_pct", "amount"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def _latest_mainline_factor_count() -> int:
+    summary, _, error = _load_json_candidates(_report_file_candidates(GEN2_MAINLINE_INTRADAY_FACTOR_DIR, "summary.json"))
+    if error or not isinstance(summary, dict):
+        return 0
+    return _to_int(summary.get("factor_count"), default=0)
+
+
+def build_gen2_mainline_hotspots(requested_date: Optional[str], limit: int = 30) -> Dict[str, Any]:
+    safe_limit = max(5, min(int(limit or 30), 120))
+    sector_factor_df, sector_factor_path, sector_factor_error = _load_csv_candidates(
+        _report_file_candidates(GEN2_MAINLINE_INTRADAY_FACTOR_DIR, "mainline_intraday_diffusion_factor.csv")
+    )
+    sector_overlay_df, sector_overlay_path, sector_overlay_error = _load_csv_candidates(
+        _report_file_candidates(GEN2_MAINLINE_INTRADAY_OVERLAY_DIR, "mainline_candidate_overlay.csv")
+    )
+    member_snapshot_df, member_snapshot_path, member_snapshot_error = _load_csv_candidates(
+        _report_file_candidates(GEN2_MAINLINE_INTRADAY_OVERLAY_DIR, "mainline_member_snapshot.csv")
+    )
+    theme_pool_df, theme_pool_path, theme_pool_error = _load_csv_candidates(
+        _report_file_candidates(GEN2_MAINLINE_THEME_POOL_DIR, "observation_pool.csv")
+    )
+    theme_overlay_df, theme_overlay_path, theme_overlay_error = _load_csv_candidates(
+        _report_file_candidates(GEN2_MAINLINE_THEME_OVERLAY_DIR, "strategy_overlay.csv")
+    )
+    theme_addon_df, theme_addon_path, theme_addon_error = _load_csv_candidates(
+        _report_file_candidates(GEN2_MAINLINE_THEME_OVERLAY_DIR, "theme_addon.csv")
+    )
+    sector_summary_json, sector_summary_path, sector_summary_error = _load_json_candidates(
+        _report_file_candidates(GEN2_MAINLINE_INTRADAY_FACTOR_DIR, "summary.json")
+    )
+    sector_overlay_summary_json, sector_overlay_summary_path, sector_overlay_summary_error = _load_json_candidates(
+        _report_file_candidates(GEN2_MAINLINE_INTRADAY_OVERLAY_DIR, "summary.json")
+    )
+    watch_selected, _ = _pick_gen2_mainline_selected_date(
+        requested_date=requested_date,
+        sector_factor=sector_factor_df,
+        theme_pool=theme_pool_df,
+        watchlist_dates=[],
+    )
+    watchlist_df, watchlist_json, watchlist_csv_path, watchlist_json_path, watchlist_dates = _load_mainline_watchlist_snapshot(
+        watch_selected
+    )
+    selected_date, date_resolution = _pick_gen2_mainline_selected_date(
+        requested_date=requested_date,
+        sector_factor=sector_factor_df,
+        theme_pool=theme_pool_df,
+        watchlist_dates=watchlist_dates,
+    )
+    latest_trade_date = _normalize_date_str(_resolve_latest_stock_trade_date())
+    member_snapshot_source_date = _normalize_date_str(
+        sector_overlay_summary_json.get("target_date") if isinstance(sector_overlay_summary_json, dict) else None
+    ) or selected_date
+
+    sector_factor_day = _filter_df_by_date(sector_factor_df, selected_date, ["date_text", "trade_date"]).copy()
+    sector_factor_day["mainline_intraday_score"] = pd.to_numeric(
+        sector_factor_day.get("mainline_intraday_score"), errors="coerce"
+    )
+    for col in ["true_index_window_score", "intraday_diffusion_score"]:
+        if col in sector_factor_day.columns:
+            sector_factor_day[col] = pd.to_numeric(sector_factor_day[col], errors="coerce")
+    sector_sort_cols = [
+        c for c in ["mainline_intraday_score", "true_index_window_score", "intraday_diffusion_score"] if c in sector_factor_day.columns
+    ]
+    if sector_sort_cols:
+        sector_factor_day = sector_factor_day.sort_values(
+            sector_sort_cols,
+            ascending=[False] * len(sector_sort_cols),
+            na_position="last",
+        )
+    sector_factor_day = sector_factor_day.head(safe_limit)
+
+    sector_overlay_day = _filter_df_by_date(sector_overlay_df, selected_date, ["entry_date_text"]).copy()
+    for col in ["mainline_intraday_score", "score", "l3_rt_strong3_ratio"]:
+        if col in sector_overlay_day.columns:
+            sector_overlay_day[col] = pd.to_numeric(sector_overlay_day[col], errors="coerce")
+    overlay_sort_cols = [c for c in ["mainline_intraday_score", "score", "l3_rt_strong3_ratio"] if c in sector_overlay_day.columns]
+    if overlay_sort_cols:
+        sector_overlay_day = sector_overlay_day.sort_values(overlay_sort_cols, ascending=False, na_position="last")
+    sector_overlay_day = sector_overlay_day.head(safe_limit)
+
+    member_snapshot_day = member_snapshot_df.copy()
+    for col in ["mainline_intraday_score", "change_pct", "amount"]:
+        if col in member_snapshot_day.columns:
+            member_snapshot_day[col] = pd.to_numeric(member_snapshot_day[col], errors="coerce")
+    if "stock_code6" in member_snapshot_day.columns:
+        member_snapshot_day["stock_code6"] = member_snapshot_day["stock_code6"].map(_normalize_stock_code6)
+    member_snapshot_day["snapshot_trade_date"] = member_snapshot_source_date
+    current_snapshot_df = _load_stock_daily_snapshot(
+        latest_trade_date,
+        member_snapshot_day.get("stock_code6", pd.Series(dtype=str)).dropna().astype(str).tolist(),
+    )
+    if not current_snapshot_df.empty:
+        current_snapshot_df = current_snapshot_df.rename(
+            columns={
+                "trade_date": "current_trade_date",
+                "close": "current_close",
+                "change_pct": "current_change_pct",
+                "amount": "current_amount",
+            }
+        )
+        if "stock_code6" in member_snapshot_day.columns:
+            member_snapshot_day = member_snapshot_day.merge(current_snapshot_df, left_on="stock_code6", right_on="code6", how="left")
+            member_snapshot_day = member_snapshot_day.drop(columns=["code6"], errors="ignore")
+    member_sort_cols = [c for c in ["mainline_intraday_score", "change_pct", "amount"] if c in member_snapshot_day.columns]
+    if member_sort_cols:
+        member_snapshot_day = member_snapshot_day.sort_values(
+            member_sort_cols,
+            ascending=[False] * len(member_sort_cols),
+            na_position="last",
+        )
+    member_snapshot_day = member_snapshot_day.head(safe_limit)
+
+    theme_pool_day = _filter_df_by_date(theme_pool_df, selected_date, ["trade_date"]).copy()
+    for col in ["theme_candidate_score", "theme_weight_hint", "ret20", "ret10", "ret5"]:
+        if col in theme_pool_day.columns:
+            theme_pool_day[col] = pd.to_numeric(theme_pool_day[col], errors="coerce")
+    if "code6" in theme_pool_day.columns:
+        theme_pool_day["code6"] = theme_pool_day["code6"].map(_normalize_stock_code6)
+    theme_pool_day["snapshot_trade_date"] = selected_date
+    theme_current_snapshot_df = _load_stock_daily_snapshot(
+        latest_trade_date,
+        theme_pool_day.get("code6", pd.Series(dtype=str)).dropna().astype(str).tolist(),
+    )
+    if not theme_current_snapshot_df.empty and "code6" in theme_pool_day.columns:
+        theme_current_snapshot_df = theme_current_snapshot_df.rename(
+            columns={
+                "trade_date": "current_trade_date",
+                "close": "current_close",
+                "change_pct": "current_change_pct",
+                "amount": "current_amount",
+            }
+        )
+        theme_pool_day = theme_pool_day.merge(theme_current_snapshot_df, on="code6", how="left")
+    theme_pool_sort_cols = [c for c in ["theme_candidate_score", "theme_weight_hint"] if c in theme_pool_day.columns]
+    if theme_pool_sort_cols:
+        theme_pool_day = theme_pool_day.sort_values(theme_pool_sort_cols, ascending=False, na_position="last")
+    theme_pool_day = theme_pool_day.head(safe_limit)
+
+    theme_overlay_day = theme_overlay_df.copy()
+    for col in ["overlay_score", "raw_score", "theme_weight_hint"]:
+        if col in theme_overlay_day.columns:
+            theme_overlay_day[col] = pd.to_numeric(theme_overlay_day[col], errors="coerce")
+    theme_overlay_sort_cols = [c for c in ["overlay_score", "raw_score"] if c in theme_overlay_day.columns]
+    if theme_overlay_sort_cols:
+        theme_overlay_day = theme_overlay_day.sort_values(theme_overlay_sort_cols, ascending=False, na_position="last")
+    theme_overlay_day = theme_overlay_day.head(safe_limit)
+
+    theme_addon_day = theme_addon_df.copy()
+    for col in ["theme_weight_hint", "theme_candidate_score"]:
+        if col in theme_addon_day.columns:
+            theme_addon_day[col] = pd.to_numeric(theme_addon_day[col], errors="coerce")
+    theme_addon_sort_cols = [c for c in ["theme_candidate_score", "theme_weight_hint"] if c in theme_addon_day.columns]
+    if theme_addon_sort_cols:
+        theme_addon_day = theme_addon_day.sort_values(theme_addon_sort_cols, ascending=False, na_position="last")
+    theme_addon_day = theme_addon_day.head(safe_limit)
+
+    if not watchlist_df.empty:
+        for col in ["candidate_score", "stock_current_from_h20", "stock_current_from_anchor", "sector_rank"]:
+            if col in watchlist_df.columns:
+                watchlist_df[col] = pd.to_numeric(watchlist_df[col], errors="coerce")
+        watchlist_sort_cols = [c for c in ["candidate_score", "stock_current_from_h20"] if c in watchlist_df.columns]
+        if watchlist_sort_cols:
+            watchlist_df = watchlist_df.sort_values(watchlist_sort_cols, ascending=False, na_position="last")
+        watchlist_df = watchlist_df.head(safe_limit)
+
+    sector_watchlist_mode = "watchlist"
+    sector_watchlist_hint = "严格候选观察池，偏研究跟踪，不建议直接买入。"
+    sector_watchlist_display = watchlist_df.copy()
+    if sector_watchlist_display.empty and not member_snapshot_day.empty:
+        fallback = member_snapshot_day.copy()
+        fallback["stock_code"] = fallback.get("stock_code_raw", fallback.get("stock_code6"))
+        fallback["sector_rank"] = pd.to_numeric(fallback.get("rank_in_sector_by_day"), errors="coerce")
+        fallback["candidate_score"] = pd.to_numeric(fallback.get("mainline_intraday_score"), errors="coerce")
+        fallback["stock_current_from_anchor"] = pd.to_numeric(fallback.get("change_pct"), errors="coerce") / 100.0
+        fallback["stock_current_from_h20"] = pd.NA
+        fallback["amount"] = pd.to_numeric(fallback.get("amount"), errors="coerce")
+        fallback = fallback.sort_values(
+            [c for c in ["mainline_intraday_score", "rank_in_sector_by_day", "change_pct", "amount"] if c in fallback.columns],
+            ascending=[False, True, False, False][: len([c for c in ["mainline_intraday_score", "rank_in_sector_by_day", "change_pct", "amount"] if c in fallback.columns])],
+            na_position="last",
+        ).head(safe_limit)
+        sector_watchlist_display = fallback
+        sector_watchlist_mode = "member_snapshot_fallback"
+        sector_watchlist_hint = "严格观察池为空，当前回退展示主线板块中的强势成分股，仅供观察，不建议直接买入。"
+
+    sector_count = len(sector_factor_day)
+    overlay_count = len(sector_overlay_day)
+    theme_pool_count = len(theme_pool_day)
+    theme_match_count = (
+        int(theme_overlay_day.get("has_mainline_theme", pd.Series(dtype=bool)).fillna(False).sum())
+        if not theme_overlay_day.empty
+        else 0
+    )
+    watchlist_count = len(watchlist_df)
+    available = any(
+        [
+            not sector_factor_day.empty,
+            not sector_overlay_day.empty,
+            not theme_pool_day.empty,
+            not theme_overlay_day.empty,
+            not watchlist_df.empty,
+        ]
+    )
+    missing_labels = []
+    if sector_factor_path is None:
+        missing_labels.append("\u677f\u5757\u4e3b\u7ebf\u56e0\u5b50")
+    if theme_pool_path is None:
+        missing_labels.append("\u4e3b\u9898\u89c2\u5bdf\u6c60")
+    if watchlist_csv_path is None and watchlist_json_path is None:
+        missing_labels.append("\u4e3b\u9898\u89c2\u5bdf\u6c60")
+    message = None
+    if not available:
+        message = "\u4e3b\u7ebf\u70ed\u70b9\u7ed3\u679c\u6682\u4e0d\u53ef\u7528\uff1b\u8bf7\u5148\u751f\u6210\u4e3b\u7ebf\u677f\u5757\u6216\u4e3b\u9898\u7814\u7a76\u4ea7\u7269\u3002"
+    elif missing_labels:
+        message = "\u90e8\u5206\u4e3b\u7ebf\u70ed\u70b9\u4ea7\u7269\u7f3a\u5931\uff1a" + "\u3001".join(missing_labels)
+
+    source_status = [
+        _build_source_status(
+            "sector_factor",
+            "\u677f\u5757\u4e3b\u7ebf\u56e0\u5b50",
+            sector_factor_path,
+            sector_factor_error,
+            len(sector_factor_df),
+            _extract_df_latest_date(sector_factor_df, ["date_text", "trade_date"]),
+        ),
+        _build_source_status(
+            "sector_overlay",
+            "\u677f\u5757\u4e3b\u7ebf\u4e0e\u5019\u9009\u91cd\u5408",
+            sector_overlay_path,
+            sector_overlay_error,
+            len(sector_overlay_df),
+            _extract_df_latest_date(sector_overlay_df, ["entry_date_text"]),
+        ),
+        _build_source_status(
+            "member_snapshot",
+            "\u677f\u5757\u4e3b\u7ebf\u4e0e\u5019\u9009\u91cd\u5408",
+            member_snapshot_path,
+            member_snapshot_error,
+            len(member_snapshot_df),
+            selected_date,
+        ),
+        _build_source_status(
+            "theme_pool",
+            "\u4e3b\u7ebf\u4e3b\u9898\u89c2\u5bdf\u6c60",
+            theme_pool_path,
+            theme_pool_error,
+            len(theme_pool_df),
+            _extract_df_latest_date(theme_pool_df, ["trade_date"]),
+        ),
+        _build_source_status(
+            "theme_overlay",
+            "\u4e3b\u7ebf\u4e3b\u9898\u7b56\u7565\u53e0\u52a0",
+            theme_overlay_path or theme_addon_path,
+            theme_overlay_error or theme_addon_error,
+            len(theme_overlay_df) or len(theme_addon_df),
+            selected_date,
+        ),
+        _build_source_status(
+            "sector_watchlist",
+            "\u4e3b\u7ebf\u4e3b\u9898\u89c2\u5bdf\u6c60",
+            watchlist_csv_path or watchlist_json_path,
+            None if (watchlist_csv_path or watchlist_json_path) else "missing",
+            len(watchlist_df),
+            selected_date or (watchlist_dates[-1] if watchlist_dates else None),
+        ),
+    ]
+
+    return _sanitize(
+        {
+            "available": available,
+            "message": message,
+            "requested_date": _normalize_date_str(requested_date),
+            "selected_date": selected_date,
+            "date_resolution": date_resolution,
+            "latest_trade_date": latest_trade_date,
+            "summary": {
+                "sector_count": sector_count,
+                "candidate_overlay_count": overlay_count,
+                "theme_pool_count": theme_pool_count,
+                "theme_match_count": theme_match_count,
+                "watchlist_count": watchlist_count,
+                "sector_watchlist_display_count": len(sector_watchlist_display),
+                "watchlist_available_dates": watchlist_dates[-20:],
+            },
+            "sector_mainline": sector_factor_day.to_dict(orient="records"),
+            "sector_candidate_overlay": sector_overlay_day.to_dict(orient="records"),
+            "sector_member_snapshot": member_snapshot_day.to_dict(orient="records"),
+            "theme_observation_pool": theme_pool_day.to_dict(orient="records"),
+            "theme_strategy_overlay": theme_overlay_day.to_dict(orient="records"),
+            "theme_addon": theme_addon_day.to_dict(orient="records"),
+            "sector_watchlist": watchlist_df.to_dict(orient="records"),
+            "sector_watchlist_display": sector_watchlist_display.to_dict(orient="records"),
+            "sector_watchlist_mode": sector_watchlist_mode,
+            "sector_watchlist_hint": sector_watchlist_hint,
+            "raw_summaries": {
+                "sector_factor": sector_summary_json,
+                "sector_overlay": sector_overlay_summary_json,
+                "sector_watchlist": watchlist_json,
+            },
+            "source_dates": {
+                "sector_factor": _normalize_date_str(sector_summary_json.get("target_date")) if isinstance(sector_summary_json, dict) else None,
+                "sector_overlay": member_snapshot_source_date,
+                "sector_watchlist": _normalize_date_str(watchlist_json.get("trade_date")) if isinstance(watchlist_json, dict) else None,
+                "theme_pool": _extract_df_latest_date(theme_pool_day, ["trade_date"]),
+                "latest_trade": latest_trade_date,
+            },
+            "source_status": source_status,
+            "paths": {
+                "sector_summary": str(sector_summary_path) if sector_summary_path else None,
+                "sector_overlay_summary": str(sector_overlay_summary_path) if sector_overlay_summary_path else None,
+                "watchlist_json": str(watchlist_json_path) if watchlist_json_path else None,
+            },
+        }
+    )
+
 def _build_gen2_official_branch_freshness(requested_date: Optional[str], selected_date: Optional[str], official_dates: List[str]) -> Dict[str, Any]:
     latest_official_date = official_dates[-1] if official_dates else None
     target_date = _normalize_date_str(requested_date) or _normalize_date_str(selected_date)
@@ -4757,7 +5977,7 @@ def _build_gen2_breakout_quality_rows(v4_pool_df: pd.DataFrame, selected_date: s
                     **setup,
                     "key": f"{code6}|breakout_quality",
                     "quality_family": "breakout",
-                    "quality_family_label": "浜屾绐佺牬",
+                    "quality_family_label": "二次突破",
                     "code": _to_exchange_stock_code(code6),
                     "code6": code6,
                     "name": str(ctx.get("name") or ""),
@@ -4927,11 +6147,11 @@ def _build_gen2_selection_pool(signal_date: Optional[str], limit: int) -> Dict[s
             reason = str(_row_value(ledger, "execution_note", "") or default_reason)
         elif pass_breakout_stage:
             stage_no = _to_int(_row_value(source, "breakout_stage_no"), default=0) or 0
-            stage_label = "浜岀獊鍥涘眰" if stage_no >= 4 else "浜岀獊涓夊眰"
+            stage_label = "二突四层" if stage_no >= 4 else "二突三层"
             stage_type = "success" if stage_no >= 4 else "warning"
             reason = str(_row_value(source, "reason_text", "") or "当前阶段为突破候选，建议保持观察")
         elif pass_volume5_trigger:
-            stage_label = "volume5瑙﹀彂"
+            stage_label = "volume5触发"
             stage_type = "success" if pass_pre else "warning"
             reason = "最近持续触发 volume5 与大额信号，建议关注，后续按 2:00 复核"
         elif not pass_raw and not pass_official:
@@ -4939,15 +6159,15 @@ def _build_gen2_selection_pool(signal_date: Optional[str], limit: int) -> Dict[s
             stage_type = "info"
             reason = "D-1 V4 尚无有效基础信号，当前仅返回 2m/30m 预警提示"
         elif not pass_pre:
-            stage_label = "椋庢帶杩囨护"
+            stage_label = "风控过滤"
             stage_type = "danger"
             reason = "被风险降温控制拦截"
         elif not pass_final:
-            stage_label = "涓荤嚎杩囨护"
+            stage_label = "主线过滤"
             stage_type = "warning"
             reason = "未通过最终风控门槛：volume5_keep80_runup 与突破阶段不兼容"
         elif is_suspended:
-            stage_label = "鐔旀柇鏆傚仠"
+            stage_label = "熔断暂停"
             stage_type = "danger"
             reason = str(_row_value(ledger, "execution_note", "") or "该股票被交易所涨跌幅降级风控拦截")
         else:
@@ -5033,54 +6253,65 @@ def _build_gen2_selection_pool(signal_date: Optional[str], limit: int) -> Dict[s
     official_breakout_count = int((official_df.get("source_family", pd.Series(dtype=str)).astype(str) == "big_bull").sum()) if (official_branch_fresh and not official_df.empty) else 0
     mainline1_count = max(final_count, official_volume5_count)
     mainline2_count = official_breakout_count
+    intraday_state = summary.get("intraday_state") if isinstance(summary, dict) else {}
+    v4_trigger_note = "D-1 V4 rank -> 30m before_confirm 的 NORMAL 门控。"
+    if isinstance(intraday_state, dict):
+        if intraday_state.get("fallback") == "skip_intraday_normal":
+            v4_trigger_note = "D-1 V4 rank -> 30m before_confirm 全部未触发 NORMAL，已按配置跳过该门控回退。"
+        elif intraday_state.get("reason") == "intraday_state_empty":
+            v4_trigger_note = "D-1 V4 rank -> 30m before_confirm 未能构建 intraday_state，按无候选处理。"
+        elif intraday_state.get("reason") == "all_intraday_normal_false":
+            v4_trigger_note = "D-1 V4 rank -> 30m before_confirm 全部为 NORMAL=false。"
+        elif intraday_state.get("reason"):
+            v4_trigger_note = f"D-1 V4 rank -> 30m before_confirm 过滤原因: {intraday_state.get('reason')}。"
     pipeline = [
         {
             "key": "v4_pool",
-            "label": "D-1 V4??",
+            "label": "D-1 V4",
             "count": int(len(v4_pool_df)),
-            "note": "? D-1 V4 ??????N???????????????????",
+            "note": "D-1 V4 原始候选池：先按 30m before_confirm normal 门控后进入主链。",
         },
         {
             "key": "volume5_quality",
-            "label": "volume5 ??",
+            "label": "volume5 质检",
             "count": int(quality_summary.get("pass_count") or 0),
-            "note": "D-1 V4 ?? + Alpha191 volume5 ????? keep80 ? runup<=100%?",
+            "note": "D-1 V4 + Alpha191 volume5（keep80 且 runup<=100%）。",
         },
         {
             "key": "v4_g2_trigger",
-            "label": "V4/G2??",
+            "label": "V4/G2 触发",
             "count": raw_count,
-            "note": "D-1 V4 rank ?????30m????????????? normal.",
+            "note": v4_trigger_note,
         },
         {
             "key": "risk_cool",
-            "label": "??????",
+            "label": "风控过滤",
             "count": pre_count,
-            "note": "?????????User V2????????????",
+            "note": "User V2 风控链路的预过滤结果。",
         },
         {
             "key": "mainline1",
-            "label": "??1 volume5",
+            "label": "主线1 volume5",
             "count": mainline1_count,
-            "note": "volume5_keep80_runup ???????1?volume5????",
+            "note": "主线1：volume5_keep80_runup（volume5 正向主线）。",
         },
         {
             "key": "mainline2",
-            "label": "??2 breakout+??",
+            "label": "主线2 breakout+big_bull",
             "count": mainline2_count,
-            "note": "big_bull ? 3_rt_strong3_ratio ?????????2?",
+            "note": "主线2：big_bull 与 3_rt_strong3_ratio 组合，通过二级筛选。",
         },
         {
             "key": "official_v2_complete",
-            "label": "??complete??",
+            "label": "官方V2完整链路",
             "count": int(len(official_df)),
-            "note": str(branch_freshness.get("text") or "g2_v2_complete ????????"),
+            "note": str(branch_freshness.get("text") or "g2_v2_complete 分支可用性不足"),
         },
         {
             "key": "buyable",
-            "label": "?????",
+            "label": "可买标记",
             "count": int(sum(1 for row in full_rows if row.get("buyable"))),
-            "note": "?????????????????????????",
+            "note": "最终可买且通过主链条件的候选数。",
         },
     ]
     return _sanitize(
@@ -5119,6 +6350,445 @@ def _build_gen2_selection_pool(signal_date: Optional[str], limit: int) -> Dict[s
             "v4_d_rows": _gen2_v4_pool_records(v4_d_pool_df, selected_date, "D", int(limit)),
             "data_freshness": build_gen2_data_freshness(requested_date, selected_date),
             "message": "返回 D-1 V4/G2候选；若 D 日数据不足会自动退化到 volume5+breakout 可买列表。",
+        }
+    )
+
+
+def _load_gen2_open_state_for_date(signal_date: Optional[str]) -> Dict[str, Any]:
+    selected_date = _normalize_date_str(signal_date)
+    if not selected_date:
+        return {"state": "UNKNOWN", "source": str(GEN2_OPEN_STATE_DAILY_PATH), "available": False}
+    if not GEN2_OPEN_STATE_DAILY_PATH.exists():
+        return {"state": "UNKNOWN", "source": str(GEN2_OPEN_STATE_DAILY_PATH), "available": False}
+    try:
+        df = pd.read_csv(GEN2_OPEN_STATE_DAILY_PATH)
+    except Exception as exc:
+        logger.warning(f"load G2 open state for ticket failed: {exc}")
+        return {
+            "state": "UNKNOWN",
+            "source": str(GEN2_OPEN_STATE_DAILY_PATH),
+            "available": False,
+            "error": str(exc),
+        }
+    if df.empty or "trade_date" not in df.columns:
+        return {"state": "UNKNOWN", "source": str(GEN2_OPEN_STATE_DAILY_PATH), "available": False}
+    d = df.copy()
+    d["trade_date"] = pd.to_datetime(d["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    state_col = "g2_open_state" if "g2_open_state" in d.columns else "state"
+    if state_col not in d.columns:
+        return {"state": "UNKNOWN", "source": str(GEN2_OPEN_STATE_DAILY_PATH), "available": False}
+    exact = d[d["trade_date"].eq(selected_date)].copy()
+    date_source = "exact"
+    if exact.empty:
+        prior_dates = sorted([str(x) for x in d["trade_date"].dropna().unique() if str(x) <= selected_date])
+        if not prior_dates:
+            return {"state": "UNKNOWN", "source": str(GEN2_OPEN_STATE_DAILY_PATH), "available": False}
+        exact = d[d["trade_date"].eq(prior_dates[-1])].copy()
+        date_source = "fallback_previous"
+    row = exact.tail(1).iloc[0]
+    state = str(row.get(state_col) or "UNKNOWN").strip().upper() or "UNKNOWN"
+    return _sanitize(
+        {
+            "state": state,
+            "trade_date": str(row.get("trade_date") or ""),
+            "requested_date": selected_date,
+            "date_source": date_source,
+            "source": str(GEN2_OPEN_STATE_DAILY_PATH),
+            "available": True,
+            "raw": row.where(pd.notna(row), None).to_dict(),
+        }
+    )
+
+
+def _gen2_ticket_position_policy(open_state: str) -> Dict[str, Any]:
+    state = str(open_state or "UNKNOWN").strip().upper()
+    if state == "AGGRESSIVE":
+        return {"can_open": True, "target_exposure": "60%-90%", "max_new_positions": 3, "single_position": "25%-35%"}
+    if state == "NORMAL":
+        return {"can_open": True, "target_exposure": "30%-60%", "max_new_positions": 2, "single_position": "20%-30%"}
+    if state == "PROBE":
+        return {"can_open": False, "target_exposure": "0%-20%", "max_new_positions": 0, "single_position": "0%"}
+    if state == "OFF":
+        return {"can_open": False, "target_exposure": "0%", "max_new_positions": 0, "single_position": "0%"}
+    return {"can_open": False, "target_exposure": "0%", "max_new_positions": 0, "single_position": "0%"}
+
+
+def _gen2_ticket_strategy_source(row: Dict[str, Any]) -> str:
+    if row.get("pass_mainline1") and row.get("pass_mainline2"):
+        return "volume5 + big_bull"
+    if row.get("pass_mainline2"):
+        return "big_bull"
+    if row.get("pass_mainline1") or str(row.get("source_family") or "") == "volume5":
+        return "volume5"
+    return str(row.get("source_family") or row.get("signal_family") or "g2_v2_complete")
+
+
+def _gen2_ticket_candidate(row: Dict[str, Any], index: int, policy: Dict[str, Any]) -> Dict[str, Any]:
+    code = str(row.get("code") or row.get("code6") or "")
+    name = str(row.get("name") or "")
+    entry_price = _to_float(row.get("entry_price"))
+    single_position = str(policy.get("single_position") or "0%")
+    strategy_source = _gen2_ticket_strategy_source(row)
+    buy_area = "等待盘中确认价"
+    if entry_price is not None:
+        buy_area = f"{entry_price:.2f} 附近，严禁明显高开/直线拉升后追价"
+    return _sanitize(
+        {
+            "rank": int(index),
+            "code": code,
+            "code6": str(row.get("code6") or "") or _normalize_stock_code6(code),
+            "name": name,
+            "strategy_source": strategy_source,
+            "stage_label": row.get("stage_label"),
+            "confirm_datetime": row.get("confirm_datetime"),
+            "entry_price": entry_price,
+            "buy_area": buy_area,
+            "suggested_position": single_position,
+            "auto_order_allowed": False,
+            "requires_manual_approval": True,
+            "evidence": {
+                "v4_rank": row.get("v4_rank"),
+                "v4_score": row.get("v4_score"),
+                "alpha191_volume5_score": row.get("alpha191_volume5_score"),
+                "alpha191_volume5_rank_in_day": row.get("alpha191_volume5_rank_in_day"),
+                "source_family": row.get("source_family"),
+                "signal_family": row.get("signal_family"),
+                "g2_v2_buy_logic": row.get("g2_v2_buy_logic"),
+                "l3_rt_strong3_ratio": row.get("l3_rt_strong3_ratio"),
+                "sector_score_bonus": row.get("sector_score_bonus"),
+                "pass_mainline1": row.get("pass_mainline1"),
+                "pass_mainline2": row.get("pass_mainline2"),
+                "pass_official_v2_live": row.get("pass_official_v2_live"),
+            },
+            "buy_conditions": [
+                "只在交易单允许开仓时执行",
+                "必须属于 G2 V4 g2_v2_complete 正式候选",
+                "盘中 15m/30m 确认信号不能撤销或过期",
+                "不追直线拉升，不在明显高开透支后临时加价",
+            ],
+            "invalid_conditions": [
+                "市场状态降为 PROBE/OFF",
+                "候选从 G2 V4 正式可买池消失",
+                "盘中跌破确认结构或买入理由失效",
+                "出现 ST、停牌、涨停买不到或明显流动性异常",
+            ],
+            "risk_rules": [
+                "单票浮亏 -4% 后禁止加仓",
+                "单票浮亏 -6% 必须处理",
+                "买入后 3 个交易日仍未按预期走强则降级复盘",
+            ],
+            "review_points": ["T+1 表现", "T+3 是否走强", "T+5 盈亏与买点质量归因"],
+            "reason_text": row.get("reason_text"),
+        }
+    )
+
+
+def _gen2_ticket_markdown(ticket: Dict[str, Any]) -> str:
+    lines = [
+        f"# G2 V4 Daily Trade Ticket - {ticket.get('signal_date') or ''}",
+        "",
+        f"- 生成时间：{ticket.get('generated_at') or ''}",
+        f"- 策略口径：{ticket.get('strategy_code') or ''}",
+        f"- 市场状态：{ticket.get('market_state') or 'UNKNOWN'}",
+        f"- 今日是否允许开仓：{'是' if ticket.get('can_open') else '否'}",
+        f"- 允许总仓位：{ticket.get('target_exposure') or '0%'}",
+        f"- 正式候选数：{len(ticket.get('formal_candidates') or [])}",
+        f"- 自动下单：关闭，必须人工确认",
+        "",
+        "## 今日纪律",
+    ]
+    for item in ticket.get("forbidden_actions") or []:
+        lines.append(f"- {item}")
+    lines.extend(["", "## 正式候选"])
+    candidates = ticket.get("formal_candidates") or []
+    if not candidates:
+        lines.append("- 今日无正式买入候选。")
+    for item in candidates:
+        evidence = item.get("evidence") or {}
+        lines.extend(
+            [
+                "",
+                f"### {item.get('rank')}. {item.get('code')} {item.get('name')}",
+                f"- 来源：{item.get('strategy_source')}",
+                f"- 买入区间：{item.get('buy_area')}",
+                f"- 建议仓位：{item.get('suggested_position')}",
+                f"- 确认时间：{item.get('confirm_datetime') or '-'}",
+                f"- V4：rank={evidence.get('v4_rank')}, score={evidence.get('v4_score')}",
+                f"- 主线证据：mainline1={evidence.get('pass_mainline1')}, mainline2={evidence.get('pass_mainline2')}, l3={evidence.get('l3_rt_strong3_ratio')}",
+                f"- 理由：{item.get('reason_text') or '-'}",
+                "- 失效条件：" + "；".join(str(x) for x in (item.get("invalid_conditions") or [])),
+                "- 风控规则：" + "；".join(str(x) for x in (item.get("risk_rules") or [])),
+            ]
+        )
+    lines.extend(["", "## 数据状态"])
+    for stage in ticket.get("pipeline") or []:
+        lines.append(f"- {stage.get('label')}: {stage.get('count')} | {stage.get('note')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _save_gen2_daily_trade_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    signal_date = _normalize_date_str(ticket.get("signal_date")) or datetime.now().strftime("%Y-%m-%d")
+    GEN2_DAILY_TICKET_DIR.mkdir(parents=True, exist_ok=True)
+    json_path = GEN2_DAILY_TICKET_DIR / f"{signal_date}.json"
+    md_path = GEN2_DAILY_TICKET_DIR / f"{signal_date}.md"
+    markdown = _gen2_ticket_markdown(ticket)
+    payload = dict(ticket)
+    payload["markdown"] = markdown
+    json_text = json.dumps(_sanitize(payload), ensure_ascii=False, indent=2, default=str)
+    json_path.write_text(json_text, encoding="utf-8")
+    md_path.write_text(markdown, encoding="utf-8")
+    GEN2_DAILY_TICKET_LATEST_PATH.write_text(json_text, encoding="utf-8")
+    (GEN2_DAILY_TICKET_DIR / "latest.md").write_text(markdown, encoding="utf-8")
+    return {"json_path": str(json_path), "markdown_path": str(md_path), "latest_path": str(GEN2_DAILY_TICKET_LATEST_PATH)}
+
+
+def _load_gen2_daily_execution_ledger() -> List[Dict[str, Any]]:
+    if not GEN2_DAILY_EXECUTION_LEDGER_PATH.exists():
+        return []
+    try:
+        data = json.loads(GEN2_DAILY_EXECUTION_LEDGER_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(f"load gen2 daily execution ledger failed: {exc}")
+        return []
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict) and isinstance(data.get("records"), list):
+        return [item for item in data.get("records") if isinstance(item, dict)]
+    return []
+
+
+def _save_gen2_daily_execution_ledger(records: List[Dict[str, Any]]) -> None:
+    GEN2_DAILY_TICKET_DIR.mkdir(parents=True, exist_ok=True)
+    clean_records = sorted(
+        [_sanitize(item) for item in records if isinstance(item, dict)],
+        key=lambda item: (str(item.get("signal_date") or ""), str(item.get("updated_at") or "")),
+        reverse=True,
+    )
+    GEN2_DAILY_EXECUTION_LEDGER_PATH.write_text(
+        json.dumps(clean_records, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
+def _find_gen2_daily_execution_record(signal_date: str, strategy_code: str = "g2_v2_complete") -> Optional[Dict[str, Any]]:
+    target_date = _normalize_date_str(signal_date)
+    target_strategy = str(strategy_code or "g2_v2_complete")
+    if not target_date:
+        return None
+    for item in _load_gen2_daily_execution_ledger():
+        if _normalize_date_str(item.get("signal_date")) == target_date and str(item.get("strategy_code") or "") == target_strategy:
+            return item
+    return None
+
+
+def _upsert_gen2_daily_execution_record(payload: Dict[str, Any]) -> Dict[str, Any]:
+    signal_date = _normalize_date_str(payload.get("signal_date"))
+    if not signal_date:
+        latest = _build_gen2_daily_trade_ticket(None, limit=30, formal_limit=3, persist=True)
+        signal_date = _normalize_date_str(latest.get("signal_date"))
+    if not signal_date:
+        return {"ok": False, "error": "missing signal_date"}
+
+    strategy_code = str(payload.get("strategy_code") or "g2_v2_complete")
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    records = _load_gen2_daily_execution_ledger()
+    record_id = f"{signal_date}|{strategy_code}"
+    existing_index = -1
+    existing: Dict[str, Any] = {}
+    for idx, item in enumerate(records):
+        if str(item.get("record_id") or "") == record_id:
+            existing_index = idx
+            existing = dict(item)
+            break
+        if _normalize_date_str(item.get("signal_date")) == signal_date and str(item.get("strategy_code") or "") == strategy_code:
+            existing_index = idx
+            existing = dict(item)
+            break
+
+    allowed_status = {"pending", "followed", "no_trade", "partial", "violated", "reviewed"}
+    execution_status = str(payload.get("execution_status") or existing.get("execution_status") or "pending").strip().lower()
+    if execution_status not in allowed_status:
+        execution_status = "pending"
+
+    ticket = _build_gen2_daily_trade_ticket(signal_date, limit=30, formal_limit=3, persist=True)
+    candidate_codes = [
+        str(item.get("code") or item.get("code6") or "").strip()
+        for item in (ticket.get("formal_candidates") or [])
+        if isinstance(item, dict)
+    ]
+    record = {
+        **existing,
+        "record_id": record_id,
+        "signal_date": signal_date,
+        "strategy_code": strategy_code,
+        "mode": ticket.get("mode") or "shadow_only",
+        "market_state": ticket.get("market_state") or "",
+        "can_open": bool(ticket.get("can_open")),
+        "formal_candidate_count": int(ticket.get("formal_candidate_count") or 0),
+        "formal_candidate_codes": candidate_codes,
+        "execution_status": execution_status,
+        "executed": bool(payload.get("executed")) if "executed" in payload else bool(existing.get("executed", False)),
+        "discipline_ok": bool(payload.get("discipline_ok")) if "discipline_ok" in payload else bool(existing.get("discipline_ok", True)),
+        "violation_tags": payload.get("violation_tags") if isinstance(payload.get("violation_tags"), list) else existing.get("violation_tags", []),
+        "execution_note": str(payload.get("execution_note") if payload.get("execution_note") is not None else existing.get("execution_note", "")).strip(),
+        "t1_review": str(payload.get("t1_review") if payload.get("t1_review") is not None else existing.get("t1_review", "")).strip(),
+        "t3_review": str(payload.get("t3_review") if payload.get("t3_review") is not None else existing.get("t3_review", "")).strip(),
+        "t5_review": str(payload.get("t5_review") if payload.get("t5_review") is not None else existing.get("t5_review", "")).strip(),
+        "updated_at": now_text,
+        "created_at": existing.get("created_at") or now_text,
+    }
+    if existing_index >= 0:
+        records[existing_index] = record
+    else:
+        records.append(record)
+    _save_gen2_daily_execution_ledger(records)
+    return {"ok": True, "record": _sanitize(record), "ledger_path": str(GEN2_DAILY_EXECUTION_LEDGER_PATH)}
+
+
+def _build_gen2_daily_trade_ticket(
+    signal_date: Optional[str],
+    limit: int = 30,
+    formal_limit: int = 3,
+    persist: bool = True,
+) -> Dict[str, Any]:
+    safe_limit = max(10, min(int(limit or 30), 100))
+    safe_formal_limit = max(1, min(int(formal_limit or 3), 5))
+    pool = _build_gen2_selection_pool(signal_date, safe_limit)
+    selected_date = _normalize_date_str(pool.get("signal_date")) or _normalize_date_str(signal_date) or ""
+    open_state = _load_gen2_open_state_for_date(selected_date)
+    market_state = str(open_state.get("state") or "UNKNOWN").upper()
+    policy = _gen2_ticket_position_policy(market_state)
+    can_open = bool(policy.get("can_open"))
+    source_rows = pool.get("rows") or []
+    buyable_rows = [row for row in source_rows if row.get("buyable")]
+    formal_rows = buyable_rows[:safe_formal_limit] if can_open else []
+    formal_candidates = [
+        _gen2_ticket_candidate(row, idx + 1, policy)
+        for idx, row in enumerate(formal_rows)
+    ]
+    watch_rows = [
+        row
+        for row in source_rows
+        if row not in formal_rows and (row.get("pass_mainline1") or row.get("pass_mainline2") or row.get("pass_breakout_stage"))
+    ][: max(0, safe_limit - len(formal_rows))]
+    holdings_cache = _load_ths_capital_holdings_cache()
+    holding_rows = holdings_cache.get("rows") if isinstance(holdings_cache, dict) else None
+    ticket = _sanitize(
+        {
+            "available": bool(pool.get("available")),
+            "schema_version": 1,
+            "mode": "shadow_only",
+            "strategy_code": "g2_v2_complete",
+            "strategy_name": "G2 V4 official daily trade ticket",
+            "alpha191_gate": "g2_v2_complete",
+            "signal_date": selected_date,
+            "requested_date": _normalize_date_str(signal_date),
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "market_state": market_state,
+            "market_state_detail": open_state,
+            "can_open": can_open,
+            "target_exposure": policy.get("target_exposure"),
+            "max_new_positions": policy.get("max_new_positions"),
+            "single_position": policy.get("single_position"),
+            "formal_candidate_count": len(formal_candidates),
+            "formal_candidates": formal_candidates,
+            "watch_candidates": watch_rows[:10],
+            "existing_holdings": {
+                "available": isinstance(holding_rows, list),
+                "count": len(holding_rows) if isinstance(holding_rows, list) else 0,
+                "note": "真实持仓仅作可选附加层，不作为 G2 V4 主流程 hard blocker。",
+            },
+            "forbidden_actions": [
+                "不买非 G2 V4 正式候选",
+                "不追直线拉升",
+                "不补亏损票",
+                "不超过交易单给出的持仓数量和仓位上限",
+                "不因为盘感临时放宽市场状态门禁",
+            ],
+            "review_contract": {
+                "t1": "记录是否按买入条件触发、是否违反纪律、次日浮盈亏",
+                "t3": "判断是否按预期走强，未走强则降级",
+                "t5": "归因选股、买点、市场状态、执行纪律",
+            },
+            "pipeline": pool.get("pipeline") or [],
+            "data_freshness": pool.get("data_freshness"),
+            "branch_freshness": pool.get("branch_freshness"),
+            "source_summary": {
+                "row_count": pool.get("row_count"),
+                "trigger_count": pool.get("trigger_count"),
+                "complete_count": pool.get("complete_count"),
+                "quality_pass_count": pool.get("quality_pass_count"),
+                "source_latest_date": pool.get("source_latest_date"),
+            },
+            "message": (
+                "G2 V4 今日允许开仓，正式候选已生成。"
+                if can_open and formal_candidates
+                else "今日无正式开仓票；只允许管理已有持仓和观察 G2 V4 候选。"
+            ),
+        }
+    )
+    if persist:
+        ticket["outputs"] = _save_gen2_daily_trade_ticket(ticket)
+    ticket["execution_record"] = _find_gen2_daily_execution_record(
+        str(ticket.get("signal_date") or ""),
+        str(ticket.get("strategy_code") or "g2_v2_complete"),
+    )
+    return _sanitize(ticket)
+
+
+def _build_gen2_live_selection_summary(signal_date: Optional[str]) -> Dict[str, Any]:
+    requested_date = _normalize_date_str(signal_date)
+    live_dates = _gen2_live_update_dates()
+    official_dates = _load_gen2_v2_complete_dates()
+    ledger_dates: List[str] = []
+    try:
+        ledger_df = _load_gen2_risk_cool_shadow_ledger()
+        if not ledger_df.empty and "entry_date" in ledger_df.columns:
+            ledger_dates = sorted([str(x) for x in ledger_df["entry_date"].dropna().unique() if str(x)])
+    except Exception as exc:
+        logger.warning(f"build gen2 live selection summary failed to load ledger dates: {exc}")
+        ledger_dates = []
+
+    selectable_dates = sorted(set(live_dates + ledger_dates + official_dates))
+    if not selectable_dates:
+        return {
+            "summary": {
+                "strategy_name": "G2 second-generation strategy",
+                "candidate_count": 0,
+            },
+            "branch_freshness": {},
+            "live_trade_mode": "latest_driven_mainline",
+            "official_branch_blocks_live": False,
+            "signal_date": "",
+            "requested_date": requested_date or "",
+            "source_latest_date": "",
+        }
+
+    selected_date = selectable_dates[-1]
+    if requested_date:
+        earlier_dates = [x for x in selectable_dates if x <= requested_date]
+        selected_date = earlier_dates[-1] if earlier_dates else selectable_dates[-1]
+
+    branch_freshness = _build_gen2_official_branch_freshness(requested_date, selected_date, official_dates)
+    summary = _load_gen2_live_update_summary(selected_date)
+    candidate_count = _to_int(summary.get("filtered_signals"), default=0)
+    if candidate_count <= 0:
+        candidate_count = _to_int(summary.get("raw_candidates"), default=0)
+    if candidate_count <= 0:
+        candidate_count = _to_int(summary.get("shadow_rows_for_date"), default=0)
+
+    return _sanitize(
+        {
+            "summary": {
+                "strategy_name": "G2 second-generation strategy",
+                "candidate_count": int(candidate_count),
+            },
+            "branch_freshness": branch_freshness,
+            "live_trade_mode": "latest_driven_mainline",
+            "official_branch_blocks_live": False,
+            "signal_date": selected_date,
+            "requested_date": requested_date or "",
+            "source_latest_date": selectable_dates[-1],
         }
     )
 
@@ -5607,31 +7277,31 @@ def _build_live_fallback_info(
         return info
 
     info["active"] = True
-    info["title"] = f"???? {requested} ?????? V5 ???"
+    info["title"] = f"{requested} 请求已回退，改用 V5 回看窗口"
     if requested_is_trading_day and latest_trade and requested > latest_trade:
         info["message"] = (
-            f"{requested} ????????????? {latest_trade}?"
-            f" V5 ???14:35-14:50????????????????????? {selected}?"
+            f"{requested} 为交易日请求，但最新交易日仍为 {latest_trade}。"
+            f" 已按 V5 交易时段14:35-14:50 的回看规则，回退到 {selected}。"
         )
         if latest_snapshot != latest_trade:
             info["show_repair_entry"] = True
             info["repair_target_date"] = latest_trade
-            info["repair_reason"] = f"??? {latest_trade} ? V5 ??????????????????"
+            info["repair_reason"] = f"{latest_trade} 的快照与 V5 回看窗口未对齐，建议先执行修复。"
         return info
 
     if requested_is_trading_day:
-        info["message"] = f"{requested} ??????????????????? {selected}?"
+        info["message"] = f"{requested} 为交易日请求，当前仅有 {selected} 的完整可选数据。"
         if latest_trade and latest_snapshot != latest_trade:
             info["show_repair_entry"] = True
             info["repair_target_date"] = latest_trade
-            info["repair_reason"] = f"??????? {latest_trade} ? V5 ?????????????????"
+            info["repair_reason"] = f"{latest_trade} 快照与 V5 回看窗口未对齐，需要补齐数据。"
         elif latest_trade and requested <= latest_trade:
             info["show_repair_entry"] = True
             info["repair_target_date"] = requested
-            info["repair_reason"] = f"{requested} ???????????????????"
+            info["repair_reason"] = f"{requested} 交易日与当前 V5 回看状态不一致，请补齐该日数据。"
         return info
 
-    info["message"] = f"{requested} ????????????????????? {selected}?"
+    info["message"] = f"{requested} 非交易日请求，已回退到 {selected}。"
     return info
 
 def _load_v4_data(strategy_version: str) -> Dict[str, Any]:
@@ -5736,7 +7406,7 @@ def _load_hist_with_factors(signal_date: str, lookback_days: int = 130) -> pd.Da
     if hist.empty:
         return hist
 
-    # MySQL amount currently鏄€滀竾鍏冣€濆彛寰勶紝缁熶竴鎹㈢畻涓衡€滃厓鈥濆彛寰勩€?    hist["amount"] = hist["amount"] * 10000.0
+    # MySQL amount currently是万元口径，统一换算为元”口径?    hist["amount"] = hist["amount"] * 10000.0
     hist = hist.sort_values(["code", "date"]).reset_index(drop=True)
     g = hist.groupby("code", group_keys=False)
     hist["ret1"] = g["close"].pct_change()
@@ -6024,7 +7694,7 @@ def _build_realtime_snapshot_rows(
         "sold_today": "",
         "buy_candidates": "|".join(buy_candidates),
         "source": "realtime_selection_snapshot",
-        "source_note": "鐢卞疄鏃堕€夎偂鎺ュ彛鐢熸垚",
+        "source_note": "由实时股接口生成",
     }
 
     holding_row = {
@@ -6039,7 +7709,7 @@ def _build_realtime_snapshot_rows(
         "breadth": breadth,
         "signal_drawdown": signal_drawdown,
         "source": "realtime_selection_snapshot",
-        "source_note": "鐢卞疄鏃堕€夎偂鎺ュ彛鐢熸垚",
+        "source_note": "由实时股接口生成",
     }
 
     return {"decision_row": _sanitize(decision_row), "holding_row": _sanitize(holding_row)}
@@ -6047,7 +7717,7 @@ def _build_realtime_snapshot_rows(
 
 def _build_score_fail_reasons(raw_row: Optional[pd.Series]) -> str:
     if raw_row is None or (isinstance(raw_row, pd.Series) and raw_row.empty):
-        return "????????"
+        return "无有效数据"
 
     reasons: List[str] = []
     mom5 = _to_float(raw_row.get("mom5"))
@@ -6059,28 +7729,28 @@ def _build_score_fail_reasons(raw_row: Optional[pd.Series]) -> str:
     vol_ratio = _to_float(raw_row.get("vol_ratio"))
 
     if mom5 is None:
-        reasons.append("mom5??")
+        reasons.append("mom5缺失")
     elif mom5 <= 0:
         reasons.append("mom5<=0")
     if mom10 is None:
-        reasons.append("mom10??")
+        reasons.append("mom10缺失")
     if close is None or ma10 is None:
-        reasons.append("close/MA10??")
+        reasons.append("close/MA10缺失")
     elif close <= ma10:
         reasons.append("close<=MA10")
     if amt20 is None:
-        reasons.append("amt20??")
+        reasons.append("amt20缺失")
     elif amt20 < SCORE_MIN_TURNOVER20:
-        reasons.append("20????????????")
+        reasons.append(f"amt20<{SCORE_MIN_TURNOVER20}")
     if vol10 is None:
-        reasons.append("vol10??")
+        reasons.append("vol10缺失")
     elif vol10 < SCORE_MIN_VOL10 or vol10 > SCORE_MAX_VOL10:
-        reasons.append("vol10??????")
+        reasons.append(f"vol10不在范围[{SCORE_MIN_VOL10},{SCORE_MAX_VOL10}]")
     if vol_ratio is None:
-        reasons.append("vol_ratio??")
+        reasons.append("vol_ratio缺失")
 
     if not reasons:
-        return "??"
+        return "通过"
     return " | ".join(reasons)
 
 def _persist_top_selection_scores(
@@ -6251,7 +7921,7 @@ def _build_today_trade_scoring(
         enriched = []
         for t in trades:
             item = dict(t)
-            item["score_note"] = "鏁版嵁搴撹瘎鍒嗘暟鎹笉鍙敤"
+            item["score_note"] = "数据库评分数据不可用"
             enriched.append(item)
         return {"enriched_trades": _sanitize(enriched), "score_map": {}}
 
@@ -6547,14 +8217,14 @@ def _evaluate_intraday_buy_candidate(
         "near_breakout_ok_15m": False,
         "volume_ok_15m": False,
         "stretch_ok": False,
-        "reason": "鍒嗛挓绾挎暟鎹己澶憋紝鏃犳硶纭灏剧洏涔扮偣",
+        "reason": "分钟线数据缺失，无法确认尾盘买点",
     }
 
     if bars15.empty or bars30.empty:
         return payload
     if len(bars15) < 4 or len(bars30) < 3:
         payload["status"] = "insufficient"
-        payload["reason"] = "鍒嗛挓绾挎牱鏈笉瓒筹紝鑷冲皯闇€瑕?4 鏍?5鍒嗛挓K 鍜?3 鏍?0鍒嗛挓K"
+        payload["reason"] = "分钟线样本不足，至少霢?4 ?5分钟K ?3 ?0分钟K"
         return payload
 
     latest15 = bars15.iloc[-1]
@@ -6670,11 +8340,11 @@ def _infer_sell_reason_code(candidate: Dict[str, Any]) -> str:
     ).lower()
     if "stop_loss" in reason_text or "姝㈡崯" in reason_text:
         return "stop_loss"
-    if "take_profit" in reason_text or "姝㈢泩" in reason_text:
+    if "take_profit" in reason_text or "止盈" in reason_text:
         return "take_profit"
     if "trailing" in reason_text or "鍥炴挙" in reason_text:
         return "trailing_stop"
-    if "score_drop" in reason_text or "璇勫垎" in reason_text:
+    if "score_drop" in reason_text or "评分" in reason_text:
         return "score_drop"
     if "portfolio_cut" in reason_text or "闄嶄粨" in reason_text:
         return "portfolio_cut"
@@ -6721,14 +8391,14 @@ def _evaluate_intraday_sell_candidate(
         "sell_pressure_ok": False,
         "stop_loss_triggered": stop_loss_triggered,
         "take_profit_reached": take_profit_reached,
-        "reason": "鍒嗛挓绾挎暟鎹己澶憋紝鏃犳硶纭鐩樹腑鍗栫偣",
+        "reason": "分钟线数据缺失，无法确认盘中卖点",
     }
 
     if bars15.empty or bars30.empty:
         return payload
     if len(bars15) < 3 or len(bars30) < 2:
         payload["status"] = "insufficient"
-        payload["reason"] = "鍒嗛挓绾挎牱鏈笉瓒筹紝鑷冲皯闇€瑕?3 鏍?5鍒嗛挓K 鍜?2 鏍?0鍒嗛挓K"
+        payload["reason"] = "分钟线样本不足，至少霢?3 ?5分钟K ?2 ?0分钟K"
         return payload
 
     latest15 = bars15.iloc[-1]
@@ -6794,7 +8464,7 @@ def _evaluate_intraday_sell_candidate(
     reason_parts = []
     reason_parts.append("15分钟走弱成立" if weakness_ok else "15分钟未明显走弱")
     reason_parts.append("30分钟趋势转弱" if trend_weak else "30分钟趋势无明显转弱")
-    reason_parts.append("鍗栧帇閲忚兘閫氳繃" if sell_pressure_ok else "鍗栧帇閲忚兘涓嶈冻")
+    reason_parts.append("卖压量能通过" if sell_pressure_ok else "卖压量能不足")
     if stop_loss_triggered:
         reason_parts.append("触发止损线")
     if take_profit_reached:
@@ -6939,16 +8609,16 @@ def _build_intraday_execution_analysis(
 
     if data_ready_count == 0 and sell_data_ready_count == 0:
         analysis["data_status"] = "missing"
-        analysis["message"] = f"{signal_date_text} 鍒嗛挓绾垮皻鏈叆搴撴垨鏈洿鏂板埌涔板叆{cutoff_text}/鍗栧嚭{sell_cutoff_text}"
+        analysis["message"] = f"{signal_date_text} 分钟线尚未入库或未更新到买入{cutoff_text}/卖出{sell_cutoff_text}"
     elif triggered_codes:
         analysis["data_status"] = "buy_point_ready"
-        analysis["message"] = f"灏剧洏鍒嗛挓涔扮偣宸茶Е鍙戯細{', '.join(triggered_codes)}"
+        analysis["message"] = f"尾盘分钟买点已触发：{', '.join(triggered_codes)}"
     elif sell_triggered_codes:
         analysis["data_status"] = "sell_point_ready"
-        analysis["message"] = f"鐩樹腑鍒嗛挓鍗栫偣宸茶Е鍙戯細{', '.join(sell_triggered_codes)}"
+        analysis["message"] = f"盘中分钟卖点已触发：{', '.join(sell_triggered_codes)}"
     elif not candidates and not sell_candidates:
         analysis["data_status"] = "no_candidates"
-        analysis["message"] = "褰撴棩鏃犲緟涔板叆鍊欓€夛紝涓旀棤闇€瑕佸垎閽熺‘璁ょ殑鍗栧嚭璁″垝"
+        analysis["message"] = "当日无待买入候，且无霢要分钟确认的卖出计划"
     else:
         analysis["data_status"] = "watch"
         analysis["message"] = "当前仅用于交易时段分析，等待后续数据更新后可继续执行。"
@@ -7016,12 +8686,12 @@ def _build_today_selection_analysis(
 
     signal_date = response["signal_date"]
     if not signal_date:
-        response["message"] = "缂哄皯signal_date锛屾棤娉曡繕鍘熷綋鏃ラ€夎偂璇勫垎"
+        response["message"] = "缺少signal_date，无法还原当日股评分"
         return _sanitize(response)
 
     hist = _load_hist_with_factors(signal_date=signal_date)
     if hist.empty:
-        response["message"] = "鏁版嵁搴撹瘎鍒嗘暟鎹笉鍙敤"
+        response["message"] = "数据库评分数据不可用"
         return _sanitize(response)
 
     try:
@@ -7296,7 +8966,7 @@ def _resolve_snapshot_date(
         rolled = available_dates[-1]
 
     if requested:
-        note = f"璇锋眰鏃ユ湡 {requested} 鏆傛棤浜ゆ槗蹇収锛屽凡鍥為€€鍒版渶杩戞湁鏁版嵁鏃?{rolled}"
+        note = f"请求日期 {requested} 暂无交易快照，已回到最近有数据?{rolled}"
     return {"selected_date": rolled, "note": note}
 
 
@@ -8133,14 +9803,492 @@ def _get_gen2_backtest_update_task(task_id: str) -> Optional[Dict[str, Any]]:
         return dict(task) if task else None
 
 
-def _run_gen2_backtest_update_task(task_id: str, end_date: Optional[str] = None) -> None:
-    cmd = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "gen2_build_v2_complete_strategy.py"),
-        "--replace-official",
+def _set_gen2_mainline_update_task(task_id: str, payload: Dict[str, Any]) -> None:
+    with GEN2_MAINLINE_UPDATE_TASK_LOCK:
+        task = GEN2_MAINLINE_UPDATE_TASKS.setdefault(task_id, {})
+        task.update(payload)
+
+
+def _get_gen2_mainline_update_task(task_id: str) -> Optional[Dict[str, Any]]:
+    with GEN2_MAINLINE_UPDATE_TASK_LOCK:
+        task = GEN2_MAINLINE_UPDATE_TASKS.get(task_id)
+        return dict(task) if task else None
+
+
+def _get_active_gen2_mainline_update_task() -> Optional[Dict[str, Any]]:
+    with GEN2_MAINLINE_UPDATE_TASK_LOCK:
+        for task in GEN2_MAINLINE_UPDATE_TASKS.values():
+            if task.get("status") in {"queued", "running"}:
+                return dict(task)
+    return None
+
+
+def _run_gen2_mainline_script_step(
+    step_name: str,
+    script_name: str,
+    args: List[str],
+) -> Dict[str, Any]:
+    cmd = [sys.executable, str(REPO_ROOT / "scripts" / script_name), *args]
+    started_at = datetime.now()
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+        cwd=str(REPO_ROOT),
+    )
+    finished_at = datetime.now()
+    ok = proc.returncode == 0
+    return {
+        "name": step_name,
+        "script": script_name,
+        "cmd": cmd,
+        "ok": ok,
+        "status": "completed" if ok else "failed",
+        "returncode": int(proc.returncode),
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "finished_at": finished_at.isoformat(timespec="seconds"),
+        "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+        "stdout_tail": "\n".join((proc.stdout or "").splitlines()[-40:]),
+        "stderr_tail": "\n".join((proc.stderr or "").splitlines()[-40:]),
+    }
+
+
+def _gen2_intraday_cutoff_status(table: str, target_date: str, min_codes: int = 3000) -> Dict[str, Any]:
+    normalized_date = _normalize_date_str(target_date)
+    if not normalized_date:
+        return {"ok": False, "table": table, "target_date": target_date, "error": "invalid target_date"}
+    try:
+        df = clickhouse_query_df(
+            f"""
+            SELECT
+                datetime AS dt,
+                uniq(code) AS codes
+            FROM {table}
+            WHERE toDate(datetime) = toDate(?)
+            GROUP BY dt
+            ORDER BY dt DESC
+            LIMIT 12
+            """,
+            [normalized_date],
+        )
+    except Exception as exc:
+        return {"ok": False, "table": table, "target_date": normalized_date, "error": str(exc)}
+    if df is None or df.empty:
+        return {
+            "ok": False,
+            "table": table,
+            "target_date": normalized_date,
+            "latest_cutoff": None,
+            "latest_codes": 0,
+            "min_codes": int(min_codes),
+            "reason": "no_intraday_rows_for_target_date",
+        }
+    work = df.copy()
+    work["codes"] = pd.to_numeric(work.get("codes"), errors="coerce").fillna(0).astype(int)
+    latest = work.iloc[0]
+    complete = work[work["codes"] >= int(min_codes)]
+    latest_cutoff = pd.to_datetime(latest.get("dt"), errors="coerce")
+    complete_cutoff = pd.to_datetime(complete.iloc[0].get("dt"), errors="coerce") if not complete.empty else pd.NaT
+    return {
+        "ok": not complete.empty,
+        "table": table,
+        "target_date": normalized_date,
+        "latest_cutoff": None if pd.isna(latest_cutoff) else latest_cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+        "latest_codes": int(latest.get("codes") or 0),
+        "complete_cutoff": None if pd.isna(complete_cutoff) else complete_cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+        "complete_codes": 0 if complete.empty else int(complete.iloc[0].get("codes") or 0),
+        "min_codes": int(min_codes),
+        "recent_slots": [
+            {
+                "dt": pd.to_datetime(row.dt, errors="coerce").strftime("%Y-%m-%d %H:%M:%S"),
+                "codes": int(row.codes or 0),
+            }
+            for row in work.itertuples(index=False)
+            if not pd.isna(pd.to_datetime(row.dt, errors="coerce"))
+        ],
+    }
+
+
+def _run_gen2_intraday_minute_repair(target_date: str, periods: Optional[List[str]] = None, timeout_seconds: int = 1800) -> Dict[str, Any]:
+    normalized_date = _normalize_date_str(target_date)
+    if not normalized_date:
+        return {"ok": False, "target_date": target_date, "error": "invalid target_date"}
+    period_list = [str(p).strip() for p in (periods or ["15m", "30m"]) if str(p).strip()]
+    argv = [
+        "sync_intraday_minutes_fast.py",
+        "--target-date",
+        normalized_date,
+        "--types",
+        "stock,index",
+        "--periods",
+        ",".join(period_list),
+        "--batch-size",
+        "500",
+        "--min-complete-codes",
+        "3000",
     ]
-    if end_date:
-        cmd.extend(["--end-date", end_date])
+    cmd = [sys.executable, str(REPO_ROOT / "scripts" / "sync_intraday_minutes_fast.py"), *argv[1:]]
+    started_at = datetime.now()
+    try:
+        import contextlib
+        import io
+
+        import importlib
+        import scripts.sync_intraday_minutes_fast as sync_intraday_minutes_fast
+
+        sync_intraday_minutes_fast = importlib.reload(sync_intraday_minutes_fast)
+        sync_intraday_minutes_fast_main = sync_intraday_minutes_fast.main
+
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = argv
+            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                returncode = int(sync_intraday_minutes_fast_main() or 0)
+        finally:
+            sys.argv = old_argv
+        finished_at = datetime.now()
+        return {
+            "ok": returncode == 0,
+            "status": "completed" if returncode == 0 else "failed",
+            "target_date": normalized_date,
+            "periods": period_list,
+            "returncode": int(returncode),
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "finished_at": finished_at.isoformat(timespec="seconds"),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+            "cmd": cmd,
+            "mode": "in_process",
+            "stdout_tail": "\n".join(stdout_buf.getvalue().splitlines()[-80:]),
+            "stderr_tail": "\n".join(stderr_buf.getvalue().splitlines()[-80:]),
+        }
+    except SystemExit as exc:
+        finished_at = datetime.now()
+        returncode = int(exc.code or 0) if isinstance(exc.code, int) else 1
+        return {
+            "ok": returncode == 0,
+            "status": "completed" if returncode == 0 else "failed",
+            "target_date": normalized_date,
+            "periods": period_list,
+            "returncode": returncode,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "finished_at": finished_at.isoformat(timespec="seconds"),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+            "cmd": cmd,
+            "mode": "in_process",
+            "stdout_tail": "",
+            "stderr_tail": str(exc),
+        }
+    except Exception as inproc_exc:
+        logger.warning(f"G2 intraday minute in-process repair failed, fallback subprocess: {inproc_exc}")
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(300, int(timeout_seconds or 1800)),
+            cwd=str(REPO_ROOT),
+        )
+    except subprocess.TimeoutExpired as exc:
+        finished_at = datetime.now()
+        return {
+            "ok": False,
+            "status": "timeout",
+            "target_date": normalized_date,
+            "periods": period_list,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "finished_at": finished_at.isoformat(timespec="seconds"),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+            "cmd": cmd,
+            "stdout_tail": "\n".join((exc.stdout or "").splitlines()[-40:]),
+            "stderr_tail": "\n".join((exc.stderr or "").splitlines()[-40:]),
+        }
+    finished_at = datetime.now()
+    return {
+        "ok": proc.returncode == 0,
+        "status": "completed" if proc.returncode == 0 else "failed",
+        "target_date": normalized_date,
+        "periods": period_list,
+        "returncode": int(proc.returncode),
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "finished_at": finished_at.isoformat(timespec="seconds"),
+        "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+        "cmd": cmd,
+        "stdout_tail": "\n".join((proc.stdout or "").splitlines()[-60:]),
+        "stderr_tail": "\n".join((proc.stderr or "").splitlines()[-60:]),
+    }
+
+
+def _ensure_gen2_mainline_intraday_minutes(target_date: str, min_codes: int = 3000) -> Dict[str, Any]:
+    before = _gen2_intraday_cutoff_status("kline_minute_30", target_date, min_codes=min_codes)
+    if before.get("ok"):
+        return {"ok": True, "attempted_repair": False, "before": before, "after": before}
+    repair = _run_gen2_intraday_minute_repair(target_date, periods=["15m", "30m"])
+    after = _gen2_intraday_cutoff_status("kline_minute_30", target_date, min_codes=min_codes)
+    return {
+        "ok": bool(after.get("ok")),
+        "attempted_repair": True,
+        "before": before,
+        "repair": repair,
+        "after": after,
+        "error": None if after.get("ok") else (repair.get("stderr_tail") or repair.get("stdout_tail") or after.get("reason") or after.get("error")),
+    }
+
+
+def _run_gen2_mainline_update_task(task_id: str, target_date: Optional[str], limit: int, mode: str = "all") -> None:
+    selected_date = _normalize_date_str(target_date)
+    normalized_mode = str(mode or "all").strip().lower()
+    all_steps = [
+        {
+            "name": "sector_factor",
+            "script": "generate_mainline_intraday_diffusion_factor.py",
+            "args": (
+                ["--table", "kline_minute_30", "--cutoff-time", "latest", "--target-date", selected_date]
+                if selected_date
+                else ["--table", "kline_minute_30", "--cutoff-time", "latest"]
+            ),
+            "optional": False,
+        },
+        {
+            "name": "sector_overlay",
+            "script": "generate_mainline_candidate_overlay.py",
+            "args": ["--target-date", selected_date] if selected_date else [],
+            "optional": True,
+        },
+        {
+            "name": "sector_watchlist",
+            "script": "build_mainline_sector_watchlist.py",
+            "args": ["--trade-date", selected_date, "--limit", str(max(30, int(limit or 30)))] if selected_date else ["--limit", str(max(30, int(limit or 30)))],
+            "optional": True,
+        },
+        {
+            "name": "theme_clusters",
+            "script": "generate_behavior_theme_clusters_v1.py",
+            "args": ["--target-date", selected_date] if selected_date else [],
+            "optional": True,
+        },
+        {
+            "name": "theme_candidate_source",
+            "script": "generate_behavior_theme_candidate_source_v1.py",
+            "args": ["--target-date", selected_date, "--top-n", str(max(30, int(limit or 30)))] if selected_date else ["--top-n", str(max(30, int(limit or 30)))],
+            "optional": True,
+        },
+        {
+            "name": "theme_pool",
+            "script": "generate_mainline_theme_observation_pool_v1.py",
+            "args": ["--target-date", selected_date, "--top-n", str(max(30, int(limit or 30)))] if selected_date else ["--top-n", str(max(30, int(limit or 30)))],
+            "optional": True,
+        },
+        {
+            "name": "theme_overlay",
+            "script": "generate_mainline_theme_strategy_overlay_v1.py",
+            "args": ["--target-date", selected_date, "--top-n", str(max(30, int(limit or 30)))] if selected_date else ["--top-n", str(max(30, int(limit or 30)))],
+            "optional": True,
+        },
+    ]
+    if normalized_mode == "sector":
+        steps = [step for step in all_steps if step["name"].startswith("sector")]
+    elif normalized_mode == "theme":
+        steps = [step for step in all_steps if step["name"].startswith("theme")]
+    else:
+        steps = list(all_steps)
+    started_at = datetime.now()
+    warnings_list: List[Dict[str, Any]] = []
+    _set_gen2_mainline_update_task(
+        task_id,
+        {
+            "task_id": task_id,
+            "status": "running",
+            "progress": 5,
+            "target_date": selected_date,
+            "limit": int(limit),
+            "mode": normalized_mode,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "steps_total": len(steps),
+            "steps_completed": 0,
+            "steps": [],
+            "current_step": steps[0]["name"] if steps else None,
+            "message": "\u5f00\u59cb\u5237\u65b0\u7b2c\u4e8c\u4ee3\u4e3b\u7ebf\u70ed\u70b9\u4ea7\u7269",
+        },
+    )
+    finished_steps: List[Dict[str, Any]] = []
+    try:
+        if selected_date and any(step["name"] == "sector_factor" for step in steps):
+            _set_gen2_mainline_update_task(
+                task_id,
+                {
+                    "current_step": "intraday_minute_precheck",
+                    "progress": 5,
+                    "message": "检查并修复G2主线所需的当日15m/30m分钟线",
+                    "steps": finished_steps,
+                },
+            )
+            minute_check = _ensure_gen2_mainline_intraday_minutes(selected_date)
+            minute_step = {
+                "name": "intraday_minute_precheck",
+                "script": "sync_intraday_minutes_fast.py",
+                "cmd": (minute_check.get("repair") or {}).get("cmd", []),
+                "ok": bool(minute_check.get("ok")),
+                "status": "completed" if minute_check.get("ok") else "failed",
+                "optional": False,
+                "returncode": (minute_check.get("repair") or {}).get("returncode"),
+                "started_at": (minute_check.get("repair") or {}).get("started_at") or datetime.now().isoformat(timespec="seconds"),
+                "finished_at": (minute_check.get("repair") or {}).get("finished_at") or datetime.now().isoformat(timespec="seconds"),
+                "duration_seconds": (minute_check.get("repair") or {}).get("duration_seconds", 0.0),
+                "stdout_tail": (minute_check.get("repair") or {}).get("stdout_tail", ""),
+                "stderr_tail": (minute_check.get("repair") or {}).get("stderr_tail", ""),
+                "data_status": minute_check,
+            }
+            finished_steps.append(minute_step)
+            if not minute_step["ok"]:
+                finished_at = datetime.now()
+                _set_gen2_mainline_update_task(
+                    task_id,
+                    {
+                        "status": "failed",
+                        "progress": 100,
+                        "finished_at": finished_at.isoformat(timespec="seconds"),
+                        "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+                        "steps_completed": 0,
+                        "steps": finished_steps,
+                        "warnings": warnings_list,
+                        "current_step": "intraday_minute_precheck",
+                        "message": "主线热点刷新失败：当日30m分钟线缺失且自动修复未完成",
+                        "error": minute_check.get("error") or "intraday minute data precheck failed",
+                    },
+                )
+                return
+        for idx, step in enumerate(steps, start=1):
+            if step["name"] == "sector_overlay" and _latest_mainline_factor_count() <= 0:
+                skipped = {
+                    "name": step["name"],
+                    "script": step["script"],
+                    "cmd": [],
+                    "ok": True,
+                    "optional": True,
+                    "status": "skipped",
+                    "returncode": 0,
+                    "started_at": datetime.now().isoformat(timespec="seconds"),
+                    "finished_at": datetime.now().isoformat(timespec="seconds"),
+                    "duration_seconds": 0.0,
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                }
+                finished_steps.append(skipped)
+                _set_gen2_mainline_update_task(
+                    task_id,
+                    {
+                        "steps": finished_steps,
+                        "warnings": warnings_list,
+                        "steps_completed": len([x for x in finished_steps if x.get("ok")]),
+                        "message": "\u4e3b\u7ebf\u56e0\u5b50\u4e3a\u7a7a\uff0c\u5df2\u8df3\u8fc7\u677f\u5757\u5019\u9009\u53e0\u52a0",
+                    },
+                )
+                continue
+            _set_gen2_mainline_update_task(
+                task_id,
+                {
+                    "current_step": step["name"],
+                    "progress": min(95, 5 + int((idx - 1) / max(1, len(steps)) * 90)),
+                    "message": f"\u6267\u884c {step['script']}",
+                    "steps": finished_steps,
+                },
+            )
+            result = _run_gen2_mainline_script_step(step["name"], step["script"], step["args"])
+            result["optional"] = bool(step.get("optional"))
+            finished_steps.append(result)
+            if not result["ok"]:
+                if bool(step.get("optional")):
+                    result["status"] = "warning"
+                    warning_item = {
+                        "step": step["name"],
+                        "script": step["script"],
+                        "message": result.get("stderr_tail") or result.get("stdout_tail") or f"{step['script']} failed",
+                    }
+                    warnings_list.append(warning_item)
+                    _set_gen2_mainline_update_task(
+                        task_id,
+                        {
+                            "steps": finished_steps,
+                            "warnings": warnings_list,
+                            "steps_completed": len([x for x in finished_steps if x.get("ok")]),
+                            "message": f"{step['script']} \u5931\u8d25\uff0c\u5df2\u6309\u53ef\u9009\u6b65\u9aa4\u8df3\u8fc7",
+                        },
+                    )
+                    continue
+                finished_at = datetime.now()
+                _set_gen2_mainline_update_task(
+                    task_id,
+                    {
+                        "status": "failed",
+                        "progress": 100,
+                        "finished_at": finished_at.isoformat(timespec="seconds"),
+                        "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+                        "steps_completed": len(finished_steps) - 1,
+                        "steps": finished_steps,
+                        "warnings": warnings_list,
+                        "current_step": step["name"],
+                        "message": f"\u4e3b\u7ebf\u70ed\u70b9\u5237\u65b0\u5931\u8d25\uff0c\u5361\u5728 {step['script']}",
+                        "error": result.get("stderr_tail") or result.get("stdout_tail") or f"{step['script']} failed",
+                    },
+                )
+                return
+        finished_at = datetime.now()
+        _set_gen2_mainline_update_task(
+            task_id,
+            {
+                "status": "completed",
+                "progress": 100,
+                "finished_at": finished_at.isoformat(timespec="seconds"),
+                "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+                "steps_completed": len([x for x in finished_steps if x.get("ok")]),
+                "steps": finished_steps,
+                "warnings": warnings_list,
+                "current_step": None,
+                "message": "\u5f00\u59cb\u5237\u65b0\u7b2c\u4e8c\u4ee3\u4e3b\u7ebf\u70ed\u70b9\u4ea7\u7269" if not warnings_list else "\u4e3b\u7ebf\u70ed\u70b9\u5df2\u5b8c\u6210\uff0c\u90e8\u5206\u53ef\u9009\u6b65\u9aa4\u5df2\u8df3\u8fc7",
+                "result_preview": build_gen2_mainline_hotspots(selected_date, min(int(limit or 30), 20)),
+            },
+        )
+    except Exception as exc:
+        finished_at = datetime.now()
+        _set_gen2_mainline_update_task(
+            task_id,
+            {
+                "status": "failed",
+                "progress": 100,
+                "finished_at": finished_at.isoformat(timespec="seconds"),
+                "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
+                "steps_completed": len(finished_steps),
+                "steps": finished_steps,
+                "warnings": warnings_list,
+                "current_step": None,
+                "message": "\u7b2c\u4e8c\u4ee3\u4e3b\u7ebf\u70ed\u70b9\u4ea7\u7269\u5237\u65b0\u5f02\u5e38\u7ec8\u6b62",
+                "error": str(exc),
+            },
+        )
+
+
+def _run_gen2_backtest_update_task(task_id: str, end_date: Optional[str] = None, legacy_330: bool = True) -> None:
+    if legacy_330:
+        cmd = [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "restore_g2_331_backtest_outputs.py"),
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "gen2_build_v2_complete_strategy.py"),
+            "--replace-official",
+            "--populate-sort-probe",
+        ]
+        if end_date:
+            cmd.extend(["--end-date", end_date])
     started_at = datetime.now()
     _set_gen2_backtest_update_task(
         task_id,
@@ -8208,6 +10356,8 @@ def _run_gen2_shadow_update_task(task_id: str, signal_date: str, pool_rank: int,
         "--alpha191-gate",
         str(alpha191_gate or "off"),
     ]
+    env = os.environ.copy()
+    env["AISTOCK_GEN2_LIVE_SKIP_INTRADAY_NORMAL_EMPTY"] = "1"
     _set_gen2_shadow_update_task(
         task_id,
         {
@@ -8225,6 +10375,7 @@ def _run_gen2_shadow_update_task(task_id: str, signal_date: str, pool_rank: int,
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
             timeout=900,
         )
         stdout_tail = (proc.stdout or "")[-5000:]
@@ -8293,30 +10444,42 @@ def get_v4_market_gate(
     if target_date:
         date_filter = "AND k.trade_date <= ?::DATE"
         params.append(target_date)
-    df = clickhouse_query_df(
-        f"""
-        SELECT code, name, trade_date, close
-        FROM (
-            SELECT
-                k.code,
-                s.name,
-                k.trade_date,
-                k.close,
-                row_number() OVER (
-                    PARTITION BY k.code, k.trade_date
-                    ORDER BY ifNull(k.created_at, toDateTime('1970-01-01')) DESC, k.id DESC
-                ) AS rn
-            FROM kline_daily k
-            LEFT JOIN stocks s ON s.code = k.code
-            WHERE k.code = ?
-              {date_filter}
+    try:
+        df = clickhouse_query_df(
+            f"""
+            SELECT code, name, trade_date, close
+            FROM (
+                SELECT
+                    k.code,
+                    s.name,
+                    k.trade_date,
+                    k.close,
+                    row_number() OVER (
+                        PARTITION BY k.code, k.trade_date
+                        ORDER BY ifNull(k.created_at, toDateTime('1970-01-01')) DESC, k.id DESC
+                    ) AS rn
+                FROM kline_daily k
+                LEFT JOIN stocks s ON s.code = k.code
+                WHERE k.code = ?
+                  {date_filter}
+            )
+            WHERE rn = 1
+            ORDER BY trade_date DESC
+            LIMIT 30
+            """,
+            params,
         )
-        WHERE rn = 1
-        ORDER BY trade_date DESC
-        LIMIT 30
-        """,
-        params,
-    )
+    except Exception as exc:
+        logger.warning(f"load v4 market gate from ClickHouse failed: trade_date={target_date or ''}, error={exc}")
+        return _sanitize(
+            {
+                "available": False,
+                "can_open": False,
+                "code": "999999.SH",
+                "name": "指数数据",
+                "message": "指数数据暂时不可用，已降级为不可开仓。",
+            }
+        )
     if df is None or df.empty:
         return _sanitize(
             {
@@ -8333,26 +10496,29 @@ def get_v4_market_gate(
     df = df.dropna(subset=["trade_date", "close"]).sort_values("trade_date").reset_index(drop=True)
     snapshot_date = target_date or _normalize_date_str(_resolve_latest_stock_trade_date())
     live_snapshot: Dict[str, Any] = {}
-    if snapshot_date and clickhouse_table_exists("intraday_quote_snapshot"):
+    if snapshot_date:
         try:
-            snap_df = clickhouse_query_df(
-                """
-                SELECT code, name, snapshot_time, price
-                FROM intraday_quote_snapshot
-                WHERE code IN ('999999.SH', '000001.SH')
-                  AND asset_type = 'index'
-                  AND snapshot_date = ?::DATE
-                  AND price > 0
-                ORDER BY snapshot_time DESC
-                LIMIT 1
-                """,
-                [snapshot_date],
-            )
+            if not clickhouse_table_exists("intraday_quote_snapshot"):
+                snap_df = pd.DataFrame()
+            else:
+                snap_df = clickhouse_query_df(
+                    """
+                    SELECT code, name, snapshot_time, price
+                    FROM intraday_quote_snapshot
+                    WHERE code IN ('999999.SH', '000001.SH')
+                      AND asset_type = 'index'
+                      AND snapshot_date = ?::DATE
+                      AND price > 0
+                    ORDER BY snapshot_time DESC
+                    LIMIT 1
+                    """,
+                    [snapshot_date],
+                )
             if snap_df is not None and not snap_df.empty:
                 snap = snap_df.iloc[0]
                 live_snapshot = {
                     "code": str(snap.get("code") or "999999.SH"),
-                    "name": str(snap.get("name") or "涓婅瘉鎸囨暟"),
+                    "name": str(snap.get("name") or "上证指数"),
                     "snapshot_time": str(snap.get("snapshot_time") or ""),
                     "price": _to_float(snap.get("price")),
                 }
@@ -8426,7 +10592,12 @@ def get_v4_market_gate(
 def _normalize_stock_code6(value: Any) -> str:
     raw = str(value or "").strip().upper()
     match = re.search(r"(\d{6})", raw)
-    return match.group(1) if match else ""
+    if match:
+        return match.group(1)
+    digits = re.sub(r"\D+", "", raw)
+    if digits and len(digits) <= 6:
+        return digits.zfill(6)
+    return ""
 
 
 def _to_exchange_stock_code(value: Any) -> str:
@@ -8696,28 +10867,23 @@ def get_gen2_live(
             "verification_summary": _build_gen2_shadow_verification_summary([]),
             "verification_global_summary": _build_gen2_shadow_verification_summary([]),
             "verification_queue": [],
+            "requested_date": requested_date,
+            "selection_signal_date": selection_signal_date,
+            "display_signal_date": selection_signal_date or requested_date or "",
+            "ledger_signal_date": "",
+            "is_ledger_fallback": False,
+            "date_notice": "",
         }
     try:
-        selection_pool = _build_gen2_selection_pool(selected_date, 30) if selected_date else {}
+        selection_pool = _build_gen2_live_selection_summary(selected_date) if selected_date else {}
         selection_signal_date = _normalize_date_str(selection_pool.get("signal_date") or selected_date)
     except Exception as exc:
         logger.exception("gen2/live failed to build selection_pool")
         selection_pool = {
-            "available": False,
-            "rows": [],
-            "trigger_rows": [],
-            "complete_rows": [],
-            "quality_rows": [],
             "summary": {},
-            "pipeline": [],
             "branch_freshness": {},
             "live_trade_mode": "latest_driven_mainline",
             "official_branch_blocks_live": False,
-            "strategy_code": "g2_alpha191_volume5_keep80_runup",
-            "strategy_name": "G2 second-generation strategy",
-            "row_count": 0,
-            "visible_row_count": 0,
-            "candidate_count": 0,
             "message": f"G2 selection pool build failed: {exc}",
         }
         selection_signal_date = selected_date
@@ -8743,7 +10909,7 @@ def get_gen2_live(
             "selection": {
                 "summary": {
                     "strategy_name": "G2 second-generation strategy",
-                    "candidate_count": int(selection_pool.get("row_count") or shadow.get("row_count") or 0),
+                    "candidate_count": int(selection_pool.get("summary", {}).get("candidate_count") or shadow.get("row_count") or 0),
                 },
                 "branch_freshness": selection_pool.get("branch_freshness") or {},
                 "live_trade_mode": selection_pool.get("live_trade_mode") or "latest_driven_mainline",
@@ -8787,6 +10953,7 @@ def get_gen2_backtest_history(
 @router.post("/gen2/backtest/update-latest")
 def run_gen2_backtest_update_latest(
     end_date: Optional[str] = Query(None, description="optional backtest end date; blank means latest available source date"),
+    legacy_330: bool = Query(True, description="Use legacy 330% g2_v2 complete build mode"),
 ):
     selected_end_date = _normalize_date_str(end_date) if end_date else None
     with GEN2_BACKTEST_UPDATE_TASK_LOCK:
@@ -8806,7 +10973,7 @@ def run_gen2_backtest_update_latest(
     )
     thread = threading.Thread(
         target=_run_gen2_backtest_update_task,
-        args=(task_id, selected_end_date),
+        args=(task_id, selected_end_date, bool(legacy_330)),
         name=f"gen2-backtest-update-{task_id}",
         daemon=True,
     )
@@ -8825,12 +10992,13 @@ def get_gen2_backtest_update_task(task_id: str):
 @router.post("/gen2/official-rebuild/update-latest")
 def run_gen2_official_rebuild_update_latest(
     end_date: Optional[str] = Query(None, description="optional official rebuild end date; blank means latest trade date"),
-    mode: str = Query("breakout_only", description="mainline | breakout_only | full"),
+    mode: str = Query("full", description="mainline | breakout_only | full"),
+    legacy_330: bool = Query(True, description="Use legacy 330% g2_v2 complete build mode"),
 ):
     selected_end_date = _normalize_date_str(end_date) if end_date else _normalize_date_str(_resolve_latest_stock_trade_date())
     if not selected_end_date:
-        return {"status": "failed", "progress": 100, "error": "鏃犳硶瑙ｆ瀽姝ｅ紡鍒嗘敮閲嶅缓鏃ユ湡"}
-    normalized_mode = str(mode or "breakout_only").strip().lower()
+        return {"status": "failed", "progress": 100, "error": "无法解析正式分支重建日期"}
+    normalized_mode = str(mode or "full").strip().lower()
     if normalized_mode not in {"mainline", "breakout_only", "full"}:
         return {"status": "failed", "progress": 100, "error": "Unsupported mode"}
     state = _load_gen2_shadow_monitor_state()
@@ -8841,8 +11009,9 @@ def run_gen2_official_rebuild_update_latest(
     return _start_gen2_official_rebuild_task(
         selected_end_date,
         include_breakout=(normalized_mode == "full"),
-        timeout_seconds=int(state.get("official_rebuild_timeout_seconds") or 5400),
+        timeout_seconds=int(state.get("official_rebuild_timeout_seconds") or 10800),
         breakout_only=(normalized_mode == "breakout_only"),
+        legacy_330=bool(legacy_330),
     )
 
 
@@ -8909,6 +11078,63 @@ def get_gen2_selection_pool(
             str(payload.get("source_latest_date") or payload.get("signal_date") or selected_date or ""),
         )
         return payload
+
+
+@router.get("/gen2/mainline-hotspots")
+def get_gen2_mainline_hotspots(
+    target_date: Optional[str] = Query(None, description="target snapshot date"),
+    limit: int = Query(30, ge=5, le=120, description="row limit per section"),
+):
+    return build_gen2_mainline_hotspots(target_date, int(limit))
+
+
+@router.post("/gen2/mainline-hotspots/update")
+def run_gen2_mainline_hotspots_update(
+    target_date: Optional[str] = Query(None, description="target snapshot date"),
+    limit: int = Query(30, ge=5, le=120, description="row limit per section"),
+    mode: str = Query("all", description="refresh mode: all | sector | theme"),
+):
+    active_task = _get_active_gen2_mainline_update_task()
+    if active_task:
+        return active_task
+    selected_date = _normalize_date_str(target_date) if target_date else None
+    normalized_mode = str(mode or "all").strip().lower()
+    if normalized_mode not in {"all", "sector", "theme"}:
+        normalized_mode = "all"
+    task_id = f"gen2_mainline_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
+    step_total = 7 if normalized_mode == "all" else 3 if normalized_mode == "sector" else 4
+    _set_gen2_mainline_update_task(
+        task_id,
+        {
+            "task_id": task_id,
+            "status": "queued",
+            "progress": 0,
+            "target_date": selected_date,
+            "limit": int(limit),
+            "mode": normalized_mode,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "steps_total": step_total,
+            "steps_completed": 0,
+            "steps": [],
+            "message": "主线热点产物刷新已入队",
+        },
+    )
+    thread = threading.Thread(
+        target=_run_gen2_mainline_update_task,
+        args=(task_id, selected_date, int(limit), normalized_mode),
+        name=f"gen2-mainline-update-{task_id}",
+        daemon=True,
+    )
+    thread.start()
+    return _get_gen2_mainline_update_task(task_id) or {"task_id": task_id, "status": "queued", "progress": 0}
+
+
+@router.get("/gen2/mainline-hotspots/update-task/{task_id}")
+def get_gen2_mainline_hotspots_update_task(task_id: str):
+    task = _get_gen2_mainline_update_task(task_id)
+    if not task:
+        return {"task_id": task_id, "status": "missing", "progress": 0, "message": "任务不存在"}
+    return _sanitize(task)
 
 
 @router.get("/gen2/workflow/status")
@@ -8981,17 +11207,66 @@ def get_gen2_workflow_lineage(
     )
 
 
+@router.get("/gen2/daily-trade-ticket")
+def get_gen2_daily_trade_ticket(
+    signal_date: Optional[str] = Query(None, description="signal date"),
+    limit: int = Query(30, ge=10, le=100, description="source candidate row limit"),
+    formal_limit: int = Query(3, ge=1, le=5, description="formal trade ticket candidate limit"),
+    persist: bool = Query(True, description="write JSON and Markdown ticket artifacts"),
+):
+    return _build_gen2_daily_trade_ticket(
+        signal_date=signal_date,
+        limit=limit,
+        formal_limit=formal_limit,
+        persist=bool(persist),
+    )
+
+
+@router.get("/gen2/daily-trade-ticket/execution")
+def get_gen2_daily_trade_execution(
+    signal_date: Optional[str] = Query(None, description="signal date"),
+):
+    selected_date = _normalize_date_str(signal_date)
+    if not selected_date:
+        ticket = _build_gen2_daily_trade_ticket(None, limit=30, formal_limit=3, persist=False)
+        selected_date = _normalize_date_str(ticket.get("signal_date"))
+    record = _find_gen2_daily_execution_record(selected_date or "")
+    return _sanitize(
+        {
+            "available": bool(record),
+            "signal_date": selected_date or "",
+            "record": record,
+            "ledger_path": str(GEN2_DAILY_EXECUTION_LEDGER_PATH),
+        }
+    )
+
+
+@router.post("/gen2/daily-trade-ticket/execution")
+def save_gen2_daily_trade_execution(
+    payload: Dict[str, Any] = Body(...),
+):
+    return _upsert_gen2_daily_execution_record(payload or {})
+
+
 @router.get("/gen2/risk-cool-shadow")
 def get_gen2_risk_cool_shadow(
     signal_date: Optional[str] = Query(None, description="signal date"),
     limit: int = Query(30, ge=5, le=100, description="candidate row limit"),
 ):
     ledger_df = _load_gen2_risk_cool_shadow_ledger()
+    requested_date = _normalize_date_str(signal_date) if signal_date else None
+    selection_signal_date = ""
+    try:
+        selection_summary = _build_gen2_live_selection_summary(requested_date) if requested_date else {}
+        selection_signal_date = _normalize_date_str(selection_summary.get("signal_date") or "")
+    except Exception as exc:
+        logger.warning(f"load gen2 live selection summary for shadow view failed: {exc}")
+        selection_signal_date = ""
     if ledger_df.empty or "entry_date" not in ledger_df.columns:
         return {
             "available": False,
             "rows": [],
-            "message": "G2 V3 User V2 two_stop_cd3褰卞瓙鍙拌处灏氭湭鐢熸垚",
+            "message": "G2 V3 User V2 two_stop_cd3影子台账尚未生成",
             "strategy_name": "G2 V3 User V2",
             "cooldown_policy": "two_stop_cd3_skip",
             "global_summary": _load_gen2_risk_cool_shadow_summary(),
@@ -9000,6 +11275,12 @@ def get_gen2_risk_cool_shadow(
             "verification_summary": _build_gen2_shadow_verification_summary([]),
             "verification_global_summary": _build_gen2_shadow_verification_summary([]),
             "verification_queue": [],
+            "requested_date": requested_date,
+            "selection_signal_date": selection_signal_date,
+            "display_signal_date": selection_signal_date or requested_date or "",
+            "ledger_signal_date": "",
+            "is_ledger_fallback": False,
+            "date_notice": "",
         }
 
     all_dates = sorted([str(x) for x in ledger_df["entry_date"].dropna().unique() if str(x)])
@@ -9007,7 +11288,7 @@ def get_gen2_risk_cool_shadow(
         return {
             "available": False,
             "rows": [],
-            "message": "G2 V3 User V2 two_stop_cd3褰卞瓙鍙拌处娌℃湁鍙敤鏃ユ湡",
+            "message": "G2 V3 User V2 two_stop_cd3影子台账没有可用日期",
             "strategy_name": "G2 V3 User V2",
             "cooldown_policy": "two_stop_cd3_skip",
             "global_summary": _load_gen2_risk_cool_shadow_summary(),
@@ -9016,14 +11297,31 @@ def get_gen2_risk_cool_shadow(
             "verification_summary": _build_gen2_shadow_verification_summary([]),
             "verification_global_summary": _build_gen2_shadow_verification_summary([]),
             "verification_queue": [],
+            "requested_date": requested_date,
+            "selection_signal_date": selection_signal_date,
+            "display_signal_date": selection_signal_date or requested_date or "",
+            "ledger_signal_date": "",
+            "is_ledger_fallback": False,
+            "date_notice": "",
         }
 
-    requested_date = _normalize_date_str(signal_date) if signal_date else None
     selected_date = all_dates[-1]
     if requested_date:
         earlier_dates = [x for x in all_dates if x <= requested_date]
         selected_date = earlier_dates[-1] if earlier_dates else all_dates[-1]
+    display_signal_date = selection_signal_date or requested_date or selected_date
+    is_ledger_fallback = bool(display_signal_date and display_signal_date != selected_date)
+    date_notice = (
+        f"最新 G2 候选日期为 {display_signal_date}，但影子复盘台账最新仅到 {selected_date}；当前先展示最近可用复盘样本。"
+        if is_ledger_fallback
+        else ""
+    )
 
+    date_notice = (
+        f"Latest G2 candidate date is {display_signal_date}, but shadow review ledger latest is {selected_date}; showing latest available review rows."
+        if is_ledger_fallback
+        else ""
+    )
     day_df = ledger_df[ledger_df["entry_date"] == selected_date].copy()
     priority = {"executed": 0, "observable": 1, "suspended_by_two_stop_cd3": 2, "suspended_by_stop_cd5": 2}
     if "shadow_status" in day_df.columns:
@@ -9099,6 +11397,11 @@ def get_gen2_risk_cool_shadow(
         "signal_date": selected_date,
         "requested_date": requested_date,
         "source_latest_date": all_dates[-1],
+        "display_signal_date": display_signal_date,
+        "selection_signal_date": selection_signal_date,
+        "ledger_signal_date": selected_date,
+        "is_ledger_fallback": is_ledger_fallback,
+        "date_notice": date_notice,
         "strategy_name": "G2 V3 User V2",
         "cooldown_policy": "two_stop_cd3_skip",
         "cooldown_active": (counts.get("suspended_by_two_stop_cd3", 0) + counts.get("suspended_by_stop_cd5", 0)) > 0,
@@ -9111,7 +11414,7 @@ def get_gen2_risk_cool_shadow(
         "verification_summary": _build_gen2_shadow_verification_summary(rows),
         "verification_global_summary": _build_gen2_shadow_global_verification_summary(ledger_df),
         "verification_queue": _build_gen2_shadow_verification_queue(ledger_df),
-        "message": "G2 V3 User V2 two_stop_cd3褰卞瓙鍙拌处鍙敤浜庤瀵熷拰椋庢帶纭锛屼笉浠ｈ〃鑷姩涔板叆鎸囦护",
+        "message": "G2 V3 User V2 two_stop_cd3影子台账只用于观察和风控确认，不代表自动买入指令",
     }
     return _sanitize(result)
 
@@ -9127,7 +11430,7 @@ def run_gen2_risk_cool_shadow_update(
     if alpha191_gate not in GEN2_ALPHA191_ACTIVE_GATES:
         return {"status": "failed", "progress": 100, "error": "Unsupported alpha191_gate"}
     if not selected_date:
-        return {"status": "failed", "progress": 100, "error": "鏃犳硶瑙ｆ瀽褰卞瓙浜ゆ槗鏇存柊鏃ユ湡"}
+        return {"status": "failed", "progress": 100, "error": "无法解析影子交易更新日期"}
     with GEN2_SHADOW_UPDATE_TASK_LOCK:
         for task in GEN2_SHADOW_UPDATE_TASKS.values():
             if task.get("status") in {"queued", "running"}:
@@ -9887,6 +12190,12 @@ def get_v4_manual_holdings_signals(payload: Dict[str, Any]):
         period30_df = _load_minute_bars_for_signal(code, 30, limit=240)
         signal15 = _detect_bearish_divergence(period15_df) if not period15_df.empty else {"detected": False, "reason": "15m数据不足，暂不评估。"}
         signal30 = _detect_bearish_divergence(period30_df) if not period30_df.empty else {"detected": False, "reason": "30m数据不足，暂不评估。"}
+        rsi_box_t = _detect_rsi_box_t_signal(period15_df) if not period15_df.empty else {
+            "enabled": False,
+            "status": "data_missing",
+            "action": "observe",
+            "recommendation": "15m数据不足，暂不评估箱体做T。",
+        }
         risk_level = "low"
         if signal15.get("detected") and signal30.get("detected"):
             risk_level = "high"
@@ -9903,6 +12212,7 @@ def get_v4_manual_holdings_signals(payload: Dict[str, Any]):
                 "name": name,
                 "rsi15_signal": signal15,
                 "rsi30_signal": signal30,
+                "rsi_box_t": rsi_box_t,
                 "risk_level": risk_level,
                 "suggestion": suggestion,
             }
@@ -10070,7 +12380,7 @@ def refresh_v4_manual_holdings_all(payload: Dict[str, Any]):
         in_score_pool = bool(score_item) and _to_int(score_item.get("v4_rank"), 0) > 0
         score_pool_status = "in_pool" if in_score_pool else "out_of_pool"
         risk_level = str(signal_item.get("risk_level") or "low")
-        suggestion = str(signal_item.get("suggestion") or "缁х画瑙傚療")
+        suggestion = str(signal_item.get("suggestion") or "继续观察")
         if not in_score_pool:
             risk_level = "high"
             suggestion = "暂未入池：评分池缺失或异常，建议仅观察不下单。"
@@ -10086,6 +12396,7 @@ def refresh_v4_manual_holdings_all(payload: Dict[str, Any]):
                     "pnl_ratio": quote_item.get("pnl_ratio"),
                     "rsi15_signal": signal_item.get("rsi15_signal"),
                     "rsi30_signal": signal_item.get("rsi30_signal"),
+                    "rsi_box_t": signal_item.get("rsi_box_t"),
                     "risk_level": risk_level,
                     "suggestion": suggestion,
                     "v4_signal_date": score_item.get("v4_signal_date"),
@@ -10130,6 +12441,16 @@ def set_gen2_shadow_buy_monitor_config(payload: Dict[str, Any]):
     if isinstance(payload, dict):
         if "enabled" in payload:
             state["enabled"] = bool(payload.get("enabled"))
+        if "official_rebuild_enabled" in payload:
+            state["official_rebuild_enabled"] = bool(payload.get("official_rebuild_enabled"))
+        if "official_rebuild_legacy_330" in payload:
+            state["official_rebuild_legacy_330"] = bool(payload.get("official_rebuild_legacy_330"))
+        if "official_rebuild_include_breakout" in payload:
+            state["official_rebuild_include_breakout"] = bool(payload.get("official_rebuild_include_breakout"))
+        if "official_rebuild_timeout_seconds" in payload:
+            state["official_rebuild_timeout_seconds"] = max(300, _to_int(payload.get("official_rebuild_timeout_seconds"), 10800))
+        if "official_rebuild_retry_minutes" in payload:
+            state["official_rebuild_retry_minutes"] = max(1, _to_int(payload.get("official_rebuild_retry_minutes"), 10))
         if "interval_seconds" in payload:
             state["interval_seconds"] = max(120, _to_int(payload.get("interval_seconds"), 120))
         if "pool_rank" in payload:
@@ -10159,6 +12480,44 @@ def run_gen2_shadow_buy_monitor_once(payload: Dict[str, Any]):
         force_send = bool(payload.get("force_send"))
     result = _run_gen2_shadow_buy_monitor(force_send=force_send, recipient_override=recipient_email)
     return _sanitize(result)
+
+
+@router.get("/gen2/strategy-refresh/status")
+def get_gen2_strategy_refresh_status():
+    return _sanitize(_configure_gen2_strategy_refresh_scheduler())
+
+
+@router.post("/gen2/strategy-refresh/config")
+def set_gen2_strategy_refresh_config(payload: Dict[str, Any]):
+    state = _load_gen2_strategy_refresh_state()
+    if isinstance(payload, dict):
+        if "enabled" in payload:
+            state["enabled"] = bool(payload.get("enabled"))
+        if "trading_hours_only" in payload:
+            state["trading_hours_only"] = bool(payload.get("trading_hours_only"))
+        if "data_delay_minutes" in payload:
+            state["data_delay_minutes"] = min(20, max(0, _to_int(payload.get("data_delay_minutes"), 2)))
+        if "run_shadow_monitor" in payload:
+            state["run_shadow_monitor"] = bool(payload.get("run_shadow_monitor"))
+        if "run_mainline_hotspots" in payload:
+            state["run_mainline_hotspots"] = bool(payload.get("run_mainline_hotspots"))
+        if "mainline_mode" in payload:
+            mode = str(payload.get("mainline_mode") or "sector").strip().lower()
+            state["mainline_mode"] = mode if mode in {"all", "sector", "theme"} else "sector"
+        if "mainline_limit" in payload:
+            state["mainline_limit"] = min(120, max(5, _to_int(payload.get("mainline_limit"), 30)))
+        if "force_each_bar_once" in payload:
+            state["force_each_bar_once"] = bool(payload.get("force_each_bar_once"))
+    _save_gen2_strategy_refresh_state(state)
+    return _sanitize(_configure_gen2_strategy_refresh_scheduler())
+
+
+@router.post("/gen2/strategy-refresh/run-once")
+def run_gen2_strategy_refresh_once(payload: Dict[str, Any]):
+    force = True
+    if isinstance(payload, dict) and "force" in payload:
+        force = bool(payload.get("force"))
+    return _sanitize(_run_gen2_strategy_refresh_30m(force=force, source="manual"))
 
 
 @router.get("/v4/manual-holdings/monitor/status")
@@ -10223,11 +12582,11 @@ def read_v4_manual_holdings_ths_capital_holdings():
 def get_v4_manual_holding_entry_backtest(
     code: str = Query(..., description="6位股票代码"),
     strategy_version: Optional[str] = Query(None, description="策略版本"),
-    max_samples: int = Query(400, ge=50, le=3000, description="鏈€澶ф牱鏈暟"),
+    max_samples: int = Query(400, ge=50, le=3000, description="朢大样本数"),
 ):
     code6 = str(code or "").strip()[:6]
     if not re.fullmatch(r"\d{6}", code6):
-        return _sanitize({"ok": False, "message": "鑲＄エ浠ｇ爜鏃犳晥"})
+        return _sanitize({"ok": False, "message": "股票代码无效"})
 
     sv = str(strategy_version or DEFAULT_LIVE_STRATEGY_VERSION or "v5").strip()
     try:
@@ -10261,7 +12620,7 @@ def get_v4_manual_holding_entry_backtest(
             )
     except Exception as exc:
         logger.warning(f"manual holding entry backtest load failed: code={code6}, error={exc}")
-        return _sanitize({"ok": False, "message": f"璇诲彇鍘嗗彶鏁版嵁澶辫触: {exc}"})
+        return _sanitize({"ok": False, "message": f"读取历史数据失败: {exc}"})
 
     if signal_df is None or signal_df.empty:
         return _sanitize(
@@ -10271,11 +12630,11 @@ def get_v4_manual_holding_entry_backtest(
                 "strategy_version": sv,
                 "sample_count": 0,
                 "horizons": {},
-                "message": "璇ヨ偂鍦ㄥ綋鍓嶇瓥鐣ョ増鏈笅鏆傛棤鍘嗗彶鍏ュ満鏍锋湰",
+                "message": "该股在当前策略版本下暂无历史入场样本",
             }
         )
     if price_df is None or price_df.empty:
-        return _sanitize({"ok": False, "message": "缂哄皯鏃ョ嚎鏁版嵁"})
+        return _sanitize({"ok": False, "message": "缺少日线数据"})
 
     signal_df = signal_df.copy()
     price_df = price_df.copy()
@@ -10343,14 +12702,4 @@ def get_v4_manual_holding_entry_backtest(
             "recent_samples": realized_rows,
         }
     )
-
-
-
-
-
-
-
-
-
-
 

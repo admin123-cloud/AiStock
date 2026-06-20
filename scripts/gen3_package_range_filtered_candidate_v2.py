@@ -3,15 +3,20 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+import sys
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "reports" / "gen3_range_filtered_candidate_package_v2"
-COMBO_DIR = ROOT / "reports" / "gen3_combo_range_filter_v1"
-STRESS_DIR = ROOT / "reports" / "gen3_combo_range_filter_execution_stress_v1"
-LIVE_REVIEW_DIR = ROOT / "reports" / "gen3_live_visible_stability_review_v1"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path
+
+OUT_DIR = report_path("gen3_range_filtered_candidate_package_v2")
+COMBO_DIR = report_path("gen3_combo_range_filter_v1")
+STRESS_DIR = report_path("gen3_combo_range_filter_execution_stress_v1")
+LIVE_REVIEW_DIR = report_path("gen3_live_visible_stability_review_v1")
 
 VARIANT = "range_conservative_combo_b"
 

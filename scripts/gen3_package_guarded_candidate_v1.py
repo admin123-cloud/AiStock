@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "reports" / "gen3_guarded_candidate_package_v1"
-GUARDED_DIR = ROOT / "reports" / "gen3_dynamic_router_guarded_v1"
-EXEC_DIR = ROOT / "reports" / "gen3_guarded_execution_stress_v1"
-DOWN_DIR = ROOT / "reports" / "gen3_down_panic_v3_regime_audit_v1"
-RANGE_DIR = ROOT / "reports" / "gen3_range_v3_mtm_pressure_v1"
-STRONG_DIR = ROOT / "reports" / "gen3_strong_v2_independent_source_v1"
-CURRENT_G3_DIR = ROOT / "reports" / "gen3_final_candidate_package_v1"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path
+
+OUT_DIR = report_path("gen3_guarded_candidate_package_v1")
+GUARDED_DIR = report_path("gen3_dynamic_router_guarded_v1")
+EXEC_DIR = report_path("gen3_guarded_execution_stress_v1")
+DOWN_DIR = report_path("gen3_down_panic_v3_regime_audit_v1")
+RANGE_DIR = report_path("gen3_range_v3_mtm_pressure_v1")
+STRONG_DIR = report_path("gen3_strong_v2_independent_source_v1")
+CURRENT_G3_DIR = report_path("gen3_final_candidate_package_v1")
 
 
 def pct(value: float | int | None) -> str:

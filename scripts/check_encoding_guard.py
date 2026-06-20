@@ -51,6 +51,7 @@ SKIP_PARTS = {
     "__pycache__",
     "artifacts",
     "data",
+    "runtime",
     "dist",
     "logs",
     "node_modules",

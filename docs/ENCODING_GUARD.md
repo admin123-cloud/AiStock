@@ -1,73 +1,84 @@
-# Encoding Guard
+# 编码防护手册
 
-本项目统一使用 UTF-8 保存源码、配置、脚本、文档和可提交文本文件。
+本手册用于避免仓库和全局记忆文件出现乱码回归。
 
-## 日常提交前检查
+## 提交钩子
 
-只检查已暂存文件，适合放到 git pre-commit hook 里：
+在本仓库建议开启 hooks：
 
-```powershell
-python scripts/check_encoding_guard.py --staged
-```
-
-本仓库已提供 `.githooks/pre-commit` 模板。启用方式：
-
-```powershell
+```bash
 git config core.hooksPath .githooks
 ```
 
-## 检查当前改动
+`.githooks/pre-commit` 已包含两层校验：
 
-检查未暂存改动和未跟踪文件：
+```bash
+python scripts/check_text_health.py --staged
+```
 
-```powershell
+## 日常检查命令
+
+检查已修改但未提交的文本文件：
+
+```bash
 python scripts/check_encoding_guard.py --changed
 ```
 
-不传参数时默认等同于 `--changed`。
+或一条命令统一执行两项检查：
 
-## 统一文本格式
-
-将可识别文本文件统一为 UTF-8 无 BOM 和 LF 换行：
-
-```powershell
-python scripts/normalize_text_encoding.py
+```bash
+python scripts/check_text_health.py
 ```
 
-只检查不写入：
+校验仓库全部文本文件（可能较慢）：
 
-```powershell
-python scripts/normalize_text_encoding.py --check
-```
-
-## 全仓审计
-
-用于拉出历史存量问题清单：
-
-```powershell
+```bash
 python scripts/check_encoding_guard.py --all
 ```
 
-当前仓库仍有历史乱码债务，所以 `--all` 失败是预期结果。治理节奏建议是先用 `--staged`
-拦住新增问题，再按模块逐步修复历史文件。
+校验全局记忆文件（`C:\Users\Administrator\.codex\memories`）：
 
-## 检测范围
+```bash
+python scripts/check_global_memory_encoding.py
+```
 
-脚本会检查常见源码和文本扩展名，并默认跳过这些生成或重型目录：
+## 推荐修复方式
 
-- `.git`
-- `.idea`
-- `.pytest_cache`
-- `__pycache__`
-- `artifacts`
-- `data`
-- `dist`
-- `logs`
-- `node_modules`
+建议将文本文件统一成 UTF-8 无 BOM、LF 行尾：
 
-## 修复原则
+```bash
+python scripts/normalize_text_encoding.py
+```
 
-- 能从 git 历史恢复的，优先从历史版本恢复原文。
-- 已经变成问号占位符的文本通常不可逆，需要按业务语义人工补回。
-- 带替换字符的文本通常已经部分丢失，优先确认是否影响页面、API message、导出文件或日志。
-- 可逆 mojibake 可以脚本化修复，但修复后必须逐行抽查关键页面文案。
+校验模式（不改文件）：
+
+```bash
+python scripts/normalize_text_encoding.py --check
+```
+
+## 规则说明
+
+`check_encoding_guard.py` 重点检测：
+
+- 非 UTF-8 字节
+- UTF-8 BOM
+- CRLF / CR 行尾
+- 常见 mojibake / 乱码片段
+
+全局记忆检查同样覆盖：
+
+- `PROFILE.md`
+- `ACTIVE.md`
+- `LEARNINGS.md`
+- `ERRORS.md`
+- `FEATURE_REQUESTS.md`
+
+## 为什么会乱码
+
+大多数乱码来自混用编码工具导致的编码转换链路（例如 PowerShell 某些写入方式、默认系统编码）。
+
+## Windows 建议写法
+
+- 直接编辑 `.md/.py/.js/.py` 等文本文件时，优先使用 `apply_patch`。
+- Python/Node 写文件时显式指定 UTF-8 无 BOM。
+- 避免在中文文本场景下用 `Set-Content`、`Out-File`、`Add-Content`。

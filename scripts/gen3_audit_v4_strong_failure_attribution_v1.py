@@ -6,18 +6,19 @@ from typing import Any
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path
 
 from scripts.gen3_backtest_strong_volume5_confirm_d3_execution_stress_v1 import _load_daily_prices  # noqa: E402
 from scripts.gen3_build_four_path_candidates import INDEX_CODE, _load_index_daily  # noqa: E402
 from scripts.gen3_test_v4_strong_position_scale_v1 import md_table  # noqa: E402
 
 
-SRC_DIR = ROOT / "reports" / "gen3_v4_strong_second_093_execution_stress_v1"
-OUT_DIR = ROOT / "reports" / "gen3_v4_strong_failure_attribution_v1"
+SRC_DIR = report_path("gen3_v4_strong_second_093_execution_stress_v1")
+OUT_DIR = report_path("gen3_v4_strong_failure_attribution_v1")
 BASE_PROFILE = "close_30bps"
 NEXTOPEN_PROFILE = "nextopen_30bps"
 

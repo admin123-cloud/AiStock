@@ -72,7 +72,7 @@ paths:
 startup:
   enable_reference_data_sync_on_launch: false
 email:
-  enabled: false
+  enabled: true
   smtp_server: ''
   smtp_port: 465
   smtp_user: ''
@@ -85,6 +85,15 @@ strategy_daily_runner:
   hour: 17
   minute: 0
   weekdays_only: true
+ptrade:
+  account:
+    enabled: true
+    account_type: simulation
+    broker_name: PTrade
+    username: ''
+    password: ''
+    trade_endpoint: 云仿真（交易端）
+    notes: ''
 data_sync:
   preferred_source: tdxquant
   external_fallback_enabled: true

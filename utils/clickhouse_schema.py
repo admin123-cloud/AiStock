@@ -7,6 +7,79 @@ from __future__ import annotations
 from sqlalchemy import Engine, text
 
 
+MARKET_TABLE_DDL = [
+    """
+    CREATE TABLE IF NOT EXISTS stocks
+    (
+        code String,
+        name String,
+        market String,
+        type String,
+        industry Nullable(String),
+        region Nullable(String),
+        list_date Nullable(Date),
+        quit UInt8 DEFAULT 0,
+        st UInt8 DEFAULT 0,
+        industry_code Nullable(String),
+        self_selected UInt8 DEFAULT 0,
+        holding UInt8 DEFAULT 0,
+        float_share Nullable(Float64),
+        total_share Nullable(Float64),
+        created_at DateTime DEFAULT now(),
+        updated_at DateTime DEFAULT now()
+    )
+    ENGINE = ReplacingMergeTree(updated_at)
+    ORDER BY code
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS kline_daily
+    (
+        code String,
+        trade_date Date,
+        open Float64,
+        high Float64,
+        low Float64,
+        close Float64,
+        volume Float64 DEFAULT 0,
+        amount Float64 DEFAULT 0,
+        amplitude Nullable(Float64),
+        change_pct Nullable(Float64),
+        change_amount Nullable(Float64),
+        turnover_rate Nullable(Float64),
+        created_at DateTime DEFAULT now()
+    )
+    ENGINE = ReplacingMergeTree(created_at)
+    PARTITION BY toYYYYMM(trade_date)
+    ORDER BY (code, trade_date)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS emotion_cycle
+    (
+        id Int64,
+        date Date,
+        close_up_rate Nullable(Float64),
+        intraday_up_rate Nullable(Float64),
+        sh_up_rate Nullable(Float64),
+        sz_up_rate Nullable(Float64),
+        gem_up_rate Nullable(Float64),
+        cyb_up_rate Nullable(Float64),
+        strong_up_rate Nullable(Float64),
+        limit_up_follow_rate Nullable(Float64),
+        weak_up_rate Nullable(Float64),
+        yesterday_monster_up_rate Nullable(Float64),
+        yesterday_strong_up_rate Nullable(Float64),
+        yesterday_weak_up_rate Nullable(Float64),
+        total_stocks Int32,
+        is_confirmed Int32 DEFAULT 0,
+        created_at DateTime DEFAULT now(),
+        updated_at DateTime DEFAULT now()
+    )
+    ENGINE = ReplacingMergeTree(updated_at)
+    ORDER BY date
+    """,
+]
+
+
 STRATEGY_TABLE_DDL = [
     """
     CREATE TABLE IF NOT EXISTS user_stocks
@@ -170,5 +243,5 @@ STRATEGY_TABLE_DDL = [
 
 def ensure_clickhouse_tables(engine: Engine) -> None:
     with engine.begin() as connection:
-        for ddl in STRATEGY_TABLE_DDL:
+        for ddl in [*MARKET_TABLE_DDL, *STRATEGY_TABLE_DDL]:
             connection.execute(text(ddl))

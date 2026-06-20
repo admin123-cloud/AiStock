@@ -320,8 +320,27 @@ const metrics = computed(() => payload.value?.metrics || {})
 const summary = computed(() => payload.value?.summary || {})
 const ruleLines = computed(() => payload.value?.rule_lines || [])
 const equityCurve = computed(() => payload.value?.equity_curve || [])
-const trades = computed(() => payload.value?.trades || [])
-const signals = computed(() => payload.value?.signals || [])
+function latestTimeValue(row, keys) {
+  for (const key of keys) {
+    const value = String(row?.[key] || '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function sortByLatestTime(rows, preferredKeys, fallbackKeys = []) {
+  return [...(Array.isArray(rows) ? rows : [])].sort((a, b) => {
+    const aTime = latestTimeValue(a, [...preferredKeys, ...fallbackKeys])
+    const bTime = latestTimeValue(b, [...preferredKeys, ...fallbackKeys])
+    if (aTime !== bTime) return aTime < bTime ? 1 : -1
+    const aTie = String(a?.code || a?.name || a?.trade_key || '')
+    const bTie = String(b?.code || b?.name || b?.trade_key || '')
+    return aTie < bTie ? 1 : aTie > bTie ? -1 : 0
+  })
+}
+
+const trades = computed(() => sortByLatestTime(payload.value?.trades || [], ['sell_datetime', 'sell_date'], ['buy_datetime', 'buy_date']))
+const signals = computed(() => sortByLatestTime(payload.value?.signals || [], ['confirm_datetime', 'entry_date'], ['code', 'trade_key']))
 const tradeClassifications = computed(() => payload.value?.trade_classifications || [
   { value: '', label: '未分类', type: 'info' },
   { value: 'favorite', label: '最喜欢', type: 'success' },

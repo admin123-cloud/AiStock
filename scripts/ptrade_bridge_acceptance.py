@@ -24,9 +24,10 @@ from execution.ptrade_bridge import PTradeFileBridge
 from scripts.ptrade_bridge_live_probe import run_probe
 from scripts.ptrade_bridge_preflight import DEFAULT_STRATEGY_FILE, run_preflight
 from scripts.ptrade_bridge_readiness_audit import run_audit, write_json
+from utils.paths import runtime_path
 
 
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+DEFAULT_BRIDGE_DIR = runtime_path("ptrade_bridge")
 DEFAULT_REPORT = ROOT / "reports" / "ptrade_bridge_acceptance" / "latest.json"
 
 

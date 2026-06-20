@@ -19,9 +19,10 @@ if str(ROOT) not in sys.path:
 
 from execution.ptrade_bridge import PTradeFileBridge
 from scripts.ptrade_file_bridge_api_runner import process_once, read_json
+from utils.paths import runtime_path
 
 
-DEFAULT_SMOKE_ROOT = ROOT / "data" / "runtime" / "ptrade_bridge_smoke"
+DEFAULT_SMOKE_ROOT = runtime_path("ptrade_bridge_smoke")
 DEFAULT_REPORT = ROOT / "reports" / "ptrade_bridge_smoke" / "latest.json"
 
 

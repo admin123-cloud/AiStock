@@ -52,6 +52,24 @@ def _latest_complete_intraday_date(table: str, min_codes: int) -> str:
     return pd.to_datetime(df["d"].iloc[0]).strftime("%Y-%m-%d")
 
 
+def _latest_intraday_cutoff_time(table: str, target_date: str, min_codes: int) -> str:
+    df = clickhouse_query_df(
+        f"""
+        SELECT datetime AS dt, uniq(code) AS codes
+        FROM {table}
+        WHERE toDate(datetime) = toDate(?)
+        GROUP BY dt
+        HAVING codes >= ?
+        ORDER BY dt DESC
+        LIMIT 1
+        """,
+        [target_date, int(min_codes)],
+    )
+    if df.empty or pd.isna(df["dt"].iloc[0]):
+        raise RuntimeError(f"no complete intraday cutoff in {table} for target_date={target_date}")
+    return pd.to_datetime(df["dt"].iloc[0]).strftime("%H:%M:%S")
+
+
 def _fetch_sector_close_tdxquant(
     sectors: pd.DataFrame,
     target_date: str,
@@ -326,8 +344,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate research-only mainline intraday diffusion factor.")
     parser.add_argument("--target-date", default=None)
     parser.add_argument("--level", type=int, default=2)
-    parser.add_argument("--table", default="kline_minute_60")
-    parser.add_argument("--cutoff-time", default="11:30:00")
+    parser.add_argument("--table", default="kline_minute_30")
+    parser.add_argument("--cutoff-time", default="latest")
     parser.add_argument("--min-complete-codes", type=int, default=3000)
     parser.add_argument("--top-n", type=int, default=8)
     parser.add_argument("--lookback-calendar-days", type=int, default=150)
@@ -338,6 +356,9 @@ def main() -> int:
     args = parser.parse_args()
 
     target_date = args.target_date or _latest_complete_intraday_date(args.table, args.min_complete_codes)
+    cutoff_time = args.cutoff_time
+    if str(cutoff_time or "").strip().lower() in {"", "latest", "auto"}:
+        cutoff_time = _latest_intraday_cutoff_time(args.table, target_date, args.min_complete_codes)
     sectors = _load_sectors(args.level)
     index_source = "tdxquant_sector_index"
     try:
@@ -353,7 +374,7 @@ def main() -> int:
         window = _recent_fallback_window(index_daily, target_date, args.top_n)
     members = _load_members([args.level], 5)
     intraday = _load_intraday_day(args.table, target_date)
-    morning = _morning_stock_returns(intraday, args.cutoff_time)
+    morning = _morning_stock_returns(intraday, cutoff_time)
     diffusion = _sector_diffusion_stats(
         morning,
         members,
@@ -385,7 +406,7 @@ def main() -> int:
         "target_date": target_date,
         "level": args.level,
         "table": args.table,
-        "cutoff_time": args.cutoff_time,
+        "cutoff_time": cutoff_time,
         "research_only": True,
         "index_source": index_source,
         "window_mode": window_mode,

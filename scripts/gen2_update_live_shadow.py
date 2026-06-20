@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -13,6 +14,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from utils.paths import data_path, report_path  # noqa: E402
 
 from scripts.gen2_backtest_open_v1_portfolio import _json_default, _load_trade_dates  # noqa: E402
 from scripts.gen2_build_risk_cool_shadow_ledger import _build_ledger, _summarize, _write_report  # noqa: E402
@@ -28,14 +31,15 @@ from api.gen2_factor import _add_factor, _estimate_prewarm_days, _load_daily_ohl
 from utils.market_warehouse import clickhouse_client  # noqa: E402
 
 
-DEFAULT_SOURCE_CSV = ROOT / "reports" / "gen2_risk_cool_dynamic_circuit_user_v2_cap_v2" / "sources" / "risk_cool_base.csv"
+DEFAULT_SOURCE_CSV = report_path("gen2_risk_cool_dynamic_circuit_user_v2_cap_v2", "sources", "risk_cool_base.csv")
 DEFAULT_SOURCE_PARQUET = DEFAULT_SOURCE_CSV.with_suffix(".parquet")
-DEFAULT_RUN_DIR = ROOT / "reports" / "gen2_risk_cool_dynamic_circuit_user_v2_cap_v2" / "backtests" / "two_stop_cd3_skip"
-DEFAULT_OUTPUT_DIR = ROOT / "reports" / "gen2_risk_cool_shadow_ledger"
-DEFAULT_SHARE_CAP_CACHE = ROOT / "data" / "runtime" / "tdx_share_cap_history.parquet"
-DEFAULT_ALPHA191_TRAIN_SOURCE = ROOT / "reports" / "gen2_alpha191_overlay_candidate_train_dirs" / "sources" / "risk_cool_base.parquet"
-DEFAULT_ALPHA191_TRAIN_VALUES = ROOT / "reports" / "gen2_alpha191_candidate_core10_t1" / "alpha191_core10_t1_signal_values.parquet"
-DEFAULT_MAINLINE_THEME_ADDON = ROOT / "reports" / "mainline_theme_strategy_overlay_v1" / "theme_addon.csv"
+DEFAULT_RUN_DIR = report_path("gen2_risk_cool_dynamic_circuit_user_v2_cap_v2", "backtests", "two_stop_cd3_skip")
+DEFAULT_OUTPUT_DIR = report_path("gen2_risk_cool_shadow_ledger")
+DEFAULT_SHARE_CAP_CACHE = data_path("runtime", "tdx_share_cap_history.parquet")
+DEFAULT_ALPHA191_TRAIN_SOURCE = report_path("gen2_alpha191_overlay_candidate_train_dirs", "sources", "risk_cool_base.parquet")
+DEFAULT_ALPHA191_TRAIN_VALUES = report_path("gen2_alpha191_candidate_core10_t1", "alpha191_core10_t1_signal_values.parquet")
+DEFAULT_MAINLINE_THEME_ADDON = report_path("mainline_theme_strategy_overlay_v1", "theme_addon.csv")
+_GEN2_LIVE_SKIP_INTRADAY_NORMAL_EMPTY_ENV = "AISTOCK_GEN2_LIVE_SKIP_INTRADAY_NORMAL_EMPTY"
 ALPHA191_VOLUME5_FACTORS = ["Alpha150", "Alpha070", "Alpha095", "Alpha132", "Alpha144"]
 ALPHA191_VOLUME5_DIRECTIONS = {
     "Alpha150": "low",
@@ -47,6 +51,13 @@ ALPHA191_VOLUME5_DIRECTIONS = {
 ALPHA191_VOLUME5_GATES = {"volume5_keep80_runup"}
 ALPHA191_ACTIVE_GATES = {"off", "volume5_keep80_runup", "g2_v2_complete"}
 ALPHA191_MAIN_THRESHOLD_Q = 0.20
+
+
+def _as_output_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 LIVE_OUTPUT_COLUMNS = [
     "entry_date",
     "code",
@@ -133,7 +144,12 @@ def _build_live_contexts(events: pd.DataFrame, signal_date: str, trade_dates: li
     return base.reset_index(drop=True)
 
 
-def _make_live_candidates(event_dataset: Path, state_daily: Path, signal_date: str, pool_rank: int) -> pd.DataFrame:
+def _allow_skip_intraday_empty_normal() -> bool:
+    value = os.getenv(_GEN2_LIVE_SKIP_INTRADAY_NORMAL_EMPTY_ENV, "false").strip().lower()
+    return value in {"1", "true", "yes", "on", "y"}
+
+
+def _make_live_candidates(event_dataset: Path, state_daily: Path, signal_date: str, pool_rank: int, state_debug: dict[str, Any] | None = None) -> pd.DataFrame:
     trade_dates = _load_trade_dates("2024-07-09", signal_date)
     if signal_date not in trade_dates:
         return pd.DataFrame()
@@ -154,6 +170,41 @@ def _make_live_candidates(event_dataset: Path, state_daily: Path, signal_date: s
         return triggers
     state = _build_intraday_state(triggers, state_daily, 30)
     filtered = _filter_with_state(triggers, state, "before_confirm")
+    if state_debug is not None:
+        normal_mask = (
+            state.get("intraday_normal", pd.Series([], dtype=bool))
+            if isinstance(state, pd.DataFrame)
+            else pd.Series([], dtype=bool)
+        )
+        if isinstance(normal_mask, pd.Series):
+            normal_mask = normal_mask.fillna(False).astype(bool)
+        normal_dates: list[str] = []
+        if isinstance(normal_mask, pd.Series) and isinstance(state, pd.DataFrame) and len(state) > 0:
+            normal_dates = [
+                str(x)
+                for x in state.loc[normal_mask, "entry_date"].dropna().astype(str).unique().tolist()
+            ]
+        state_debug.update(
+            {
+                "state_rows": int(len(state)),
+                "trigger_rows": int(len(triggers)),
+                "normal_rows": int(normal_mask.sum()) if isinstance(normal_mask, pd.Series) else 0,
+                "normal_dates": normal_dates,
+                "fallback": "none",
+            }
+        )
+        if len(state) == 0:
+            state_debug["reason"] = "intraday_state_empty"
+        elif int(normal_mask.sum()) == 0 and filtered.empty and _allow_skip_intraday_empty_normal():
+            state_debug["reason"] = "all_intraday_normal_false"
+            state_debug["fallback"] = "skip_intraday_normal"
+            fallback = triggers.copy()
+            fallback["intraday_normal_mode"] = "before_confirm_no_normal"
+            fallback["g2_open_state"] = "NORMAL"
+            filtered = fallback
+        else:
+            state_debug["reason"] = "filtered_by_intraday_normal"
+            state_debug["fallback"] = "none"
     if filtered.empty:
         return filtered
     filtered = filtered[filtered["trigger_type"].eq("bottom_fractal_break_high_vol")].copy()
@@ -1079,7 +1130,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     live_dir = output_dir / "live_updates"
     live_dir.mkdir(parents=True, exist_ok=True)
 
-    candidates = _make_live_candidates(Path(args.event_dataset), Path(args.state_daily), signal_date, int(args.pool_rank))
+    state_debug: dict[str, Any] = {}
+    candidates = _make_live_candidates(
+        Path(args.event_dataset),
+        Path(args.state_daily),
+        signal_date,
+        int(args.pool_rank),
+        state_debug=state_debug,
+    )
     filtered, filter_summary = _apply_live_filters(
         candidates,
         start_date=(pd.Timestamp(signal_date) - pd.Timedelta(days=430)).strftime("%Y-%m-%d"),
@@ -1147,12 +1205,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "pre_alpha191_theme_matches": int(filtered_before_alpha191.get("mainline_theme_match", pd.Series(dtype=bool)).fillna(False).sum()) if not filtered_before_alpha191.empty else 0,
             "mode": "research_only_fields_no_buy_bypass",
         },
+        "intraday_state": state_debug,
         "outputs": {
-            "raw_candidates": str(live_raw.relative_to(ROOT)),
-            "pre_alpha191_signals": str(live_pre_alpha191.relative_to(ROOT)),
-            "filtered_signals": str(live_filtered.relative_to(ROOT)),
+            "raw_candidates": _as_output_path(live_raw),
+            "pre_alpha191_signals": _as_output_path(live_pre_alpha191),
+            "filtered_signals": _as_output_path(live_filtered),
             "source_csv": str(source_csv.relative_to(ROOT)) if source_csv.is_relative_to(ROOT) else str(source_csv),
-            "shadow_ledger": str((output_dir / "shadow_ledger.csv").relative_to(ROOT)),
+            "shadow_ledger": _as_output_path(output_dir / "shadow_ledger.csv"),
         },
     }
     (live_dir / f"{signal_date}_summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")

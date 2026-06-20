@@ -18,14 +18,13 @@ if str(ROOT) not in sys.path:
 from scripts.gen2_backtest_risk_cool_dynamic_circuit import _run_dynamic  # noqa: E402
 from scripts.gen2_runtime_dates import add_end_date_argument, resolve_end_date, resolve_window_ends  # noqa: E402
 from utils.market_warehouse import clickhouse_client  # noqa: E402
+from utils.paths import report_path  # noqa: E402
 
 
-COMBO = (
-    ROOT
-    / "reports"
-    / "gen2_breakout_buy_point_research"
-    / "breakout_family_intraday_strength_probe"
-    / "combo_policy_probe"
+COMBO = report_path(
+    "gen2_breakout_buy_point_research",
+    "breakout_family_intraday_strength_probe",
+    "combo_policy_probe",
 )
 SOURCE = COMBO / "sources" / "rtret60_or_breakbox25.parquet"
 OUT = COMBO / "sector_context_probe" / "sector_filter_matrix"
@@ -76,8 +75,9 @@ def _members(code6_key: tuple[str, ...] | None = None) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame(columns=["stock_code", "stock_code6", "sector_code", "sector_name", "level", "stock_count"])
     df = pd.concat(frames, ignore_index=True)
-    df["stock_code"] = df["stock_code"].astype(str).map(lambda v: v.split(".")[0].zfill(6))
-    df["stock_code6"] = df["stock_code"]
+    raw_code = df["stock_code"].astype(str)
+    df["stock_code6"] = raw_code.map(lambda v: v.split(".")[0].zfill(6))
+    df["stock_code"] = raw_code
     df = df.drop_duplicates(["stock_code6", "sector_code", "level"]).reset_index(drop=True)
     df["level"] = pd.to_numeric(df["level"], errors="coerce").astype("Int64")
     return df

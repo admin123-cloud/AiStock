@@ -51,12 +51,23 @@ def _json_default(value: Any) -> Any:
 
 def _load_signals(path: Path, start_date: str, end_date: str) -> pd.DataFrame:
     df = pd.read_parquet(path)
-    rule = GEN2_OPEN_RULE_V1
-    d = df[
-        (df["pattern"] == rule["pattern"])
-        & (df["g2_open_state"] == rule["g2_open_state"])
-        & (df["trigger_type"] == rule["trigger_type"])
-    ].copy()
+    source_family = df.get("source_family", pd.Series("", index=df.index)).fillna("").astype(str)
+    signal_family = df.get("signal_family", pd.Series("", index=df.index)).fillna("").astype(str)
+    family_priority = pd.to_numeric(df.get("g2_v2_family_priority", pd.Series(np.nan, index=df.index)), errors="coerce")
+    prepared_multi_source = bool(
+        source_family.isin(["volume5", "big_bull"]).any()
+        or signal_family.str.startswith(("volume5", "breakout")).any()
+        or family_priority.notna().any()
+    )
+    if prepared_multi_source:
+        d = df.copy()
+    else:
+        rule = GEN2_OPEN_RULE_V1
+        d = df[
+            (df["pattern"] == rule["pattern"])
+            & (df["g2_open_state"] == rule["g2_open_state"])
+            & (df["trigger_type"] == rule["trigger_type"])
+        ].copy()
     d["entry_date"] = pd.to_datetime(d["entry_date"]).dt.strftime("%Y-%m-%d")
     d = d[(d["entry_date"] >= start_date) & (d["entry_date"] <= end_date)].copy()
     d["v4_rank"] = pd.to_numeric(d["v4_rank"], errors="coerce").fillna(999).astype(int)

@@ -6,9 +6,14 @@ from pathlib import Path
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = ROOT / "reports" / "gen3_combo_panic_strong_execution_stress_v1" / "base_30bps_closed_trades.csv"
+import sys
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path  # noqa: E402
+DEFAULT_INPUT = report_path("gen3_market_state_router_strategy_v1", "g3_route_execution_mandate_candidate_closed_trades.csv")
 DEFAULT_OUT = ROOT / "reports" / "gen3_live_safe_schema_v1"
 
 
@@ -63,6 +68,10 @@ LIVE_OK_FIELDS = {
     "confirm_rule",
     "policy",
     "layer_policy",
+    "profile",
+    "strategy_id",
+    "route",
+    "route_label",
     "execution_variant",
     "execution_note",
     "candidate_key",

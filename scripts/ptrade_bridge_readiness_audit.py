@@ -15,9 +15,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from execution.ptrade_bridge import PTradeFileBridge
+from utils.paths import runtime_path
 
 
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+DEFAULT_BRIDGE_DIR = runtime_path("ptrade_bridge")
 DEFAULT_REPORT = ROOT / "reports" / "ptrade_bridge_readiness_audit" / "latest.json"
 
 

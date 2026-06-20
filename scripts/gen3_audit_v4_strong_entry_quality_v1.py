@@ -6,17 +6,18 @@ from typing import Any
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path
 
 from scripts.gen3_backtest_strong_volume5_slot_resim_v1 import _md_table as md_table  # noqa: E402
 from utils.market_warehouse import clickhouse_query_df  # noqa: E402
 
 
-SRC = ROOT / "reports" / "gen3_v4_strong_failure_attribution_v1" / "strong_main_path_attribution.csv"
-OUT_DIR = ROOT / "reports" / "gen3_v4_strong_entry_quality_audit_v1"
+SRC = report_path("gen3_v4_strong_failure_attribution_v1", "strong_main_path_attribution.csv")
+OUT_DIR = report_path("gen3_v4_strong_entry_quality_audit_v1")
 
 
 def sql_literal(value: str) -> str:

@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "reports" / "gen3_range_filtered_live_safe_payload_v2"
-RUNTIME_DIR = ROOT / "data" / "runtime" / "gen3_range_filtered_live_safe"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-SOURCE_PAYLOAD = ROOT / "reports" / "gen3_guarded_live_safe_payload_v1" / "g3_guarded_live_safe_payload.csv"
-SELECTED_TRADES = ROOT / "reports" / "gen3_range_filtered_candidate_package_v2" / "g3_range_filtered_candidate_closed_trades.csv"
-RANGE_SOURCE = ROOT / "reports" / "gen3_range_v3_mtm_pressure_v1" / "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv"
+from utils.paths import report_path, runtime_path
+
+OUT_DIR = report_path("gen3_range_filtered_live_safe_payload_v2")
+RUNTIME_DIR = runtime_path("gen3_range_filtered_live_safe")
+
+SOURCE_PAYLOAD = report_path("gen3_guarded_live_safe_payload_v1", "g3_guarded_live_safe_payload.csv")
+SELECTED_TRADES = report_path("gen3_range_filtered_candidate_package_v2", "g3_range_filtered_candidate_closed_trades.csv")
+RANGE_SOURCE = report_path("gen3_range_v3_mtm_pressure_v1", "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv")
 
 FORBIDDEN_FIELDS = {"policy_net_ret", "stake", "exit_value", "realized_pnl", "policy_exit_date", "exit_price", "exit_date"}
 

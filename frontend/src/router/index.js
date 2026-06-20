@@ -46,6 +46,20 @@ const routes = [
     }
   },
   {
+    path: '/news/cls-radar',
+    name: 'ClsNewsRadar',
+    component: () => import('@/views/pages/ClsNewsRadar.vue'),
+    meta: {
+      title: '财联社消息雷达',
+      group: 'market',
+      groupLabel: '市场',
+      groupOrder: 1,
+      navOrder: 2.7,
+      navLabel: '财联社消息雷达',
+      icon: 'N'
+    }
+  },
+  {
     path: '/stock/:code',
     name: 'StockDetail',
     component: () => import('@/views/pages/StockDetail.vue'),
@@ -106,6 +120,7 @@ const routes = [
       groupOrder: 2.5,
       navOrder: 0.5,
       navLabel: '实盘交易',
+      hiddenInNav: true,
       icon: 'G2'
     }
   },
@@ -120,6 +135,22 @@ const routes = [
       groupOrder: 2.5,
       navOrder: 0.7,
       navLabel: '策略选股池',
+      hiddenInNav: true,
+      icon: 'G2'
+    }
+  },
+  {
+    path: '/gen2/mainline-hotspots',
+    name: 'Gen2MainlineHotspots',
+    component: () => import('@/views/pages/Gen2MainlineHotspots.vue'),
+    meta: {
+      title: '第二代主线热点',
+      group: 'gen2',
+      groupLabel: '第二代策略',
+      groupOrder: 2.5,
+      navOrder: 0.8,
+      navLabel: '主线热点',
+      hiddenInNav: true,
       icon: 'G2'
     }
   },
@@ -149,6 +180,7 @@ const routes = [
       groupOrder: 2.5,
       navOrder: 2,
       navLabel: '历史回测',
+      hiddenInNav: true,
       icon: 'G2'
     }
   },
@@ -183,45 +215,98 @@ const routes = [
     }
   },
   {
-    path: '/gen3/research',
-    name: 'Gen3Research',
-    component: () => import('@/views/pages/Gen3Research.vue'),
+    path: '/gen3/state-alpha',
+    name: 'Gen3StateAlpha',
+    component: () => import('@/views/pages/Gen3StateAlpha.vue'),
     meta: {
-      title: 'G3第三代策略研究台',
+      title: 'G3 工作台',
       group: 'gen3',
       groupLabel: 'G3第三代策略',
       groupOrder: 2.7,
       navOrder: 1,
-      navLabel: '研究台',
-      icon: 'G3'
+      navLabel: '工作台'
     }
   },
   {
-    path: '/gen3/v3-backtest',
-    name: 'Gen3V3Backtest',
-    component: () => import('@/views/pages/Gen3V3Backtest.vue'),
+    path: '/gen3/state-alpha/candidates',
+    name: 'Gen3StateAlphaCandidates',
+    component: () => import('@/views/pages/Gen3StateAlphaCandidates.vue'),
     meta: {
-      title: 'G3 V3历史回测',
+      title: 'G3 State Alpha 候选池',
       group: 'gen3',
       groupLabel: 'G3第三代策略',
       groupOrder: 2.7,
-      navOrder: 2,
-      navLabel: 'V3历史回测',
-      icon: 'G3'
+      navOrder: 1.05,
+      navLabel: '候选池',
+      hiddenInNav: true,
+      icon: ''
     }
   },
   {
-    path: '/gen3/v4-research',
-    name: 'Gen3V4ResearchBacktest',
-    component: () => import('@/views/pages/Gen3V4ResearchBacktest.vue'),
+    path: '/gen3/state-alpha/mainwave',
+    name: 'Gen3StateAlphaMainwave',
+    component: () => import('@/views/pages/Gen3StateAlphaMainwave.vue'),
     meta: {
-      title: 'G3 V4研究回测',
+      title: '主升行业机会',
       group: 'gen3',
       groupLabel: 'G3第三代策略',
       groupOrder: 2.7,
-      navOrder: 3,
-      navLabel: 'V4研究回测',
-      icon: 'G3'
+      navOrder: 1.06,
+      navLabel: '主升行业机会'
+    }
+  },
+  {
+    path: '/gen3/state-alpha/routes',
+    name: 'Gen3StateAlphaRoutes',
+    component: () => import('@/views/pages/Gen3StateAlphaRoutes.vue'),
+    meta: {
+      title: '策略有效性诊断',
+      group: 'gen3',
+      groupLabel: 'G3第三代策略',
+      groupOrder: 2.7,
+      navOrder: 1.08,
+      navLabel: '有效性诊断'
+    }
+  },
+  {
+    path: '/gen3/state-alpha/risk',
+    name: 'Gen3StateAlphaRisk',
+    component: () => import('@/views/pages/Gen3StateAlphaRisk.vue'),
+    meta: {
+      title: '风控合同',
+      group: 'gen3',
+      groupLabel: 'G3第三代策略',
+      groupOrder: 2.7,
+      navOrder: 1.1,
+      navLabel: '风控合同'
+    }
+  },
+  {
+    path: '/gen3/state-alpha/trades',
+    name: 'Gen3StateAlphaTrades',
+    component: () => import('@/views/pages/Gen3StateAlphaTrades.vue'),
+    meta: {
+      title: '历史成交复盘',
+      group: 'gen3',
+      groupLabel: 'G3第三代策略',
+      groupOrder: 2.7,
+      navOrder: 1.09,
+      navLabel: '历史成交复盘'
+    }
+  },
+  {
+    path: '/gen3/state-alpha/replacement',
+    name: 'Gen3StateAlphaReplacement',
+    component: () => import('@/views/pages/Gen3StateAlphaReplacement.vue'),
+    meta: {
+      title: 'G3融合状态',
+      group: 'gen3',
+      groupLabel: 'G3第三代策略',
+      groupOrder: 2.7,
+      navOrder: 1.25,
+      navLabel: '融合验收',
+      hiddenInNav: true,
+      icon: ''
     }
   },
   {
@@ -282,9 +367,32 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
-  document.title = `${to.meta.title || 'AiStock'} - ${APP_TITLE}`
-  next()
+const setPageTitle = (route) => {
+  document.title = `${route.meta?.title || 'AiStock'} - ${APP_TITLE}`
+}
+
+router.afterEach((to) => {
+  setPageTitle(to)
+})
+
+router.onError((error, to) => {
+  setPageTitle(router.currentRoute.value)
+  const message = String(error?.message || error || '')
+  if (!message.includes('Failed to fetch dynamically imported module')) return
+
+  const targetPath = to?.fullPath || window.location.pathname + window.location.search + window.location.hash
+  const retryKey = `aistock_route_import_retry:${targetPath}`
+  if (sessionStorage.getItem(retryKey)) {
+    sessionStorage.removeItem(retryKey)
+    return
+  }
+  sessionStorage.setItem(retryKey, '1')
+  window.location.assign(targetPath)
+})
+
+router.isReady().then(() => {
+  sessionStorage.removeItem(`aistock_route_import_retry:${router.currentRoute.value.fullPath}`)
+  setPageTitle(router.currentRoute.value)
 })
 
 export default router

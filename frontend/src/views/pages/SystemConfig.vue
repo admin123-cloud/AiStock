@@ -1,112 +1,174 @@
 <template>
   <div class="system-config">
-    <div class="config-header">
-      <h1>系统配置</h1>
-      <p>自动维护为主，手动修复兜底</p>
-    </div>
+    <section class="ops-hero">
+      <div class="hero-copy">
+        <span class="eyebrow">System Command Center</span>
+        <h1>系统配置</h1>
+        <p>把日常维护收敛成一个主入口：自动调度负责常规更新，手动按钮只用于补链路、复核和救场。</p>
+      </div>
+      <div class="hero-status-card">
+        <span class="status-pill large" :class="coreMaintenance.enabled ? 'enabled' : 'paused'">
+          {{ coreMaintenance.enabled ? '自动维护运行中' : '自动维护已暂停' }}
+        </span>
+        <div class="hero-health">
+          <strong :class="`state-${coreMaintenance.overall_status || 'idle'}`">{{ maintenanceStatusText }}</strong>
+          <span>今日成功率 {{ formatRate(coreMaintenance.today_success_rate) }}</span>
+        </div>
+        <div class="hero-meta">
+          <span>最近失败：{{ latestFailedText }}</span>
+          <span>刷新于：{{ formatDateTime(lastStatusRefreshAt) }}</span>
+        </div>
+      </div>
+    </section>
 
-    <section class="health-strip">
-      <div class="health-item">
-        <span class="health-label">核心状态</span>
-        <strong :class="`state-${coreMaintenance.overall_status || 'idle'}`">
-          {{ maintenanceStatusText }}
-        </strong>
+    <section class="command-grid">
+      <article class="command-card primary-command">
+        <span class="command-kicker">推荐操作</span>
+        <h2>一键修复今日市场数据</h2>
+        <p>覆盖交易日历、股票/指数/板块基础数据、当天日线、分钟快照、15/30m分钟K线、板块统计和盘后自检。</p>
+        <button
+          class="btn hero-btn"
+          :disabled="runningTodayFullMarketRefreshNow || isTaskRunning('today_full_market_refresh')"
+          @click="refreshTodayFullMarketNow"
+        >
+          {{ runningTodayFullMarketRefreshNow || isTaskRunning('today_full_market_refresh') ? '正在更新并自检...' : '立即执行今日全市场更新' }}
+        </button>
+      </article>
+
+      <article class="command-card">
+        <span class="command-kicker">自动化</span>
+        <h3>{{ coreMaintenance.enabled ? '自动维护已接管' : '自动维护已暂停' }}</h3>
+        <p>常规同步建议交给调度器。只有排障时才暂停或重启自动维护。</p>
+        <button class="btn secondary" @click="toggleCoreMaintenance">
+          {{ coreMaintenance.enabled ? '暂停自动维护' : '启动自动维护' }}
+        </button>
+      </article>
+
+      <article class="command-card">
+        <span class="command-kicker">排障</span>
+        <h3>历史分钟K线修复</h3>
+        <p>用于回补最近30个交易日股票/指数分钟K线，耗时较长，不作为日常主入口。</p>
+        <button
+          class="btn danger soft"
+          :disabled="runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running"
+          @click="triggerMarketMinuteHistoryRepairNow"
+        >
+          {{ runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running ? '修复中...' : '执行历史分钟修复' }}
+        </button>
+      </article>
+    </section>
+
+    <section class="section-card gateway-section">
+      <div class="section-title-row">
+        <div>
+          <span class="eyebrow">TDX Gateway</span>
+          <h2>TDX Gateway 排障入口</h2>
+        </div>
+        <span class="status-pill" :class="tdxGatewayStatusClass">
+          {{ tdxGatewayStatusText }}
+        </span>
       </div>
-      <div class="health-item">
-        <span class="health-label">今日成功率</span>
-        <strong>{{ formatRate(coreMaintenance.today_success_rate) }}</strong>
+      <div class="maintenance-actions">
+        <button class="btn" :disabled="tdxGatewayLoading" @click="refreshTdxGatewayDiagnostics">
+          {{ tdxGatewayLoading ? '诊断中...' : '刷新诊断' }}
+        </button>
+        <button class="btn primary" :disabled="tdxGatewayInitializing || tdxGatewayRestarting" @click="initializeTdxGateway">
+          {{ tdxGatewayInitializing ? '初始化中...' : '重新初始化' }}
+        </button>
+        <button class="btn danger soft" :disabled="tdxGatewayRestarting" @click="restartTdxGateway">
+          {{ tdxGatewayRestarting ? '重启请求已发送...' : '重启 Gateway' }}
+        </button>
       </div>
-      <div class="health-item">
-        <span class="health-label">运行中任务</span>
-        <strong>{{ runningTaskText }}</strong>
+      <div class="gateway-grid">
+        <article class="gateway-card">
+          <span>后端访问地址</span>
+          <strong>{{ tdxGatewayDiagnostics.gateway_url || '-' }}</strong>
+          <small>Docker 后端通过这个地址访问宿主机 Gateway</small>
+        </article>
+        <article class="gateway-card">
+          <span>健康检查</span>
+          <strong>{{ tdxGatewayHealthText }}</strong>
+          <small>{{ tdxGatewayHealthDetail }}</small>
+        </article>
+        <article class="gateway-card">
+          <span>真实取数探针</span>
+          <strong>{{ tdxGatewayProbeText }}</strong>
+          <small>{{ tdxGatewayProbeDetail }}</small>
+        </article>
+        <article class="gateway-card">
+          <span>宿主机进程</span>
+          <strong>{{ tdxGatewayProcessText }}</strong>
+          <small>{{ tdxGatewayTaskText }}</small>
+        </article>
       </div>
-      <div class="health-item">
-        <span class="health-label">最近失败任务</span>
-        <strong>{{ latestFailedText }}</strong>
-      </div>
-      <div class="health-item">
-        <span class="health-label">最近刷新</span>
-        <strong>{{ formatDateTime(lastStatusRefreshAt) }}</strong>
+      <div class="gateway-diagnostics">
+        <div class="diagnostic-line">
+          <span>最近检查</span>
+          <strong>{{ formatDateTime(tdxGatewayDiagnostics.checked_at) }}</strong>
+        </div>
+        <div class="diagnostic-line">
+          <span>后端配置</span>
+          <strong>strict={{ tdxGatewayDiagnostics.backend?.strict_startup || '0' }}</strong>
+        </div>
+        <div v-if="tdxGatewayDiagnostics.health?.error" class="diagnostic-line danger-line">
+          <span>健康错误</span>
+          <strong>{{ tdxGatewayDiagnostics.health.error }}</strong>
+        </div>
+        <div v-if="tdxGatewayDiagnostics.market_data_probe?.error" class="diagnostic-line danger-line">
+          <span>取数错误</span>
+          <strong>{{ tdxGatewayDiagnostics.market_data_probe.error }}</strong>
+        </div>
       </div>
     </section>
 
     <section class="section-card">
       <div class="section-title-row">
-        <h2>Auto 核心数据自动维护</h2>
-        <span class="status-pill" :class="coreMaintenance.enabled ? 'enabled' : 'paused'">
-          {{ coreMaintenance.enabled ? '已启用' : '已暂停' }}
-        </span>
-      </div>
-
-      <div class="task-table">
-        <div class="task-row head">
-          <span>任务</span>
-          <span>状态</span>
-          <span>说明</span>
-          <span>最近耗时</span>
-          <span>近10次均耗</span>
-          <span>最近来源</span>
-          <span>下次执行</span>
-          <span>最近成功</span>
-          <span>操作</span>
+        <div>
+          <span class="eyebrow">Data Pipeline</span>
+          <h2>核心数据链路</h2>
         </div>
-        <div v-for="task in maintenanceTasks" :key="task.key" class="task-row">
-          <span>{{ task.label }}</span>
-          <span :class="`state-${getTaskStatus(task.key)}`">{{ getTaskStatusText(task.key) }}</span>
-          <span>{{ getTaskMessage(task.key) }}</span>
-          <span>{{ getTaskLastDuration(task.key) }}</span>
-          <span>{{ getTaskAvgDuration(task.key) }}</span>
-          <span>{{ getTaskTriggerSource(task.key) }}</span>
-          <span>{{ getNextRunTime(task.key) }}</span>
-          <span>{{ getTaskLastSuccess(task.key) }}</span>
-          <span class="task-action-cell">
-            <button
-              class="btn task-sync-btn"
-              :disabled="isMaintenanceTaskActionDisabled(task.key)"
-              @click="syncMaintenanceTask(task)"
-            >
-              {{ isMaintenanceTaskSyncing(task.key) ? '同步中...' : '同步' }}
-            </button>
-          </span>
+        <div class="section-actions">
+          <button class="btn subtle" @click="refreshCoreMaintenanceStatus">刷新状态</button>
+          <button class="btn subtle" @click="toggleTimelinePanel">
+            {{ showTimelinePanel ? '收起时间线' : '查看时间线' }}
+          </button>
         </div>
       </div>
 
-      <div class="maintenance-actions">
-        <button class="btn primary" @click="toggleCoreMaintenance">
-          {{ coreMaintenance.enabled ? '暂停自动维护' : '启动自动维护' }}
-        </button>
-        <button
-          class="btn success"
-          :disabled="runningCoreAssetsSyncNow"
-          @click="syncCoreAssetsNow"
-        >
-          {{ runningCoreAssetsSyncNow ? '核心同步执行中...' : '立即同步核心数据' }}
-        </button>
-        <button
-          class="btn warning"
-          :disabled="runningOfficialDailyNow || isTaskRunning('official_daily')"
-          @click="triggerOfficialDailyCloseNow"
-        >
-          {{ runningOfficialDailyNow || isTaskRunning('official_daily') ? '盘后正式日线执行中...' : '立即执行盘后正式日线' }}
-        </button>
-        <button
-          class="btn danger"
-          :disabled="runningMinuteKlineRepairNow || isTaskRunning('minute_kline_daily_repair_validate')"
-          @click="triggerMinuteKlineRepairNow"
-        >
-          {{ runningMinuteKlineRepairNow || isTaskRunning('minute_kline_daily_repair_validate') ? '分钟数据重同步中...' : '一键重新同步分钟数据' }}
-        </button>
-        <button
-          class="btn danger"
-          :disabled="runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running"
-          @click="triggerMarketMinuteHistoryRepairNow"
-        >
-          {{ runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running ? '历史分钟修复中...' : '股票/指数历史分钟修复' }}
-        </button>
-        <button class="btn" @click="refreshCoreMaintenanceStatus">刷新状态</button>
-        <button class="btn ghost" @click="toggleTimelinePanel">
-          {{ showTimelinePanel ? '收起任务时间线' : '查看任务时间线' }}
-        </button>
+      <div class="pipeline-grid">
+        <article v-for="group in coreTaskGroups" :key="group.key" class="pipeline-card" :class="`accent-${group.accent}`">
+          <div class="pipeline-head">
+            <div>
+              <span class="command-kicker">{{ group.kicker }}</span>
+              <h3>{{ group.title }}</h3>
+              <p>{{ group.description }}</p>
+            </div>
+            <span class="status-pill" :class="getGroupStatus(group)">
+              {{ getGroupSummary(group) }}
+            </span>
+          </div>
+          <div class="task-stack">
+            <div v-for="task in group.tasks" :key="task.key" class="task-chip">
+              <div class="task-chip-main">
+                <span class="task-dot" :class="`state-bg-${getTaskStatus(task.key)}`"></span>
+                <strong>{{ task.label }}</strong>
+                <span :class="`state-${getTaskStatus(task.key)}`">{{ getTaskStatusText(task.key) }}</span>
+              </div>
+              <div class="task-chip-meta">
+                <span>成功：{{ getTaskLastSuccess(task.key) }}</span>
+                <span>下次：{{ getNextRunTime(task.key) }}</span>
+              </div>
+              <p>{{ getTaskMessage(task.key) }}</p>
+              <button
+                class="mini-btn"
+                :disabled="isMaintenanceTaskActionDisabled(task.key)"
+                @click="syncMaintenanceTask(task)"
+              >
+                {{ isMaintenanceTaskSyncing(task.key) ? '执行中' : '单项执行' }}
+              </button>
+            </div>
+          </div>
+        </article>
       </div>
 
       <div v-if="showTimelinePanel" class="timeline-panel">
@@ -124,7 +186,70 @@
 
     <section class="section-card">
       <div class="section-title-row">
-        <h2>启动初始化基础数据</h2>
+        <div>
+          <span class="eyebrow">Strategy Ops</span>
+          <h2>策略维护</h2>
+        </div>
+        <span class="status-pill" :class="strategyMaintenanceRunning ? 'enabled' : 'paused'">
+          {{ strategyMaintenanceRunning ? '执行中' : '待命' }}
+        </span>
+      </div>
+
+      <div class="maintenance-actions">
+        <button
+          class="btn success"
+          :disabled="strategyMaintenanceRunning"
+          @click="runAllStrategyMaintenanceTasks('daily')"
+        >
+          {{ runningAllStrategyMaintenanceNow ? 'G3日常维护执行中...' : '一键执行G3日常维护' }}
+        </button>
+        <button
+          class="btn danger soft"
+          :disabled="strategyMaintenanceRunning"
+          @click="runAllStrategyMaintenanceTasks('heavy')"
+        >
+          一键执行证据复核
+        </button>
+        <button class="btn" @click="refreshStrategyMaintenanceStatus">刷新G3状态</button>
+      </div>
+
+      <div class="strategy-grid">
+        <article
+          v-for="task in strategyMaintenanceTasks"
+          :key="task.key"
+          class="strategy-card"
+          :class="{ 'strategy-card-heavy': task.mode === 'heavy' }"
+        >
+          <div class="strategy-title-row">
+            <h3>{{ task.label }}</h3>
+            <div class="strategy-title-badges">
+              <span v-if="task.mode === 'heavy'" class="task-kind heavy">重任务</span>
+              <span v-else class="task-kind daily">日常</span>
+              <span :class="`state-${getStrategyTaskStatus(task.key)}`">{{ getStrategyTaskStatusText(task.key) }}</span>
+            </div>
+          </div>
+          <p>{{ getStrategyTaskMessage(task) }}</p>
+          <div class="strategy-meta">
+            <span>上次成功</span>
+            <strong>{{ formatDateTime(getStrategyTaskLastSuccess(task.key)) }}</strong>
+          </div>
+          <button
+            class="mini-btn"
+            :disabled="isStrategyTaskActionDisabled(task.key)"
+            @click="runStrategyMaintenanceTask(task)"
+          >
+            {{ isStrategyTaskSyncing(task.key) ? '执行中' : (task.mode === 'heavy' ? '重型执行' : '执行一次') }}
+          </button>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <div class="section-title-row">
+        <div>
+          <span class="eyebrow">Startup Policy</span>
+          <h2>启动初始化</h2>
+        </div>
         <span class="status-pill" :class="startupReferenceSyncEnabled ? 'enabled' : 'paused'">
           {{ startupReferenceSyncEnabled ? '启动时开启' : '启动时关闭' }}
         </span>
@@ -146,14 +271,100 @@
 
     <section class="section-card">
       <div class="section-title-row">
-        <h2>高级维护（手动兜底）</h2>
+        <div>
+          <span class="eyebrow">Trading Account</span>
+          <h2>PTrade交易账号</h2>
+        </div>
+        <span class="status-pill" :class="ptradeAccountForm.enabled ? 'enabled' : 'paused'">
+          {{ ptradeAccountForm.enabled ? '已启用' : '已停用' }}
+        </span>
+      </div>
+      <p class="section-tip">
+        当前用于PTrade云仿真交易端联调；以后切换真实账号时，只替换账号类型、用户名和密码即可。密码保存到本地私有配置，不写入版本库。
+      </p>
+      <div class="account-config-grid">
+        <label>
+          <span>账号类型</span>
+          <select v-model="ptradeAccountForm.account_type">
+            <option value="simulation">模拟账号</option>
+            <option value="real">真实账号</option>
+          </select>
+        </label>
+        <label>
+          <span>券商/终端</span>
+          <input v-model="ptradeAccountForm.broker_name" placeholder="PTrade" />
+        </label>
+        <label>
+          <span>用户名</span>
+          <input v-model="ptradeAccountForm.username" autocomplete="username" placeholder="请输入PTrade账号" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input
+            v-model="ptradeAccountForm.password"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="ptradeAccountPasswordPlaceholder"
+          />
+        </label>
+        <label>
+          <span>交易端/环境</span>
+          <input v-model="ptradeAccountForm.trade_endpoint" placeholder="云仿真（交易端）" />
+        </label>
+        <label>
+          <span>启用</span>
+          <select v-model="ptradeAccountForm.enabled">
+            <option :value="true">启用</option>
+            <option :value="false">停用</option>
+          </select>
+        </label>
+      </div>
+      <label class="account-notes">
+        <span>备注</span>
+        <input v-model="ptradeAccountForm.notes" placeholder="例如：G3模拟交易联调用" />
+      </label>
+      <div class="maintenance-actions">
+        <button class="btn primary" :disabled="ptradeAccountSaving" @click="savePtradeAccountConfig">
+          {{ ptradeAccountSaving ? '保存中...' : '保存PTrade账号' }}
+        </button>
+        <button class="btn" :disabled="ptradeAccountLoading || ptradeAccountSaving" @click="loadPtradeAccountConfig">刷新配置</button>
+      </div>
+      <div class="config-note">
+        当前状态：用户名 {{ ptradeAccountPublic.username_masked || '未配置' }}；
+        密码 {{ ptradeAccountPublic.password_configured ? '已配置' : '未配置' }}；
+        保存位置 {{ ptradeAccountPublic.storage || 'config/settings.local.yaml' }}
+      </div>
+    </section>
+
+    <section class="section-card">
+      <div class="section-title-row">
+        <div>
+          <span class="eyebrow">Fallback Tools</span>
+          <h2>高级维护</h2>
+        </div>
         <button class="btn ghost" @click="advancedOpen = !advancedOpen">
           {{ advancedOpen ? '折叠' : '展开' }}
         </button>
       </div>
-      <p class="section-tip">低频维护、重算、初始化任务放在这里。自动维护异常时再使用手工触发。</p>
+      <p class="section-tip">低频维护、重算、初始化任务放在这里。自动维护异常时再使用手工触发；“立即同步核心数据”已降级为参考数据入口，避免和今日全市场闭环重复。</p>
 
       <div v-show="advancedOpen" class="advanced-grid">
+        <article class="manual-card spotlight">
+          <h3>基础参考数据</h3>
+          <p>只同步交易日历、股票/指数/板块基础列表和当日日线。日常请优先使用顶部“一键修复今日市场数据”。</p>
+          <div class="tag-row">
+            <span class="tag">参考数据</span>
+            <span class="tag">轻量同步</span>
+          </div>
+          <button
+            class="btn success"
+            :disabled="runningCoreAssetsSyncNow"
+            @click="syncCoreAssetsNow"
+          >
+            {{ runningCoreAssetsSyncNow ? '基础同步中...' : '只同步基础参考数据' }}
+          </button>
+        </article>
+
         <article class="manual-card">
           <h3>股票数据</h3>
           <p>股票列表、日线修复、全历史修复、盘中股票快照手动触发。</p>
@@ -271,10 +482,14 @@ const updatingTradeCalendar = ref(false)
 const repairingEmotion30d = ref(false)
 const repairingEmotionLatest = ref(false)
 const emotionAutoEnabled = ref(false)
-const runningOfficialDailyNow = ref(false)
 const runningCoreAssetsSyncNow = ref(false)
-const runningMinuteKlineRepairNow = ref(false)
+const runningTodayFullMarketRefreshNow = ref(false)
 const runningMarketMinuteHistoryRepairNow = ref(false)
+const strategyTaskStates = ref({})
+const strategyTaskSyncing = ref({})
+const strategyTaskPollTimers = ref({})
+const runningAllStrategyMaintenanceNow = ref(false)
+const STRATEGY_SUCCESS_STORAGE_KEY = 'aistock.strategyMaintenance.lastSuccess.v1'
 
 const advancedOpen = ref(false)
 const showTimelinePanel = ref(false)
@@ -283,6 +498,22 @@ const coreMaintenanceRefreshTimer = ref(null)
 const startupReferenceSyncEnabled = ref(false)
 const startupReferenceSyncDefaultEnabled = ref(false)
 const startupReferenceSyncSaving = ref(false)
+const ptradeAccountLoading = ref(false)
+const ptradeAccountSaving = ref(false)
+const ptradeAccountPublic = ref({})
+const ptradeAccountForm = ref({
+  enabled: true,
+  account_type: 'simulation',
+  broker_name: 'PTrade',
+  username: '',
+  password: '',
+  trade_endpoint: '云仿真（交易端）',
+  notes: ''
+})
+const tdxGatewayLoading = ref(false)
+const tdxGatewayInitializing = ref(false)
+const tdxGatewayRestarting = ref(false)
+const tdxGatewayDiagnostics = ref({})
 const maintenanceTaskSyncing = ref({})
 const syncHistoryDays = ref(30)
 const klinePeriods = ref([
@@ -308,10 +539,44 @@ const maintenanceTasks = [
   { key: 'sector_list_sync', label: '板块列表同步' },
   { key: 'stock_intraday', label: '盘中股票/指数日线快照' },
   { key: 'market_intraday_minutes', label: '盘中股票/指数分钟级快照' },
+  { key: 'market_intraday_kline_refresh', label: '当天15/30m分钟K线落库' },
   { key: 'minute_kline_daily_repair_validate', label: '最近2日分钟K线补全验证' },
   { key: 'sector_intraday_stats_refresh', label: '板块当日统计刷新' },
   { key: 'official_daily', label: '盘后正式日线写库' },
   { key: 'repair_daily', label: '次日自动巡检修复' }
+]
+
+const taskByKey = Object.fromEntries(maintenanceTasks.map((task) => [task.key, task]))
+
+const ptradeAccountPasswordPlaceholder = computed(() => (
+  ptradeAccountPublic.value?.password_configured ? '留空则保持原密码' : '请输入密码'
+))
+
+const coreTaskGroups = [
+  {
+    key: 'reference',
+    kicker: 'Reference',
+    title: '基础参考数据',
+    description: '交易日历、股票/指数列表、板块列表与成分，是所有同步链路的底座。',
+    accent: 'blue',
+    tasks: ['trade_calendar', 'stock_list_sync', 'index_list_sync', 'sector_list_sync'].map((key) => taskByKey[key])
+  },
+  {
+    key: 'intraday',
+    kicker: 'Today Market',
+    title: '当天市场数据',
+    description: '日线快照、分钟快照、15/30m分钟K线和板块当日统计，支撑盘中页面与策略。',
+    accent: 'green',
+    tasks: ['stock_intraday', 'market_intraday_minutes', 'market_intraday_kline_refresh', 'sector_intraday_stats_refresh'].map((key) => taskByKey[key])
+  },
+  {
+    key: 'after_close',
+    kicker: 'After Close',
+    title: '盘后复核',
+    description: '盘后正式日线写库、分钟K线完整性验证和次日巡检修复，负责把数据闭环收紧。',
+    accent: 'amber',
+    tasks: ['official_daily', 'minute_kline_daily_repair_validate', 'repair_daily'].map((key) => taskByKey[key])
+  }
 ]
 
 const maintenanceTaskNameMap = {
@@ -321,11 +586,63 @@ const maintenanceTaskNameMap = {
   sector_list_sync: 'sync_sectors',
   stock_intraday: 'update_stock_today_data',
   market_intraday_minutes: 'update_market_today_minute_data',
+  market_intraday_kline_refresh: 'sync_today_intraday_kline',
   minute_kline_daily_repair_validate: 'minute_kline_daily_repair_validate',
   sector_intraday_stats_refresh: 'update_sector_intraday_stats',
   official_daily: 'official_daily_close_sync',
   repair_daily: 'repair_previous_daily_kline'
 }
+
+const strategyMaintenanceTasks = [
+  {
+    key: 'g3_state_alpha_refresh',
+    label: 'G3 State Alpha刷新',
+    mode: 'daily',
+    description: '刷新第三代市场状态Alpha影子工作流，生成当日候选、影子票据和台账。'
+  },
+  {
+    key: 'g3_shadow_monitor',
+    label: 'G3影子信号监控',
+    mode: 'daily',
+    description: '手动运行G3影子监控与通知链路，检查阻断、心跳和候选变化。'
+  },
+  {
+    key: 'g3_workflow_status',
+    label: 'G3信号链路自检',
+    mode: 'daily',
+    description: '检查G3运行链路、候选池、30m确认、风控合同和正式交易闸门。'
+  },
+  {
+    key: 'g3_current_shadow',
+    label: 'G3今日影子票据',
+    mode: 'daily',
+    description: '读取G3今日影子买入票据、候选路由和影子台账可用性。'
+  },
+  {
+    key: 'g3_historical_trades',
+    label: 'G3历史成交复核',
+    mode: 'heavy',
+    description: '复核G3 State Alpha历史成交、权益曲线、路线收益和未来函数审计。'
+  },
+  {
+    key: 'g3_evidence_inventory',
+    label: 'G3证据归档复核',
+    mode: 'heavy',
+    description: '检查G3研究证据归档、蓝图报告和清理清单是否仍可读取。'
+  },
+  {
+    key: 'g3_monitor_status',
+    label: 'G3调度监控',
+    mode: 'daily',
+    description: '检查G3 shadow monitor调度器、邮件、心跳和下一次运行时间。'
+  },
+  {
+    key: 'g3_current_readiness',
+    label: 'G3当前准入检查',
+    mode: 'daily',
+    description: '读取G3当前工作台数据，确认shadow-only、observe-only和正式交易锁。'
+  }
+]
 
 const coreMaintenance = ref({
   enabled: false,
@@ -337,6 +654,14 @@ const coreMaintenance = ref({
   task_status: {},
   task_status_normalized: {},
   timeline: []
+})
+
+const strategyMaintenanceRunning = computed(() => {
+  const hasLocalTaskRunning = Object.values(strategyTaskSyncing.value || {}).some(Boolean)
+  const hasBackendTaskRunning = Object.values(strategyTaskStates.value || {}).some((state) => {
+    return normalizeStrategyStatus(state?.status) === 'running'
+  })
+  return runningAllStrategyMaintenanceNow.value || hasLocalTaskRunning || hasBackendTaskRunning
 })
 
 const normalizeCoreMaintenance = (payload = {}) => {
@@ -371,6 +696,67 @@ const formatDuration = (valueSec) => {
   const remain = sec - min * 60
   return `${min}m ${remain.toFixed(1)}s`
 }
+
+const unwrapGatewayBody = (section) => {
+  const body = section?.body
+  return body?.data || body || {}
+}
+
+const tdxGatewayHealthPayload = computed(() => unwrapGatewayBody(tdxGatewayDiagnostics.value.health))
+const tdxGatewayHostPayload = computed(() => unwrapGatewayBody(tdxGatewayDiagnostics.value.host_diagnostics))
+const tdxGatewayProcessPayload = computed(() => tdxGatewayHostPayload.value?.process?.data || tdxGatewayHostPayload.value?.process || {})
+const tdxGatewayProbePayload = computed(() => tdxGatewayDiagnostics.value.market_data_probe || tdxGatewayHostPayload.value?.market_data_probe || {})
+
+const tdxGatewayStatusClass = computed(() => {
+  if (tdxGatewayLoading.value || tdxGatewayInitializing.value || tdxGatewayRestarting.value) return 'running'
+  if (tdxGatewayProbePayload.value?.probe_ok || tdxGatewayProbePayload.value?.ok) return 'enabled'
+  if (tdxGatewayHealthPayload.value?.ready || tdxGatewayHealthPayload.value?.status === 'available') return 'enabled'
+  return 'paused'
+})
+
+const tdxGatewayStatusText = computed(() => {
+  if (tdxGatewayRestarting.value) return '重启中'
+  if (tdxGatewayInitializing.value) return '初始化中'
+  if (tdxGatewayLoading.value) return '诊断中'
+  if (tdxGatewayStatusClass.value === 'enabled') return '可用'
+  return '待排查'
+})
+
+const tdxGatewayHealthText = computed(() => {
+  const health = tdxGatewayHealthPayload.value
+  if (health.ready || health.status === 'available') return 'available'
+  return health.status || 'unknown'
+})
+
+const tdxGatewayHealthDetail = computed(() => {
+  const health = tdxGatewayHealthPayload.value
+  return health.last_error || `last=${formatDateTime(health.last_activity)}`
+})
+
+const tdxGatewayProbeText = computed(() => {
+  const probe = tdxGatewayProbePayload.value
+  if (probe.probe_ok || probe.ok) return '取数通过'
+  return '未通过'
+})
+
+const tdxGatewayProbeDetail = computed(() => {
+  const probe = tdxGatewayProbePayload.value
+  const fields = probe.fields || []
+  if (fields.length) return fields.join(', ')
+  return probe.error || probe.body?.detail || '-'
+})
+
+const tdxGatewayProcessText = computed(() => {
+  const proc = tdxGatewayProcessPayload.value || {}
+  const pid = proc.pid || proc.data?.pid
+  const memory = proc.privateMemoryMb || proc.data?.privateMemoryMb
+  return pid ? `PID ${pid}${memory ? ` / ${memory}MB` : ''}` : '-'
+})
+
+const tdxGatewayTaskText = computed(() => {
+  const proc = tdxGatewayProcessPayload.value || {}
+  return `task=${proc.taskState || '-'} result=${proc.lastTaskResult ?? '-'}`
+})
 
 const getTaskState = (taskKey) => {
   return coreMaintenance.value.task_status_normalized?.[taskKey] || {}
@@ -441,6 +827,187 @@ const isTaskRunning = (taskKey) => !!getTaskRaw(taskKey)?.is_running
 const isMaintenanceTaskSyncing = (taskKey) => !!maintenanceTaskSyncing.value[taskKey]
 const isMaintenanceTaskActionDisabled = (taskKey) => isTaskRunning(taskKey) || isMaintenanceTaskSyncing(taskKey)
 
+const getGroupStatus = (group) => {
+  const statuses = (group.tasks || []).map((task) => getTaskStatus(task.key))
+  if (statuses.includes('running')) return 'enabled'
+  if (statuses.includes('failed')) return 'failed'
+  if (statuses.every((status) => status === 'success')) return 'enabled'
+  return 'paused'
+}
+
+const getGroupSummary = (group) => {
+  const tasks = group.tasks || []
+  const running = tasks.filter((task) => getTaskStatus(task.key) === 'running').length
+  if (running > 0) return `${running} 项运行中`
+  const failed = tasks.filter((task) => getTaskStatus(task.key) === 'failed').length
+  if (failed > 0) return `${failed} 项失败`
+  const success = tasks.filter((task) => getTaskStatus(task.key) === 'success').length
+  return `${success}/${tasks.length} 成功`
+}
+
+const loadStrategySuccessMemory = () => {
+  try {
+    const raw = localStorage.getItem(STRATEGY_SUCCESS_STORAGE_KEY)
+    const data = raw ? JSON.parse(raw) : {}
+    Object.entries(data || {}).forEach(([taskKey, lastSuccessAt]) => {
+      if (lastSuccessAt) {
+        setStrategyTaskState(taskKey, { last_success_at: lastSuccessAt })
+      }
+    })
+  } catch (error) {
+    // Ignore corrupted local UI cache; fresh status refresh will repopulate it.
+  }
+}
+
+const saveStrategySuccessMemory = (taskKey, lastSuccessAt) => {
+  if (!taskKey || !lastSuccessAt) return
+  try {
+    const raw = localStorage.getItem(STRATEGY_SUCCESS_STORAGE_KEY)
+    const data = raw ? JSON.parse(raw) : {}
+    data[taskKey] = lastSuccessAt
+    localStorage.setItem(STRATEGY_SUCCESS_STORAGE_KEY, JSON.stringify(data))
+  } catch (error) {
+    // Local persistence is only a UI convenience; do not block task execution.
+  }
+}
+
+const setStrategyTaskState = (taskKey, patch) => {
+  const previousState = strategyTaskStates.value[taskKey] || {}
+  const nextState = {
+    ...previousState,
+    ...patch
+  }
+  const rememberedSuccessAt =
+    nextState.last_success_at ||
+    previousState.last_success_at ||
+    (normalizeStrategyStatus(nextState.status) === 'success' ? (nextState.updated_at || new Date().toISOString()) : null)
+  if (rememberedSuccessAt) {
+    nextState.last_success_at = rememberedSuccessAt
+  }
+  strategyTaskStates.value = {
+    ...strategyTaskStates.value,
+    [taskKey]: nextState
+  }
+  if (rememberedSuccessAt) {
+    saveStrategySuccessMemory(taskKey, rememberedSuccessAt)
+  }
+}
+
+const setStrategyTaskSyncing = (taskKey, syncing) => {
+  strategyTaskSyncing.value = {
+    ...strategyTaskSyncing.value,
+    [taskKey]: syncing
+  }
+}
+
+const normalizeStrategyStatus = (status, fallback = 'idle') => {
+  const value = String(status || '').toLowerCase()
+  if (['running', 'queued', 'pending'].includes(value)) return 'running'
+  if (['completed', 'success', 'ok', 'passed'].includes(value)) return 'success'
+  if (['failed', 'error', 'missing'].includes(value)) return 'failed'
+  if (value === 'paused' || value === 'disabled') return 'paused'
+  return fallback
+}
+
+const strategyTaskMessageFromResult = (payload) => {
+  if (!payload || typeof payload !== 'object') return ''
+  if (payload.message) return String(payload.message)
+  if (payload.error) return String(payload.error)
+  if (payload.reason) return String(payload.reason)
+  if (payload.last_error) return String(payload.last_error)
+  if (payload.last_result?.reason) return String(payload.last_result.reason)
+  if (payload.last_result?.message) return String(payload.last_result.message)
+  return ''
+}
+
+const getStrategyTaskStatus = (taskKey) => {
+  if (isStrategyTaskSyncing(taskKey)) return 'running'
+  return normalizeStrategyStatus(strategyTaskStates.value[taskKey]?.status, 'idle')
+}
+
+const getStrategyTaskStatusText = (taskKey) => getStateText(getStrategyTaskStatus(taskKey))
+
+const getStrategyTaskMessage = (task) => {
+  const state = strategyTaskStates.value[task.key] || {}
+  return state.message || task.description || '-'
+}
+
+const getStrategyTaskLastSuccess = (taskKey) => {
+  const state = strategyTaskStates.value[taskKey] || {}
+  return state.last_success_at
+}
+
+const isStrategyTaskSyncing = (taskKey) => !!strategyTaskSyncing.value[taskKey]
+const isStrategyTaskActionDisabled = (taskKey) => strategyMaintenanceRunning.value || isStrategyTaskSyncing(taskKey)
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const clearStrategyTaskPollTimer = (taskKey) => {
+  const timer = strategyTaskPollTimers.value[taskKey]
+  if (timer) clearTimeout(timer)
+  strategyTaskPollTimers.value = {
+    ...strategyTaskPollTimers.value,
+    [taskKey]: null
+  }
+}
+
+const pollStrategyAsyncTask = async (task, taskId, statusUrl, options = {}) => {
+  const { scheduleNext = true, showToast = true } = options
+  clearStrategyTaskPollTimer(task.key)
+  try {
+    const response = await axios.get(`${API_BASE}${statusUrl}`)
+    const payload = response.data || {}
+    const rawStatus = payload.status || payload.task?.status
+    const status = normalizeStrategyStatus(rawStatus)
+    const statePatch = {
+      status,
+      task_id: taskId,
+      progress: payload.progress ?? payload.task?.progress,
+      message: strategyTaskMessageFromResult(payload) || `${task.label} ${status === 'running' ? '执行中' : '已更新'}`,
+      updated_at: payload.updated_at || payload.finished_at || payload.task?.updated_at || new Date().toISOString(),
+      raw: payload
+    }
+    if (status === 'success') {
+      statePatch.last_success_at = payload.finished_at || payload.updated_at || payload.task?.updated_at || new Date().toISOString()
+    }
+    setStrategyTaskState(task.key, statePatch)
+    if (status === 'running') {
+      if (scheduleNext) {
+        strategyTaskPollTimers.value = {
+          ...strategyTaskPollTimers.value,
+          [task.key]: setTimeout(() => pollStrategyAsyncTask(task, taskId, statusUrl), 3000)
+        }
+      }
+      return status
+    }
+    setStrategyTaskSyncing(task.key, false)
+    if (status === 'failed') {
+      if (showToast) ElMessage.error(`${task.label}失败: ${strategyTaskMessageFromResult(payload) || rawStatus || '未知错误'}`)
+    } else if (showToast) {
+      ElMessage.success(`${task.label}完成`)
+    }
+    return status
+  } catch (error) {
+    setStrategyTaskSyncing(task.key, false)
+    setStrategyTaskState(task.key, {
+      status: 'failed',
+      message: error.response?.data?.detail || error.message || '查询任务状态失败',
+      updated_at: new Date().toISOString()
+    })
+    if (showToast) ElMessage.error(`${task.label}状态查询失败`)
+    return 'failed'
+  }
+}
+
+const waitStrategyAsyncTask = async (task, taskId, statusUrl) => {
+  let status = 'running'
+  while (status === 'running') {
+    status = await pollStrategyAsyncTask(task, taskId, statusUrl, { scheduleNext: false, showToast: false })
+    if (status === 'running') await sleep(3000)
+  }
+  return status
+}
+
 const getStateText = (status) => {
   const map = {
     running: '运行中',
@@ -460,8 +1027,10 @@ const taskAliasMap = {
   update_stock_today_data: '盘中股票/指数日线快照',
   update_today_data: '盘中指数分钟级快照',
   update_market_today_minute_data: '盘中股票/指数分钟级快照',
+  sync_today_intraday_kline: '当天15/30m分钟K线落库',
   minute_kline_daily_repair_validate: '分钟K线补全验证',
   market_minute_history_repair: '股票/指数历史分钟级修复',
+  today_full_market_refresh: '当天全市场更新自检',
   update_sector_intraday_stats: '板块当日统计刷新',
   official_daily_close_sync: '盘后正式日线写库',
   repair_previous_daily_kline: '次日自动巡检修复',
@@ -473,11 +1042,13 @@ const getTaskAlias = (taskName) => taskAliasMap[taskName] || taskName
 const maintenanceStatusText = computed(() => getStateText(coreMaintenance.value.overall_status))
 const runningTaskText = computed(() => {
   if (!coreMaintenance.value.running_task) return '-'
-  return maintenanceTasks.find((item) => item.key === coreMaintenance.value.running_task)?.label || coreMaintenance.value.running_task
+  const taskKey = coreMaintenance.value.running_task
+  return maintenanceTasks.find((item) => item.key === taskKey)?.label || getTaskAlias(taskKey)
 })
 const latestFailedText = computed(() => {
   if (!coreMaintenance.value.latest_failed_task) return '-'
-  return maintenanceTasks.find((item) => item.key === coreMaintenance.value.latest_failed_task)?.label || coreMaintenance.value.latest_failed_task
+  const taskKey = coreMaintenance.value.latest_failed_task
+  return maintenanceTasks.find((item) => item.key === taskKey)?.label || getTaskAlias(taskKey)
 })
 
 const refreshCoreMaintenanceStatus = async () => {
@@ -501,6 +1072,143 @@ const loadStartupReferenceSyncSetting = async () => {
   }
 }
 
+const loadPtradeAccountConfig = async () => {
+  ptradeAccountLoading.value = true
+  try {
+    const response = await axios.get(`${API_BASE}/system/ptrade-account-config`)
+    const data = response.data?.data || {}
+    ptradeAccountPublic.value = data
+    ptradeAccountForm.value = {
+      enabled: data.enabled !== false,
+      account_type: data.account_type || 'simulation',
+      broker_name: data.broker_name || 'PTrade',
+      username: data.username || '',
+      password: '',
+      trade_endpoint: data.trade_endpoint || '云仿真（交易端）',
+      notes: data.notes || ''
+    }
+  } catch (error) {
+    ElMessage.warning(error.response?.data?.detail || error.message || 'PTrade账号配置读取失败')
+  } finally {
+    ptradeAccountLoading.value = false
+  }
+}
+
+const savePtradeAccountConfig = async () => {
+  ptradeAccountSaving.value = true
+  try {
+    const form = ptradeAccountForm.value || {}
+    const response = await axios.post(`${API_BASE}/system/ptrade-account-config`, {
+      enabled: form.enabled !== false,
+      account_type: form.account_type || 'simulation',
+      broker_name: form.broker_name || 'PTrade',
+      username: form.username || '',
+      password: form.password || '',
+      trade_endpoint: form.trade_endpoint || '',
+      notes: form.notes || ''
+    })
+    const data = response.data?.data || {}
+    ptradeAccountPublic.value = data
+    ptradeAccountForm.value = {
+      ...ptradeAccountForm.value,
+      enabled: data.enabled !== false,
+      account_type: data.account_type || 'simulation',
+      broker_name: data.broker_name || 'PTrade',
+      username: data.username || '',
+      password: '',
+      trade_endpoint: data.trade_endpoint || '云仿真（交易端）',
+      notes: data.notes || ''
+    }
+    ElMessage.success(response.data?.message || 'PTrade账号配置已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'PTrade账号配置保存失败')
+  } finally {
+    ptradeAccountSaving.value = false
+  }
+}
+
+const refreshTdxGatewayDiagnostics = async () => {
+  tdxGatewayLoading.value = true
+  try {
+    const response = await axios.get(`${API_BASE}/system/tdx-gateway/diagnostics?run_probe=true`)
+    tdxGatewayDiagnostics.value = response.data?.data || {}
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway诊断失败')
+  } finally {
+    tdxGatewayLoading.value = false
+  }
+}
+
+const waitForTdxGatewayReady = async (timeoutMs = 45000) => {
+  const started = Date.now()
+  let lastPayload = null
+  while (Date.now() - started < timeoutMs) {
+    await sleep(3000)
+    try {
+      const response = await axios.get(`${API_BASE}/system/tdx-gateway/diagnostics?run_probe=true`)
+      lastPayload = response.data?.data || {}
+      tdxGatewayDiagnostics.value = lastPayload
+      const health = unwrapGatewayBody(lastPayload.health)
+      const probe = lastPayload.market_data_probe || {}
+      if (health.ready || health.status === 'available' || probe.probe_ok) {
+        return { ok: true, payload: lastPayload }
+      }
+    } catch (error) {
+      lastPayload = {
+        ...(lastPayload || {}),
+        health: { error: error.response?.data?.detail || error.message || 'TDX Gateway刷新失败' }
+      }
+      tdxGatewayDiagnostics.value = lastPayload
+    }
+  }
+  return { ok: false, payload: lastPayload }
+}
+
+const initializeTdxGateway = async () => {
+  tdxGatewayInitializing.value = true
+  try {
+    const response = await axios.post(`${API_BASE}/system/tdx-gateway/initialize`)
+    tdxGatewayDiagnostics.value = response.data?.data?.diagnostics || {}
+    if (response.data?.success) {
+      ElMessage.success('TDX Gateway重新初始化完成')
+    } else {
+      const ready = await waitForTdxGatewayReady(18000)
+      if (ready.ok) {
+        ElMessage.success('TDX Gateway已恢复')
+      } else {
+        ElMessage.warning('TDX Gateway初始化未通过，请查看诊断')
+      }
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway初始化失败')
+  } finally {
+    tdxGatewayInitializing.value = false
+  }
+}
+
+const restartTdxGateway = async () => {
+  tdxGatewayRestarting.value = true
+  try {
+    const response = await axios.post(`${API_BASE}/system/tdx-gateway/restart`)
+    tdxGatewayDiagnostics.value = response.data?.data?.diagnostics || tdxGatewayDiagnostics.value
+    if (response.data?.success) {
+      ElMessage.success('TDX Gateway重启请求已发送，正在等待恢复')
+      const ready = await waitForTdxGatewayReady()
+      if (ready.ok) {
+        ElMessage.success('TDX Gateway已恢复')
+      } else {
+        ElMessage.warning('TDX Gateway重启后仍未通过诊断，请查看错误')
+      }
+    } else {
+      ElMessage.warning(response.data?.message || '重启请求未成功，请查看诊断')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway重启请求失败')
+  } finally {
+    tdxGatewayRestarting.value = false
+  }
+}
+
 const refreshTimeline = async () => {
   try {
     const response = await axios.get(`${API_BASE}/system/core-data-maintenance/timeline?limit=30`)
@@ -509,6 +1217,417 @@ const refreshTimeline = async () => {
     }
   } catch (error) {
     ElMessage.error('获取任务时间线失败')
+  }
+}
+
+const refreshStrategyMaintenanceStatus = async () => {
+  const statusRequests = [
+    {
+      key: 'g3_state_alpha_refresh',
+      url: '/gen3-state-alpha/shadow-monitor/status',
+      map: (data) => ({
+        status: data.workflow?.ok === false || data.monitor?.last_error ? 'failed' : 'success',
+        message: data.workflow?.message || strategyTaskMessageFromResult(data.monitor?.last_result) || 'G3 State Alpha运行链路可用',
+        last_success_at: data.monitor?.last_success_at || data.workflow?.checked_at || null,
+        updated_at: data.workflow?.checked_at || data.monitor?.last_run_at || data.scheduler?.next_run_time,
+        task_id: data.monitor?.last_refresh_task_id || '-',
+        raw: data
+      })
+    },
+    {
+      key: 'g3_shadow_monitor',
+      url: '/gen3-state-alpha/shadow-monitor/status',
+      map: (data) => ({
+        status: data.monitor?.last_error ? 'failed' : (data.monitor?.enabled ? 'idle' : 'paused'),
+        message: data.scheduler?.message || (data.monitor?.enabled ? 'G3影子监控已启用，等待触发' : 'G3影子监控已暂停'),
+        last_success_at: data.monitor?.last_error ? null : data.monitor?.last_success_at,
+        updated_at: data.monitor?.last_run_at || data.monitor?.last_heartbeat_sent_at || data.scheduler?.next_run_time,
+        task_id: data.monitor?.last_refresh_task_id || '-',
+        raw: data
+      })
+    },
+    {
+      key: 'g3_workflow_status',
+      url: '/gen3-state-alpha/workflow/status',
+      map: (data) => ({
+        status: data.ok === false ? 'failed' : 'success',
+        message: data.message || `路线=${data.selected_route || '-'}，阻断=${Array.isArray(data.blockers) ? data.blockers.length : 0}`,
+        last_success_at: data.ok === false ? null : data.checked_at,
+        updated_at: data.checked_at,
+        task_id: '-',
+        raw: data
+      })
+    },
+    {
+      key: 'g3_current_shadow',
+      url: '/gen3-state-alpha/current?refresh=false&limit=80',
+      map: (data) => ({
+        status: data.ok === false ? 'failed' : 'success',
+        message: strategyTaskMessageFromResult(data) || data.diagnosis || 'G3当前影子票据可读取',
+        last_success_at: data.ok === false ? null : (data.updated_at || data.generated_at || new Date().toISOString()),
+        updated_at: data.updated_at || data.generated_at || new Date().toISOString(),
+        task_id: '-',
+        raw: data
+      })
+    },
+    {
+      key: 'g3_monitor_status',
+      url: '/gen3-state-alpha/shadow-monitor/status',
+      map: (data) => ({
+        status: data.scheduler?.enabled ? 'success' : (data.monitor?.enabled ? 'success' : 'paused'),
+        message: data.scheduler?.enabled ? `下次运行 ${formatDateTime(data.scheduler.next_run_time)}` : 'G3监控调度未启用',
+        last_success_at: data.monitor?.last_success_at || null,
+        updated_at: data.monitor?.last_run_at || data.scheduler?.next_run_time,
+        task_id: data.monitor?.job_id || '-',
+        raw: data
+      })
+    },
+    {
+      key: 'g3_current_readiness',
+      url: '/gen3-state-alpha/current?refresh=false&limit=80',
+      map: (data) => ({
+        status: data.ok === false ? 'failed' : (data.formal_buy_signal || data.auto_order_allowed ? 'failed' : 'success'),
+        message: data.formal_buy_signal || data.auto_order_allowed
+          ? '正式交易闸门异常开启，请立即复核'
+          : 'shadow-only / observe-only，正式交易闸门锁定',
+        last_success_at: data.ok === false ? null : (data.updated_at || data.generated_at || new Date().toISOString()),
+        updated_at: data.updated_at || data.generated_at || new Date().toISOString(),
+        task_id: '-',
+        raw: data
+      })
+    },
+    {
+      key: 'g3_historical_trades',
+      url: '/gen3-state-alpha/historical-trades?limit=80',
+      map: (data) => ({
+        status: data.ok === false ? 'failed' : 'success',
+        message: data.metrics?.trade_count != null
+          ? `历史成交 ${data.metrics.trade_count} 笔，未来函数审计 ${data.future_leak_audit?.status || '已读取'}`
+          : (strategyTaskMessageFromResult(data) || 'G3历史成交复核可读取'),
+        last_success_at: data.ok === false ? null : new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        task_id: '-',
+        raw: data
+      })
+    },
+    {
+      key: 'g3_evidence_inventory',
+      url: '/gen3-state-alpha/evidence-inventory?limit=200',
+      map: (data) => ({
+        status: data.ok === false ? 'failed' : 'success',
+        message: `证据归档 ${Array.isArray(data.inventory) ? data.inventory.length : 0} 条，蓝图报告${data.artifacts?.blueprint_report?.ok ? '可读' : '待复核'}`,
+        last_success_at: data.ok === false ? null : new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        task_id: '-',
+        raw: data
+      })
+    }
+  ]
+
+  await Promise.all(statusRequests.map(async (item) => {
+    try {
+      const response = await axios.get(`${API_BASE}${item.url}`)
+      const data = response.data || {}
+      setStrategyTaskState(item.key, item.map(data))
+    } catch (error) {
+      setStrategyTaskState(item.key, {
+        status: 'failed',
+        message: error.response?.data?.detail || error.message || '获取状态失败',
+        updated_at: new Date().toISOString()
+      })
+    }
+  }))
+}
+
+const runStrategyMaintenanceTask = async (task, options = {}) => {
+  const { waitForCompletion = false, showToast = true } = options
+  setStrategyTaskSyncing(task.key, true)
+  setStrategyTaskState(task.key, {
+    status: 'running',
+    message: `${task.label} 已触发...`,
+    updated_at: new Date().toISOString()
+  })
+
+  try {
+    let response
+    if (task.key === 'g3_state_alpha_refresh') {
+      response = await axios.post(`${API_BASE}/gen3-state-alpha/workflow/refresh/run-once`, { force_send: false })
+      const payload = response.data || {}
+      if (payload.task_id) {
+        const statusUrl = `/gen3-state-alpha/workflow/refresh-task/${payload.task_id}`
+        return waitForCompletion
+          ? await waitStrategyAsyncTask(task, payload.task_id, statusUrl)
+          : await pollStrategyAsyncTask(task, payload.task_id, statusUrl, { showToast })
+      }
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false ? 'failed' : 'success',
+        message: strategyTaskMessageFromResult(payload) || 'G3 State Alpha刷新完成',
+        last_success_at: payload.ok === false ? null : new Date().toISOString(),
+        updated_at: payload.checked_at || new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      await refreshStrategyMaintenanceStatus()
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'g3_shadow_monitor') {
+      response = await axios.post(`${API_BASE}/gen3-state-alpha/shadow-monitor/run-once`, { force_send: true })
+      const payload = response.data || {}
+      if (payload.task_id) {
+        const statusUrl = `/gen3-state-alpha/workflow/refresh-task/${payload.task_id}`
+        return waitForCompletion
+          ? await waitStrategyAsyncTask(task, payload.task_id, statusUrl)
+          : await pollStrategyAsyncTask(task, payload.task_id, statusUrl, { showToast })
+      }
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false ? 'failed' : 'success',
+        message: strategyTaskMessageFromResult(payload) || 'G3影子监控完成',
+        last_success_at: payload.ok === false ? null : new Date().toISOString(),
+        updated_at: payload.checked_at || new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      await refreshStrategyMaintenanceStatus()
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'g3_workflow_status') {
+      response = await axios.get(`${API_BASE}/gen3-state-alpha/workflow/status`)
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false ? 'failed' : 'success',
+        message: payload.message || `路线=${payload.selected_route || '-'}，阻断=${Array.isArray(payload.blockers) ? payload.blockers.length : 0}`,
+        last_success_at: payload.ok === false ? null : (payload.checked_at || new Date().toISOString()),
+        updated_at: payload.checked_at || new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (['g3_current_shadow', 'g3_current_readiness'].includes(task.key)) {
+      response = await axios.get(`${API_BASE}/gen3-state-alpha/current?refresh=false&limit=80`)
+      const payload = response.data || {}
+      const guardrailOpen = !!payload.formal_buy_signal || !!payload.auto_order_allowed
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false || guardrailOpen ? 'failed' : 'success',
+        message: guardrailOpen
+          ? '正式交易闸门异常开启，请立即复核'
+          : (strategyTaskMessageFromResult(payload) || 'G3当前影子票据与准入检查可读取'),
+        last_success_at: payload.ok === false || guardrailOpen ? null : new Date().toISOString(),
+        updated_at: payload.updated_at || payload.generated_at || new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'g3_monitor_status') {
+      response = await axios.get(`${API_BASE}/gen3-state-alpha/shadow-monitor/status`)
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.scheduler?.enabled ? 'success' : (payload.monitor?.enabled ? 'success' : 'paused'),
+        message: payload.scheduler?.enabled ? `下次运行 ${formatDateTime(payload.scheduler.next_run_time)}` : 'G3监控调度未启用',
+        last_success_at: payload.monitor?.last_success_at || null,
+        updated_at: payload.monitor?.last_run_at || payload.scheduler?.next_run_time || new Date().toISOString(),
+        task_id: payload.monitor?.job_id || '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'g3_historical_trades') {
+      response = await axios.get(`${API_BASE}/gen3-state-alpha/historical-trades?limit=80`)
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false ? 'failed' : 'success',
+        message: payload.metrics?.trade_count != null
+          ? `历史成交 ${payload.metrics.trade_count} 笔，未来函数审计 ${payload.future_leak_audit?.status || '已读取'}`
+          : (strategyTaskMessageFromResult(payload) || 'G3历史成交复核完成'),
+        last_success_at: payload.ok === false ? null : new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'g3_evidence_inventory') {
+      response = await axios.get(`${API_BASE}/gen3-state-alpha/evidence-inventory?limit=200`)
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false ? 'failed' : 'success',
+        message: `证据归档 ${Array.isArray(payload.inventory) ? payload.inventory.length : 0} 条，蓝图报告${payload.artifacts?.blueprint_report?.ok ? '可读' : '待复核'}`,
+        last_success_at: payload.ok === false ? null : new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'gen2_strategy_refresh') {
+      response = await axios.post(`${API_BASE}/trading/gen2/strategy-refresh/run-once`, { force: true })
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false && !payload.skipped ? 'failed' : 'success',
+        message: strategyTaskMessageFromResult(payload) || 'G2 30m策略刷新完成',
+        last_success_at: payload.finished_at || new Date().toISOString(),
+        updated_at: payload.finished_at || payload.last_run_at || new Date().toISOString(),
+        task_id: payload.steps?.find?.((item) => item.task_id)?.task_id || payload.last_mainline_task_id || '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      await refreshStrategyMaintenanceStatus()
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'gen2_shadow_monitor') {
+      response = await axios.post(`${API_BASE}/trading/gen2/shadow-monitor/run-once`, { force_send: false })
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false ? 'failed' : 'success',
+        message: strategyTaskMessageFromResult(payload) || 'G2实盘信号监控完成',
+        last_success_at: payload.ok === false ? null : (payload.finished_at || payload.checked_at || new Date().toISOString()),
+        updated_at: payload.finished_at || payload.checked_at || new Date().toISOString(),
+        task_id: payload.official_rebuild?.task_id || '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      await refreshStrategyMaintenanceStatus()
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'gen2_selection_shadow') {
+      response = await axios.post(`${API_BASE}/trading/gen2/risk-cool-shadow/update?pool_rank=200&alpha191_gate=g2_v2_complete`)
+      const payload = response.data || {}
+      if (payload.task_id) {
+        const statusUrl = `/trading/gen2/risk-cool-shadow/update-task/${payload.task_id}`
+        return waitForCompletion
+          ? await waitStrategyAsyncTask(task, payload.task_id, statusUrl)
+          : await pollStrategyAsyncTask(task, payload.task_id, statusUrl, { showToast })
+      } else {
+        throw new Error('未返回任务ID')
+      }
+    }
+
+    if (task.key === 'gen2_mainline_hotspots') {
+      response = await axios.post(`${API_BASE}/trading/gen2/mainline-hotspots/update?mode=all&limit=30`)
+      const payload = response.data || {}
+      if (payload.task_id) {
+        const statusUrl = `/trading/gen2/mainline-hotspots/update-task/${payload.task_id}`
+        return waitForCompletion
+          ? await waitStrategyAsyncTask(task, payload.task_id, statusUrl)
+          : await pollStrategyAsyncTask(task, payload.task_id, statusUrl, { showToast })
+      } else {
+        throw new Error('未返回任务ID')
+      }
+    }
+
+    if (task.key === 'gen2_backtest_latest') {
+      response = await axios.post(`${API_BASE}/trading/gen2/backtest/update-latest?legacy_330=true`)
+      const payload = response.data || {}
+      if (payload.task_id) {
+        const statusUrl = `/trading/gen2/backtest/update-task/${payload.task_id}`
+        return waitForCompletion
+          ? await waitStrategyAsyncTask(task, payload.task_id, statusUrl)
+          : await pollStrategyAsyncTask(task, payload.task_id, statusUrl, { showToast })
+      } else {
+        throw new Error('未返回任务ID')
+      }
+    }
+
+    if (task.key === 'gen2_official_rebuild') {
+      response = await axios.post(`${API_BASE}/trading/gen2/official-rebuild/update-latest?mode=breakout_only&legacy_330=true`)
+      const payload = response.data || {}
+      if (payload.task_id) {
+        const statusUrl = `/trading/gen2/official-rebuild/update-task/${payload.task_id}`
+        return waitForCompletion
+          ? await waitStrategyAsyncTask(task, payload.task_id, statusUrl)
+          : await pollStrategyAsyncTask(task, payload.task_id, statusUrl, { showToast })
+      } else {
+        throw new Error('未返回任务ID')
+      }
+    }
+
+    if (task.key === 'v4_manual_holding_monitor') {
+      response = await axios.post(`${API_BASE}/trading/v4/manual-holdings/monitor/run-once`, { force_send: false })
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false ? 'failed' : 'success',
+        message: strategyTaskMessageFromResult(payload) || '实盘持仓监控完成',
+        last_success_at: payload.ok === false ? null : (payload.checked_at || payload.updated_at || new Date().toISOString()),
+        updated_at: payload.checked_at || payload.updated_at || new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      await refreshStrategyMaintenanceStatus()
+      return getStrategyTaskStatus(task.key)
+    }
+
+    if (task.key === 'gen3_live_refresh') {
+      response = await axios.get(`${API_BASE}/gen3-shadow/live?refresh=true&allow_after_close=true&limit=80`)
+      const payload = response.data || {}
+      setStrategyTaskState(task.key, {
+        status: payload.ok === false || payload.refresh?.ok === false ? 'failed' : 'success',
+        message: strategyTaskMessageFromResult(payload) || 'G3研究数据已刷新读取',
+        last_success_at: payload.ok === false || payload.refresh?.ok === false ? null : new Date().toISOString(),
+        updated_at: payload.updated_at || payload.generated_at || new Date().toISOString(),
+        task_id: '-',
+        raw: payload
+      })
+      setStrategyTaskSyncing(task.key, false)
+      return getStrategyTaskStatus(task.key)
+    }
+
+    throw new Error('未配置策略维护任务')
+  } catch (error) {
+    setStrategyTaskSyncing(task.key, false)
+    setStrategyTaskState(task.key, {
+      status: 'failed',
+      message: error.response?.data?.detail || error.message || '执行失败',
+      updated_at: new Date().toISOString()
+    })
+    if (showToast) ElMessage.error(`${task.label}执行失败`)
+    return 'failed'
+  }
+}
+
+const runAllStrategyMaintenanceTasks = async (mode = 'daily') => {
+  const selectedTasks = strategyMaintenanceTasks.filter((task) => (task.mode || 'daily') === mode)
+  const modeText = mode === 'heavy' ? '证据复核' : 'G3日常维护'
+  if (!selectedTasks.length) {
+    ElMessage.info(`暂无可执行的${modeText}任务`)
+    return
+  }
+  const confirmText = mode === 'heavy'
+    ? '确认一键执行G3历史成交和证据归档复核吗？该操作只读取研究证据，不会打开正式交易闸门。'
+    : '确认按顺序一键执行G3日常维护吗？将刷新影子工作流并检查监控、票据、台账和正式交易锁。'
+  if (!confirm(confirmText)) return
+  runningAllStrategyMaintenanceNow.value = true
+  try {
+    let failedCount = 0
+    for (const task of selectedTasks) {
+      const status = await runStrategyMaintenanceTask(task, { waitForCompletion: true, showToast: false })
+      if (status === 'failed') failedCount += 1
+    }
+    await refreshStrategyMaintenanceStatus()
+    if (failedCount > 0) {
+      ElMessage.warning(`策略${modeText}一键执行完成，失败 ${failedCount} 项`)
+    } else {
+      ElMessage.success(`策略${modeText}一键执行完成`)
+    }
+  } finally {
+    runningAllStrategyMaintenanceNow.value = false
   }
 }
 
@@ -578,42 +1697,22 @@ const pollTaskStatus = async (taskName, onDone) => {
   }
 }
 
-const triggerOfficialDailyCloseNow = async () => {
-  if (!confirm('确认立即执行盘后正式日线写库吗？')) return
-  runningOfficialDailyNow.value = true
+const refreshTodayFullMarketNow = async () => {
+  if (!confirm('确认一键更新当天所有股票、指数、板块数据，并在盘后执行完整性自检吗？')) return
+  runningTodayFullMarketRefreshNow.value = true
   try {
-    const response = await axios.post(`${API_BASE}/system/core-data-maintenance/run-official-daily-close`)
+    const response = await axios.post(`${API_BASE}/system/core-data-maintenance/refresh-today-full-market`)
     if (response.data?.success) {
-      ElMessage.success('盘后正式日线任务已启动')
-      pollTaskStatus('official_daily_close_sync', () => {
-        runningOfficialDailyNow.value = false
-      })
-    } else {
-      runningOfficialDailyNow.value = false
-      ElMessage.error(response.data?.message || '启动失败')
-    }
-  } catch (error) {
-    runningOfficialDailyNow.value = false
-    ElMessage.error(error.response?.data?.detail || error.message || '启动失败')
-  }
-}
-
-const triggerMinuteKlineRepairNow = async () => {
-  if (!confirm('确认重新同步最近2个交易日的5m/15m/30m/60m分钟K线吗？')) return
-  runningMinuteKlineRepairNow.value = true
-  try {
-    const response = await axios.post(`${API_BASE}/system/core-data-maintenance/run-task/minute_kline_daily_repair_validate`)
-    if (response.data?.success) {
-      ElMessage.success(response.data?.message || '分钟数据重同步任务已启动')
-      pollTaskStatus(response.data?.task_name || 'minute_kline_daily_repair_validate', () => {
-        runningMinuteKlineRepairNow.value = false
+      ElMessage.success(response.data?.message || '当天全市场更新自检任务已启动')
+      pollTaskStatus(response.data?.task_name || 'today_full_market_refresh', () => {
+        runningTodayFullMarketRefreshNow.value = false
       })
       return
     }
-    runningMinuteKlineRepairNow.value = false
+    runningTodayFullMarketRefreshNow.value = false
     ElMessage.error(response.data?.message || '启动失败')
   } catch (error) {
-    runningMinuteKlineRepairNow.value = false
+    runningTodayFullMarketRefreshNow.value = false
     ElMessage.error(error.response?.data?.detail || error.message || '启动失败')
   }
 }
@@ -649,9 +1748,16 @@ const syncMaintenanceTask = async (task) => {
     ...maintenanceTaskSyncing.value,
     [task.key]: true
   }
+  const forceTasks = new Set([
+    'stock_intraday',
+    'market_intraday_minutes',
+    'market_intraday_kline_refresh',
+    'sector_intraday_stats_refresh'
+  ])
+  const forceQuery = forceTasks.has(task.key) ? '?force=true' : ''
 
   try {
-    const response = await axios.post(`${API_BASE}/system/core-data-maintenance/run-task/${task.key}`)
+    const response = await axios.post(`${API_BASE}/system/core-data-maintenance/run-task/${task.key}${forceQuery}`)
     if (response.data?.success) {
       ElMessage.success(response.data?.message || '任务已启动')
       pollTaskStatus(response.data?.task_name || backendTaskName, () => {
@@ -769,7 +1875,7 @@ const updateSectorIntradayStats = async () => {
   if (!confirm('确认刷新板块当日成分涨跌统计吗？')) return
   updatingSectorIntradayStats.value = true
   try {
-    const response = await axios.post(`${API_BASE}/system/update-sector-intraday-stats`)
+    const response = await axios.post(`${API_BASE}/system/update-sector-intraday-stats?force=true`)
     if (response.data?.success) {
       ElMessage.success('板块当日统计刷新任务已启动')
       pollTaskStatus('update_sector_intraday_stats', () => { updatingSectorIntradayStats.value = false })
@@ -867,7 +1973,10 @@ const updateTodayData = async () => {
   if (!confirm('确认更新当天指数数据吗？')) return
   updatingTodayData.value = true
   try {
-    const response = await axios.post(`${API_BASE}/system/update-today-data`, { periods: selectedUpdatePeriods.value })
+    const response = await axios.post(`${API_BASE}/system/update-today-data`, {
+      periods: selectedUpdatePeriods.value,
+      force: true,
+    })
     if (response.data?.success) {
       ElMessage.success('当天指数数据更新任务已启动')
       pollTaskStatus('update_today_data', () => { updatingTodayData.value = false })
@@ -889,7 +1998,10 @@ const updateStockTodayData = async () => {
   if (!confirm('确认更新当天股票数据吗？')) return
   updatingStockTodayData.value = true
   try {
-    const response = await axios.post(`${API_BASE}/system/update-stock-today-data`, { periods: selectedStockUpdatePeriods.value })
+    const response = await axios.post(`${API_BASE}/system/update-stock-today-data`, {
+      periods: selectedStockUpdatePeriods.value,
+      force: true,
+    })
     if (response.data?.success) {
       ElMessage.success('当天股票数据更新任务已启动')
       pollTaskStatus('update_stock_today_data', () => { updatingStockTodayData.value = false })
@@ -954,10 +2066,15 @@ const toggleEmotionAuto5m = async () => {
 }
 
 onMounted(() => {
+  loadStrategySuccessMemory()
   refreshCoreMaintenanceStatus()
+  refreshStrategyMaintenanceStatus()
   loadStartupReferenceSyncSetting()
+  loadPtradeAccountConfig()
+  refreshTdxGatewayDiagnostics()
   coreMaintenanceRefreshTimer.value = setInterval(async () => {
     await refreshCoreMaintenanceStatus()
+    await refreshStrategyMaintenanceStatus()
     if (showTimelinePanel.value) await refreshTimeline()
   }, 10000)
 })
@@ -967,124 +2084,445 @@ onUnmounted(() => {
     clearInterval(coreMaintenanceRefreshTimer.value)
     coreMaintenanceRefreshTimer.value = null
   }
+  Object.values(strategyTaskPollTimers.value || {}).forEach((timer) => {
+    if (timer) clearTimeout(timer)
+  })
 })
 </script>
 
 <style scoped>
 .system-config {
-  max-width: 1240px;
+  --ink: #17223b;
+  --muted: #61708d;
+  --line: rgba(90, 119, 164, 0.18);
+  --panel: rgba(255, 255, 255, 0.92);
+  --blue: #315fbd;
+  --green: #0b8f63;
+  --amber: #c56b08;
+  --red: #c43d32;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 24px;
+  color: var(--ink);
 }
 
-.config-header {
-  text-align: center;
-  margin-bottom: 20px;
-}
-
-.config-header h1 {
-  margin: 0;
-  font-size: 34px;
-  color: #1f2a44;
-}
-
-.config-header p {
-  margin-top: 8px;
-  color: #607189;
-}
-
-.health-strip {
+.ops-hero {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.7fr);
+  gap: 20px;
+  overflow: hidden;
+  margin-bottom: 18px;
+  padding: 28px;
+  border: 1px solid rgba(96, 126, 187, 0.2);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(74, 144, 226, 0.22), transparent 30%),
+    radial-gradient(circle at 82% 6%, rgba(12, 143, 99, 0.18), transparent 28%),
+    linear-gradient(135deg, #f8fbff 0%, #eef5ff 52%, #f7fbf4 100%);
+  box-shadow: 0 24px 60px rgba(43, 68, 112, 0.12);
+}
+
+.ops-hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -80px -130px auto;
+  width: 300px;
+  height: 300px;
+  border-radius: 999px;
+  background: rgba(49, 95, 189, 0.08);
+}
+
+.hero-copy,
+.hero-status-card {
+  position: relative;
+  z-index: 1;
+}
+
+.eyebrow,
+.command-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #53709f;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero-copy h1 {
+  margin: 0;
+  font-size: clamp(36px, 5vw, 58px);
+  letter-spacing: -0.05em;
+  color: #13213c;
+}
+
+.hero-copy p {
+  max-width: 720px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.hero-status-card {
+  display: grid;
+  gap: 18px;
+  align-content: center;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(14px);
+}
+
+.hero-health strong {
+  display: block;
+  font-size: 32px;
+  letter-spacing: -0.03em;
+}
+
+.hero-health span,
+.hero-meta span {
+  color: var(--muted);
+}
+
+.hero-meta {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.command-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 0.9fr 0.9fr;
+  gap: 14px;
   margin-bottom: 18px;
 }
 
-.health-item {
-  background: linear-gradient(135deg, #f8fbff, #f3f7ff);
-  border: 1px solid #dde8ff;
-  border-radius: 12px;
-  padding: 12px;
+.command-card {
+  min-height: 210px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--panel);
+  box-shadow: 0 16px 42px rgba(28, 49, 89, 0.08);
 }
 
-.health-label {
-  display: block;
-  font-size: 12px;
-  color: #5d6d87;
-  margin-bottom: 6px;
+.command-card h2,
+.command-card h3 {
+  margin: 8px 0;
+  color: #172746;
+  letter-spacing: -0.03em;
+}
+
+.command-card h2 {
+  font-size: 30px;
+}
+
+.command-card p {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.primary-command {
+  color: #fff;
+  background:
+    linear-gradient(135deg, rgba(28, 80, 168, 0.94), rgba(9, 123, 92, 0.9)),
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.25), transparent 35%);
+}
+
+.primary-command h2,
+.primary-command p,
+.primary-command .command-kicker {
+  color: #fff;
 }
 
 .section-card {
-  background: #fff;
-  border: 1px solid #e6edf7;
-  border-radius: 14px;
-  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 18px;
   margin-bottom: 18px;
+  box-shadow: 0 16px 42px rgba(31, 51, 86, 0.07);
 }
 
 .section-title-row {
   display: flex;
   justify-content: space-between;
+  gap: 16px;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 }
 
 .section-title-row h2 {
-  margin: 0;
-  color: #203153;
+  margin: 2px 0 0;
+  color: #172746;
+  font-size: 24px;
+  letter-spacing: -0.03em;
 }
 
-.status-pill {
-  padding: 4px 10px;
-  border-radius: 999px;
+.section-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.gateway-section {
+  border-color: rgba(197, 107, 8, 0.24);
+}
+
+.gateway-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.gateway-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff, #fbfcff);
+}
+
+.gateway-card span,
+.gateway-card small,
+.diagnostic-line span {
+  color: var(--muted);
   font-size: 12px;
 }
 
-.status-pill.enabled {
-  color: #1e7e34;
-  background: #e8f8ee;
+.gateway-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #203153;
+  font-size: 16px;
 }
 
-.status-pill.paused {
-  color: #805500;
-  background: #fff4d8;
-}
-
-.task-table {
-  border: 1px solid #edf2f9;
-  border-radius: 10px;
-  overflow: hidden;
-}
-
-.task-row {
+.gateway-diagnostics {
   display: grid;
-  grid-template-columns: 1.1fr 0.7fr 1.5fr 0.8fr 0.9fr 0.9fr 1fr 1fr 0.8fr;
   gap: 8px;
+  margin-top: 14px;
+}
+
+.diagnostic-line {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
   padding: 10px 12px;
-  border-bottom: 1px solid #edf2f9;
-  align-items: center;
+  border-radius: 12px;
+  background: #f7f9fc;
+}
+
+.diagnostic-line strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #26395f;
   font-size: 13px;
 }
 
-.task-row:last-child {
+.danger-line {
+  background: #fff5f3;
+}
+
+.danger-line strong {
+  color: var(--red);
+}
+
+.pipeline-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.pipeline-card {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.pipeline-head {
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(135deg, rgba(49, 95, 189, 0.08), transparent);
+}
+
+.pipeline-card.accent-green .pipeline-head {
+  background: linear-gradient(135deg, rgba(11, 143, 99, 0.09), transparent);
+}
+
+.pipeline-card.accent-amber .pipeline-head {
+  background: linear-gradient(135deg, rgba(197, 107, 8, 0.1), transparent);
+}
+
+.pipeline-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.pipeline-head h3 {
+  margin: 6px 0;
+  color: #1c2b47;
+}
+
+.pipeline-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-stack {
+  display: grid;
+}
+
+.task-chip {
+  position: relative;
+  padding: 14px 14px 44px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.task-chip:last-child {
   border-bottom: none;
 }
 
-.task-row.head {
-  font-weight: 600;
-  background: #f6f9ff;
-  color: #35507b;
-}
-
-.task-action-cell {
+.task-chip-main {
   display: flex;
-  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.task-sync-btn {
-  padding: 7px 12px;
+.task-chip-main strong {
+  flex: 1;
+  min-width: 0;
+  color: #203153;
+}
+
+.task-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #8793a8;
+}
+
+.task-chip-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  color: #7a879d;
   font-size: 12px;
+}
+
+.task-chip p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.strategy-card {
+  position: relative;
+  padding: 16px 16px 48px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #fff, #f9fbff);
+}
+
+.strategy-card-heavy {
+  background: linear-gradient(180deg, #fffaf4, #fff);
+  border-color: rgba(197, 107, 8, 0.24);
+}
+
+.strategy-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.strategy-title-row h3 {
+  margin: 0;
+  color: #203153;
+  font-size: 15px;
+}
+
+.strategy-title-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   white-space: nowrap;
+}
+
+.task-kind {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.task-kind.daily {
+  color: #0c7652;
+  background: #e9f8f0;
+}
+
+.task-kind.heavy {
+  color: #a35a08;
+  background: #fff1d8;
+}
+
+.strategy-card p {
+  min-height: 58px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.strategy-meta {
+  display: grid;
+  gap: 4px;
+  color: #7c8aa0;
+  font-size: 12px;
+}
+
+.strategy-meta strong {
+  color: #203153;
+}
+
+.mini-btn {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: #fff;
+  background: #4d65d9;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mini-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .maintenance-actions {
@@ -1096,11 +2534,31 @@ onUnmounted(() => {
 
 .btn {
   border: none;
-  border-radius: 8px;
+  border-radius: 12px;
   padding: 10px 14px;
   color: #fff;
   background: #4d65d9;
   cursor: pointer;
+  box-shadow: 0 10px 22px rgba(42, 72, 143, 0.18);
+}
+
+.hero-btn {
+  margin-top: 10px;
+  padding: 13px 18px;
+  color: #17315a;
+  background: #fff;
+  font-weight: 800;
+}
+
+.btn.secondary,
+.btn.subtle {
+  color: #26405f;
+  background: #edf4ff;
+  box-shadow: none;
+}
+
+.btn.soft {
+  box-shadow: none;
 }
 
 .btn:disabled {
@@ -1126,6 +2584,37 @@ onUnmounted(() => {
 
 .btn.ghost {
   background: #6b7387;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-pill.large {
+  width: fit-content;
+  padding: 7px 12px;
+}
+
+.status-pill.enabled {
+  color: #117447;
+  background: #e8f8ee;
+}
+
+.status-pill.paused {
+  color: #805500;
+  background: #fff4d8;
+}
+
+.status-pill.failed {
+  color: #b42318;
+  background: #fff0ef;
 }
 
 .timeline-panel {
@@ -1181,6 +2670,41 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
+.account-config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.account-config-grid label,
+.account-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #52657f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.account-config-grid input,
+.account-config-grid select,
+.account-notes input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #d9e2f0;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: #fff;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.account-notes {
+  margin-bottom: 12px;
+}
+
 .advanced-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1189,8 +2713,13 @@ onUnmounted(() => {
 
 .manual-card {
   border: 1px solid #ebeff7;
-  border-radius: 10px;
-  padding: 12px;
+  border-radius: 18px;
+  padding: 14px;
+  background: #fff;
+}
+
+.manual-card.spotlight {
+  background: linear-gradient(135deg, #f6fbff, #eef8f3);
 }
 
 .manual-card h3 {
@@ -1266,17 +2795,47 @@ onUnmounted(() => {
   color: #5f6f8a;
 }
 
+.state-bg-running {
+  background: #1f66d5;
+}
+
+.state-bg-success {
+  background: #1a8f58;
+}
+
+.state-bg-failed {
+  background: #cf352e;
+}
+
+.state-bg-paused {
+  background: #b5811f;
+}
+
+.state-bg-idle {
+  background: #7b8798;
+}
+
 @media (max-width: 980px) {
-  .health-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .ops-hero,
+  .command-grid,
+  .gateway-grid,
+  .pipeline-grid,
+  .strategy-grid {
+    grid-template-columns: 1fr;
   }
 
   .advanced-grid {
     grid-template-columns: 1fr;
   }
 
-  .task-row {
+  .account-config-grid {
     grid-template-columns: 1fr;
+  }
+
+  .section-title-row,
+  .pipeline-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .timeline-item {

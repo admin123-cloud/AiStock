@@ -33,7 +33,18 @@ RANGE_FILTERED_REPORT_DIR = report_path("gen3_range_filtered_shadow_only_v2")
 RANGE_FILTERED_RUNTIME_DIR = runtime_path("gen3_range_filtered_shadow")
 RANGE_FILTERED_LIVE_SAFE_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_build_range_filtered_live_safe_payload_v2.py"
 RANGE_FILTERED_UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_range_filtered_shadow_only_v2.py"
-ROUTE_EXECUTION_V3_DIR = report_path("gen3_route_execution_mandate_candidate_package_v3")
+V4_STRONG_OFFENSE_REPORT_DIR = report_path("gen3_v4_strong_offense_shadow_only_v1")
+V4_STRONG_OFFENSE_RUNTIME_DIR = runtime_path("gen3_v4_strong_offense_shadow")
+V4_STRONG_OFFENSE_UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_v4_strong_offense_shadow_only_v1.py"
+V4_STRONG_OFFENSE_CURRENT_SOURCE_REPORT_DIR = report_path("gen3_v4_strong_offense_current_source_payload_v1")
+V4_STRONG_OFFENSE_CURRENT_SOURCE_RUNTIME_DIR = runtime_path("gen3_v4_strong_offense_current_source")
+V4_STRONG_OFFENSE_CURRENT_SOURCE_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_build_v4_strong_offense_current_source_payload_v1.py"
+V4_STRONG_OFFENSE_FRESHNESS_REPORT_DIR = report_path("gen3_v4_strong_offense_freshness_audit_v1")
+V4_STRONG_OFFENSE_FRESHNESS_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_audit_v4_strong_offense_freshness_v1.py"
+STATE_ROUTER_CURRENT_REPORT_DIR = report_path("gen3_state_router_shadow_daily_v1")
+STATE_ROUTER_CURRENT_RUNTIME_DIR = runtime_path("gen3_state_router_shadow")
+STATE_ROUTER_CURRENT_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_state_router_shadow_daily_v1.py"
+ROUTE_EXECUTION_V3_DIR = report_path("gen3_market_state_router_strategy_v1")
 V4_RESEARCH_PACKAGE_DIR = report_path("gen3_v4_research_package_v1")
 V4_STRONG_HISTORY_DIR = report_path("gen3_v4_strong_failure_attribution_v1")
 V4_STRONG_ENTRY_QUALITY_DIR = report_path("gen3_v4_strong_entry_quality_audit_v1")
@@ -48,7 +59,11 @@ def _read_csv_records(path: Path, limit: int | None = None) -> list[dict[str, An
     if not path.exists():
         return []
 
-    df = pd.read_csv(path, low_memory=False)
+    try:
+        df = pd.read_csv(path, low_memory=False)
+    except pd.errors.EmptyDataError:
+        logger.warning("CSV artifact is empty, returning no records: {}", path)
+        return []
     if limit is not None:
         df = df.head(limit)
     df = df.astype(object).where(pd.notna(df), None)
@@ -449,7 +464,8 @@ def _read_range_second_acceptance_research() -> dict[str, Any]:
 
     first_date = str(curve_df["date"].iloc[0]) if not curve_df.empty and "date" in curve_df.columns else None
     last_date = str(curve_df["date"].iloc[-1]) if not curve_df.empty and "date" in curve_df.columns else None
-    initial_capital = 150000.0
+    initial_capital = _to_float(curve_df["equity"].iloc[0]) if not curve_df.empty and "equity" in curve_df.columns else None
+    candidate_name = summary.get("candidate") or "g3_market_state_router_strategy_v1"
     final_equity = _to_float(curve_df["equity"].iloc[-1]) if not curve_df.empty and "equity" in curve_df.columns else None
 
     return {
@@ -676,6 +692,128 @@ def _run_range_filtered_update(as_of: str | None) -> dict[str, Any]:
     }
 
 
+def _run_state_router_current_update(entry_date: str | None) -> dict[str, Any]:
+    if not STATE_ROUTER_CURRENT_SCRIPT.exists():
+        return {
+            "ran": False,
+            "ok": False,
+            "returncode": None,
+            "error": f"state-router update script not found: {STATE_ROUTER_CURRENT_SCRIPT}",
+        }
+
+    cmd = [
+        sys.executable,
+        str(STATE_ROUTER_CURRENT_SCRIPT),
+        "--out-dir",
+        str(STATE_ROUTER_CURRENT_REPORT_DIR),
+        "--runtime-dir",
+        str(STATE_ROUTER_CURRENT_RUNTIME_DIR),
+    ]
+    if entry_date:
+        cmd.extend(["--entry-date", entry_date])
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except Exception as exc:
+        logger.exception("G3 state-router current shadow update failed to run")
+        return {
+            "ran": True,
+            "ok": False,
+            "returncode": None,
+            "error": str(exc),
+        }
+
+    return {
+        "ran": True,
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "stdout_tail": proc.stdout[-2000:],
+        "stderr_tail": proc.stderr[-2000:],
+    }
+
+
+def _run_v4_strong_offense_update(as_of: str | None) -> dict[str, Any]:
+    missing = [
+        str(path)
+        for path in [V4_STRONG_OFFENSE_CURRENT_SOURCE_SCRIPT, V4_STRONG_OFFENSE_UPDATE_SCRIPT, V4_STRONG_OFFENSE_FRESHNESS_SCRIPT]
+        if not path.exists()
+    ]
+    if missing:
+        return {
+            "ran": False,
+            "ok": False,
+            "returncode": None,
+            "error": f"V4 strong offense update script not found: {', '.join(missing)}",
+        }
+
+    commands = [
+        [sys.executable, str(V4_STRONG_OFFENSE_CURRENT_SOURCE_SCRIPT)],
+        [
+            sys.executable,
+            str(V4_STRONG_OFFENSE_UPDATE_SCRIPT),
+            "--out-dir",
+            str(V4_STRONG_OFFENSE_REPORT_DIR),
+            "--runtime-dir",
+            str(V4_STRONG_OFFENSE_RUNTIME_DIR),
+        ],
+        [sys.executable, str(V4_STRONG_OFFENSE_FRESHNESS_SCRIPT)],
+    ]
+    if as_of:
+        commands[1].extend(["--as-of", as_of])
+
+    steps: list[dict[str, Any]] = []
+    for cmd in commands:
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+        except Exception as exc:
+            logger.exception("G3 V4 strong offense shadow update failed to run")
+            steps.append({"cmd": cmd, "ok": False, "returncode": None, "error": str(exc)})
+            return {
+                "ran": True,
+                "ok": False,
+                "returncode": None,
+                "steps": steps,
+                "error": str(exc),
+            }
+
+        step = {
+            "cmd": cmd,
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout_tail": proc.stdout[-2000:],
+            "stderr_tail": proc.stderr[-2000:],
+        }
+        steps.append(step)
+        if proc.returncode != 0:
+            return {
+                "ran": True,
+                "ok": False,
+                "returncode": proc.returncode,
+                "steps": steps,
+            }
+
+    return {
+        "ran": True,
+        "ok": True,
+        "returncode": 0,
+        "steps": steps,
+    }
+
+
 @router.get("/live")
 async def get_gen3_shadow_live(
     as_of: Optional[str] = Query(default=None, description="Optional as-of timestamp for refresh mode."),
@@ -721,7 +859,10 @@ async def get_gen3_shadow_live(
     return {
         "ok": True,
         "mode": "observe_only",
+        "candidate": "g3_market_state_router_strategy_v1",
         "auto_order_allowed": False,
+        "formal_buy_signal": False,
+        "order_path_enabled": False,
         "message": diagnosis.get("diagnosis", ""),
         "diagnosis": diagnosis,
         "summary": summary,
@@ -848,12 +989,13 @@ async def get_gen3_route_execution_v3_backtest(
     first_date = str(curve_df["date"].iloc[0]) if not curve_df.empty and "date" in curve_df.columns else None
     last_date = str(curve_df["date"].iloc[-1]) if not curve_df.empty and "date" in curve_df.columns else None
     final_equity = _to_float(curve_df["equity"].iloc[-1]) if not curve_df.empty and "equity" in curve_df.columns else None
-    initial_capital = 150000.0
+    initial_capital = _to_float(curve_df["equity"].iloc[0]) if not curve_df.empty and "equity" in curve_df.columns else None
+    candidate_name = summary.get("candidate") or "g3_market_state_router_strategy_v1"
 
     return {
         "ok": True,
         "mode": "research_backtest_only",
-        "candidate": "g3_route_execution_mandate_v3",
+        "candidate": candidate_name,
         "auto_order_allowed": False,
         "formal_buy_signal": False,
         "order_path_enabled": False,
@@ -865,7 +1007,7 @@ async def get_gen3_route_execution_v3_backtest(
             "trade_count": trade_total,
             "initial_capital": initial_capital,
             "final_equity": final_equity,
-            "total_return": final_equity / initial_capital - 1.0 if final_equity else None,
+            "total_return": final_equity / initial_capital - 1.0 if final_equity and initial_capital else None,
             "max_drawdown": _max_drawdown(curve_df["equity"]) if not curve_df.empty and "equity" in curve_df.columns else None,
             "worst_open_mtm_ret": _to_float(curve_df["worst_open_mtm_ret"].min()) if not curve_df.empty and "worst_open_mtm_ret" in curve_df.columns else None,
             "avg_open_positions": _to_float(curve_df["open_positions"].mean()) if not curve_df.empty and "open_positions" in curve_df.columns else None,
@@ -909,7 +1051,7 @@ async def get_gen3_route_execution_v3_backtest(
             "formal_buy_signal": False,
             "order_path_enabled": False,
             "auto_order_allowed": False,
-            "requires_same_day_fill_audit_before_shadow_payload": True,
+            "requires_live_candidate_generator_before_formal_trading": True,
         },
     }
 
@@ -1052,7 +1194,7 @@ async def get_gen3_v4_research_backtest(
             "trade_count": trade_total,
             "initial_capital": initial_capital,
             "final_equity": final_equity,
-            "total_return": final_equity / initial_capital - 1.0 if final_equity else None,
+            "total_return": final_equity / initial_capital - 1.0 if final_equity and initial_capital else None,
             "max_drawdown": _max_drawdown(curve_df["equity"]) if not curve_df.empty and "equity" in curve_df.columns else None,
             "worst_open_mtm_ret": _to_float(curve_df["worst_open_mtm_ret"].min()) if not curve_df.empty and "worst_open_mtm_ret" in curve_df.columns else None,
             "avg_open_positions": _to_float(curve_df["open_positions"].mean()) if not curve_df.empty and "open_positions" in curve_df.columns else None,
@@ -1268,6 +1410,214 @@ async def get_gen3_range_filtered_shadow(
     }
 
 
+@router.get("/v4-strong-offense")
+async def get_gen3_v4_strong_offense_shadow(
+    as_of: Optional[str] = Query(default=None, description="Optional as-of timestamp for refresh mode."),
+    refresh: bool = Query(default=False, description="Run the G3 V4 strong-offense shadow-only update before reading output."),
+    limit: int = Query(default=20, ge=1, le=200, description="Maximum candidate rows returned."),
+) -> dict[str, Any]:
+    """
+    Return the G3 V4 strong-offense observation status.
+
+    This endpoint exposes the current research candidate as a shadow-only
+    observation feed. It never enables formal buy signals or order routing.
+    """
+
+    effective_as_of = as_of if isinstance(as_of, str) and as_of.strip() else None
+    refresh_result = _run_v4_strong_offense_update(as_of=effective_as_of) if refresh else {
+        "ran": False,
+        "ok": None,
+        "returncode": None,
+    }
+
+    latest_summary_path = V4_STRONG_OFFENSE_RUNTIME_DIR / "latest_summary.json"
+    latest_candidates_path = V4_STRONG_OFFENSE_RUNTIME_DIR / "latest_candidates.csv"
+    summary_path = V4_STRONG_OFFENSE_REPORT_DIR / "g3_v4_strong_offense_shadow_summary.csv"
+    route_summary_path = V4_STRONG_OFFENSE_REPORT_DIR / "g3_v4_strong_offense_shadow_route_summary.csv"
+    recent_path = V4_STRONG_OFFENSE_REPORT_DIR / "g3_v4_strong_offense_shadow_recent_candidates.csv"
+    forbidden_audit_path = V4_STRONG_OFFENSE_REPORT_DIR / "g3_v4_strong_offense_shadow_forbidden_field_audit.csv"
+    isolation_path = V4_STRONG_OFFENSE_REPORT_DIR / "g3_v4_strong_offense_shadow_isolation_manifest.csv"
+    current_source_summary_path = V4_STRONG_OFFENSE_CURRENT_SOURCE_RUNTIME_DIR / "latest_summary.json"
+    current_source_payload_path = V4_STRONG_OFFENSE_CURRENT_SOURCE_RUNTIME_DIR / "latest_payload.csv"
+    current_source_route_summary_path = V4_STRONG_OFFENSE_CURRENT_SOURCE_RUNTIME_DIR / "latest_route_summary.csv"
+    current_source_consistency_path = (
+        V4_STRONG_OFFENSE_CURRENT_SOURCE_REPORT_DIR / "g3_v4_strong_offense_current_source_summary.csv"
+    )
+    freshness_summary_path = V4_STRONG_OFFENSE_FRESHNESS_REPORT_DIR / "summary.json"
+    freshness_table_path = V4_STRONG_OFFENSE_FRESHNESS_REPORT_DIR / "g3_v4_strong_offense_source_freshness.csv"
+
+    latest_summary = _read_json(latest_summary_path)
+    summary = _read_first_record(summary_path)
+    route_summary = _read_csv_records(route_summary_path, limit=50)
+    candidates = _read_csv_records(latest_candidates_path, limit=limit)
+    recent_candidates = _read_csv_records(recent_path, limit=limit)
+    forbidden_audit = _read_csv_records(forbidden_audit_path, limit=20)
+    isolation = _read_csv_records(isolation_path, limit=50)
+    current_source_summary = _read_json(current_source_summary_path)
+    current_source_payload = _read_csv_records(current_source_payload_path, limit=limit)
+    current_source_route_summary = _read_csv_records(current_source_route_summary_path, limit=50)
+    current_source_consistency = _read_first_record(current_source_consistency_path)
+    freshness_summary = _read_json(freshness_summary_path)
+    freshness_sources = _read_csv_records(freshness_table_path, limit=20)
+
+    if not latest_summary and not summary:
+        latest_summary = {
+            "diagnosis_code": "NO_G3_V4_STRONG_OFFENSE_SHADOW_REPORT",
+            "diagnosis": "未找到 G3 V4 强进攻 shadow-only 观察产物，需要先运行 strong-offense 影子观察脚本。",
+            "today_shadow_candidates": 0,
+            "auto_order_allowed_rows": 0,
+            "formal_buy_signal_rows": 0,
+            "order_path_enabled_rows": 0,
+        }
+
+    diagnosis = latest_summary.get("diagnosis") or summary.get("diagnosis", "")
+
+    return {
+        "ok": True,
+        "mode": "v4_strong_offense_shadow_only_observe",
+        "candidate": "g3_v4_strong_offense_candidate_v1",
+        "auto_order_allowed": False,
+        "formal_buy_signal": False,
+        "order_path_enabled": False,
+        "message": diagnosis,
+        "summary": latest_summary or summary,
+        "csv_summary": summary,
+        "route_summary": route_summary,
+        "candidates": candidates,
+        "recent_candidates": recent_candidates,
+        "current_source_summary": current_source_summary,
+        "current_source_payload": current_source_payload,
+        "current_source_route_summary": current_source_route_summary,
+        "current_source_consistency": current_source_consistency,
+        "freshness_summary": freshness_summary,
+        "freshness_sources": freshness_sources,
+        "forbidden_audit": forbidden_audit,
+        "isolation": isolation,
+        "refresh": refresh_result,
+        "artifacts": {
+            "runtime_dir": _path_status(V4_STRONG_OFFENSE_RUNTIME_DIR),
+            "report_dir": _path_status(V4_STRONG_OFFENSE_REPORT_DIR),
+            "latest_summary": _path_status(latest_summary_path),
+            "latest_candidates": _path_status(latest_candidates_path),
+            "summary": _path_status(summary_path),
+            "route_summary": _path_status(route_summary_path),
+            "recent_candidates": _path_status(recent_path),
+            "forbidden_audit": _path_status(forbidden_audit_path),
+            "isolation": _path_status(isolation_path),
+            "current_source_runtime_dir": _path_status(V4_STRONG_OFFENSE_CURRENT_SOURCE_RUNTIME_DIR),
+            "current_source_report_dir": _path_status(V4_STRONG_OFFENSE_CURRENT_SOURCE_REPORT_DIR),
+            "current_source_summary": _path_status(current_source_summary_path),
+            "current_source_payload": _path_status(current_source_payload_path),
+            "current_source_route_summary": _path_status(current_source_route_summary_path),
+            "current_source_consistency": _path_status(current_source_consistency_path),
+            "freshness_summary": _path_status(freshness_summary_path),
+            "freshness_sources": _path_status(freshness_table_path),
+        },
+        "guardrails": {
+            "independent_from_g2": True,
+            "uses_v4_strong_offense_candidate_v1": True,
+            "source_is_research_closed_trade_mapping": True,
+            "current_source_payload_available": bool(current_source_summary),
+            "formal_buy_signal": False,
+            "order_path_enabled": False,
+            "auto_order_allowed": False,
+            "requires_current_source_rebuild_before_live_trading": True,
+            "down_range_visibility_not_fully_proven": True,
+            "freshness_verdict": freshness_summary.get("verdict") if freshness_summary else None,
+        },
+    }
+
+
+@router.get("/state-router-current")
+async def get_gen3_state_router_current_shadow(
+    entry_date: Optional[str] = Query(default=None, description="Optional entry date, e.g. 2026-06-18."),
+    refresh: bool = Query(default=False, description="Run the current G3 state-router shadow update before reading output."),
+    limit: int = Query(default=30, ge=1, le=200, description="Maximum source candidate rows returned."),
+) -> dict[str, Any]:
+    """
+    Return the current-day G3 market-state router shadow status.
+
+    This endpoint is observe-only. It may include current proxy/replay sources,
+    so it never enables formal buy signals or order routing.
+    """
+
+    effective_entry_date = entry_date if isinstance(entry_date, str) and entry_date.strip() else None
+    refresh_result = _run_state_router_current_update(effective_entry_date) if refresh else {
+        "ran": False,
+        "ok": None,
+        "returncode": None,
+    }
+
+    latest_summary_path = STATE_ROUTER_CURRENT_RUNTIME_DIR / "latest_summary.json"
+    latest_candidates_path = STATE_ROUTER_CURRENT_RUNTIME_DIR / "latest_candidates.csv"
+    latest_all_path = STATE_ROUTER_CURRENT_RUNTIME_DIR / "latest_all_source_candidates.csv"
+    latest_route_diagnostics_path = STATE_ROUTER_CURRENT_RUNTIME_DIR / "latest_route_diagnostics.csv"
+    latest_strategy_contract_path = STATE_ROUTER_CURRENT_RUNTIME_DIR / "latest_strategy_contract.json"
+    report_summary_path = STATE_ROUTER_CURRENT_REPORT_DIR / "summary.json"
+    selected_path = STATE_ROUTER_CURRENT_REPORT_DIR / "g3_state_router_selected_candidates.csv"
+    all_path = STATE_ROUTER_CURRENT_REPORT_DIR / "g3_state_router_all_source_candidates.csv"
+    route_diagnostics_path = STATE_ROUTER_CURRENT_REPORT_DIR / "g3_state_router_route_diagnostics.csv"
+    strategy_contract_path = STATE_ROUTER_CURRENT_REPORT_DIR / "g3_state_router_strategy_contract.json"
+    market_context_path = STATE_ROUTER_CURRENT_REPORT_DIR / "g3_state_router_market_context.csv"
+
+    summary = _read_json(latest_summary_path) or _read_json(report_summary_path)
+    selected = _read_csv_records(latest_candidates_path if latest_candidates_path.exists() else selected_path, limit=limit)
+    all_candidates = _read_csv_records(latest_all_path if latest_all_path.exists() else all_path, limit=limit)
+    route_diagnostics = _read_csv_records(latest_route_diagnostics_path if latest_route_diagnostics_path.exists() else route_diagnostics_path, limit=20)
+    strategy_contract = _read_json(latest_strategy_contract_path) or _read_json(strategy_contract_path) or {}
+    market_context = _read_csv_records(market_context_path, limit=5)
+
+    if not summary:
+        summary = {
+            "diagnosis_code": "NO_G3_STATE_ROUTER_CURRENT_REPORT",
+            "diagnosis": "未找到 G3 状态路由当日 shadow 产物，需要先运行 state-router current 脚本。",
+            "selected_rows": 0,
+            "source_rows": 0,
+            "auto_order_allowed_rows": 0,
+        }
+
+    return {
+        "ok": True,
+        "mode": "state_router_current_shadow_only_observe",
+        "candidate": "g3_market_state_router_strategy_v1",
+        "auto_order_allowed": False,
+        "formal_buy_signal": False,
+        "order_path_enabled": False,
+        "message": summary.get("diagnosis") or summary.get("diagnosis_code", ""),
+        "summary": summary,
+        "selected_candidates": selected,
+        "all_source_candidates": all_candidates,
+        "route_diagnostics": route_diagnostics,
+        "strategy_contract": strategy_contract,
+        "market_context": market_context,
+        "refresh": refresh_result,
+        "artifacts": {
+            "runtime_dir": _path_status(STATE_ROUTER_CURRENT_RUNTIME_DIR),
+            "report_dir": _path_status(STATE_ROUTER_CURRENT_REPORT_DIR),
+            "latest_summary": _path_status(latest_summary_path),
+            "latest_candidates": _path_status(latest_candidates_path),
+            "latest_all_source_candidates": _path_status(latest_all_path),
+            "latest_route_diagnostics": _path_status(latest_route_diagnostics_path),
+            "latest_strategy_contract": _path_status(latest_strategy_contract_path),
+            "report_summary": _path_status(report_summary_path),
+            "selected_candidates": _path_status(selected_path),
+            "all_source_candidates": _path_status(all_path),
+            "route_diagnostics": _path_status(route_diagnostics_path),
+            "strategy_contract": _path_status(strategy_contract_path),
+            "market_context": _path_status(market_context_path),
+        },
+        "guardrails": {
+            "independent_from_g2": True,
+            "shadow_only": True,
+            "formal_buy_signal": False,
+            "order_path_enabled": False,
+            "auto_order_allowed": False,
+            "requires_current_institutional_generator": bool(summary.get("requires_current_institutional_generator", True)),
+            "requires_current_old_g3_generator": bool(summary.get("requires_current_old_g3_generator", True)),
+        },
+    }
+
+
 @router.get("/route-execution-v3")
 async def get_gen3_route_execution_v3(
     limit: int = Query(default=30, ge=1, le=200, description="Maximum closed trade rows returned."),
@@ -1295,15 +1645,17 @@ async def get_gen3_route_execution_v3(
     if not summary:
         summary = {
             "status": "missing",
-            "candidate": "g3_route_execution_mandate_v3",
+            "candidate": "g3_market_state_router_strategy_v1",
             "goal_complete": False,
             "message": "未找到 G3 V3 路由级执行约束候选包，需要先运行 gen3_package_route_execution_mandate_v3.py。",
         }
 
+    candidate_name = summary.get("candidate") or "g3_market_state_router_strategy_v1"
+
     return {
         "ok": True,
         "mode": "research_only",
-        "candidate": "g3_route_execution_mandate_v3",
+        "candidate": candidate_name,
         "auto_order_allowed": False,
         "formal_buy_signal": False,
         "order_path_enabled": False,
@@ -1335,7 +1687,7 @@ async def get_gen3_route_execution_v3(
             "formal_buy_signal": False,
             "order_path_enabled": False,
             "auto_order_allowed": False,
-            "requires_same_day_fill_audit_before_shadow_payload": True,
+            "requires_live_candidate_generator_before_formal_trading": True,
         },
     }
 

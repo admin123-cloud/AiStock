@@ -21,7 +21,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+DEFAULT_BRIDGE_DIR = Path(os.getenv("AISTOCK_PTRADE_BRIDGE_DIR") or r"F:\Stock\AiStockData\data\runtime\ptrade_bridge")
 DEFAULT_PTRADE_API_DIR = Path(r"D:\PTrade\ptrade\Libs\Python\api")
 
 

@@ -18,9 +18,10 @@ if str(ROOT) not in sys.path:
 from execution.ptrade_bridge import PTradeFileBridge
 from scripts.ptrade_bridge_live_probe import wait_for_ack, write_json
 from scripts.ptrade_bridge_readiness_audit import run_audit
+from utils.paths import runtime_path
 
 
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+DEFAULT_BRIDGE_DIR = runtime_path("ptrade_bridge")
 DEFAULT_REPORT = ROOT / "reports" / "ptrade_bridge_live_submit_test" / "latest.json"
 LIVE_ACK_STATUSES = {
     "submitted",

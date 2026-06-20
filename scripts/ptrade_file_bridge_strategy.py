@@ -10,12 +10,57 @@ import json
 import time
 from pathlib import Path
 
+
+class _GlobalState(object):
+    pass
+
+
+try:
+    g
+except NameError:
+    g = _GlobalState()
+
+
+class _FallbackLog(object):
+    def info(self, message, *args):
+        try:
+            print(message % args if args else message)
+        except Exception:
+            print(message)
+
+    def error(self, message, *args):
+        try:
+            print(message % args if args else message)
+        except Exception:
+            print(message)
+
+
+try:
+    log
+except NameError:
+    log = _FallbackLog()
+
 try:
     import PTradeQuantApi as pt
 except Exception:
     pt = None
 
-BRIDGE_DIR = r"F:\Stock\AiStock\data\runtime\ptrade_bridge"
+try:
+    from utils.paths import runtime_path
+except Exception:
+    runtime_path = None
+
+
+def _default_bridge_dir():
+    if callable(runtime_path):
+        try:
+            return str(runtime_path("ptrade_bridge"))
+        except Exception:
+            pass
+    return r"F:\Stock\AiStockData\data\runtime\ptrade_bridge"
+
+
+BRIDGE_DIR = _default_bridge_dir()
 ENABLE_LIVE_ORDER = False
 POLL_SECONDS = 3
 POSITION_SNAPSHOT_SECONDS = 300
@@ -23,6 +68,7 @@ ORDER_SNAPSHOT_SECONDS = 300
 ENABLE_POSITION_SNAPSHOT = False
 ENABLE_ORDER_SNAPSHOT = False
 MAX_LIVE_ORDER_VALUE = 20000.0
+DEFAULT_EXECUTION_MODE = "ptrade_hosted_strategy"
 
 
 def _bridge_path(*parts):
@@ -182,7 +228,8 @@ def _as_rows(value):
 def _write_status(extra=None):
     payload = {
         "ok": True,
-        "source": "ptrade_internal_strategy",
+        "source": "ptrade_file_bridge_strategy",
+        "execution_mode": _g_get("execution_mode", DEFAULT_EXECUTION_MODE),
         "bridge_dir": BRIDGE_DIR,
         "enable_live_order": bool(ENABLE_LIVE_ORDER),
         "enable_position_snapshot": bool(ENABLE_POSITION_SNAPSHOT),
@@ -397,7 +444,8 @@ def _snapshot_positions():
             "latest.json",
             {
                 "ok": True,
-                "source": "ptrade_internal_strategy",
+                "source": "ptrade_file_bridge_strategy",
+                "execution_mode": _g_get("execution_mode", DEFAULT_EXECUTION_MODE),
                 "snapshot_time": _now_text(),
                 "positions": rows,
             },
@@ -407,7 +455,13 @@ def _snapshot_positions():
         _write_json(
             "status",
             "position_snapshot_error.json",
-            {"ok": False, "source": "ptrade_internal_strategy", "updated_at": _now_text(), "message": str(exc)},
+            {
+                "ok": False,
+                "source": "ptrade_file_bridge_strategy",
+                "execution_mode": _g_get("execution_mode", DEFAULT_EXECUTION_MODE),
+                "updated_at": _now_text(),
+                "message": str(exc),
+            },
         )
         return {"ok": False, "message": str(exc)}
 
@@ -421,7 +475,8 @@ def _snapshot_orders():
             "latest.json",
             {
                 "ok": True,
-                "source": "ptrade_internal_strategy",
+                "source": "ptrade_file_bridge_strategy",
+                "execution_mode": _g_get("execution_mode", DEFAULT_EXECUTION_MODE),
                 "snapshot_time": _now_text(),
                 "orders": rows,
             },
@@ -431,12 +486,20 @@ def _snapshot_orders():
         _write_json(
             "status",
             "order_snapshot_error.json",
-            {"ok": False, "source": "ptrade_internal_strategy", "updated_at": _now_text(), "message": str(exc)},
+            {
+                "ok": False,
+                "source": "ptrade_file_bridge_strategy",
+                "execution_mode": _g_get("execution_mode", DEFAULT_EXECUTION_MODE),
+                "updated_at": _now_text(),
+                "message": str(exc),
+            },
         )
         return {"ok": False, "message": str(exc)}
 
 
-def initialize(context):
+def initialize(context=None):
+    if not _g_get("execution_mode"):
+        _g_set("execution_mode", DEFAULT_EXECUTION_MODE)
     _ensure_dirs()
     g.last_poll_ts = 0
     g.last_position_snapshot_ts = 0
@@ -450,7 +513,7 @@ def initialize(context):
     log.info("AiStock PTrade file bridge initialized: %s" % BRIDGE_DIR)
 
 
-def handle_data(context, data):
+def handle_data(context=None, data=None):
     now = time.time()
     if now - getattr(g, "last_poll_ts", 0) < POLL_SECONDS:
         return
@@ -468,3 +531,15 @@ def handle_data(context, data):
         g.last_order_snapshot_ts = now
         status_extra["order_snapshot"] = _snapshot_orders()
     _write_status(status_extra)
+
+
+def run_forever():
+    _g_set("execution_mode", "ptrade_python_script_runner")
+    initialize()
+    while True:
+        handle_data()
+        time.sleep(0.5)
+
+
+if __name__ == "__main__":
+    run_forever()

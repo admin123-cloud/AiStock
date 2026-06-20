@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 
+from utils.paths import report_path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -15,8 +16,8 @@ from scripts.gen3_test_range_30m_volume_acceptance_v1 import PROFILES, standardi
 from scripts.gen3_test_range_box_stress_icepoint_climax_overlay_v1 import md_table, simulate_scaled, summarize  # noqa: E402
 
 
-SOURCE_DIR = ROOT / "reports" / "gen3_range_second_acceptance_v1"
-OUT_DIR = ROOT / "reports" / "gen3_range_second_acceptance_structure_veto_v1"
+SOURCE_DIR = report_path("gen3_range_second_acceptance_v1")
+OUT_DIR = report_path("gen3_range_second_acceptance_structure_veto_v1")
 
 BACKTEST_START = "2020-01-01"
 BACKTEST_END = "2026-05-29"

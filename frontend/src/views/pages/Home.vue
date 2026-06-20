@@ -177,16 +177,16 @@
             去系统配置修复
           </button>
         </div>
-        <div v-if="marketData.sentiment?.emotion_phase" class="emotion-phase-card" :class="`phase-${marketData.sentiment.emotion_phase.phase_code}`">
+        <div v-if="currentEmotionPhase" class="emotion-phase-card" :class="`phase-${currentEmotionPhase.phase_code}`">
           <div class="emotion-phase-row">
-            <div class="emotion-phase-name">{{ marketData.sentiment.emotion_phase.phase_name }}</div>
-            <div class="emotion-phase-confidence">置信度 {{ Math.round((marketData.sentiment.emotion_phase.confidence || 0) * 100) }}%</div>
+            <div class="emotion-phase-name">{{ currentEmotionPhase.phase_name }}</div>
+            <div class="emotion-phase-confidence">置信度 {{ Math.round((currentEmotionPhase.confidence || 0) * 100) }}%</div>
           </div>
-          <div class="emotion-phase-action">{{ marketData.sentiment.emotion_phase.action_hint }}</div>
-          <div class="emotion-phase-reason" v-if="marketData.sentiment.emotion_phase.reason_summary">
-            {{ marketData.sentiment.emotion_phase.reason_summary }}
+          <div class="emotion-phase-action">{{ currentEmotionPhase.action_hint }}</div>
+          <div class="emotion-phase-reason" v-if="currentEmotionPhase.reason_summary">
+            {{ currentEmotionPhase.reason_summary }}
           </div>
-          <div class="emotion-phase-stale" v-if="marketData.sentiment.emotion_phase.data_status?.is_stale">
+          <div class="emotion-phase-stale" v-if="currentEmotionPhase.data_status?.is_stale">
             情绪周期日期与行情日期不一致，请先执行“更新最新情绪”。
           </div>
         </div>
@@ -449,6 +449,33 @@ const phaseLabelMap = {
   euphoria: '高潮',
   decline: '退潮'
 }
+const phaseCardMeta = {
+  ice: {
+    phase_name: '冰点期(股灾)',
+    action_hint: '按计划分批低吸，等待情绪修复的第一波确认。',
+    risk_hint: '优先控制抄底节奏，避免恐慌未收敛前过早重仓。'
+  },
+  start: {
+    phase_name: '启动期',
+    action_hint: '轻仓试错，优先跟踪开始转强的核心方向。',
+    risk_hint: '信号仍在构建，避免一次性重仓。'
+  },
+  ferment: {
+    phase_name: '发酵期',
+    action_hint: '持股为主，围绕主线做结构优化。',
+    risk_hint: '注意分化，不要在同一方向过度堆叠。'
+  },
+  euphoria: {
+    phase_name: '高潮期',
+    action_hint: '分批止盈，降低追高频率，保留核心强势仓位。',
+    risk_hint: '高波动区间，提防情绪反转和高位回撤。'
+  },
+  decline: {
+    phase_name: '退潮期',
+    action_hint: '控制回撤，减仓弱势品种，等待下一轮信号。',
+    risk_hint: '退潮时容易连续回撤，避免频繁交易。'
+  }
+}
 const emotionLegendSelected = ref(
   Object.fromEntries(emotionCycleSeriesMeta.map((item) => [item.name, true]))
 )
@@ -679,6 +706,129 @@ const resolveEmotionPhaseCode = (point, prevPoint) => {
   return 'start'
 }
 
+const resolveEmotionPhaseDetail = (point, prevPoint, granularity, dataStatus = null) => {
+  const closeUp = Number(point.closeUp || 0)
+  const strongUp = Number(point.strongUp || 0)
+  const followRate = Number(point.followRate || 0)
+  const prevCloseUp = Number(prevPoint?.closeUp ?? closeUp)
+  const prevStrongUp = Number(prevPoint?.strongUp ?? strongUp)
+  const deltaCloseUp = closeUp - prevCloseUp
+  const deltaStrongUp = strongUp - prevStrongUp
+  const code = resolveEmotionPhaseCode(point, prevPoint)
+  const meta = phaseCardMeta[code] || phaseCardMeta.start
+  const reasons = []
+  let confidenceHits = 0
+
+  if (code === 'ice') {
+    if (closeUp <= 38) {
+      reasons.push(`收盘上涨比例偏低(${closeUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (strongUp <= 15) {
+      reasons.push(`强势上涨比例偏低(${strongUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (deltaCloseUp <= 0) {
+      reasons.push(`短期动量仍未转强(${deltaCloseUp.toFixed(1)})`)
+      confidenceHits += 1
+    }
+  } else if (code === 'euphoria') {
+    if (closeUp >= 72) {
+      reasons.push(`收盘上涨比例高位(${closeUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (strongUp >= 35) {
+      reasons.push(`强势上涨比例较高(${strongUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (followRate >= 58) {
+      reasons.push(`涨停溢价较好(${followRate.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+  } else if (code === 'decline') {
+    if (deltaCloseUp <= -5) {
+      reasons.push(`收盘上涨比例回落(${deltaCloseUp.toFixed(1)})`)
+      confidenceHits += 1
+    }
+    if (strongUp < 20) {
+      reasons.push(`强势上涨比例偏弱(${strongUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (deltaStrongUp <= -2) {
+      reasons.push(`强势动量走弱(${deltaStrongUp.toFixed(1)})`)
+      confidenceHits += 1
+    }
+  } else if (code === 'ferment') {
+    if (closeUp >= 56) {
+      reasons.push(`收盘上涨比例维持强势(${closeUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (strongUp >= 24) {
+      reasons.push(`强势上涨比例抬升(${strongUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (deltaCloseUp >= -1) {
+      reasons.push(`短期动量保持稳定(${deltaCloseUp.toFixed(1)})`)
+      confidenceHits += 1
+    }
+  } else {
+    if (closeUp >= 42 && closeUp <= 58) {
+      reasons.push(`收盘上涨比例进入修复区间(${closeUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+    if (deltaCloseUp >= 2) {
+      reasons.push(`短期动量明显改善(${deltaCloseUp.toFixed(1)})`)
+      confidenceHits += 1
+    }
+    if (strongUp >= 18) {
+      reasons.push(`强势表现开始回升(${strongUp.toFixed(1)}%)`)
+      confidenceHits += 1
+    }
+  }
+
+  if (!reasons.length) {
+    reasons.push(`${granularity === 'hourly' ? '小时' : '日线'}情绪曲线当前处于中间区间`)
+  }
+
+  return {
+    phase_code: code,
+    phase_name: meta.phase_name,
+    confidence: Math.min(0.95, 0.48 + confidenceHits * 0.12),
+    action_hint: meta.action_hint,
+    risk_hint: meta.risk_hint,
+    reason_summary: reasons.join('；'),
+    data_status: dataStatus || undefined
+  }
+}
+
+const currentEmotionPhase = computed(() => {
+  const ec = emotionCycleData.value
+  const dates = ec?.dates || []
+  if (!dates.length) {
+    return marketData.value.sentiment?.emotion_phase || null
+  }
+
+  const lastIndex = dates.length - 1
+  const point = {
+    closeUp: ec?.close_up_rate?.[lastIndex] ?? 0,
+    strongUp: ec?.strong_up_rate?.[lastIndex] ?? 0,
+    followRate: ec?.limit_up_follow_rate?.[lastIndex] ?? 0
+  }
+  const prevPoint = lastIndex > 0
+    ? {
+        closeUp: ec?.close_up_rate?.[lastIndex - 1] ?? point.closeUp,
+        strongUp: ec?.strong_up_rate?.[lastIndex - 1] ?? point.strongUp,
+        followRate: ec?.limit_up_follow_rate?.[lastIndex - 1] ?? point.followRate
+      }
+    : point
+
+  const fallbackStatus = emotionGranularity.value === 'daily'
+    ? marketData.value.sentiment?.emotion_phase?.data_status
+    : null
+
+  return resolveEmotionPhaseDetail(point, prevPoint, emotionGranularity.value, fallbackStatus)
+})
+
 const emotionPhaseTimeline = computed(() => {
   const ec = emotionCycleData.value
   const dates = ec?.dates || []
@@ -704,12 +854,12 @@ const emotionPhaseTimeline = computed(() => {
           followRate: followSeries[i - 1] ?? point.followRate
         }
       : point
-    const code = resolveEmotionPhaseCode(point, prevPoint)
+    const detail = resolveEmotionPhaseDetail(point, prevPoint, emotionGranularity.value)
     timeline.push({
       date: dates[i],
       dateLabel: formatTrendDate(dates[i]),
-      code,
-      label: phaseLabelMap[code] || '启动',
+      code: detail.phase_code,
+      label: phaseLabelMap[detail.phase_code] || '启动',
       showLabel: i === 0 || i === size - 1 || i % labelStep === 0,
       closeUp: Number(point.closeUp || 0).toFixed(1),
       strongUp: Number(point.strongUp || 0).toFixed(1),

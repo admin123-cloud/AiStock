@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "reports" / "gen3_route_execution_mandate_candidate_package_v3"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-V2_PACKAGE = ROOT / "reports" / "gen3_range_filtered_candidate_package_v2"
-MANDATE_DIR = ROOT / "reports" / "gen3_route_execution_mandate_v1"
-VISIBILITY_DIR = ROOT / "reports" / "gen3_route_exit_visibility_audit_v1"
-GUARDED_DIR = ROOT / "reports" / "gen3_dynamic_router_guarded_v1"
-SECTOR_INDEX_VALIDATION_DIR = ROOT / "reports" / "g3_sector_index_logic_validation_v1"
+from utils.paths import report_path
+
+OUT_DIR = report_path("gen3_route_execution_mandate_candidate_package_v3")
+
+V2_PACKAGE = report_path("gen3_range_filtered_candidate_package_v2")
+MANDATE_DIR = report_path("gen3_route_execution_mandate_v1")
+VISIBILITY_DIR = report_path("gen3_route_exit_visibility_audit_v1")
+GUARDED_DIR = report_path("gen3_dynamic_router_guarded_v1")
+SECTOR_INDEX_VALIDATION_DIR = report_path("g3_sector_index_logic_validation_v1")
 
 MAIN_PROFILE = "down_range_same_day_close30_strong_haircut2"
 CONSERVATIVE_PROFILE = "down_range_same_day_close100_strong_haircut2"

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-V4_DIR = ROOT / "reports" / "gen3_v4_research_package_v1"
-D4_DIR = ROOT / "reports" / "gen3_v4_strong_confirm_d3_visible_combo_v1"
-GUARDED_DIR = ROOT / "reports" / "gen3_guarded_candidate_package_v1"
-OUT_DIR = ROOT / "reports" / "gen3_v4_guarded_decision_matrix_v1"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path  # noqa: E402
+
+V4_DIR = report_path("gen3_v4_research_package_v1")
+D4_DIR = report_path("gen3_v4_strong_confirm_d3_visible_combo_v1")
+GUARDED_DIR = report_path("gen3_guarded_candidate_package_v1")
+OUT_DIR = report_path("gen3_v4_guarded_decision_matrix_v1")
 
 
 def pct(v: float | int | None) -> str:
@@ -38,6 +44,17 @@ def md_table(df: pd.DataFrame, pct_cols: set[str] | None = None) -> str:
 
 
 def get_row(df: pd.DataFrame, **conds: str) -> pd.Series:
+    if df.empty:
+        return pd.Series(
+            {
+                "trade_count": 0,
+                "total_return": 0.0,
+                "max_drawdown": 0.0,
+                "win_rate": 0.0,
+                "avg_trade_return": 0.0,
+                "worst_trade": 0.0,
+            }
+        )
     m = pd.Series(True, index=df.index)
     for col, value in conds.items():
         m &= df[col].astype(str).eq(str(value))
@@ -50,11 +67,13 @@ def get_row(df: pd.DataFrame, **conds: str) -> pd.Series:
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     v4 = pd.read_csv(V4_DIR / "g3_v4_research_summary.csv")
-    d4 = pd.read_csv(D4_DIR / "summary.csv")
+    d4_summary_path = D4_DIR / "summary.csv"
+    d4 = pd.read_csv(d4_summary_path) if d4_summary_path.exists() else pd.DataFrame()
     guarded = pd.read_csv(GUARDED_DIR / "g3_guarded_candidate_summary.csv")
     guarded_stress = pd.read_csv(GUARDED_DIR / "g3_guarded_execution_stress_summary.csv")
     v4_windows = pd.read_csv(V4_DIR / "g3_v4_research_windows.csv")
-    d4_windows = pd.read_csv(D4_DIR / "d4_open__cost30" / "window_summary.csv")
+    d4_windows_path = D4_DIR / "d4_open__cost30" / "window_summary.csv"
+    d4_windows = pd.read_csv(d4_windows_path) if d4_windows_path.exists() else pd.DataFrame()
     guarded_windows = pd.read_csv(GUARDED_DIR / "g3_guarded_candidate_windows.csv")
 
     rows: list[dict] = []

@@ -13,13 +13,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.gen3_backtest_strong_volume5_slot_resim_v1 import _trade_calendar
+from utils.paths import report_path
 from utils.market_warehouse import clickhouse_query_df
 
-
-PANIC_PATH = ROOT / "reports" / "gen3_panic_v2_research" / "final_candidate_v1" / "m30_close5_full_nextopen_cost30_closed_trades.csv"
-RANGE_PATH = ROOT / "reports" / "gen3_range_v3_mtm_pressure_v1" / "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv"
-STRONG_PATH = ROOT / "reports" / "gen3_strong_v2_independent_source_v1" / "strong_v2_main_up_only_hold5_closed_trades.csv"
-OUT_DIR = ROOT / "reports" / "gen3_dynamic_router_combo_v1"
+PANIC_PATH = report_path("gen3_panic_v2_research", "final_candidate_v1", "m30_close5_full_nextopen_cost30_closed_trades.csv")
+RANGE_PATH = report_path("gen3_range_v3_mtm_pressure_v1", "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv")
+STRONG_PATH = report_path("gen3_strong_v2_independent_source_v1", "strong_v2_main_up_only_hold5_closed_trades.csv")
+OUT_DIR = report_path("gen3_dynamic_router_combo_v1")
 
 INITIAL_CAPITAL = 150_000.0
 SLOTS = 5

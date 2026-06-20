@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-V4_DIR = ROOT / "reports" / "gen3_v4_research_package_v1"
-OUT_DIR = ROOT / "reports" / "gen3_v4_strong_path_shock_audit_v1"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path  # noqa: E402
+
+V4_DIR = report_path("gen3_v4_research_package_v1")
+OUT_DIR = report_path("gen3_v4_strong_path_shock_audit_v1")
 
 
 def pct(v: float | int | None) -> str:

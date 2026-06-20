@@ -40,6 +40,14 @@ SCHEDULER_CONFIG: Dict[str, Any] = {
             "trading_hours": {"start": "09:30", "end": "15:00"},
             "interval": 900,
         },
+        "cls_news": {
+            "enabled": True,
+            "description": "CLS telegraph news refresh and event signal scoring",
+            "trading_days_only": False,
+            "interval": 45,
+            "pages": 1,
+            "rn": 50,
+        },
     },
     "sync": {
         "kline": {

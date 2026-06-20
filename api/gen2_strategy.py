@@ -86,7 +86,13 @@ GEN2_ALPHA191_OVERHEAD005_DD8_RUN_DIR = (
 GEN2_ALPHA191_DD_GUARD_REPORT = report_path("gen2_alpha191_dd_guard_sweep", "conclusion_zh.md")
 GEN2_ALPHA191_NEXT_GUARD_REPORT = report_path("gen2_alpha191_score050_next_guard_sweep_v2", "conclusion_zh.md")
 GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_RUN_DIR = (
-    report_path("gen2_alpha191_light_constraint_matrix", "backtests", "volume5_keep80_runup_le100")
+    report_path("gen2_v2_complete_strategy", "runs", "official", "full")
+)
+GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_LEGACY_330_RUN_DIR = (
+    report_path("gen2_v2_complete_strategy", "runs", "official_legacy_330", "full")
+)
+GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_SORT_PROBE_G2V2_RUN_DIR = (
+    report_path("gen2_v2_complete_strategy", "runs", "sort_probe", "g2_v2", "full")
 )
 GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_REPORT = REPO_ROOT / "docs" / "strategy-g2-alpha191-light-constraint-contribution.md"
 GEN2_CURRENT_SHADOW_LEDGER = report_path("gen2_risk_cool_shadow_ledger", "shadow_ledger.csv")
@@ -166,7 +172,12 @@ GEN2_BACKTEST_RUNS = {
         "strategy_name": "G2 第二代完整版：volume5 + 突破板块扩散",
         "strategy_display_name": "第二代完整版：volume5主线 + 突破主线 + 板块扩散",
         "status": "main_execution_candidate",
-        "run_dir": GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_RUN_DIR,
+        "run_dir": GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_SORT_PROBE_G2V2_RUN_DIR,
+        "allow_summary_only": True,
+        "fallback_run_dirs": [
+            GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_RUN_DIR,
+            GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_LEGACY_330_RUN_DIR,
+        ],
         "summary_report": report_path("gen2_v2_complete_strategy", "summary.md"),
         "state_report": REPO_ROOT / "docs" / "strategy-g2-alpha191-volume5-light-constraints.md",
         "explanation_report": report_path("gen2_v2_complete_strategy", "summary.md"),
@@ -177,6 +188,21 @@ GEN2_BACKTEST_RUNS = {
             "排序：采用 g2_v2，同日先排 volume5 主线，再用突破主线补位；同主线内按调整后分数、排名和确认时间排序。",
             "组合引擎：沿用 stop_cd3_skip、30m 风控、最多 2 仓、每日最多 1 笔、单票最多 50%。",
             "当前定位：第二代正式完整回测版本；真实下单仍需实盘页资金、持仓纪律和当日数据质量确认。",
+        ],
+    },
+    "g2_alpha191_volume5_keep80_runup_current": {
+        "strategy_code": "g2_alpha191_volume5_keep80_runup_current",
+        "strategy_name": "G2 Alpha191 volume5 + big_bull (current)",
+        "strategy_display_name": "G2 Alpha191 volume5 + big_bull（当前运行）",
+        "status": "research_only",
+        "run_dir": GEN2_ALPHA191_MAIN_VOLUME5_RUNUP_RUN_DIR,
+        "fallback_run_dirs": [report_path("gen2_v2_complete_strategy", "runs", "sort_probe", "g2_v2", "full")],
+        "summary_report": report_path("gen2_v2_complete_strategy", "summary.md"),
+        "state_report": REPO_ROOT / "docs" / "strategy-g2-alpha191-light-constraint-contribution.md",
+        "explanation_report": report_path("gen2_v2_complete_strategy", "summary.md"),
+        "rule_lines": [
+            "级排序分数捹: volume5 + big_bull ",
+            "g2_v2 排序：先 volume5 后 breakout；按分数/评分顺序取样",
         ],
     },
     "g2_attack_v1_prev_low": {
@@ -976,6 +1002,28 @@ def _read_csv_records(path: Path, limit: int = 0) -> List[Dict[str, Any]]:
     return df.to_dict("records")
 
 
+def _sort_records_by_latest_time(
+    rows: List[Dict[str, Any]],
+    preferred_keys: List[str],
+    fallback_keys: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    fallback_keys = fallback_keys or []
+
+    def _pick_time(row: Dict[str, Any]) -> str:
+        for key in (*preferred_keys, *fallback_keys):
+            value = str(row.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _sort_key(row: Dict[str, Any]) -> tuple[int, str, str]:
+        value = _pick_time(row)
+        tie_breaker = str(row.get("code") or row.get("name") or row.get("trade_key") or "")
+        return (1 if value else 0, value, tie_breaker)
+
+    return sorted(rows, key=_sort_key, reverse=True)
+
+
 def _read_json_file(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -1566,14 +1614,36 @@ def build_gen2_backtest_history(strategy_code: str = GEN2_BACKTEST_DEFAULT_CODE)
     if not config:
         return _sanitize({"available": False, "message": f"未知的策略版本: {code}", "strategy_code": code})
 
-    run_dir = Path(config["run_dir"])
+    candidate_dirs = [Path(config["run_dir"])]
+    candidate_dirs.extend(Path(item) for item in (config.get("fallback_run_dirs") or []))
+    allow_summary_only = bool(config.get("allow_summary_only"))
+    selected_dir: Optional[Path] = None
+    summary_only_dir: Optional[Path] = None
+
+    for candidate in candidate_dirs:
+        has_summary = (candidate / "summary.json").exists()
+        has_curve = (candidate / "equity_curve.csv").exists()
+        has_trades = (candidate / "trades.csv").exists()
+        if not has_summary:
+            continue
+        if has_curve and has_trades:
+            selected_dir = candidate
+            break
+        if allow_summary_only and summary_only_dir is None:
+            summary_only_dir = candidate
+
+    if selected_dir is None:
+        selected_dir = summary_only_dir if allow_summary_only else None
+    if selected_dir is None:
+        selected_dir = candidate_dirs[0]
+    run_dir = selected_dir
     summary_path = run_dir / "summary.json"
     curve_path = run_dir / "equity_curve.csv"
     trades_path = run_dir / "trades.csv"
     signals_path = run_dir / "signals.csv"
     segment_path = run_dir / "segment_summary.csv"
     decision_ledger_path = run_dir / "decision_ledger.csv"
-    if not summary_path.exists() or not curve_path.exists() or not trades_path.exists():
+    if not summary_path.exists():
         return _sanitize(
             {
                 "available": False,
@@ -1587,8 +1657,16 @@ def build_gen2_backtest_history(strategy_code: str = GEN2_BACKTEST_DEFAULT_CODE)
     curve_rows = _read_csv_records(curve_path)
     signal_all_rows = _read_csv_records(signals_path)
     raw_trade_rows = _read_csv_records(trades_path)
-    trade_rows = _apply_trade_classifications(code, _enrich_trades_with_buy_strategy(raw_trade_rows, signal_all_rows))
-    signal_rows = signal_all_rows[:300]
+    trade_rows = _sort_records_by_latest_time(
+        _apply_trade_classifications(code, _enrich_trades_with_buy_strategy(raw_trade_rows, signal_all_rows)),
+        ["sell_datetime", "sell_date", "buy_datetime", "buy_date"],
+        ["trade_key", "code"],
+    )
+    signal_rows = _sort_records_by_latest_time(
+        signal_all_rows[:300],
+        ["confirm_datetime", "entry_date"],
+        ["code", "trade_key"],
+    )
     segment_rows = _read_csv_records(segment_path) if segment_path.exists() else []
     decision_rows = _read_csv_records(decision_ledger_path, limit=300) if decision_ledger_path.exists() else []
     latest_curve = curve_rows[-1] if curve_rows else {}
@@ -1615,7 +1693,6 @@ def build_gen2_backtest_history(strategy_code: str = GEN2_BACKTEST_DEFAULT_CODE)
         "daily_sharpe_text": f"{daily_sharpe:.2f}" if daily_sharpe is not None else None,
         **concentration,
     }
-
     return _sanitize(
         {
             "available": True,

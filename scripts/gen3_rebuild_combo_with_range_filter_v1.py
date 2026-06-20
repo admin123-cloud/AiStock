@@ -25,9 +25,10 @@ from scripts.gen3_build_dynamic_router_combo_v1 import (  # noqa: E402
 )
 from scripts.gen3_build_dynamic_router_guarded_v1 import standardize_strong_guarded  # noqa: E402
 
+from utils.paths import report_path  # noqa: E402
 
-OUT_DIR = ROOT / "reports" / "gen3_combo_range_filter_v1"
-RANGE_SOURCE = ROOT / "reports" / "gen3_range_v3_mtm_pressure_v1" / "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv"
+OUT_DIR = report_path("gen3_combo_range_filter_v1")
+RANGE_SOURCE = report_path("gen3_range_v3_mtm_pressure_v1", "range_v3_weak_low_not_chasing_h5_cost30_closed_trades.csv")
 
 STRONG_GUARD = {
     "name": "strong_breadth_score_volume5_guard",

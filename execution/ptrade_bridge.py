@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
+try:
+    from utils.paths import runtime_path
+except Exception:  # pragma: no cover - fallback for standalone copies
+    runtime_path = None
+
 
 def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -154,7 +159,10 @@ class PTradeBridgePaths:
 
 class PTradeFileBridge:
     def __init__(self, root: Optional[Path | str] = None) -> None:
-        default_root = Path(__file__).resolve().parents[1] / "data" / "runtime" / "ptrade_bridge"
+        if callable(runtime_path):
+            default_root = runtime_path("ptrade_bridge")
+        else:
+            default_root = Path(r"F:\Stock\AiStockData\data\runtime\ptrade_bridge")
         self.paths = PTradeBridgePaths(Path(root or os.getenv("AISTOCK_PTRADE_BRIDGE_DIR") or default_root))
         self.paths.ensure()
 
@@ -181,6 +189,21 @@ class PTradeFileBridge:
         latest_probe_ack_status = str(latest_probe_ack.get("status") or "") if latest_probe_ack else ""
         heartbeat_recent = heartbeat_age is not None and heartbeat_age <= heartbeat_recent_seconds
         ptrade_live_order_enabled = bool(heartbeat.get("enable_live_order"))
+        heartbeat_source = str(heartbeat.get("source") or "").strip()
+        heartbeat_execution_mode = str(heartbeat.get("execution_mode") or "").strip()
+        if heartbeat_source == "ptrade_file_bridge_strategy" and heartbeat_execution_mode == "ptrade_python_script_runner":
+            consumer_type = "ptrade_python_script_runner"
+        elif heartbeat_source == "ptrade_file_bridge_strategy":
+            consumer_type = "ptrade_internal_strategy"
+        elif heartbeat_source == "ptrade_file_bridge_api_runner":
+            consumer_type = "local_api_runner"
+        elif heartbeat_source:
+            consumer_type = "unknown"
+        else:
+            consumer_type = "missing"
+        ptrade_internal_strategy_running = bool(heartbeat_recent and consumer_type == "ptrade_internal_strategy")
+        ptrade_python_script_runner_running = bool(heartbeat_recent and consumer_type == "ptrade_python_script_runner")
+        local_api_runner_running = bool(heartbeat_recent and consumer_type == "local_api_runner")
         dry_run_probe_recent = (
             latest_probe_ack is not None
             and latest_probe_ack_status in {"dry_run", "waiting_approval"}
@@ -220,6 +243,12 @@ class PTradeFileBridge:
             "last_processing_file": str(last_processing) if last_processing else None,
             "last_processing_age_seconds": round(_file_age_seconds(last_processing), 3) if last_processing else None,
             "ptrade_heartbeat": heartbeat or None,
+            "ptrade_heartbeat_source": heartbeat_source or None,
+            "ptrade_heartbeat_execution_mode": heartbeat_execution_mode or None,
+            "ptrade_consumer_type": consumer_type,
+            "ptrade_internal_strategy_running": ptrade_internal_strategy_running,
+            "ptrade_python_script_runner_running": ptrade_python_script_runner_running,
+            "local_api_runner_running": local_api_runner_running,
             "ptrade_heartbeat_file": str(heartbeat_file) if heartbeat_file.exists() else None,
             "ptrade_heartbeat_age_seconds": round(heartbeat_age, 3) if heartbeat_age is not None else None,
             "ptrade_strategy_queue": strategy_queue if heartbeat else None,
@@ -232,6 +261,9 @@ class PTradeFileBridge:
                 "ptrade_heartbeat_recent": bool(heartbeat_recent),
                 "dry_run_probe_ack_recent": bool(dry_run_probe_recent),
                 "ptrade_live_order_enabled": bool(ptrade_live_order_enabled),
+                "ptrade_internal_strategy_running": ptrade_internal_strategy_running,
+                "ptrade_python_script_runner_running": ptrade_python_script_runner_running,
+                "local_api_runner_running": local_api_runner_running,
                 "no_stale_processing": len(stale_processing) == 0,
                 "ready_for_live_order": ready_for_live,
                 "message": "PTrade bridge is ready for approved live order." if ready_for_live else "Local submit is available, but PTrade consumption is not fully proven yet.",

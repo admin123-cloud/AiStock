@@ -22,9 +22,10 @@ from scripts.ptrade_bridge_preflight import (
     _same_path,
 )
 from scripts.ptrade_bridge_readiness_audit import write_json
+from utils.paths import runtime_path
 
 
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+DEFAULT_BRIDGE_DIR = runtime_path("ptrade_bridge")
 DEFAULT_REPORT = ROOT / "reports" / "ptrade_bridge_heartbeat_diagnose" / "latest.json"
 
 

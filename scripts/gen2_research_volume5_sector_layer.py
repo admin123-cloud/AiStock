@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -14,16 +14,17 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import scripts.gen2_research_breakout_sector_filter_matrix as sector_filter_matrix  # noqa: E402
 from scripts.gen2_backtest_risk_cool_dynamic_circuit import _run_dynamic  # noqa: E402
 from scripts.gen2_runtime_dates import add_end_date_argument, resolve_end_date, resolve_window_ends  # noqa: E402
 from scripts.gen2_research_breakout_sector_filter_matrix import (  # noqa: E402
     _members,
     _sector_intraday,
 )
+from utils.paths import report_path  # noqa: E402
 
-
-SOURCE = ROOT / "reports" / "gen2_breakout_buy_point_research" / "sources" / "volume5_dynamic_stop_cd3_mapped.parquet"
-OUT = ROOT / "reports" / "g2_volume5_sector_layer_probe"
+SOURCE = report_path("gen2_breakout_buy_point_research", "sources", "volume5_dynamic_stop_cd3_mapped.parquet")
+OUT = report_path("g2_volume5_sector_layer_probe")
 def _json_default(obj: Any) -> Any:
     if isinstance(obj, (np.integer,)):
         return int(obj)
@@ -50,8 +51,20 @@ def _num_col(df: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(df[column], errors="coerce").fillna(-1.0)
 
 
+def _resolve_volume5_source() -> Path:
+    candidates = [
+        SOURCE,
+        report_path("gen2_alpha191_light_constraint_matrix", "sources", "volume5_keep80_runup_le100.parquet"),
+        report_path("gen2_v2_complete_strategy", "sources", "g2_v2_complete.parquet"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("volume5 source missing. tried: " + " | ".join(str(item) for item in candidates))
+
+
 def _enrich_volume5() -> pd.DataFrame:
-    df = pd.read_parquet(SOURCE).copy()
+    df = pd.read_parquet(_resolve_volume5_source()).copy()
     df["source_family"] = "volume5"
     df["entry_date"] = pd.to_datetime(df["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -62,6 +75,7 @@ def _enrich_volume5() -> pd.DataFrame:
     members = _members(
         tuple(sorted(set(df["code6"].dropna().astype(str).str.zfill(6))))
     ).sort_values(["stock_code6", "level", "stock_count"], ascending=[True, True, True])
+    sector_filter_matrix._MEMBERS_CACHE = members
     sector_map = {
         (r.stock_code6, int(r.level)): r
         for r in members.itertuples(index=False)

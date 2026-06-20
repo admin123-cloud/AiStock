@@ -8,17 +8,18 @@ from typing import Any
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path
 
 import scripts.gen3_build_dynamic_router_combo_v1 as router
 import scripts.gen3_test_range_execution_margin_v1 as margin
 
 
-OUT_DIR = ROOT / "reports" / "gen3_v4_research_package_v1"
-SECTOR_INDEX_VALIDATION_DIR = ROOT / "reports" / "g3_sector_index_logic_validation_v1"
+OUT_DIR = report_path("gen3_v4_research_package_v1")
+SECTOR_INDEX_VALIDATION_DIR = report_path("g3_sector_index_logic_validation_v1")
 INITIAL_CAPITAL = 150_000.0
 STRONG_GUARD_PROFILE = "strong_breadth_score_volume5_guard"
 STRONG_GUARD_THRESHOLDS = {

@@ -14,10 +14,11 @@ if str(ROOT) not in sys.path:
 
 import scripts.gen3_build_dynamic_router_combo_v1 as router
 import scripts.gen3_test_strong_quality_filter_v1 as quality
+from utils.paths import report_path
 
 
-OUT_DIR = ROOT / "reports" / "gen3_range_execution_margin_v1"
-RANGE_DIR = ROOT / "reports" / "gen3_range_v3_gap_candidate_source_v1"
+OUT_DIR = report_path("gen3_range_execution_margin_v1")
+RANGE_DIR = report_path("gen3_range_v3_gap_candidate_source_v1")
 INITIAL_CAPITAL = 150_000.0
 
 

@@ -13,12 +13,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import scripts.gen3_build_dynamic_router_combo_v1 as router
+from utils.paths import report_path
 
 
-OUT_DIR = ROOT / "reports" / "gen3_strong_quality_filter_v1"
-STRONG_PLUSWEAK = (
-    ROOT / "reports" / "gen3_strong_v2_independent_source_v1" / "strong_v2_main_up_plus_weak04_hold5_closed_trades.csv"
-)
+OUT_DIR = report_path("gen3_strong_quality_filter_v1")
+STRONG_PLUSWEAK = report_path("gen3_strong_v2_independent_source_v1", "strong_v2_main_up_plus_weak04_hold5_closed_trades.csv")
 
 INITIAL_CAPITAL = 150_000.0
 ROUTE_DAILY_LIMIT = {"down_panic": 2, "range_gap": 1, "strong_main": 2}

@@ -1,11 +1,14 @@
 import asyncio
 import uuid
+import subprocess
+import sys
 from typing import Optional, List
 from datetime import datetime, timedelta
 import heapq
 from urllib.parse import quote
 import threading
 import json
+from pathlib import Path
 from sqlalchemy import text
 from fastapi import APIRouter, HTTPException, Query, Body, Request
 from pydantic import BaseModel
@@ -13,8 +16,11 @@ from pydantic import BaseModel
 from utils.database import db
 from scheduler.trading_calendar import get_trading_dates_from_db
 from utils.logger import get_logger
+from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+from utils.paths import report_path
 
 logger = get_logger(__name__)
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # 创建路由对象
 router = APIRouter(prefix="/kline-check", tags=["K线完整性检查"])
@@ -1413,6 +1419,454 @@ def process_repair_trade_date_task(task_id: str, trade_date: str, data_type: str
                 "summary": {"total": 1, "success": 0, "failed": 1, "trade_date": trade_date},
                 "generated_at": datetime.now().isoformat(),
                 "error": str(e),
+            },
+        )
+
+
+PREVIOUS_DAY_REPAIR_PERIODS = {"1d", "5m", "15m", "30m", "60m"}
+MINUTE_REPAIR_FREQ = {"5m": "5", "15m": "15", "30m": "30", "60m": "60"}
+PREVIOUS_DAY_REPAIR_SOURCES = {"auto", "tdxquant", "baostock"}
+TDXQUANT_FAST_MINUTE_PERIODS = {"15m", "30m"}
+
+
+def _normalize_previous_day_periods(raw_periods: object) -> list[str]:
+    periods = raw_periods if isinstance(raw_periods, list) and raw_periods else ["1d", "5m", "15m", "30m", "60m"]
+    out: list[str] = []
+    for item in periods:
+        value = str(item or "").strip().lower()
+        if value in {"day", "daily", "d"}:
+            value = "1d"
+        if value in {"5", "15", "30", "60"}:
+            value = f"{value}m"
+        if value not in PREVIOUS_DAY_REPAIR_PERIODS:
+            raise HTTPException(status_code=400, detail=f"不支持的前一日补齐周期: {item}")
+        if value not in out:
+            out.append(value)
+    return out
+
+
+def _resolve_previous_repair_trade_date(explicit_date: str = "") -> str:
+    if explicit_date:
+        return explicit_date
+    try:
+        df = clickhouse_query_df(
+            """
+            SELECT max(trade_date) AS target_trade_date
+            FROM kline_daily
+            WHERE trade_date < today()
+            """
+        )
+        if not df.empty and df.iloc[0].get("target_trade_date") is not None:
+            return str(df.iloc[0]["target_trade_date"])[:10]
+    except Exception as exc:
+        logger.warning(f"resolve previous repair trade date from ClickHouse failed: {exc}")
+    dates = get_trading_dates_from_db((datetime.now() - timedelta(days=14)).date(), datetime.now().date())
+    if dates:
+        today_text = datetime.now().strftime("%Y-%m-%d")
+        prev = [str(item)[:10] for item in dates if str(item)[:10] < today_text]
+        if prev:
+            return prev[-1]
+    return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _period_coverage(period: str, trade_date: str, codes: list[str] | None = None) -> dict:
+    table = get_table_name(period)
+    if not clickhouse_table_exists(table):
+        return {"period": period, "table": table, "exists": False, "rows": 0, "codes": 0}
+    date_expr = "trade_date" if period == "1d" else "toDate(datetime)"
+    time_col = "trade_date" if period == "1d" else "datetime"
+    try:
+        if codes:
+            df = clickhouse_query_df(
+                f"""
+                SELECT
+                    count() AS rows,
+                    countDistinct(code) AS codes,
+                    min({time_col}) AS first_time,
+                    max({time_col}) AS last_time
+                FROM {table}
+                WHERE {date_expr} = toDate({{trade_date:String}})
+                  AND code IN {{codes:Array(String)}}
+                """,
+                {"trade_date": trade_date, "codes": sorted(set(codes))},
+            )
+        else:
+            df = clickhouse_query_df(
+                f"""
+                SELECT
+                    count() AS rows,
+                    countDistinct(code) AS codes,
+                    min({time_col}) AS first_time,
+                    max({time_col}) AS last_time
+                FROM {table}
+                WHERE {date_expr} = toDate(?)
+                """,
+                [trade_date],
+            )
+        row = df.iloc[0].to_dict() if not df.empty else {}
+        return {
+            "period": period,
+            "table": table,
+            "exists": True,
+            "scope": "codes" if codes else "all",
+            "requested_codes": len(set(codes)) if codes else None,
+            "rows": int(row.get("rows") or 0),
+            "codes": int(row.get("codes") or 0),
+            "first_time": str(row.get("first_time")) if row.get("first_time") is not None else None,
+            "last_time": str(row.get("last_time")) if row.get("last_time") is not None else None,
+            "expected_bars_per_code": BARS_PER_DAY_MAP.get(period),
+        }
+    except Exception as exc:
+        return {"period": period, "table": table, "exists": True, "error": str(exc), "rows": 0, "codes": 0}
+
+
+def _coverage_is_adequate(item: dict, requested_codes: list[str] | None = None, threshold: float = 0.995) -> bool:
+    if not item.get("exists") or item.get("error"):
+        return False
+    period = str(item.get("period") or "")
+    rows = int(item.get("rows") or 0)
+    codes = int(item.get("codes") or 0)
+    if rows <= 0 or codes <= 0:
+        return False
+    if requested_codes:
+        expected_codes = len(set(requested_codes))
+        bars = BARS_PER_DAY_MAP.get(period, 1) or 1
+        return codes >= expected_codes and rows >= int(expected_codes * bars * threshold)
+    if period == "1d":
+        return codes >= 3000
+    bars = BARS_PER_DAY_MAP.get(period)
+    return bool(bars and codes >= 3000 and rows >= int(codes * bars * threshold))
+
+
+def _all_coverages_adequate(coverages: list[dict], periods: list[str], requested_codes: list[str] | None = None) -> bool:
+    by_period = {str(item.get("period")): item for item in coverages}
+    return all(_coverage_is_adequate(by_period.get(period, {}), requested_codes=requested_codes) for period in periods)
+
+
+def _inadequate_periods(
+    coverages: list[dict],
+    periods: list[str],
+    requested_codes: list[str] | None = None,
+) -> list[str]:
+    by_period = {str(item.get("period")): item for item in coverages}
+    return [
+        period
+        for period in periods
+        if not _coverage_is_adequate(by_period.get(period, {}), requested_codes=requested_codes)
+    ]
+
+
+def _source_allows_tdxquant(source: str) -> bool:
+    return source in ("auto", "tdxquant")
+
+
+def _source_allows_baostock(source: str) -> bool:
+    return source in ("auto", "baostock")
+
+
+def _run_cmd(cmd: list[str], timeout_seconds: int) -> dict:
+    started = datetime.now()
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(30, int(timeout_seconds or 30)),
+        )
+        return {
+            "ok": result.returncode == 0,
+            "returncode": result.returncode,
+            "cmd": cmd,
+            "started_at": started.isoformat(timespec="seconds"),
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            "duration_seconds": (datetime.now() - started).total_seconds(),
+            "stdout_tail": result.stdout[-4000:],
+            "stderr_tail": result.stderr[-4000:],
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "returncode": None,
+            "cmd": cmd,
+            "started_at": started.isoformat(timespec="seconds"),
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            "duration_seconds": (datetime.now() - started).total_seconds(),
+            "error": str(exc),
+        }
+
+
+@router.post("/repair-previous-trade-date")
+async def repair_previous_trade_date_data(
+    request: dict = Body(default_factory=dict, description="一键补齐前一交易日股票K线，并可自动重跑策略。"),
+):
+    periods = _normalize_previous_day_periods((request or {}).get("periods"))
+    trade_date = _resolve_previous_repair_trade_date(str((request or {}).get("trade_date") or "").strip())
+    data_type = str((request or {}).get("data_type") or "stock").strip().lower() or "stock"
+    max_workers = int((request or {}).get("max_workers") or 2)
+    auto_refresh_g3 = bool((request or {}).get("auto_refresh_g3", True))
+    replace = bool((request or {}).get("replace", False))
+    force = bool((request or {}).get("force", False))
+    source = str((request or {}).get("source") or "auto").strip().lower() or "auto"
+    if source not in PREVIOUS_DAY_REPAIR_SOURCES:
+        raise HTTPException(status_code=400, detail=f"source must be one of {sorted(PREVIOUS_DAY_REPAIR_SOURCES)}")
+    timeout_seconds = int((request or {}).get("timeout_seconds") or 3600)
+    codes = (request or {}).get("codes")
+    normalized_codes = [str(item).strip().upper() for item in codes if str(item).strip()] if isinstance(codes, list) else []
+    task_id = str(uuid.uuid4())
+    threading.Thread(
+        target=process_repair_previous_trade_date_task,
+        args=(task_id, trade_date, periods, data_type, max_workers, auto_refresh_g3, replace, force, source, timeout_seconds, normalized_codes),
+        daemon=True,
+    ).start()
+    return {
+        "task_id": task_id,
+        "trade_date": trade_date,
+        "periods": periods,
+        "source": source,
+        "auto_refresh_g3": auto_refresh_g3,
+    }
+
+
+def process_repair_previous_trade_date_task(
+    task_id: str,
+    trade_date: str,
+    periods: list[str],
+    data_type: str,
+    max_workers: int,
+    auto_refresh_g3: bool,
+    replace: bool,
+    force: bool,
+    source: str,
+    timeout_seconds: int,
+    codes: list[str],
+):
+    from scripts.sync_all_klines import KlineSyncer
+
+    steps: list[dict] = []
+    total = int(("1d" in periods)) + int(any(p in MINUTE_REPAIR_FREQ for p in periods)) + int(auto_refresh_g3) * 2
+    total = max(1, total)
+    processed = 0
+
+    def tick(current: str, status: str = "running") -> None:
+        update_repair_progress(
+            task_id,
+            {
+                "total": total,
+                "processed": processed,
+                "success": processed,
+                "failed": 0,
+                "status": status,
+                "current": current,
+            },
+        )
+
+    tick(f"{trade_date} coverage_before")
+    before = [_period_coverage(period, trade_date, codes=codes or None) for period in periods]
+    ok = True
+    try:
+        if "1d" in periods:
+            tick(f"{trade_date} 1d")
+            syncer = KlineSyncer()
+            daily_result = syncer.repair_trade_date(
+                trade_date=trade_date,
+                sync_type=None if data_type in ("", "all") else data_type,
+                max_workers=max(1, int(max_workers or 1)),
+            )
+            step_ok = daily_result.get("status") == "completed"
+            ok = ok and step_ok
+            steps.append({"name": "daily_repair", "ok": step_ok, "result": daily_result})
+            processed += 1
+
+        minute_periods = [p for p in periods if p in MINUTE_REPAIR_FREQ]
+        if minute_periods:
+            tick(f"{trade_date} minute {','.join(minute_periods)}")
+            minute_before = [item for item in before if item.get("period") in minute_periods]
+            if not force and _all_coverages_adequate(minute_before, minute_periods, requested_codes=codes):
+                minute_result = {
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "coverage_already_adequate",
+                    "coverage": minute_before,
+                    "force": False,
+                    "source": source,
+                }
+                steps.append({"name": "minute_repair", "ok": True, "result": minute_result})
+            else:
+                repair_attempts: list[dict] = []
+                latest_coverage = minute_before
+
+                if _source_allows_tdxquant(source):
+                    tdxquant_periods = [p for p in minute_periods if p in TDXQUANT_FAST_MINUTE_PERIODS]
+                    if tdxquant_periods:
+                        cmd = [
+                            sys.executable,
+                            str(REPO_ROOT / "scripts" / "sync_intraday_minutes_fast.py"),
+                            "--target-date",
+                            trade_date,
+                            "--periods",
+                            ",".join(tdxquant_periods),
+                            "--types",
+                            "stock,index" if data_type in ("", "all") else data_type,
+                            "--batch-size",
+                            "500",
+                        ]
+                        if codes:
+                            cmd.extend(["--codes", ",".join(codes)])
+                            cmd.extend(["--min-complete-codes", str(max(1, len(set(codes))))])
+                        tdxquant_result = _run_cmd(cmd, timeout_seconds=timeout_seconds)
+                        latest_coverage = [_period_coverage(period, trade_date, codes=codes or None) for period in minute_periods]
+                        tdxquant_result["coverage_after"] = latest_coverage
+                        tdxquant_result["supported_periods"] = tdxquant_periods
+                        repair_attempts.append(
+                            {"name": "tdxquant_fast_minute_repair", "ok": bool(tdxquant_result.get("ok")), "result": tdxquant_result}
+                        )
+                    else:
+                        repair_attempts.append(
+                            {
+                                "name": "tdxquant_fast_minute_repair",
+                                "ok": True,
+                                "result": {
+                                    "skipped": True,
+                                    "reason": "no_supported_periods",
+                                    "supported_periods": sorted(TDXQUANT_FAST_MINUTE_PERIODS),
+                                    "requested_periods": minute_periods,
+                                },
+                            }
+                        )
+
+                remaining_periods = _inadequate_periods(latest_coverage, minute_periods, requested_codes=codes)
+                if remaining_periods and _source_allows_baostock(source):
+                    out_dir = report_path("kline_previous_trade_date_repair")
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    report_file = out_dir / f"baostock_minutes_{trade_date.replace('-', '')}_{task_id}.json"
+                    cmd = [
+                        sys.executable,
+                        str(REPO_ROOT / "scripts" / "collect_baostock_all_minutes.py"),
+                        "--start-date",
+                        trade_date,
+                        "--end-date",
+                        trade_date,
+                        "--frequencies",
+                        ",".join(MINUTE_REPAIR_FREQ[p] for p in remaining_periods),
+                        "--code-source",
+                        "local",
+                        "--chunk",
+                        "day",
+                        "--skip-existing-rows",
+                        "--persistent-worker-fetch",
+                        "--report",
+                        str(report_file),
+                    ]
+                    if replace:
+                        cmd.append("--replace")
+                    if codes:
+                        cmd.extend(["--codes", ",".join(codes)])
+                    baostock_result = _run_cmd(cmd, timeout_seconds=timeout_seconds)
+                    latest_coverage = [_period_coverage(period, trade_date, codes=codes or None) for period in minute_periods]
+                    baostock_result["report"] = str(report_file)
+                    baostock_result["coverage_after"] = latest_coverage
+                    baostock_result["periods"] = remaining_periods
+                    repair_attempts.append(
+                        {"name": "baostock_minute_repair", "ok": bool(baostock_result.get("ok")), "result": baostock_result}
+                    )
+
+                final_remaining = _inadequate_periods(latest_coverage, minute_periods, requested_codes=codes)
+                minute_ok = not final_remaining
+                if final_remaining and not _source_allows_baostock(source):
+                    repair_attempts.append(
+                        {
+                            "name": "minute_repair_coverage_gate",
+                            "ok": False,
+                            "result": {
+                                "reason": "coverage_inadequate_after_allowed_sources",
+                                "source": source,
+                                "remaining_periods": final_remaining,
+                                "coverage": latest_coverage,
+                            },
+                        }
+                    )
+                ok = ok and minute_ok
+                steps.append(
+                    {
+                        "name": "minute_repair",
+                        "ok": minute_ok,
+                        "result": {
+                            "source": source,
+                            "force": force,
+                            "attempts": repair_attempts,
+                            "remaining_periods": final_remaining,
+                            "coverage": latest_coverage,
+                        },
+                    }
+                )
+            processed += 1
+
+        after = [_period_coverage(period, trade_date, codes=codes or None) for period in periods]
+
+        if auto_refresh_g3:
+            tick("G3 State Alpha refresh")
+            refresh_result = _run_cmd([sys.executable, str(REPO_ROOT / "scripts" / "gen3_state_router_shadow_daily_v1.py")], timeout_seconds=600)
+            ok = ok and bool(refresh_result.get("ok"))
+            steps.append({"name": "g3_state_alpha_refresh", "ok": bool(refresh_result.get("ok")), "result": refresh_result})
+            processed += 1
+
+            tick("G3 pretrade smoke")
+            smoke_result = _run_cmd([sys.executable, str(REPO_ROOT / "scripts" / "gen3_pretrade_smoke_test_v1.py")], timeout_seconds=600)
+            ok = ok and bool(smoke_result.get("ok"))
+            steps.append({"name": "g3_pretrade_smoke", "ok": bool(smoke_result.get("ok")), "result": smoke_result})
+            processed += 1
+
+        status = "completed" if ok else "failed"
+        payload = {
+            "items": steps,
+            "summary": {
+                "status": status,
+                "trade_date": trade_date,
+                "periods": periods,
+                "source": source,
+                "before": before,
+                "after": after,
+                "auto_refresh_g3": auto_refresh_g3,
+                "codes_limited": len(codes),
+            },
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        store_repair_results(task_id, payload)
+        update_repair_progress(
+            task_id,
+            {
+                "total": total,
+                "processed": processed,
+                "success": processed if ok else max(0, processed - 1),
+                "failed": 0 if ok else 1,
+                "status": status,
+                "current": None,
+            },
+        )
+    except Exception as exc:
+        logger.exception(f"repair previous trade date failed: task={task_id}, trade_date={trade_date}")
+        store_repair_results(
+            task_id,
+            {
+                "items": steps,
+                "summary": {"status": "failed", "trade_date": trade_date, "periods": periods, "source": source},
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "error": str(exc),
+            },
+        )
+        update_repair_progress(
+            task_id,
+            {
+                "total": total,
+                "processed": processed,
+                "success": 0,
+                "failed": 1,
+                "status": "failed",
+                "error": str(exc),
+                "current": None,
             },
         )
 

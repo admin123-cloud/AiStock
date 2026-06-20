@@ -11,13 +11,14 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+from utils.paths import report_path  # noqa: E402
 
 from scripts.gen2_runtime_dates import add_end_date_argument, resolve_end_date  # noqa: E402
 from utils.market_warehouse import clickhouse_client  # noqa: E402
 
-DEFAULT_EVENT_DATASET = REPO_ROOT / "reports" / "gen2_event_study_full" / "v4_event_dataset.parquet"
-DEFAULT_STATE_DAILY = REPO_ROOT / "reports" / "gen2_open_state_research_full" / "g2_open_state_daily.csv"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "reports" / "gen2_30m_fractal_restart"
+DEFAULT_EVENT_DATASET = report_path("gen2_event_study_full", "v4_event_dataset.parquet")
+DEFAULT_STATE_DAILY = report_path("gen2_open_state_research_full", "g2_open_state_daily.csv")
+DEFAULT_OUTPUT_DIR = report_path("gen2_30m_fractal_restart")
 HORIZONS = (1, 2, 3, 5, 10, 20)
 
 

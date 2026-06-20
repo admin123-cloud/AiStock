@@ -14,10 +14,11 @@ import scripts.gen3_build_dynamic_router_combo_v1 as router
 import scripts.gen3_package_v4_research_candidate_v1 as v4pkg
 import scripts.gen3_test_range_execution_margin_v1 as margin
 from scripts.gen3_backtest_strong_volume5_slot_resim_v1 import _trade_calendar
+from utils.paths import report_path
 
 
-PACKAGE_DIR = ROOT / "reports" / "gen3_v4_research_package_v1"
-OUT_DIR = ROOT / "reports" / "gen3_v4_strong_position_scale_probe_v1"
+PACKAGE_DIR = report_path("gen3_v4_research_package_v1")
+OUT_DIR = report_path("gen3_v4_strong_position_scale_probe_v1")
 INITIAL_CAPITAL = 150_000.0
 
 PROFILES = [

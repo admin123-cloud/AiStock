@@ -30,6 +30,19 @@ For live trading, first confirm PTrade login, run one dry-run file, then switch
 `ENABLE_LIVE_ORDER = True` and submit a very small test order with
 `approved=true`.
 
+## Account config
+
+PTrade account credentials are configured from the system configuration page.
+The version-controlled `config/settings.yaml` only keeps an empty schema under
+`ptrade.account`; the actual username and password are saved into
+`config/settings.local.yaml`, which is ignored by Git.
+
+For the simulation terminal, keep `account_type=simulation` and fill the
+simulation username/password. When switching to the real account later, change
+only `account_type=real`, `username`, and `password`. The password is never
+returned by the public config API; leaving the password field blank in the UI
+keeps the existing saved password.
+
 ## Recommended path: PTrade internal strategy
 
 The current Xiangcai PTrade client can log in successfully, but the standalone
@@ -177,6 +190,21 @@ This writes an isolated dry-run order, consumes it through the local runner,
 checks waiting-approval cleanup, checks stale `processing` recovery, and writes
 `reports/ptrade_bridge_smoke/latest.json`. It never sends a live order and never
 imports `PTradeQuantApi`.
+
+G3-specific dry-run acceptance, also without touching the real bridge queue:
+
+```powershell
+python F:\Stock\AiStock-core\scripts\gen3_ptrade_bridge_acceptance.py
+```
+
+This creates an isolated bridge directory, submits one G3 BUY intent and one G3
+SELL intent through the G3 backend helpers, consumes both with the local file
+bridge runner, and verifies `dry_run` acknowledgements. It proves the G3 signal
+path can produce PTrade-compatible buy/sell files, but it does not prove the
+PTrade cloud-simulation terminal is running. Terminal consumption is only proven
+when the real bridge directory has a recent `status/latest.json` heartbeat and a
+recent dry-run ack from `ptrade_bridge_live_probe.py --submit-dry-run
+--require-heartbeat`.
 
 G2 order-path fast-path probe, also without touching the real bridge queue:
 
@@ -359,6 +387,13 @@ Probe PTrade API connection without printing account details:
 
 ```powershell
 D:\PTrade\ptrade\Libs\Python\Libs\Python\python3\python.exe F:\Stock\AiStock\scripts\ptrade_file_bridge_api_runner.py --probe
+```
+
+Manage the AiStock local dry-run runner:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File F:\Stock\AiStock-core\scripts\start_ptrade_dry_run_bridge_runner.ps1
+powershell -ExecutionPolicy Bypass -File F:\Stock\AiStock-core\scripts\stop_ptrade_bridge_runner.ps1 -WhatIfOnly
 ```
 
 Live loop, only after small-order approval:

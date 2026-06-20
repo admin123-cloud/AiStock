@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page">
     <div class="head-card">
       <div>
@@ -15,8 +15,8 @@
           clearable
           style="width: 180px"
         />
-        <el-button type="primary" :loading="loading" @click="fetchData">鏌ヨ</el-button>
-        <el-button :loading="refreshing" @click="refreshSnapshot">鏇存柊蹇収</el-button>
+        <el-button type="primary" :loading="loading" @click="fetchData">查询</el-button>
+        <el-button :loading="refreshing" @click="refreshSnapshot">刷新快照</el-button>
       </div>
     </div>
 
@@ -60,40 +60,238 @@
         :title="officialRebuildNotice"
       />
 
-      <div class="decision-strip">
+      <div v-if="false" class="decision-strip">
         <div class="decision-card" :class="marketGate?.can_open ? 'pass' : 'block'">
-          <span class="decision-label">寮€浠撻棬绂?/span>
-          <strong>{{ marketGate?.can_open ? '鍏佽鏂板' : '绂佹鏂板' }}</strong>
+          <span class="decision-label">开仓门槛</span>
+          <strong>{{ marketGate?.can_open ? '允许新增' : '禁止新增' }}</strong>
           <small>{{ marketGateSummary }}</small>
         </div>
         <div class="decision-card" :class="actionableBuyRows.length ? 'pass' : 'neutral'">
-          <span class="decision-label">姝ｅ紡涔扮偣</span>
-          <strong>{{ actionableBuyRows.length }} 鍙?/strong>
-          <small>{{ actionableBuyRows.length ? '鍙繘鍏ヤ氦鏄撹鍒欐鏌? : '褰撳墠娌℃湁姝ｅ紡鍙拱鍏ヨ偂绁? }}</small>
+          <span class="decision-label">正式买点</span>
+          <strong>{{ actionableBuyRows.length }} 只</strong>
+          <small>{{ actionableBuyRows.length ? '可进入交易规则检查' : '当前没有正式可买入股票' }}</small>
         </div>
         <div class="decision-card" :class="sellPriorityRows.length ? 'block' : 'pass'">
-          <span class="decision-label">鎸佷粨椋庢帶</span>
-          <strong>{{ sellPriorityRows.length }} 椤?/strong>
-          <small>{{ sellPriorityRows.length ? '鍏堝鐞嗗崠鍑?鍑忎粨椋庨櫓' : '鏆傛棤纭鎺у姩浣? }}</small>
+          <span class="decision-label">持仓风控</span>
+          <strong>{{ sellPriorityRows.length }} 项</strong>
+          <small>{{ sellPriorityRows.length ? '优先处理卖出、减仓风险' : '暂无硬风控动作' }}</small>
         </div>
         <div class="decision-card neutral">
-          <span class="decision-label">鑷姩鎺㈡祴</span>
-          <strong>{{ gen2ShadowMonitorStatus?.enabled ? '杩愯涓? : '鏈紑鍚? }}</strong>
+          <span class="decision-label">自动探测</span>
+          <strong>{{ gen2ShadowMonitorStatus?.enabled ? '运行中' : '未开启' }}</strong>
           <small>{{ gen2ShadowMonitorResultText || gen2ShadowMonitorText }}</small>
+        </div>
+      </div>
+
+      <div class="panel trade-ticket-panel">
+        <div class="sub-panel-header">
+          <div>
+            <div class="panel-title">今日行动工作台</div>
+            <div class="toolbar-note">G2 V4 交易单、开仓门槛、持仓风控、执行回填合并在这里处理。</div>
+            <div v-if="dailyTradeTicketOutputs" class="toolbar-note">审计文件：{{ dailyTradeTicketOutputs }}</div>
+          </div>
+          <div class="actions">
+            <el-tag :type="dailyTradeTicket?.can_open ? 'success' : 'warning'" effect="light">
+              {{ dailyTradeTicket?.can_open ? '允许开仓' : '禁止新仓' }}
+            </el-tag>
+            <el-tag :type="sellPriorityRows.length ? 'danger' : 'success'" effect="light">
+              {{ sellPriorityRows.length ? '先处理持仓风险' : '持仓风控正常' }}
+            </el-tag>
+            <el-tag type="info" effect="light">{{ dailyTradeTicket?.mode || 'shadow_only' }}</el-tag>
+            <el-button size="small" type="primary" plain :loading="gen2ShadowMonitorLoading" @click="runGen2ShadowMonitorOnce">探测买点</el-button>
+            <el-button size="small" :loading="allRefreshLoading || marketGateLoading || gen2ShadowLoading || holdingRefreshLoading" @click="refreshAllHoldingData">刷新交易状态</el-button>
+            <el-button size="small" :loading="dailyTradeTicketLoading" @click="fetchDailyTradeTicket(selectedDate)">刷新交易单</el-button>
+          </div>
+        </div>
+
+        <div class="ticket-grid">
+          <div class="ticket-metric">
+            <label>信号日</label>
+            <strong>{{ dailyTradeTicket?.signal_date || '--' }}</strong>
+          </div>
+          <div class="ticket-metric" :class="dailyTradeTicket?.can_open ? 'ok' : 'warn'">
+            <label>市场状态</label>
+            <strong>{{ dailyTradeTicket?.market_state || '--' }}</strong>
+          </div>
+          <div class="ticket-metric">
+            <label>允许仓位</label>
+            <strong>{{ dailyTradeTicket?.target_exposure || '--' }}</strong>
+          </div>
+          <div class="ticket-metric">
+            <label>正式候选</label>
+            <strong>{{ dailyTradeTicketFormalRows.length }} / {{ dailyTradeTicket?.max_new_positions ?? '--' }}</strong>
+          </div>
+          <div class="ticket-metric" :class="sellPriorityRows.length ? 'warn' : 'ok'">
+            <label>持仓风控</label>
+            <strong>{{ sellPriorityRows.length }} 项</strong>
+          </div>
+          <div class="ticket-metric">
+            <label>自动探测</label>
+            <strong>{{ gen2ShadowMonitorStatus?.enabled ? '运行中' : '未开启' }}</strong>
+          </div>
+        </div>
+
+        <el-alert
+          v-if="dailyTradeTicket?.message"
+          :type="dailyTradeTicket?.can_open ? 'success' : 'warning'"
+          :closable="false"
+          :title="dailyTradeTicket.message"
+          class="panel-alert"
+        />
+
+        <el-table
+          :data="dailyTradeTicketFormalRows"
+          stripe
+          size="small"
+          empty-text="今日交易单没有正式买入候选"
+        >
+          <el-table-column label="代码" width="110">
+            <template #default="{ row }">
+              <el-button type="primary" link @click="copyPlainCode(row.code)">{{ displayCode(row.code) }}</el-button>
+            </template>
+          </el-table-column>
+          <el-table-column prop="name" label="名称" min-width="110" show-overflow-tooltip />
+          <el-table-column prop="strategy_source" label="来源" width="150" show-overflow-tooltip />
+          <el-table-column prop="buy_area" label="买入区间" min-width="220" show-overflow-tooltip />
+          <el-table-column prop="suggested_position" label="建议仓位" width="96" />
+          <el-table-column prop="confirm_datetime" label="确认时间" width="150" show-overflow-tooltip />
+          <el-table-column label="V4证据" width="130">
+            <template #default="{ row }">
+              rank {{ row.evidence?.v4_rank || '--' }} / {{ formatScore(row.evidence?.v4_score) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="风控" min-width="240" show-overflow-tooltip>
+            <template #default="{ row }">{{ (row.risk_rules || []).join('；') }}</template>
+          </el-table-column>
+        </el-table>
+
+        <div class="ticket-discipline">
+          <el-tag
+            v-for="item in dailyTradeTicketForbiddenActions"
+            :key="item"
+            type="danger"
+            effect="plain"
+          >
+            {{ item }}
+          </el-tag>
+        </div>
+
+        <div class="daily-execution-box">
+          <div class="sub-panel-header">
+            <div>
+              <div class="sub-panel-title">执行与复盘记录</div>
+              <div class="toolbar-note">{{ dailyExecutionSummary }}</div>
+            </div>
+            <div class="actions">
+              <el-tag :type="dailyExecutionForm.discipline_ok ? 'success' : 'danger'" effect="light">
+                {{ dailyExecutionForm.discipline_ok ? '纪律正常' : '纪律问题' }}
+              </el-tag>
+              <el-button size="small" :loading="dailyExecutionSaving" @click="saveDailyExecution('no_trade')">今日无交易</el-button>
+              <el-button size="small" :loading="dailyExecutionSaving" @click="inferDailyExecutionFromLocalTrades">从成交归因</el-button>
+              <el-button size="small" type="primary" plain :loading="dailyExecutionSaving" @click="saveDailyExecution('followed')">已照单执行</el-button>
+              <el-button size="small" type="danger" plain :loading="dailyExecutionSaving" @click="saveDailyExecution('violated')">标记违规</el-button>
+            </div>
+          </div>
+          <el-form class="daily-execution-form" label-position="top" size="small">
+            <el-row :gutter="10">
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="执行状态">
+                  <el-select v-model="dailyExecutionForm.execution_status" placeholder="选择状态">
+                    <el-option label="待记录" value="pending" />
+                    <el-option label="照单执行" value="followed" />
+                    <el-option label="无交易" value="no_trade" />
+                    <el-option label="部分执行" value="partial" />
+                    <el-option label="纪律违规" value="violated" />
+                    <el-option label="已复盘" value="reviewed" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="是否有实际执行">
+                  <el-switch v-model="dailyExecutionForm.executed" active-text="有执行" inactive-text="无执行" />
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="是否遵守交易单">
+                  <el-switch v-model="dailyExecutionForm.discipline_ok" active-text="遵守" inactive-text="违规" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-form-item label="执行备注">
+              <el-input v-model="dailyExecutionForm.execution_note" type="textarea" :rows="2" placeholder="记录是否按交易单执行、是否有临时冲动、是否错过买点" />
+            </el-form-item>
+            <el-row :gutter="10">
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="T+1 复盘">
+                  <el-input v-model="dailyExecutionForm.t1_review" type="textarea" :rows="2" placeholder="次日表现、是否符合预期" />
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="T+3 复盘">
+                  <el-input v-model="dailyExecutionForm.t3_review" type="textarea" :rows="2" placeholder="三日是否走强，是否需要降级" />
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <el-form-item label="T+5 复盘">
+                  <el-input v-model="dailyExecutionForm.t5_review" type="textarea" :rows="2" placeholder="盈亏、买点质量和纪律归因" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <div class="actions">
+              <el-button type="primary" :loading="dailyExecutionSaving" @click="saveDailyExecution()">保存执行与复盘记录</el-button>
+            </div>
+          </el-form>
+        </div>
+      </div>
+
+      <div class="panel strategy-refresh-panel">
+        <div class="sub-panel-header">
+          <div>
+            <div class="panel-title">G2 30m 策略自动刷新</div>
+            <div class="toolbar-note">{{ gen2StrategyRefreshSummary }}</div>
+          </div>
+          <div class="actions">
+            <el-tag :type="gen2StrategyRefreshStatus?.enabled ? 'success' : 'info'" effect="light">
+              {{ gen2StrategyRefreshStatus?.enabled ? '半小时自动刷新已开启' : '半小时自动刷新未开启' }}
+            </el-tag>
+            <el-button size="small" :loading="gen2StrategyRefreshLoading" @click="fetchGen2StrategyRefreshStatus">刷新状态</el-button>
+            <el-button size="small" type="primary" plain :loading="gen2StrategyRefreshRunning" @click="runGen2StrategyRefreshOnce">立即执行一次</el-button>
+          </div>
+        </div>
+        <div class="refresh-grid">
+          <div class="refresh-item">
+            <label>当前30m窗口</label>
+            <strong>{{ gen2StrategyRefreshStatus?.current_bar_slot || '--' }}</strong>
+          </div>
+          <div class="refresh-item">
+            <label>下次自动刷新</label>
+            <strong>{{ gen2StrategyRefreshStatus?.next_run_time || '--' }}</strong>
+          </div>
+          <div class="refresh-item">
+            <label>上次刷新</label>
+            <strong>{{ gen2StrategyRefreshStatus?.last_success_at || gen2StrategyRefreshStatus?.last_run_at || '--' }}</strong>
+          </div>
+          <div class="refresh-item">
+            <label>上次结果</label>
+            <strong>{{ gen2StrategyRefreshLastResultText }}</strong>
+          </div>
         </div>
       </div>
 
       <div class="panel workflow-panel">
         <div class="sub-panel-header">
           <div>
-            <div class="panel-title">绛栫暐宸ヤ綔娴佺洃鎺?/div>
+            <div class="panel-title">策略工作流监控</div>
             <div class="toolbar-note">{{ workflowSummaryText }}</div>
           </div>
           <div class="actions">
             <el-tag :type="workflowOk ? 'success' : 'danger'" effect="light">
-              {{ workflowOk ? '鍏ㄩ摼璺甯? : '瀛樺湪闃诲' }}
+              {{ workflowOk ? '全链路正常' : '存在阻塞' }}
             </el-tag>
-            <el-button size="small" :loading="workflowLoading" @click="fetchWorkflowStatus(selectedDate)">鍒锋柊宸ヤ綔娴?/el-button>
+            <el-tag v-if="notificationStageExists" :type="notificationStageOk ? 'success' : 'warning'" effect="light" size="small">
+              {{ notificationStageLabel }}
+            </el-tag>
+            <el-button size="small" :loading="workflowLoading" @click="fetchWorkflowStatus(selectedDate)">刷新工作流</el-button>
           </div>
         </div>
         <div class="workflow-grid">
@@ -106,7 +304,7 @@
             <div class="workflow-step-head">
               <span>{{ workflowStageLabel(stage.stage) }}</span>
               <el-tag size="small" :type="stage.ok ? 'success' : 'danger'" effect="light">
-                {{ stage.ok ? '閫氳繃' : `${stage.failed_count || stage.failed?.length || 0}椤归樆濉瀈 }}
+                {{ stage.ok ? '通过' : `${stage.failed_count || stage.failed?.length || 0}项阻塞` }}
               </el-tag>
             </div>
             <div class="workflow-step-meta">{{ workflowStageMeta(stage) }}</div>
@@ -118,15 +316,15 @@
           stripe
           size="small"
           class="workflow-table"
-          empty-text="鏆傛棤闃诲椤?
+          empty-text="暂无阻塞项"
         >
-          <el-table-column label="灞傜骇" width="120">
+          <el-table-column label="层级" width="120">
             <template #default="{ row }">{{ workflowStageLabel(row.stage || row.type) }}</template>
           </el-table-column>
-          <el-table-column prop="name" label="妫€鏌ラ」" width="190" show-overflow-tooltip />
-          <el-table-column prop="message" label="闃诲璇存槑" min-width="360" show-overflow-tooltip />
-          <el-table-column prop="trade_date" label="鏃ユ湡" width="112" />
-          <el-table-column label="缁撴灉" width="120">
+          <el-table-column prop="name" label="检查项" width="190" show-overflow-tooltip />
+          <el-table-column prop="message" label="阻塞说明" min-width="360" show-overflow-tooltip />
+          <el-table-column prop="trade_date" label="日期" width="112" />
+          <el-table-column label="结果" width="120">
             <template #default="{ row }">
               {{ workflowCheckResult(row) }}
             </template>
@@ -139,63 +337,63 @@
           size="small"
           class="workflow-table"
         >
-          <el-table-column label="閾捐矾灞? width="110">
+          <el-table-column label="链路层" width="110">
             <template #default="{ row }">{{ workflowStageLabel(row.stage) }}</template>
           </el-table-column>
-          <el-table-column prop="label" label="鐪熸簮/浜х墿" width="170" show-overflow-tooltip />
-          <el-table-column prop="source_type" label="绫诲瀷" width="90" />
-          <el-table-column prop="storage" label="瀛樺偍浣嶇疆" min-width="260" show-overflow-tooltip />
-          <el-table-column prop="official_reader" label="瀹樻柟璇昏矾寰? min-width="220" show-overflow-tooltip />
-          <el-table-column label="璇诲洖缁撴灉" width="120">
+          <el-table-column prop="label" label="真源/产物" width="170" show-overflow-tooltip />
+          <el-table-column prop="source_type" label="类型" width="90" />
+          <el-table-column prop="storage" label="存储位置" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="official_reader" label="官方读取路径" min-width="220" show-overflow-tooltip />
+          <el-table-column label="读取结果" width="120">
             <template #default="{ row }">{{ workflowLineageResult(row) }}</template>
           </el-table-column>
         </el-table>
       </div>
 
-      <div class="panel execution-panel">
+      <div v-if="false" class="panel execution-panel">
         <div class="sub-panel-header">
           <div>
-            <div class="panel-title">浠婃棩姝ｅ紡涔板叆鎵ц鍖?/div>
-            <div class="toolbar-note">杩欓噷鍙樉绀哄凡缁忛€氳繃绛栫暐鐘舵€併€佺洏涓Е鍙戝拰椋庢帶鍊欓€夌姸鎬佺殑鍙拱鍏ユ爣鐨勶紱褰卞瓙鏍锋湰涓嶄細杩涘叆杩欓噷銆?/div>
+            <div class="panel-title">今日正式买入执行区</div>
+            <div class="toolbar-note">这里只显示已经通过策略状态、盘中触发和风控候选状态的可买入标的；影子样本不会进入这里。</div>
             <div class="toolbar-note">{{ ptradeBridgeSummary }}</div>
             <div class="toolbar-note">{{ ptradeBridgeQueueText }}</div>
             <div class="toolbar-note">{{ ptradeBridgeReadinessText }}</div>
           </div>
           <div class="actions">
-            <el-button type="primary" :loading="gen2ShadowMonitorLoading" @click="runGen2ShadowMonitorOnce">绔嬪嵆鎺㈡祴涔扮偣</el-button>
-            <el-button :loading="allRefreshLoading || marketGateLoading || gen2ShadowLoading || holdingRefreshLoading" @click="refreshAllHoldingData">鍒锋柊浜ゆ槗鐘舵€?/el-button>
+            <el-button type="primary" :loading="gen2ShadowMonitorLoading" @click="runGen2ShadowMonitorOnce">立即探测买点</el-button>
+            <el-button :loading="allRefreshLoading || marketGateLoading || gen2ShadowLoading || holdingRefreshLoading" @click="refreshAllHoldingData">刷新交易状态</el-button>
           </div>
         </div>
-        <el-table :data="actionableBuyRows" stripe size="small" empty-text="褰撳墠娌℃湁姝ｅ紡鍙拱鍏ヨ偂绁?>
-          <el-table-column label="浠ｇ爜" width="110">
+        <el-table :data="actionableBuyRows" stripe size="small" empty-text="当前没有正式可买入股票">
+          <el-table-column label="代码" width="110">
             <template #default="{ row }">
               <el-button type="primary" link @click="copyPlainCode(row.code)">{{ normalizeCode(row.code) || '--' }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="鍚嶇О" min-width="120">
+          <el-table-column label="名称" min-width="120">
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="纭鏃堕棿" width="150" show-overflow-tooltip>
+          <el-table-column label="确认时间" width="150" show-overflow-tooltip>
             <template #default="{ row }">{{ row.confirm_datetime || '--' }}</template>
           </el-table-column>
-          <el-table-column label="鍏ュ満浠? width="90">
+          <el-table-column label="入场价" width="90">
             <template #default="{ row }">{{ formatPrice(row.entry_price) }}</template>
           </el-table-column>
-          <el-table-column label="V4鎺掑悕" width="86">
+          <el-table-column label="V4排名" width="86">
             <template #default="{ row }">{{ row.v4_rank || '--' }}</template>
           </el-table-column>
           <el-table-column label="Alpha191" width="128">
             <template #default="{ row }">{{ formatScore(row.alpha191_volume5_score ?? row.alpha191_gate_score) }}</template>
           </el-table-column>
-          <el-table-column label="娑ㄥ箙/閲忔瘮" width="116">
+          <el-table-column label="涨幅/量比" width="116">
             <template #default="{ row }">{{ formatPct(row.rt_return_pct) }} / {{ formatRatio(row.amount_ratio) }}</template>
           </el-table-column>
-          <el-table-column prop="reason_text" label="瑙﹀彂璇存槑" min-width="260" show-overflow-tooltip />
-          <el-table-column label="鎿嶄綔" width="180" fixed="right">
+          <el-table-column prop="reason_text" label="触发说明" min-width="260" show-overflow-tooltip />
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
-              <el-button type="primary" link @click="openAddHoldingDialog(row, 'new')">瑙勫垯妫€鏌?/el-button>
+              <el-button type="primary" link @click="openAddHoldingDialog(row, 'new')">规则检查</el-button>
               <el-button
                 type="success"
                 link
@@ -212,80 +410,81 @@
       <div class="panel risk-panel">
         <div class="sub-panel-header">
           <div>
-            <div class="panel-title">鎸佷粨椋庢帶涓庡崠鍑轰紭鍏堢骇</div>
-            <div class="toolbar-note">瀹炵洏鍏堝鐞嗗凡鏈変粨浣嶉闄╋紝鍐嶈€冭檻鏂板寮€浠擄紱杩欓噷姹囨€荤‖姝㈡崯銆佺Щ鍔ㄦ鐩堛€佽瘎鍒嗘睜鍜屽垎閽熷崠鐐广€?/div>
+            <div class="panel-title">持仓风控与卖出优先级</div>
+            <div class="toolbar-note">实盘先处理已有仓位风险，再考虑新增开仓；这里汇总硬止损、移动止盈、评分池和分钟卖点。</div>
           </div>
-          <el-button :loading="holdingRefreshLoading || signalLoading" @click="refreshCurrentHoldings">鍒锋柊鎸佷粨椋庢帶</el-button>
+          <el-button :loading="holdingRefreshLoading || signalLoading" @click="refreshCurrentHoldings">刷新持仓风控</el-button>
         </div>
-        <el-table :data="sellPriorityRows" stripe size="small" empty-text="鏆傛棤闇€瑕佷紭鍏堝鐞嗙殑鎸佷粨椋庨櫓">
-          <el-table-column label="浠ｇ爜" width="110">
+        <el-table :data="sellPriorityRows" stripe size="small" empty-text="暂无相关持仓标记">
+          <el-table-column label="代码" width="110">
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ displayCode(row.code) }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="鍚嶇О" min-width="120" />
-          <el-table-column label="鐩堜簭" width="90">
+          <el-table-column prop="name" label="名称" min-width="120" />
+          <el-table-column label="收益率" width="90">
             <template #default="{ row }">
               <span :style="aSharePnlStyle(row.pnl_ratio)">{{ formatPct(row.pnl_ratio) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="risk_text" label="浼樺厛澶勭悊鍘熷洜" min-width="260" show-overflow-tooltip />
-          <el-table-column prop="signal.suggestion" label="鍗栧嚭寤鸿" min-width="140" show-overflow-tooltip />
-          <el-table-column label="鎿嶄綔" width="96" fixed="right">
+          <el-table-column prop="risk_text" label="风险原因" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="signal.suggestion" label="交易建议" min-width="140" show-overflow-tooltip />
+          <el-table-column label="操作" width="96" fixed="right">
             <template #default="{ row }">
-              <el-button type="warning" link @click="openSellDialog(row, row.holding_index)">鍗栧嚭</el-button>
+              <el-button type="warning" link @click="openSellDialog(row, row.holding_index)">卖出</el-button>
             </template>
           </el-table-column>
         </el-table>
       </div>
       <div class="panel">
-        <div class="panel-title">璧勯噾鑲＄エ鎬昏</div>
+        <div class="panel-title">资金股票总览</div>
         <div class="capital-grid">
           <div class="capital-item">
-            <label>鍒濆鎬昏祫閲?/label>
+            <label>初始总资金</label>
             <div class="capital-fixed">{{ formatMoney(FIXED_BASE_CAPITAL) }}</div>
           </div>
           <div class="capital-item readonly">
-            <label>鎬昏祫閲戯紙绯荤粺缁存姢锛?/label>
+            <label>总资金（系统维护）</label>
             <div>{{ formatMoney(capitalSnapshot.total_capital) }}</div>
           </div>
           <div class="capital-item readonly">
-            <label>鍙敤璧勯噾锛堢郴缁熺淮鎶わ級</label>
+            <label>可用资金/可用冻结</label>
             <div>{{ formatMoney(capitalSnapshot.available_cash) }}</div>
           </div>
           <div class="capital-item readonly">
-            <label>鎸佷粨甯傚€?/label>
+            <label>持仓市值</label>
             <div>{{ formatMoney(capitalSnapshot.market_value) }}</div>
           </div>
           <div class="capital-item readonly">
-            <label>浠撲綅鍗犳瘮</label>
+            <label>持仓占比</label>
             <div :style="{ color: capitalSnapshot.position_ratio > 80 ? '#d4380d' : '#24355d' }">{{ formatPct(capitalSnapshot.position_ratio) }}</div>
           </div>
           <div class="capital-item readonly">
-            <label>鎸佷粨鎴愭湰</label>
+            <label>持仓成本</label>
             <div>{{ formatMoney(capitalSnapshot.cost_value) }}</div>
           </div>
           <div class="capital-item readonly">
-            <label>宸插疄鐜扮泩浜?/label>
+            <label>已实现盈亏</label>
             <div :style="aSharePnlStyle(capitalSnapshot.realized_pnl)">
               {{ formatMoney(capitalSnapshot.realized_pnl) }}
             </div>
           </div>
           <div class="capital-item readonly">
-            <label>娴姩鐩堜簭</label>
+            <label>当日盈亏</label>
             <div :style="{ color: capitalSnapshot.pnl_amount > 0 ? '#d4380d' : (capitalSnapshot.pnl_amount < 0 ? '#389e0d' : '#24355d') }">
-              {{ formatMoney(capitalSnapshot.pnl_amount) }}锛坽{ formatPct(capitalSnapshot.pnl_ratio) }}锛?            </div>
+              {{ formatMoney(capitalSnapshot.pnl_amount) }}（{{ formatPct(capitalSnapshot.pnl_ratio) }}）
+            </div>
           </div>
           <div class="capital-item readonly">
-            <label>褰撴棩鐩堜簭</label>
+            <label>当日盈亏</label>
             <div :style="aSharePnlStyle(capitalSnapshot.day_pnl)">
               {{ formatMoney(capitalSnapshot.day_pnl) }}
             </div>
           </div>
           <div class="capital-item readonly">
-            <label>澶х洏寮€浠撻椄闂?/label>
+            <label>大盘开仓阈值</label>
             <div :style="{ color: marketGate?.can_open ? '#d4380d' : '#389e0d' }">
-              {{ marketGate?.can_open ? '鍏佽鏂板' : '绂佹鏂板' }}
+              {{ marketGate?.can_open ? '允许新增' : '禁止新增' }}
             </div>
             <small>{{ marketGateSummary }}</small>
           </div>
@@ -298,7 +497,7 @@
           :description="fallback.message"
           class="panel-alert"
         />
-        <div v-if="capitalForm.synced_at" class="toolbar-note">鍚岃姳椤鸿祫閲戞寔鑲℃渶杩戝悓姝ワ細{{ capitalForm.synced_at }}</div>
+        <div v-if="capitalForm.synced_at" class="toolbar-note">同花顺资金持股最近同步：{{ capitalForm.synced_at }}</div>
         <div style="height: 12px" />
         <el-alert
           v-if="disciplineText"
@@ -309,24 +508,24 @@
         />
         <div class="holding-toolbar">
           <div class="actions">
-            <el-button :loading="thsCapitalSyncLoading" @click="syncCapitalAndHoldingsFromThs">鍚屾鍚岃姳椤鸿祫閲戞寔鑲?/el-button>
-            <el-button type="primary" @click="openAddHoldingDialog(null, 'new')">鏂板鎸佷粨</el-button>
+            <el-button :loading="thsCapitalSyncLoading" @click="syncCapitalAndHoldingsFromThs">同步同花顺资金持股</el-button>
+            <el-button type="primary" @click="openAddHoldingDialog(null, 'new')">新增持仓</el-button>
           </div>
           <div class="actions">
-            <el-switch v-model="monitorTradingHoursOnly" active-text="浠呬氦鏄撴椂娈? />
+            <el-switch v-model="monitorTradingHoursOnly" active-text="仅交易时段" />
             <el-input-number v-model="monitorQuietMinutes" :min="0" :step="5" style="width: 150px" />
             <el-button type="success" :plain="monitorEnabled" :loading="monitorLoading" @click="toggleMonitor">
-              {{ monitorEnabled ? '鍋滄1鍒嗛挓璺熻釜' : '寮€鍚?鍒嗛挓璺熻釜' }}
+              {{ monitorEnabled ? '停止1分钟跟踪' : '开启1分钟跟踪' }}
             </el-button>
-            <el-button :loading="monitorLoading" @click="runMonitorNow">娴嬭瘯閫氱煡</el-button>
-            <el-button :loading="allRefreshLoading || marketGateLoading || buyPoolLoading || gen2ShadowLoading || signalLoading" @click="refreshAllHoldingData">涓€閿埛鏂板叏閮?/el-button>
+            <el-button :loading="monitorLoading" @click="runMonitorNow">测试通知</el-button>
+            <el-button :loading="allRefreshLoading || marketGateLoading || buyPoolLoading || gen2ShadowLoading || signalLoading" @click="refreshAllHoldingData">一键刷新全部</el-button>
           </div>
         </div>
-        <div class="toolbar-note">鍒嗛挓璺熻釜鐘舵€侊細{{ monitorStatusText }}</div>
-        <div class="toolbar-note">鐩樹腑鑷姩鍒锋柊锛歿{ autoRefreshStatusText }}</div>
-        <div class="toolbar-note">閫氱煡閭缁熶竴鍙栬嚜绯荤粺閰嶇疆锛屼笉鍐嶅湪瀹炵洏浜ゆ槗椤靛崟鐙淮鎶ゃ€?/div>
-        <div class="toolbar-note">鏂板鎸佷粨锛氱敤浜庢寜绛栫暐璁″垝鏂板缓璺熻釜浠撲綅锛涘凡瀹為檯鍙戠敓鐨勬寔浠撹浼樺厛閫氳繃鍚岃姳椤鸿祫閲戞寔鑲″悓姝ャ€?/div>
-        <div class="toolbar-note">褰撳墠鍚堝苟浜嗘€昏祫閲戙€佸綋鍓嶅疄鐩樻寔浠撲笌鎸佷粨绾緥锛屼究浜庡湪涓€涓潰鏉块噷鐪嬫竻璧勯噾鍜岃偂绁ㄣ€?/div>
+        <div class="toolbar-note">分钟跟踪状态：{{ monitorStatusText }}</div>
+        <div class="toolbar-note">盘中自动刷新：{{ autoRefreshStatusText }}</div>
+        <div class="toolbar-note">通知邮箱统一取自系统配置，不再在实盘交易页单独维护。</div>
+        <div class="toolbar-note">新增持仓用于按策略计划新建跟踪仓位；已实际发生的持仓请优先通过同花顺资金持股同步。</div>
+        <div class="toolbar-note">当前合并了总资金、当前实盘持仓与持仓纪律，便于在一个面板里看清资金和股票。</div>
         <div style="height: 10px" />
         <div v-if="!isGen2LiveMode" class="sub-panel">
           <div class="sub-panel-header">
@@ -334,96 +533,96 @@
               <div class="sub-panel-title">{{ buyPoolPanelTitle }}</div>
               <div class="toolbar-note">{{ buyPoolSummary }}</div>
             </div>
-            <el-button size="small" :loading="buyPoolLoading" @click="fetchBuyPool(selectedDate)">鍒锋柊鍊欓€?/el-button>
+            <el-button size="small" :loading="buyPoolLoading" @click="fetchBuyPool(selectedDate)">刷新候选</el-button>
           </div>
-          <el-table :data="buyPoolRows" stripe size="small" empty-text="鏆傛棤涔板叆瑙傚療姹犲€欓€?>
-            <el-table-column label="姹犳帓鍚? width="76">
+          <el-table :data="buyPoolRows" stripe size="small" empty-text="暂无买入观察池候选">
+            <el-table-column label="池排名" width="76">
               <template #default="{ row }">{{ row.pool_rank || '--' }}</template>
             </el-table-column>
-            <el-table-column label="浠ｇ爜" width="110">
+            <el-table-column label="代码" width="110">
               <template #default="{ row }">
                 <el-button type="primary" link @click="copyPlainCode(row.code)">{{ normalizeCode(row.code) || '--' }}</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="鍚嶇О" min-width="110">
+            <el-table-column label="名称" min-width="110">
               <template #default="{ row }">
                 <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="V4鎺掑悕" width="86">
+            <el-table-column label="V4排名" width="86">
               <template #default="{ row }">{{ row.rank || '--' }}</template>
             </el-table-column>
-            <el-table-column label="V4鍒嗘暟" width="90">
+            <el-table-column label="V4分数" width="90">
               <template #default="{ row }">{{ formatScore(row.score_total) }}</template>
             </el-table-column>
-            <el-table-column label="涔扮偣绫诲瀷" min-width="132" show-overflow-tooltip>
+            <el-table-column label="买点类型" min-width="132" show-overflow-tooltip>
               <template #default="{ row }">{{ row.setup_label || '--' }}</template>
             </el-table-column>
-            <el-table-column label="5鏃ュ姩閲? width="96">
+            <el-table-column label="5日动量" width="96">
               <template #default="{ row }">{{ formatPct(row.mom5_pct) }}</template>
             </el-table-column>
-            <el-table-column label="10鏃ュ姩閲? width="96">
+            <el-table-column label="10日动量" width="96">
               <template #default="{ row }">{{ formatPct(row.mom10_pct) }}</template>
             </el-table-column>
-            <el-table-column label="缂╅噺" width="86">
+            <el-table-column label="缩量" width="86">
               <template #default="{ row }">{{ formatRatio(row.shrink_2d_ratio || row.shrink_1d_ratio) }}</template>
             </el-table-column>
-            <el-table-column label="鏉垮潡" min-width="116" show-overflow-tooltip>
+            <el-table-column label="板块" min-width="116" show-overflow-tooltip>
               <template #default="{ row }">{{ row.sector_name || '--' }}</template>
             </el-table-column>
-            <el-table-column label="鏉垮潡璇勫垎" width="96">
+            <el-table-column label="板块评分" width="96">
               <template #default="{ row }">{{ formatScore(row.sector_score) }}</template>
             </el-table-column>
-            <el-table-column label="鐘舵€? width="92">
+            <el-table-column label="状态" width="92">
               <template #default="{ row }">
                 <el-tag :type="row.can_buy ? 'success' : (row.candidate_status === 'primary' ? 'warning' : 'info')" effect="light">
                   {{ buyPoolStatusText(row) }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="reason_text" label="鍏ユ睜鍘熷洜" min-width="260" show-overflow-tooltip />
-            <el-table-column label="鎿嶄綔" width="138" fixed="right">
+            <el-table-column prop="reason_text" label="入池原因" min-width="260" show-overflow-tooltip />
+            <el-table-column label="操作" width="138" fixed="right">
               <template #default="{ row }">
-                <el-button type="primary" link @click="openAddHoldingDialog(row, 'new')">鏂板鎸佷粨</el-button>
+                <el-button type="primary" link @click="openAddHoldingDialog(row, 'new')">新增持仓</el-button>
               </template>
             </el-table-column>
           </el-table>
           <div v-if="gen2VerificationQueueRows.length" class="verification-queue">
-            <div class="sub-panel-title">Alpha191楠岃瘉寰呭姙</div>
-            <div class="toolbar-note">鏈€杩戝凡鏈夎窡韪粨鏋溿€佸皻鏈墦鏍囩殑鍏ㄥ眬褰卞瓙鏍锋湰锛屼紭鍏堜粠杩欓噷寮€濮嬪鐩樸€?/div>
-            <el-table :data="gen2VerificationQueueRows" stripe size="small" empty-text="鏆傛棤寰呴獙璇佹牱鏈?>
-              <el-table-column label="淇″彿鏃? width="104">
+            <div class="sub-panel-title">Alpha191 验证待办</div>
+            <div class="toolbar-note">最近已有跟踪结果、尚未打标的全局影子样本，优先从这里开始复盘。</div>
+            <el-table :data="gen2VerificationQueueRows" stripe size="small" empty-text="暂无待验证样本">
+              <el-table-column label="信号日" width="104">
                 <template #default="{ row }">{{ row.entry_date || '--' }}</template>
               </el-table-column>
-              <el-table-column label="浠ｇ爜" width="100">
+              <el-table-column label="代码" width="100">
                 <template #default="{ row }">
                   <el-button type="primary" link @click="copyPlainCode(row.code)">{{ normalizeCode(row.code) || '--' }}</el-button>
                 </template>
               </el-table-column>
-              <el-table-column label="鍚嶇О" min-width="110">
+              <el-table-column label="名称" min-width="110">
                 <template #default="{ row }">
                   <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
                 </template>
               </el-table-column>
-              <el-table-column label="纭鏃堕棿" width="150" show-overflow-tooltip>
+              <el-table-column label="确认时间" width="150" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.confirm_datetime || '--' }}</template>
               </el-table-column>
-              <el-table-column label="Alpha鍒? width="86">
+              <el-table-column label="Alpha分" width="86">
                 <template #default="{ row }">{{ formatScore(row.alpha191_gate_score) }}</template>
               </el-table-column>
-              <el-table-column label="5/10/20鏃? width="142">
+              <el-table-column label="5/10/20日" width="142">
                 <template #default="{ row }">{{ formatPct(row.fwd5_pct) }} / {{ formatPct(row.fwd10_pct) }} / {{ formatPct(row.fwd20_pct) }}</template>
               </el-table-column>
-              <el-table-column label="姝㈡崯" width="74">
+              <el-table-column label="止损" width="74">
                 <template #default="{ row }">
                   <el-tag :type="row.stop5_touch_30m ? 'danger' : 'success'" effect="light" size="small">
-                    {{ row.stop5_touch_30m ? '瑙﹀彂' : '鏈Е鍙? }}
+                    {{ row.stop5_touch_30m ? '触发' : '未触发' }}
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="鎿嶄綔" width="92" fixed="right">
+              <el-table-column label="操作" width="92" fixed="right">
                 <template #default="{ row }">
-                  <el-button type="primary" link @click="openGen2VerificationDialog(row)">楠岃瘉</el-button>
+                  <el-button type="primary" link @click="openGen2VerificationDialog(row)">验证</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -434,11 +633,12 @@
           <div class="sub-panel-header">
             <div>
               <div class="sub-panel-title">{{ gen2ShadowPanelTitle }}</div>
-              <div class="toolbar-note">{{ gen2ShadowSummary }}</div>
-              <div class="toolbar-note warning-note">姝ゅ尯鏄奖瀛愯窡韪?澶嶇洏姹狅紝涓嶆槸寰呬拱鍏ユ竻鍗曪紱鍙湁鐘舵€佹槑纭负鈥滃彲涔板叆鈥濈殑琛屾墠鍏佽鏂板鎸佷粨銆?/div>
+              <div class="toolbar-note">{{ gen2ShadowSummaryDisplay }}</div>
+              <div class="toolbar-note warning-note">此区是影子跟踪/复盘池，不是待买入清单；只有状态明确为“可买入”的行才允许新增持仓。</div>
               <div class="toolbar-note">{{ gen2VerificationSummaryText }}</div>
               <div class="toolbar-note">
-                鏅嬬骇鎻愮ず锛?                <el-tag :type="gen2VerificationPromotionType" effect="light" size="small">{{ gen2VerificationPromotionLabel }}</el-tag>
+                升级提示：
+                <el-tag :type="gen2VerificationPromotionType" effect="light" size="small">{{ gen2VerificationPromotionLabel }}</el-tag>
                 {{ gen2VerificationPromotionMessage }}
               </div>
               <div v-if="gen2ShadowFreshnessNote" class="toolbar-note warning-note">{{ gen2ShadowFreshnessNote }}</div>
@@ -447,50 +647,50 @@
               <div v-if="gen2ShadowMonitorResultText" class="toolbar-note">{{ gen2ShadowMonitorResultText }}</div>
             </div>
             <div class="actions">
-              <el-tag v-if="isGen2LiveMode" type="info" effect="light">Alpha191 volume5 褰卞瓙璺熻釜/澶嶇洏姹?/el-tag>
+              <el-tag v-if="isGen2LiveMode" type="info" effect="light">Alpha191 volume5 影子跟踪/复盘池</el-tag>
               <el-select v-else v-model="gen2Alpha191Gate" size="small" style="width: 230px">
                 <el-option label="Alpha191 off" value="off" />
-                <el-option label="Alpha191 volume5 褰卞瓙璺熻釜/澶嶇洏姹? value="volume5_keep80_runup" />
+                <el-option label="Alpha191 volume5 影子跟踪/复盘池" value="volume5_keep80_runup" />
               </el-select>
-              <el-button size="small" :loading="gen2ShadowLoading" @click="fetchGen2RiskCoolShadow(selectedDate)">鍒锋柊褰卞瓙</el-button>
-              <el-button size="small" type="primary" :loading="gen2ShadowUpdateLoading" @click="updateGen2RiskCoolShadow(selectedDate)">鏇存柊褰卞瓙浜ゆ槗</el-button>
+              <el-button size="small" :loading="gen2ShadowLoading" @click="fetchGen2RiskCoolShadow(selectedDate)">刷新候选</el-button>
+              <el-button size="small" type="primary" :loading="gen2ShadowUpdateLoading" @click="updateGen2RiskCoolShadow(selectedDate)">更新候选快照</el-button>
               <el-button size="small" :loading="gen2ShadowMonitorLoading" @click="toggleGen2ShadowMonitor">
-                {{ gen2ShadowMonitorStatus?.enabled ? '鍋滄15鍒嗛挓鎺㈡祴' : '寮€鍚?5鍒嗛挓鎺㈡祴' }}
+                {{ gen2ShadowMonitorStatus?.enabled ? '停止15分钟探测' : '开启15分钟探测' }}
               </el-button>
-              <el-button size="small" type="warning" plain :loading="gen2ShadowMonitorLoading" @click="runGen2ShadowMonitorOnce">绔嬪嵆鎺㈡祴閭欢</el-button>
+              <el-button size="small" type="warning" plain :loading="gen2ShadowMonitorLoading" @click="runGen2ShadowMonitorOnce">立即探测邮件</el-button>
             </div>
           </div>
-          <el-table :data="shadowReviewRows" stripe size="small" empty-text="鏆傛棤G2褰卞瓙瑙傚療鍊欓€?>
-            <el-table-column label="鐘舵€? width="96">
+          <el-table :data="shadowReviewRows" stripe size="small" empty-text="暂无 G2 影子观察候选">
+            <el-table-column label="状态" width="96">
               <template #default="{ row }">
                 <el-tag :type="gen2ShadowTagType(row)" effect="light">{{ gen2ShadowStatusText(row) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="瀹炵洏楠岃瘉" width="104">
+            <el-table-column label="实盘验证" width="104">
               <template #default="{ row }">
                 <el-tag :type="gen2VerificationTagType(row)" effect="light">{{ gen2VerificationText(row) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="浠ｇ爜" width="110">
+            <el-table-column label="代码" width="110">
               <template #default="{ row }">
                 <el-button type="primary" link @click="copyPlainCode(row.code)">{{ normalizeCode(row.code) || '--' }}</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="鍚嶇О" min-width="110">
+            <el-table-column label="名称" min-width="110">
               <template #default="{ row }">
                 <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="褰卞瓙鎺掑悕" width="86">
+            <el-table-column label="影子排名" width="86">
               <template #default="{ row }">{{ row.day_signal_rank || '--' }}</template>
             </el-table-column>
-            <el-table-column label="纭鏃堕棿" width="150" show-overflow-tooltip>
+            <el-table-column label="确认时间" width="150" show-overflow-tooltip>
               <template #default="{ row }">{{ row.confirm_datetime || '--' }}</template>
             </el-table-column>
-            <el-table-column label="鍏ュ満浠? width="86">
+            <el-table-column label="入场价" width="86">
               <template #default="{ row }">{{ formatPrice(row.entry_price) }}</template>
             </el-table-column>
-            <el-table-column label="V4鎺掑悕" width="86">
+            <el-table-column label="V4排名" width="86">
               <template #default="{ row }">{{ row.v4_rank || '--' }}</template>
             </el-table-column>
             <el-table-column label="Alpha191" width="150">
@@ -498,36 +698,36 @@
                 {{ formatScore(row.alpha191_volume5_score ?? row.alpha191_gate_score) }} / {{ row.alpha191_volume5_rank_in_day || row.alpha191_original_v4_rank || '--' }}
               </template>
             </el-table-column>
-            <el-table-column label="娑ㄥ箙/鍘嬪姏" width="116">
+            <el-table-column label="涨幅/压力" width="116">
               <template #default="{ row }">{{ formatPct(row.runup_from_60d_low) }} / {{ formatPct(row.overhead_pressure_amount_share) }}</template>
             </el-table-column>
-            <el-table-column label="娑ㄥ箙/閲忔瘮" width="116">
+            <el-table-column label="涨幅/量比" width="116">
               <template #default="{ row }">{{ formatPct(row.rt_return_pct) }} / {{ formatRatio(row.amount_ratio) }}</template>
             </el-table-column>
-            <el-table-column label="5/10/20鏃ヨ窡韪? width="142">
+            <el-table-column label="5/10/20日跟踪" width="142">
               <template #default="{ row }">{{ formatPct(row.fwd5_pct) }} / {{ formatPct(row.fwd10_pct) }} / {{ formatPct(row.fwd20_pct) }}</template>
             </el-table-column>
-            <el-table-column label="姝㈡崯" width="74">
+            <el-table-column label="止损" width="74">
               <template #default="{ row }">
                 <el-tag :type="row.stop5_touch_30m ? 'danger' : 'success'" effect="light" size="small">
-                  {{ row.stop5_touch_30m ? '瑙﹀彂' : '鏈Е鍙? }}
+                  {{ row.stop5_touch_30m ? '触发' : '未触发' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="reason_text" label="鍘熷洜" min-width="240" show-overflow-tooltip />
-            <el-table-column label="楠岃瘉澶囨敞" min-width="180" show-overflow-tooltip>
+            <el-table-column prop="reason_text" label="理由" min-width="240" show-overflow-tooltip />
+            <el-table-column label="验证说明" min-width="180" show-overflow-tooltip>
               <template #default="{ row }">{{ gen2VerificationNoteText(row) }}</template>
             </el-table-column>
-            <el-table-column label="鎿嶄綔" width="176" fixed="right">
+              <el-table-column label="操作" width="176" fixed="right">
               <template #default="{ row }">
-                <el-button type="primary" link @click="openGen2VerificationDialog(row)">楠岃瘉</el-button>
+                <el-button type="primary" link @click="openGen2VerificationDialog(row)">验证</el-button>
                 <el-button
                   type="primary"
                   link
                   :disabled="!gen2ShadowCanAddHolding(row)"
                   @click="openAddHoldingDialog(row, 'new')"
                 >
-                  {{ gen2ShadowCanAddHolding(row) ? '鏂板鎸佷粨' : '浠呭鐩? }}
+                  {{ gen2ShadowCanAddHolding(row) ? '新增持仓' : '仅复盘' }}
                 </el-button>
               </template>
             </el-table-column>
@@ -536,8 +736,8 @@
         <div style="height: 12px" />
         <div class="sub-panel-header holding-list-header">
           <div>
-            <div class="sub-panel-title">褰撳墠瀹炵洏鎸佷粨</div>
-            <div class="toolbar-note">涓€閿洿鏂拌偂浠枫€佺泩浜忛噾棰濄€乂4鎺掑悕銆佽瘎鍒嗘睜鐘舵€佸拰鍗栫偣淇″彿銆?/div>
+            <div class="sub-panel-title">当前实盘持仓</div>
+            <div class="toolbar-note">一键更新股价、盈亏金额、V4 排名、评分池状态和卖点信号。</div>
           </div>
           <el-button
             type="primary"
@@ -545,87 +745,95 @@
             :loading="holdingRefreshLoading || allRefreshLoading"
             @click="refreshCurrentHoldings"
           >
-            涓€閿洿鏂版寔浠?          </el-button>
+            一键更新持仓
+          </el-button>
         </div>
-        <el-table :data="currentHoldingRows" class="current-holding-table" stripe size="small" :fit="false" empty-text="鏆傛棤褰撳墠瀹炵洏鎸佷粨">
-          <el-table-column label="浠ｇ爜" width="100">
+        <el-table :data="currentHoldingRows" class="current-holding-table" stripe size="small" :fit="false" empty-text="暂无当前实盘持仓">
+          <el-table-column label="代码" width="100">
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ displayCode(row.code) }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="鍚嶇О" width="110" show-overflow-tooltip>
+          <el-table-column label="名称" width="110" show-overflow-tooltip>
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="V4鎺掑悕/鍒嗘暟" width="112">
+          <el-table-column label="V4评分/排名" width="112">
             <template #default="{ row }">
               {{ v4SourceFor(row).rank_text }} / {{ v4SourceFor(row).score_text }}
             </template>
           </el-table-column>
-          <el-table-column label="鏄惁鍦ㄦ睜" width="86">
+          <el-table-column label="是否在池" width="86">
             <template #default="{ row }">
               <el-tag :type="v4SourceFor(row).in_pool ? 'success' : 'danger'" effect="light" size="small">
-                {{ v4SourceFor(row).in_pool ? '鍦ㄦ睜' : '鎺夋睜' }}
+                {{ v4SourceFor(row).in_pool ? '在池' : '不在' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="shares" label="鏁伴噺" width="74" />
-          <el-table-column prop="cost_price" label="鎴愭湰" width="80" />
-          <el-table-column prop="current_price" label="褰撳墠浠? width="80">
+          <el-table-column prop="shares" label="数量" width="74" />
+          <el-table-column prop="cost_price" label="成本" width="80" />
+          <el-table-column prop="current_price" label="当前价" width="80">
             <template #default="{ row }">{{ formatPrice(row.current_price) }}</template>
           </el-table-column>
-          <el-table-column label="甯傚€? width="102">
+          <el-table-column label="市值" width="102">
             <template #default="{ row }">{{ formatMoney(holdingMarketValue(row)) }}</template>
           </el-table-column>
-          <el-table-column label="娴姩鐩堜簭" width="102">
+          <el-table-column label="浮动盈亏" width="102">
             <template #default="{ row }">
               <span :style="aSharePnlStyle(floatingPnlAmount(row))">
                 {{ formatMoney(floatingPnlAmount(row)) }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="褰撴棩娑ㄨ穼" width="92">
+          <el-table-column label="当日涨跌" width="92">
             <template #default="{ row }">
               <span :style="aSharePnlStyle(dayChangePct(row))">
                 {{ formatSignedPct(dayChangePct(row)) }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="pnl_ratio" label="鐩堜簭%" width="82">
+          <el-table-column prop="pnl_ratio" label="盈亏%" width="82">
             <template #default="{ row }">
               <span :style="aSharePnlStyle(row.pnl_ratio)">{{ formatPct(row.pnl_ratio) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="姝㈡崯浠? width="84">
+          <el-table-column label="止损价" width="84">
             <template #default="{ row }">
               <span class="stop-loss-price">{{ formatPrice(stopLossPrice(row)) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="绾緥鐘舵€? width="104">
+          <el-table-column label="纪律状态" width="104">
             <template #default="{ row }">
               <el-tag :type="disciplineTagType(row)" effect="light" size="small">{{ disciplineTagText(row) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="RSI鑳岀" width="112">
+          <el-table-column label="RSI15/30" width="112">
             <template #default="{ row }">
               <div class="rsi-cell">
                 <el-tag :type="row.signal?.rsi15_signal?.detected ? 'danger' : 'success'" effect="light" size="small">
-                  15{{ row.signal?.rsi15_signal?.detected ? '瑙? : '-' }}
+                  15{{ row.signal?.rsi15_signal?.detected ? '触' : '-' }}
                 </el-tag>
                 <el-tag :type="row.signal?.rsi30_signal?.detected ? 'danger' : 'success'" effect="light" size="small">
-                  30{{ row.signal?.rsi30_signal?.detected ? '瑙? : '-' }}
+                  30{{ row.signal?.rsi30_signal?.detected ? '触' : '-' }}
                 </el-tag>
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="signal.suggestion" label="鍗栧嚭寤鸿" width="144" show-overflow-tooltip />
-          <el-table-column prop="buy_time" label="涔板叆鏃堕棿" width="136" />
-          <el-table-column label="鎿嶄綔" width="106">
+          <el-table-column label="箱体T" width="132" show-overflow-tooltip>
+            <template #default="{ row }">
+              <el-tag :type="rsiBoxTTagType(row)" effect="light" size="small" :title="row.signal?.rsi_box_t?.recommendation || ''">
+                {{ rsiBoxTTagText(row) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="signal.suggestion" label="交易建议" width="144" show-overflow-tooltip />
+          <el-table-column prop="buy_time" label="入场时间" width="136" />
+          <el-table-column label="操作" width="106">
             <template #default="{ row, $index }">
               <div class="op-cell">
-                <el-button type="warning" link @click="openSellDialog(row, $index)">鍗栧嚭</el-button>
-                <el-button type="danger" link @click="removeManualHolding($index)">鍒犻櫎</el-button>
+                <el-button type="warning" link @click="openSellDialog(row, $index)">卖出</el-button>
+                <el-button type="danger" link @click="removeManualHolding($index)">删除</el-button>
               </div>
             </template>
           </el-table-column>
@@ -636,27 +844,27 @@
           <el-alert
             type="info"
             :closable="false"
-            :title="`褰撳墠鏍囩殑锛?{focusCode}${focusName ? ' ' + focusName : ''}`"
+            :title="`当前标的：${focusCode}${focusName ? ` ${focusName}` : ''}`"
             :description="focusDescription"
             class="panel-alert"
           />
-          <el-table :data="focusRows" stripe size="small" empty-text="褰撳墠蹇収鏈懡涓鏍囩殑锛屼粛鍙姞鍏ユ寔浠?>
-            <el-table-column label="浠ｇ爜" width="110">
+          <el-table :data="focusRows" stripe size="small" empty-text="当前快照未命中该标的，仍可加入持仓">
+            <el-table-column label="代码" width="110">
               <template #default="{ row }">
                 <el-button type="primary" link @click="openStockDetail(row)">{{ displayCode(row.code) }}</el-button>
               </template>
             </el-table-column>
-            <el-table-column label="鍚嶇О" min-width="120">
+            <el-table-column label="名称" min-width="120">
               <template #default="{ row }">
                 <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
               </template>
             </el-table-column>
-            <el-table-column prop="rank" label="鎺掑悕" width="80" />
-            <el-table-column prop="score_total" label="鎬诲垎" width="90" />
-            <el-table-column prop="reason_text" label="璇存槑" min-width="220" show-overflow-tooltip />
-            <el-table-column label="鎿嶄綔" width="120">
+            <el-table-column prop="rank" label="排名" width="80" />
+            <el-table-column prop="score_total" label="总分" width="90" />
+            <el-table-column prop="reason_text" label="说明" min-width="220" show-overflow-tooltip />
+            <el-table-column label="操作" width="120">
               <template #default="{ row }">
-                <el-button type="primary" link @click="openAddHoldingDialog(row)">鍔犲叆鎸佷粨</el-button>
+                <el-button type="primary" link @click="openAddHoldingDialog(row)">加入持仓</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -664,64 +872,64 @@
       </div>
 
       <div class="panel">
-        <div class="panel-title">鍘嗗彶鎴愪氦涓庢寔浠撹建杩?/div>
+        <div class="panel-title">历史成交与持仓轨迹</div>
         <div class="holding-toolbar">
           <div class="actions">
-            <el-button @click="openThsImportDialog">璇诲彇鍚岃姳椤烘垚浜?/el-button>
+            <el-button @click="openThsImportDialog">读取同花顺成交</el-button>
           </div>
         </div>
-        <div class="toolbar-note">鎸夎偂绁ㄥ垎缁勫睍绀哄悓鑺遍『鍘嗗彶鎴愪氦锛岄粯璁ゆ寜鏈€杩戜拱鍏ユ椂闂村€掑簭锛涘睍寮€鍚庡彲鏌ョ湅璇ヨ偂瀹屾暣涔板崠鏄庣粏銆?/div>
-        <el-table :data="pagedHistoryTradeGroups" stripe size="small" empty-text="鏆傛棤鍘嗗彶鎴愪氦">
+        <div class="toolbar-note">按股票分组展示同花顺历史成交，默认按最近买入时间倒序；展开后可查看该股完整买卖明细。</div>
+        <el-table :data="pagedHistoryTradeGroups" stripe size="small" empty-text="暂无历史成交">
           <el-table-column type="expand" width="52">
             <template #default="{ row }">
-              <el-table :data="row.trades" size="small" stripe empty-text="璇ヨ偂鏆傛棤鏄庣粏">
-                <el-table-column prop="time" label="鎴愪氦鏃堕棿" width="160" />
-                <el-table-column prop="side" label="鏂瑰悜" width="72" />
-                <el-table-column prop="shares" label="鏁伴噺" width="88" />
-                <el-table-column prop="price" label="鎴愪氦浠? width="90">
+              <el-table :data="row.trades" size="small" stripe empty-text="该股暂无明细">
+                <el-table-column prop="time" label="成交时间" width="160" />
+                <el-table-column prop="side" label="方向" width="72" />
+                <el-table-column prop="shares" label="数量" width="88" />
+                <el-table-column prop="price" label="成交价" width="90">
                   <template #default="{ row: trade }">{{ formatPrice(trade.price) }}</template>
                 </el-table-column>
-                <el-table-column prop="before_shares" label="鍙樺姩鍓? width="88" />
-                <el-table-column prop="after_shares" label="鍙樺姩鍚? width="88" />
-                <el-table-column prop="realized_pnl" label="宸插疄鐜扮泩浜? width="120">
+                <el-table-column prop="before_shares" label="变动前" width="88" />
+                <el-table-column prop="after_shares" label="变动后" width="88" />
+                <el-table-column prop="realized_pnl" label="已实现盈亏" width="120">
                   <template #default="{ row: trade }">
                     <span :style="aSharePnlStyle(trade.realized_pnl)">{{ formatMoney(trade.realized_pnl) }}</span>
                   </template>
                 </el-table-column>
-                <el-table-column prop="reason" label="鍘熷洜/澶囨敞" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="reason" label="原因/备注" min-width="180" show-overflow-tooltip />
               </el-table>
             </template>
           </el-table-column>
-          <el-table-column label="浠ｇ爜" width="110">
+          <el-table-column label="代码" width="110">
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ displayCode(row.code) }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="鍚嶇О" min-width="120">
+          <el-table-column label="名称" min-width="120">
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column prop="latest_buy_time" label="鏈€杩戜拱鍏ユ椂闂? width="160" />
-          <el-table-column prop="first_buy_time" label="棣栨涔板叆鏃堕棿" width="160" />
-          <el-table-column prop="buy_count" label="涔板叆娆℃暟" width="88" />
-          <el-table-column prop="sell_count" label="鍗栧嚭娆℃暟" width="88" />
-          <el-table-column prop="net_shares" label="鍑€鎸佷粨鑲℃暟" width="110" />
-          <el-table-column label="褰撳墠鐘舵€? width="100">
+          <el-table-column prop="latest_buy_time" label="最近买入时间" width="160" />
+          <el-table-column prop="first_buy_time" label="首次买入时间" width="160" />
+          <el-table-column prop="buy_count" label="买入次数" width="88" />
+          <el-table-column prop="sell_count" label="卖出次数" width="88" />
+          <el-table-column prop="net_shares" label="净持仓股数" width="110" />
+          <el-table-column label="当前状态" width="100">
             <template #default="{ row }">
-              <el-tag :type="row.is_active ? 'success' : 'info'" effect="light">{{ row.is_active ? '鎸佹湁涓? : '宸插崠鍑? }}</el-tag>
+              <el-tag :type="row.is_active ? 'success' : 'info'" effect="light">{{ row.is_active ? '持有中' : '已卖出' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="褰撳墠鎸佷粨" width="100">
+          <el-table-column label="当前持仓" width="100">
             <template #default="{ row }">{{ row.current_shares > 0 ? row.current_shares : '--' }}</template>
           </el-table-column>
-          <el-table-column label="绱宸插疄鐜扮泩浜? width="130">
+          <el-table-column label="累计已实现盈亏" width="130">
             <template #default="{ row }">
               <span :style="aSharePnlStyle(row.realized_pnl)">{{ formatMoney(row.realized_pnl) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="last_trade_time" label="鏈€杩戞垚浜? width="160" />
-          <el-table-column prop="summary" label="鎽樿" min-width="240" show-overflow-tooltip />
+          <el-table-column prop="last_trade_time" label="最近成交" width="160" />
+          <el-table-column prop="summary" label="摘要" min-width="240" show-overflow-tooltip />
         </el-table>
         <div class="history-pagination" v-if="historyTradeGroups.length > historyPageSize">
           <el-pagination
@@ -736,46 +944,46 @@
       </div>
 
       <div class="panel">
-        <div class="panel-title">绛栫暐鎸佷粨涓庡緟鍗栧嚭瑙傚療</div>
-        <el-table :data="positions.rows || []" stripe size="small" empty-text="绛栫暐褰撳墠绌轰粨">
-          <el-table-column label="浠ｇ爜" width="110">
+        <div class="panel-title">交易历史持仓明细</div>
+        <el-table :data="positions.rows || []" stripe size="small" empty-text="暂无当前交易持仓">
+          <el-table-column label="代码" width="110">
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ displayCode(row.code) }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="鍚嶇О" min-width="120">
+          <el-table-column label="名称" min-width="120">
             <template #default="{ row }">
               <el-button type="primary" link @click="openStockDetail(row)">{{ row.name || '--' }}</el-button>
             </template>
           </el-table-column>
-          <el-table-column prop="shares" label="鏁伴噺" width="88" />
-          <el-table-column prop="avg_cost" label="鎴愭湰" width="88" />
-          <el-table-column prop="current_price" label="褰撳墠浠? width="88">
+          <el-table-column prop="shares" label="数量" width="88" />
+          <el-table-column prop="avg_cost" label="成本" width="88" />
+          <el-table-column prop="current_price" label="当前价" width="88">
             <template #default="{ row }">{{ formatPrice(row.current_price) }}</template>
           </el-table-column>
-          <el-table-column prop="pnl_ratio" label="鐩堜簭%" width="88">
+          <el-table-column prop="pnl_ratio" label="盈亏%" width="88">
             <template #default="{ row }">
               <span :style="aSharePnlStyle(row.pnl_ratio)">{{ formatPct(row.pnl_ratio) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="hold_days" label="鎸佹湁澶╂暟" width="96" />
+          <el-table-column prop="hold_days" label="持有天数" width="96" />
         </el-table>
       </div>
 
       <div class="panel">
         <div class="sub-panel-header">
           <div>
-            <div class="panel-title">妯℃嫙鐩樻ˉ鎺ュ洖鎵?/div>
-            <div class="toolbar-note">缁熶竴鏌ョ湅 bridge 璁㈠崟銆佹垚浜や笌鏈€鏂版寔浠撳揩鐓э紱褰?PTrade 寮€濮嬪洖鍐欏悗锛岃繖閲屽氨鏄ā鎷熺洏闂幆鏍稿闈㈡澘銆?/div>
+            <div class="panel-title">模拟盘桥接回放</div>
+            <div class="toolbar-note">统一查看 bridge 订单、成交与最新持仓快照；等 PTrade 开始回写后，这里就是模拟盘闭环核对面板。</div>
             <div class="toolbar-note">{{ ptradeBridgeSummary }}</div>
             <div class="toolbar-note">{{ ptradeBridgeQueueText }}</div>
           </div>
           <div class="actions">
-            <el-button :loading="ptradeBridgeLoading" @click="fetchPtradeBridgeState">鍒锋柊妗ユ帴鐘舵€?/el-button>
-            <el-button :loading="ptradeBridgeProbeLoading" @click="runPtradeBridgeProbe(false)">鍙鎺㈤拡</el-button>
-            <el-button type="warning" plain :loading="ptradeBridgeProbeLoading" @click="runPtradeBridgeProbe(true)">dry-run 鎺㈤拡</el-button>
-            <el-button type="success" plain :loading="ptradeBridgeAcceptanceLoading" @click="runPtradeBridgeAcceptanceGate">PTrade 楠屾敹闂ㄧ</el-button>
-            <el-button type="info" plain :loading="ptradeBridgeWatchAcceptanceLoading" @click="runPtradeBridgeWatchAcceptance">绛夊緟 PTrade 骞堕獙鏀?/el-button>
+            <el-button :loading="ptradeBridgeLoading" @click="fetchPtradeBridgeState">刷新桥接状态</el-button>
+            <el-button :loading="ptradeBridgeProbeLoading" @click="runPtradeBridgeProbe(false)">只读探针</el-button>
+            <el-button type="warning" plain :loading="ptradeBridgeProbeLoading" @click="runPtradeBridgeProbe(true)">dry-run 探针</el-button>
+            <el-button type="success" plain :loading="ptradeBridgeAcceptanceLoading" @click="runPtradeBridgeAcceptanceGate">PTrade 验收门禁</el-button>
+            <el-button type="info" plain :loading="ptradeBridgeWatchAcceptanceLoading" @click="runPtradeBridgeWatchAcceptance">等待 PTrade 并验收</el-button>
             <el-button
               type="danger"
               plain
@@ -783,21 +991,21 @@
               :disabled="!ptradeBridgeAudit?.gates?.live_submit_ready"
               @click="runPtradeBridgeLiveSubmitTest"
             >
-              live-submit 灏忛楠屾敹
+              live-submit 小额验收
             </el-button>
             <el-button
               type="primary"
               :disabled="!(ptradeBridgePositions?.latest?.ok && (ptradeBridgePositions?.latest?.positions || []).length)"
               @click="importPtradePositionsToManualHoldings"
             >
-              瀵煎叆妯℃嫙鐩樻寔浠?            </el-button>
+              导入模拟盘持仓</el-button>
           </div>
         </div>
         <el-alert
           v-if="ptradeBridgePositions?.latest?.snapshot_time"
           type="info"
           :closable="false"
-          :title="`鏈€鏂版寔浠撳揩鐓э細${ptradeBridgePositions.latest.snapshot_time}`"
+          :title="`最近模拟盘持仓快照：${ptradeBridgePositions.latest.snapshot_time}`"
           :description="ptradeBridgePositions.latest.file || ''"
           class="panel-alert"
         />
@@ -842,85 +1050,85 @@
           class="panel-alert"
         />
         <div v-if="ptradeBridgeEvidenceRows.length" class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">PTrade 楠屾敹璇佹嵁</div>
-          <el-table :data="ptradeBridgeEvidenceRows" stripe size="small" empty-text="鏆傛棤 PTrade 楠屾敹璇佹嵁">
-            <el-table-column prop="name" label="鏉′欢" min-width="180" />
-            <el-table-column label="鐘舵€? width="90">
+          <div class="sub-panel-title">PTrade 验收证据</div>
+          <el-table :data="ptradeBridgeEvidenceRows" stripe size="small" empty-text="暂无 PTrade 验收证据">
+            <el-table-column prop="name" label="条件" min-width="180" />
+            <el-table-column label="状态" width="90">
               <template #default="{ row }">
-                <el-tag :type="row.ok ? 'success' : 'warning'" size="small">{{ row.ok ? '閫氳繃' : '鏈€氳繃' }}</el-tag>
+                <el-tag :type="row.ok ? 'success' : 'warning'" size="small">{{ row.ok ? '通过' : '未通过' }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="evidence" label="璇佹嵁" min-width="260" show-overflow-tooltip />
-            <el-table-column prop="next_action" label="涓嬩竴姝? min-width="320" show-overflow-tooltip />
+            <el-table-column prop="evidence" label="证据" min-width="260" show-overflow-tooltip />
+            <el-table-column prop="next_action" label="下一步" min-width="320" show-overflow-tooltip />
           </el-table>
         </div>
         <div class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">鏈€鏂版ā鎷熺洏鎸佷粨</div>
-          <el-table :data="ptradeLatestPositionRows" stripe size="small" empty-text="鏆傛棤妯℃嫙鐩樻寔浠撳揩鐓?>
-            <el-table-column prop="code" label="浠ｇ爜" width="110">
+          <div class="sub-panel-title">最新模拟盘持仓</div>
+          <el-table :data="ptradeLatestPositionRows" stripe size="small" empty-text="暂无模拟盘持仓快照">
+            <el-table-column prop="code" label="代码" width="110">
               <template #default="{ row }">{{ displayCode(row.code) }}</template>
             </el-table-column>
-            <el-table-column prop="name" label="鍚嶇О" min-width="120" />
-            <el-table-column prop="shares" label="鏁伴噺" width="90" />
-            <el-table-column label="鎴愭湰" width="90">
+            <el-table-column prop="name" label="名称" min-width="120" />
+            <el-table-column prop="shares" label="数量" width="90" />
+            <el-table-column label="成本" width="90">
               <template #default="{ row }">{{ formatPrice(row.cost_price) }}</template>
             </el-table-column>
-            <el-table-column label="鐜颁环" width="90">
+            <el-table-column label="现价" width="90">
               <template #default="{ row }">{{ formatPrice(row.current_price) }}</template>
             </el-table-column>
-            <el-table-column label="甯傚€? width="110">
+            <el-table-column label="市值" width="110">
               <template #default="{ row }">{{ formatMoney(row.market_value) }}</template>
             </el-table-column>
-            <el-table-column label="鐩堜簭%" width="90">
+            <el-table-column label="盈亏%" width="90">
               <template #default="{ row }"><span :style="aSharePnlStyle(row.pnl_ratio)">{{ formatPct(row.pnl_ratio) }}</span></template>
             </el-table-column>
           </el-table>
         </div>
         <div class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">鏈€杩戞ā鎷熺洏鎴愪氦</div>
-          <el-table :data="ptradeBridgeFills" stripe size="small" empty-text="鏆傛棤妯℃嫙鐩樻垚浜ゅ洖鍐?>
-            <el-table-column prop="order_id" label="璁㈠崟鍙? width="180" show-overflow-tooltip />
-            <el-table-column prop="code" label="浠ｇ爜" width="110">
+          <div class="sub-panel-title">最近模拟盘成交</div>
+          <el-table :data="ptradeBridgeFills" stripe size="small" empty-text="暂无模拟盘成交回放">
+            <el-table-column prop="order_id" label="订单号" width="180" show-overflow-tooltip />
+            <el-table-column prop="code" label="代码" width="110">
               <template #default="{ row }">{{ displayCode(row.code) }}</template>
             </el-table-column>
-            <el-table-column prop="side" label="鏂瑰悜" width="80" />
-            <el-table-column prop="quantity" label="鏁伴噺" width="90" />
-            <el-table-column label="鎴愪氦浠? width="90">
+            <el-table-column prop="side" label="方向" width="80" />
+            <el-table-column prop="quantity" label="数量" width="90" />
+            <el-table-column label="成交价" width="90">
               <template #default="{ row }">{{ formatPrice(row.fill_price ?? row.price) }}</template>
             </el-table-column>
-            <el-table-column prop="filled_at" label="鎴愪氦鏃堕棿" width="168" show-overflow-tooltip />
-            <el-table-column prop="message" label="璇存槑" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="filled_at" label="成交时间" width="168" show-overflow-tooltip />
+            <el-table-column prop="message" label="说明" min-width="180" show-overflow-tooltip />
           </el-table>
         </div>
         <div class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">鏈€杩戞ā鎷熺洏璁㈠崟</div>
-          <el-table :data="ptradeBridgeOrders.slice(0, 10)" stripe size="small" empty-text="鏆傛棤妯℃嫙鐩樿鍗?>
-            <el-table-column prop="order_id" label="璁㈠崟鍙? width="180" show-overflow-tooltip />
-            <el-table-column prop="code" label="浠ｇ爜" width="110">
+          <div class="sub-panel-title">最近模拟盘订单</div>
+          <el-table :data="ptradeBridgeOrders.slice(0, 10)" stripe size="small" empty-text="暂无模拟盘订单">
+            <el-table-column prop="order_id" label="订单号" width="180" show-overflow-tooltip />
+            <el-table-column prop="code" label="代码" width="110">
               <template #default="{ row }">{{ displayCode(row.code) }}</template>
             </el-table-column>
-            <el-table-column prop="side" label="鏂瑰悜" width="80" />
-            <el-table-column prop="quantity" label="鏁伴噺" width="90" />
-            <el-table-column label="浠锋牸" width="90">
+            <el-table-column prop="side" label="方向" width="80" />
+            <el-table-column prop="quantity" label="数量" width="90" />
+            <el-table-column label="价格" width="90">
               <template #default="{ row }">{{ formatPrice(row.price) }}</template>
             </el-table-column>
-            <el-table-column prop="_bridge_status" label="鐘舵€? width="110" />
-            <el-table-column prop="created_at" label="鍒涘缓鏃堕棿" width="168" show-overflow-tooltip />
-            <el-table-column prop="reason" label="璇存槑" min-width="180" show-overflow-tooltip />
+            <el-table-column prop="_bridge_status" label="状态" width="110" />
+            <el-table-column prop="created_at" label="创建时间" width="168" show-overflow-tooltip />
+            <el-table-column prop="reason" label="说明" min-width="180" show-overflow-tooltip />
           </el-table>
         </div>
       </div>
     </template>
 
-    <el-dialog v-model="gen2VerificationDialogVisible" title="G2褰卞瓙淇″彿楠岃瘉" width="480px">
+    <el-dialog v-model="gen2VerificationDialogVisible" title="G2候选确认验证" width="480px">
       <el-form label-width="90px">
-        <el-form-item label="鏍囩殑">
+        <el-form-item label="代码">
           <span>
             {{ normalizeCode(gen2VerificationForm.row?.code) || '--' }}
             {{ gen2VerificationForm.row?.name || '' }}
           </span>
         </el-form-item>
-        <el-form-item label="楠岃瘉鐘舵€?>
+        <el-form-item label="验证状态">
           <el-select v-model="gen2VerificationForm.status" style="width: 220px">
             <el-option
               v-for="item in gen2VerificationOptions"
@@ -930,203 +1138,203 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="浠撲綅%">
+        <el-form-item label="仓位%">
           <el-input-number v-model="gen2VerificationForm.position_pct" :min="0" :max="100" :step="5" style="width: 180px" />
         </el-form-item>
-        <el-form-item label="鎴愪氦浠?>
+        <el-form-item label="成交价">
           <el-input-number v-model="gen2VerificationForm.fill_price" :min="0" :precision="3" :step="0.01" style="width: 180px" />
         </el-form-item>
-        <el-form-item label="澶囨敞">
+        <el-form-item label="备注">
           <el-input
             v-model="gen2VerificationForm.note"
             type="textarea"
             :rows="3"
-            placeholder="璁板綍涓轰粈涔堣窡銆佷负浠€涔堟斁寮冦€佺洏涓墽琛屽亸宸瓑"
+            placeholder="记录为什么跟、为什么放弃、盘中执行偏差等"
           />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="gen2VerificationDialogVisible = false">鍙栨秷</el-button>
-        <el-button type="primary" :loading="gen2VerificationSaving" @click="saveGen2Verification">淇濆瓨楠岃瘉</el-button>
+        <el-button @click="gen2VerificationDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="gen2VerificationSaving" @click="saveGen2Verification">保存验证</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="addDialogVisible" title="鏂板瀹炵洏鎸佷粨" width="420px">
+    <el-dialog v-model="addDialogVisible" title="新增实盘持仓" width="420px">
       <el-form label-width="90px">
-        <el-form-item label="浠ｇ爜">
+        <el-form-item label="代码">
           <el-autocomplete
             v-model="addForm.code"
             :fetch-suggestions="querySearchStock"
-            placeholder="杈撳叆浠ｇ爜鎴栧悕绉版ā绯婂尮閰?
+            placeholder="输入代码或名称模糊匹配"
             clearable
             @select="handleCodeSelect"
           />
         </el-form-item>
-        <el-form-item label="鍚嶇О">
-          <el-input v-model="addForm.name" placeholder="鍙€? />
+        <el-form-item label="名称">
+          <el-input v-model="addForm.name" placeholder="可选" />
         </el-form-item>
-        <el-form-item v-if="codeLookupText" label="鍖归厤缁撴灉">
+        <el-form-item v-if="codeLookupText" label="匹配结果">
           <span>{{ codeLookupText }}</span>
         </el-form-item>
-        <el-form-item label="鑲℃暟">
+        <el-form-item label="股数">
           <el-input-number v-model="addForm.shares" :min="0" :step="100" style="width: 180px" />
         </el-form-item>
-        <el-form-item label="鎴愭湰浠?>
+        <el-form-item label="成本价">
           <el-input-number v-model="addForm.cost_price" :min="0" :precision="3" :step="0.01" style="width: 180px" />
         </el-form-item>
-        <el-form-item label="瀹炴椂鐩堜簭">
+        <el-form-item label="实时盈亏">
           <span :style="{ color: livePnlColor }">{{ livePnlText }}</span>
         </el-form-item>
-        <el-form-item label="涔板叆鏃堕棿">
+        <el-form-item label="入场时间">
           <el-date-picker
             v-model="addForm.buy_time"
             type="datetime"
             value-format="YYYY-MM-DD HH:mm"
             format="YYYY-MM-DD HH:mm"
-            placeholder="绮剧‘鍒板垎閽?
+            placeholder="精确到分钟"
             style="width: 220px"
           />
         </el-form-item>
-        <el-form-item v-if="addMode === 'new'" label="鍘嗗彶棰勬湡">
-          <div v-if="entryBacktestLoading">姝ｅ湪璇勪及鍘嗗彶鏍锋湰...</div>
+        <el-form-item v-if="addMode === 'new'" label="历史预期">
+          <div v-if="entryBacktestLoading">正在评估历史样本...</div>
           <div v-else-if="entryBacktestText">{{ entryBacktestText }}</div>
-          <div v-else>杈撳叆浠ｇ爜鍚庤嚜鍔ㄨ瘎浼?/div>
+          <div v-else>输入代码后自动评估</div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="addDialogVisible = false">鍙栨秷</el-button>
-          <el-button type="primary" @click="confirmAddHolding">{{ addMode === 'new' ? '妫€鏌ヤ氦鏄撹鍒? : '纭鍔犲叆' }}</el-button>
+        <el-button @click="addDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmAddHolding">{{ addMode === 'new' ? '检查交易规则' : '确认加入' }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="ruleDialogVisible" title="浜ゆ槗瑙勫垯妫€鏌? width="560px">
+    <el-dialog v-model="ruleDialogVisible" title="交易规则检查" width="560px">
       <el-alert
         :type="ruleCheckPassed ? 'success' : 'warning'"
         :closable="false"
-        :title="ruleCheckPassed ? '瑙勫垯妫€鏌ラ€氳繃锛屽彲浠ュ姞鍏ユ寔浠? : '瀛樺湪涓嶇鍚堢瓥鐣ョ殑瑙勫垯锛岃鍏堣皟鏁?"
+        :title="ruleCheckPassed ? '规则检查通过，可以加入持仓' : '存在不符合策略的规则，请先调整'"
         class="panel-alert"
       />
       <el-table :data="ruleChecklist" size="small" stripe>
-        <el-table-column prop="label" label="瑙勫垯" min-width="260" />
-        <el-table-column label="缁撴灉" width="80">
+        <el-table-column prop="label" label="规则" min-width="260" />
+        <el-table-column label="结果" width="80">
           <template #default="{ row }">
-            <el-tag :type="row.pass ? 'success' : 'danger'" effect="light">{{ row.pass ? '閫氳繃' : '涓嶈繃' }}</el-tag>
+            <el-tag :type="row.pass ? 'success' : 'danger'" effect="light">{{ row.pass ? '通过' : '不通过' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="reason" label="璇存槑" min-width="180" />
+        <el-table-column prop="reason" label="说明" min-width="180" />
       </el-table>
       <template #footer>
-        <el-button @click="ruleDialogVisible = false">鍏抽棴</el-button>
-        <el-button type="primary" :disabled="!ruleCheckPassed" @click="confirmAddHoldingAfterCheck">閫氳繃骞跺姞鍏?/el-button>
+        <el-button @click="ruleDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :disabled="!ruleCheckPassed" @click="confirmAddHoldingAfterCheck">通过并加入</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="sellDialogVisible" title="鍗栧嚭鎸佷粨" width="430px">
+    <el-dialog v-model="sellDialogVisible" title="卖出持仓" width="430px">
       <el-form label-width="90px">
-        <el-form-item label="浠ｇ爜">
+        <el-form-item label="代码">
           <span>{{ displayCode(sellForm.code) }}</span>
         </el-form-item>
-        <el-form-item label="鍚嶇О">
+        <el-form-item label="名称">
           <span>{{ sellForm.name || '--' }}</span>
         </el-form-item>
-        <el-form-item label="鍙崠鏁伴噺">
+        <el-form-item label="可卖数量">
           <span>{{ sellForm.max_shares }}</span>
         </el-form-item>
-        <el-form-item label="鍗栧嚭鏁伴噺">
+        <el-form-item label="卖出数量">
           <el-input-number v-model="sellForm.shares" :min="1" :max="Math.max(1, Number(sellForm.max_shares || 1))" :step="1" />
-          <el-button link type="primary" @click="sellHalfPosition">鍗栧嚭涓€鍗?/el-button>
-          <el-button link type="primary" @click="sellAllPosition">鍏ㄩ儴鍗栧嚭</el-button>
+          <el-button link type="primary" @click="sellHalfPosition">卖出一半</el-button>
+          <el-button link type="primary" @click="sellAllPosition">全部卖出</el-button>
         </el-form-item>
-        <el-form-item label="鍗栧嚭浠锋牸">
+        <el-form-item label="卖出价格">
           <el-input-number v-model="sellForm.price" :min="0" :precision="3" :step="0.01" />
         </el-form-item>
-        <el-form-item label="鍗栧嚭鏃堕棿">
+        <el-form-item label="卖出时间">
           <el-date-picker
             v-model="sellForm.time"
             type="datetime"
             value-format="YYYY-MM-DD HH:mm"
             format="YYYY-MM-DD HH:mm"
-            placeholder="绮剧‘鍒板垎閽?
+            placeholder="精确到分钟"
             style="width: 220px"
           />
         </el-form-item>
-        <el-form-item label="鍘熷洜">
-          <el-input v-model="sellForm.reason" placeholder="姝㈢泩/姝㈡崯/绛栫暐鍗栧嚭" />
+        <el-form-item label="原因">
+          <el-input v-model="sellForm.reason" placeholder="止盈/止损/策略卖出" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="sellDialogVisible = false">鍙栨秷</el-button>
-        <el-button type="primary" @click="confirmSellHolding">纭鍗栧嚭</el-button>
+        <el-button @click="sellDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmSellHolding">确认卖出</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="tradeLogVisible" title="璇曠洏浜ゆ槗璁板綍" width="820px">
-      <el-table :data="manualTradeLogs" stripe size="small" empty-text="鏆傛棤浜ゆ槗璁板綍">
-        <el-table-column prop="time" label="鏃堕棿" width="150" />
-        <el-table-column prop="side" label="鏂瑰悜" width="70" />
-        <el-table-column prop="code" label="浠ｇ爜" width="100">
+    <el-dialog v-model="tradeLogVisible" title="实盘持仓交易记录" width="820px">
+      <el-table :data="manualTradeLogs" stripe size="small" empty-text="暂无交易记录">
+        <el-table-column prop="time" label="时间" width="150" />
+        <el-table-column prop="side" label="方向" width="70" />
+        <el-table-column prop="code" label="代码" width="100">
           <template #default="{ row }">{{ displayCode(row.code) }}</template>
         </el-table-column>
-        <el-table-column prop="name" label="鍚嶇О" width="120" />
-        <el-table-column prop="shares" label="鏁伴噺" width="80" />
-        <el-table-column prop="price" label="浠锋牸" width="90" />
-        <el-table-column prop="before_shares" label="鍗栧墠" width="80" />
-        <el-table-column prop="after_shares" label="鍗栧悗" width="80" />
-        <el-table-column prop="realized_pnl" label="宸插疄鐜扮泩浜? width="110">
+        <el-table-column prop="name" label="名称" width="120" />
+        <el-table-column prop="shares" label="数量" width="80" />
+        <el-table-column prop="price" label="价格" width="90" />
+        <el-table-column prop="before_shares" label="卖前" width="80" />
+        <el-table-column prop="after_shares" label="卖后" width="80" />
+        <el-table-column prop="realized_pnl" label="已实现盈亏" width="110">
           <template #default="{ row }">
             <span :style="aSharePnlStyle(row.realized_pnl)">{{ formatMoney(row.realized_pnl) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="reason" label="鍘熷洜" min-width="120" />
+        <el-table-column prop="reason" label="原因" min-width="120" />
       </el-table>
       <template #footer>
-        <el-button @click="tradeLogVisible = false">鍏抽棴</el-button>
-        <el-button type="danger" @click="clearTradeLogs">娓呯┖璁板綍</el-button>
+        <el-button @click="tradeLogVisible = false">关闭</el-button>
+        <el-button type="danger" @click="clearTradeLogs">清空记录</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="thsImportVisible" title="璇诲彇鍚岃姳椤哄巻鍙叉垚浜? width="1100px">
+    <el-dialog v-model="thsImportVisible" title="读取同花顺历史成交" width="1100px">
       <el-alert
         type="info"
         :closable="false"
-        title="浼樺厛璇诲彇浜ゅ壊鍗曟枃浠讹紱涔熷彲浠庡悓鑺遍『鍘嗗彶鎴愪氦椤靛鍒跺悗璇诲彇鍓创鏉裤€傜郴缁熶細鑷姩杩囨护鏃犳晥鎴愪氦銆?
+        title="优先读取交割单文件；也可以从同花顺历史成交页复制后读取剪贴板。系统会自动过滤无效成交。"
         class="panel-alert"
       />
       <div class="holding-toolbar">
         <div class="actions">
-          <el-button :loading="thsImportLoading" type="success" @click="readThsTradesFromDeliveryFile">璇诲彇浜ゅ壊鍗曟枃浠?/el-button>
-          <el-button :loading="thsImportLoading" type="primary" @click="readThsTradesFromWindow">鐩存帴璇诲彇浜ゆ槗绐楀彛</el-button>
-          <el-button :loading="thsImportLoading" type="primary" @click="readThsTradesFromClipboard">璇诲彇鍓创鏉?/el-button>
-          <el-button :loading="thsImportLoading" @click="parseThsTradeText(thsImportRawText)">瑙ｆ瀽涓嬫柟鏂囨湰</el-button>
+          <el-button :loading="thsImportLoading" type="success" @click="readThsTradesFromDeliveryFile">读取交割单文件</el-button>
+          <el-button :loading="thsImportLoading" type="primary" @click="readThsTradesFromWindow">直接读取交易窗口</el-button>
+          <el-button :loading="thsImportLoading" type="primary" @click="readThsTradesFromClipboard">读取剪贴板</el-button>
+          <el-button :loading="thsImportLoading" @click="parseThsTradeText(thsImportRawText)">解析下方文本</el-button>
         </div>
-        <div class="toolbar-note">宸茶瘑鍒?{{ thsImportRows.length }} 鏉″彲瀵煎叆鎴愪氦锛屽緟纭 {{ thsImportCheckedCount }} 鏉?/div>
+        <div class="toolbar-note">已识别 {{ thsImportRows.length }} 条可导入成交，待确认 {{ thsImportCheckedCount }} 条</div>
       </div>
       <el-input
         v-model="thsImportRawText"
         type="textarea"
         :rows="6"
-        placeholder="濡傛灉娴忚鍣ㄦ棤娉曠洿鎺ヨ鍙栧壀璐存澘锛岃鎶婂悓鑺遍『澶嶅埗鍐呭绮樿创鍒拌繖閲岋紝鍐嶇偣鍑昏В鏋愪笅鏂规枃鏈?
+        placeholder="如果浏览器无法直接读取剪贴板，请把同花顺复制内容粘贴到这里，再点击解析下方文本"
       />
       <div style="height: 12px" />
-      <el-table :data="thsImportRows" stripe size="small" empty-text="鏆傛棤鍙鍏ユ垚浜?>
-        <el-table-column label="纭" width="72">
+      <el-table :data="thsImportRows" stripe size="small" empty-text="暂无可导入成交">
+        <el-table-column label="确认" width="72">
           <template #default="{ row }">
             <el-checkbox v-model="row.checked" />
           </template>
         </el-table-column>
-        <el-table-column prop="time" label="鏃堕棿" width="168" />
-        <el-table-column prop="side" label="鏂瑰悜" width="80" />
-        <el-table-column prop="code" label="浠ｇ爜" width="96" />
-        <el-table-column prop="name" label="鍚嶇О" width="120" />
-        <el-table-column prop="shares" label="鏁伴噺" width="90" />
-        <el-table-column prop="price" label="鎴愪氦浠? width="90" />
-        <el-table-column prop="amount" label="鎴愪氦棰? width="110" />
-        <el-table-column prop="remark" label="澶囨敞" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="filter_reason" label="璇嗗埆璇存槑" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="time" label="时间" width="168" />
+        <el-table-column prop="side" label="方向" width="80" />
+        <el-table-column prop="code" label="代码" width="96" />
+        <el-table-column prop="name" label="名称" width="120" />
+        <el-table-column prop="shares" label="数量" width="90" />
+        <el-table-column prop="price" label="成交价" width="90" />
+        <el-table-column prop="amount" label="成交额" width="110" />
+        <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="filter_reason" label="识别说明" min-width="160" show-overflow-tooltip />
       </el-table>
       <template #footer>
-        <el-button @click="thsImportVisible = false">鍙栨秷</el-button>
-        <el-button type="primary" :disabled="thsImportCheckedCount <= 0" @click="confirmImportThsTrades">鍕鹃€夌‘璁ゅ鍏?/el-button>
+        <el-button @click="thsImportVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="thsImportCheckedCount <= 0" @click="confirmImportThsTrades">勾选确认导入</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1143,12 +1351,17 @@ import {
   getV4MarketGate,
   getGen2RiskCoolShadow,
   getGen2WorkflowStatus,
+  getGen2DailyTradeTicket,
+  getGen2DailyTradeExecution,
+  saveGen2DailyTradeExecution,
   runGen2RiskCoolShadowUpdate,
   getGen2RiskCoolShadowUpdateTask,
   saveGen2ShadowVerification,
   getGen2ShadowMonitorStatus,
   setGen2ShadowMonitorConfig,
   runGen2ShadowMonitorNow,
+  getGen2StrategyRefreshStatus,
+  runGen2StrategyRefreshNow,
   getV4ManualHoldingSignals,
   getV4ManualHoldingQuotes,
   refreshV4ManualHoldingAll,
@@ -1214,8 +1427,26 @@ const GEN2_MAIN_ALPHA191_GATE = 'g2_v2_complete'
 const gen2Alpha191Gate = ref(GEN2_MAIN_ALPHA191_GATE)
 const gen2ShadowMonitorLoading = ref(false)
 const gen2ShadowMonitorStatus = ref(null)
+const gen2StrategyRefreshLoading = ref(false)
+const gen2StrategyRefreshRunning = ref(false)
+const gen2StrategyRefreshStatus = ref(null)
 const workflowLoading = ref(false)
 const workflowStatus = ref(null)
+const dailyTradeTicketLoading = ref(false)
+const dailyTradeTicket = ref(null)
+const dailyExecutionLoading = ref(false)
+const dailyExecutionSaving = ref(false)
+const dailyExecution = ref(null)
+const dailyExecutionForm = ref({
+  execution_status: 'pending',
+  executed: false,
+  discipline_ok: true,
+  violation_tags: [],
+  execution_note: '',
+  t1_review: '',
+  t3_review: '',
+  t5_review: ''
+})
 const ptradeBridgeLoading = ref(false)
 const ptradeBridgeStatus = ref(null)
 const ptradeBridgeAudit = ref(null)
@@ -1252,7 +1483,7 @@ const codeLookupText = ref('')
 const liveQuotePrice = ref(null)
 const monitorEnabled = ref(false)
 const monitorLoading = ref(false)
-const monitorStatusText = ref('鏈紑鍚?)
+const monitorStatusText = ref('未开启')
 const monitorTradingHoursOnly = ref(true)
 const monitorQuietMinutes = ref(15)
 const entryBacktestLoading = ref(false)
@@ -1294,21 +1525,38 @@ const lastGen2ShadowAutoRefreshAt = ref(0)
 const lastWorkflowAutoRefreshAt = ref(0)
 
 const isGen2LiveMode = computed(() => true)
-const pageTitle = computed(() => 'G2 瀹炵洏浜ゆ槗椹鹃┒鑸?)
+const pageTitle = computed(() => 'G2 实盘交易驾驶舱')
 const pageSubtitle = computed(() => (
   isGen2LiveMode.value
-    ? '绗竴灞忓彧灞曠ず姝ｅ紡涔扮偣銆佸紑浠撻棬绂併€佹寔浠撻鎺у拰浜ゆ槗鎵ц鐘舵€侊紱褰卞瓙鏍锋湰浠呯敤浜庡鐩橀獙璇併€?
-    : '浠庝氦鏄撻€夎偂鍒版寔浠撶鐞嗛棴鐜紝骞剁粰鍑?15m/30m RSI 鑳岀鍗栧嚭鎻愮ず銆?
+    ? '第一页只展示正式买点、开仓门槛、持仓风控和交易执行状态；影子样本仅用于复盘验证。'
+    : '从交易选股到持仓管理闭环，并给出 15m/30m RSI 背离卖出提示。'
 ))
-const unavailableTitle = computed(() => '绗簩浠ｇ瓥鐣ュ疄鐩樹氦鏄撴暟鎹笉鍙敤')
-const buyPoolPanelTitle = computed(() => 'G2鍙傝€冧拱鍏ヨ瀵熸睜')
-const gen2ShadowPanelTitle = computed(() => 'Alpha191 volume5 褰卞瓙璺熻釜/澶嶇洏姹?)
+const unavailableTitle = computed(() => '第二代策略实盘交易数据不可用')
+const buyPoolPanelTitle = computed(() => 'G2 参考买入观察池')
+const gen2ShadowPanelTitle = computed(() => 'Alpha191 volume5 影子跟踪/复盘池')
+const gen2StrategyRefreshLastResultText = computed(() => {
+  const result = gen2StrategyRefreshStatus.value?.last_result || {}
+  if (!result || !Object.keys(result).length) return '--'
+  if (result.skipped) return result.reason || '已跳过'
+  if (result.ok === false) return result.error || '刷新失败'
+  const signalDate = result.signal_date ? ` ${result.signal_date}` : ''
+  return `成功${signalDate}`
+})
+const gen2StrategyRefreshSummary = computed(() => {
+  const status = gen2StrategyRefreshStatus.value || {}
+  if (gen2StrategyRefreshLoading.value && !status.next_run_time) return '正在读取 G2 半小时策略刷新状态...'
+  if (status.last_error) return `最近一次刷新异常：${status.last_error}`
+  const delay = status.data_delay_minutes ?? 2
+  const next = status.next_run_time || '--'
+  const last = status.last_success_at || status.last_run_at || '--'
+  return `按 30m 数据落盘后 ${delay} 分钟触发；下次 ${next}；上次 ${last}；结果 ${gen2StrategyRefreshLastResultText.value}`
+})
 
 const selection = computed(() => payload.value?.selection || {})
 const selectionBranchFreshness = computed(() => selection.value?.branch_freshness || {})
 const selectionBranchFreshnessWarning = computed(() => {
   if (selectionBranchFreshness.value?.status !== 'stale') return ''
-  return `${selectionBranchFreshness.value?.text || 'g2_v2_complete 姝ｅ紡灞曠ず鍒嗘敮婊炲悗'}锛涘綋鍓嶅疄鐩樻墽琛岀户缁寜 latest-driven 涓婚摼鍒ゆ柇锛屼笉浼氬洜涓烘棫灞曠ず鍒嗘敮鍋滃湪鍘嗗彶鑰屽仠鎽嗐€俙
+  return (selectionBranchFreshness.value?.text || 'g2_v2_complete 正式展示分支滞后') + '；当前实盘执行继续按 latest-driven 主链判断，不会因为旧展示分支停在历史而停摆。'
 })
 const workflowStages = computed(() => {
   const stages = Array.isArray(workflowStatus.value?.pipeline_stages) ? workflowStatus.value.pipeline_stages : []
@@ -1323,21 +1571,72 @@ const workflowFailedChecks = computed(() => {
   if (blockers.length) return blockers
   return workflowStages.value.flatMap((stage) => Array.isArray(stage.failed) ? stage.failed : [])
 })
+const notificationStage = computed(() => workflowStages.value.find((stage) => stage.stage === 'notification'))
+const notificationStageExists = computed(() => !!notificationStage.value)
+const notificationStageOk = computed(() => notificationStage.value?.ok === true)
+const notificationStageLabel = computed(() => notificationStageOk.value ? '通知链路正常' : '通知链路异常')
 const workflowLineageRows = computed(() => (
   Array.isArray(workflowStatus.value?.lineage_items) ? workflowStatus.value.lineage_items : []
 ))
 const workflowOk = computed(() => workflowStatus.value?.available !== false && workflowStages.value.length > 0 && workflowStages.value.every((stage) => !!stage.ok))
 const workflowSummaryText = computed(() => {
   const data = workflowStatus.value || {}
-  if (workflowLoading.value && !data.checked_at) return '姝ｅ湪妫€鏌ョ瓥鐣ユ祦姘寸嚎...'
+  if (workflowLoading.value && !data.checked_at) return '正在检查策略流水线...'
   if (!data.available && data.message) return data.message
   const failed = workflowFailedChecks.value.length
-  const checkedAt = data.checked_at ? `锛涙鏌?${data.checked_at}` : ''
-  const prev = data.prev_trade_date ? `锛汥-1 ${data.prev_trade_date}` : ''
-  const gate = data.alpha191_gate ? `锛沢ate ${data.alpha191_gate}` : ''
+  const checkedAt = data.checked_at ? '; 检查 ' + data.checked_at : ''
+  const prev = data.prev_trade_date ? '; D-1 ' + data.prev_trade_date : ''
+  const gate = data.alpha191_gate ? '; Gate ' + data.alpha191_gate : ''
+  const notificationText = notificationStageExists.value
+    ? (notificationStageOk.value ? '; 通知链路通过' : '; 通知链路异常')
+    : '; 未检测到通知链路'
   return failed
-    ? `${data.signal_date || selectedDate.value} 鏈?${failed} 涓樆濉炵偣${prev}${gate}${checkedAt}`
-    : `${data.signal_date || selectedDate.value} 鏁版嵁婧愩€侀€夎偂銆佽瘎鍒嗐€佺瓥鐣ュ拰閫氱煡閾捐矾閫氳繃${prev}${gate}${checkedAt}`
+    ? String(data.signal_date || selectedDate.value) + ' 有 ' + failed + ' 个阻塞点' + prev + gate + notificationText + checkedAt
+    : String(data.signal_date || selectedDate.value) + ' 数据源、选股、评分、策略和通知链路通过' + prev + gate + notificationText + checkedAt
+})
+const dailyTradeTicketFormalRows = computed(() => (
+  Array.isArray(dailyTradeTicket.value?.formal_candidates) ? dailyTradeTicket.value.formal_candidates : []
+))
+const dailyTradeTicketForbiddenActions = computed(() => (
+  Array.isArray(dailyTradeTicket.value?.forbidden_actions) ? dailyTradeTicket.value.forbidden_actions : []
+))
+const dailyTradeTicketSummary = computed(() => {
+  const ticket = dailyTradeTicket.value || {}
+  if (dailyTradeTicketLoading.value && !ticket.generated_at) return '正在生成 G2 V4 今日交易单...'
+  if (!ticket.available && ticket.message) return ticket.message
+  const state = ticket.market_state || '--'
+  const exposure = ticket.target_exposure || '--'
+  const count = dailyTradeTicketFormalRows.value.length
+  const generated = ticket.generated_at ? '；生成 ' + ticket.generated_at : ''
+  return `状态 ${state}；仓位 ${exposure}；正式候选 ${count} 只${generated}`
+})
+const dailyTradeTicketOutputs = computed(() => {
+  const outputs = dailyTradeTicket.value?.outputs || {}
+  const jsonPath = outputs.json_path || outputs.latest_path || ''
+  const mdPath = outputs.markdown_path || ''
+  if (jsonPath && mdPath) return `${jsonPath}；${mdPath}`
+  return jsonPath || mdPath || ''
+})
+const dailyExecutionRecord = computed(() => dailyExecution.value?.record || dailyTradeTicket.value?.execution_record || null)
+const dailyExecutionStatusText = computed(() => {
+  const status = String(dailyExecutionForm.value.execution_status || dailyExecutionRecord.value?.execution_status || 'pending')
+  const labels = {
+    pending: '待记录',
+    followed: '照单执行',
+    no_trade: '无交易',
+    partial: '部分执行',
+    violated: '纪律违规',
+    reviewed: '已复盘'
+  }
+  return labels[status] || status
+})
+const dailyExecutionSummary = computed(() => {
+  const record = dailyExecutionRecord.value
+  if (dailyExecutionLoading.value && !record) return '正在读取今日执行台账...'
+  if (!record) return '今日交易单尚未回填执行记录'
+  const updated = record.updated_at ? '；更新 ' + record.updated_at : ''
+  const discipline = record.discipline_ok === false ? '；存在纪律问题' : '；纪律正常'
+  return dailyExecutionStatusText.value + discipline + updated
 })
 const positions = computed(() => payload.value?.positions || {})
 const fallback = computed(() => payload.value?.fallback || null)
@@ -1393,34 +1692,34 @@ const buyPoolMap = computed(() => {
 })
 const buyPoolSummary = computed(() => {
   const data = buyPool.value || {}
-  if (!data.available) return data.message || '涔板叆瑙傚療姹犲緟鐢熸垚'
-  const stage = data.market_stage_label ? `锛屽ぇ鐩橀樁娈碉細${data.market_stage_label}` : ''
-  return `${data.signal_date || '--'} 鍊欓€?${data.candidate_count || 0} 鍙紝杈惧埌V4鍏ュ満闃堝€?${data.primary_count || 0} 鍙?{stage}`
+  if (!data.available) return data.message || '买入观察池待生成'
+  const stage = data.market_stage_label ? '，大盘阶段：' + data.market_stage_label : ''
+  return String(data.signal_date || '--') + ' 候选 ' + (data.candidate_count || 0) + ' 只，达到 V4 入场阈值 ' + (data.primary_count || 0) + ' 只' + stage
 })
 const workflowStageLabel = (stage) => ({
-  data_source: '鏁版嵁婧?,
-  selection: '閫夎偂鐢熸垚',
-  selection_context: '鏉垮潡涓婁笅鏂?,
-  scoring: '璇勫垎鍥犲瓙',
-  strategy: '绛栫暐浜х墿',
-  intraday_data: '鐩樹腑鏁版嵁',
-  notification: '閫氱煡閾捐矾'
+  data_source: '数据源',
+  selection: '选股生成',
+  selection_context: '板块上下文',
+  scoring: '评分因子',
+  strategy: '策略产物',
+  intraday_data: '盘中数据',
+  notification: '通知链路'
 }[stage] || stage || '--')
 const workflowStageMeta = (stage) => {
   const total = Number(stage?.check_count || stage?.checks?.length || 0)
   const failed = Number(stage?.failed_count || stage?.failed?.length || 0)
-  return stage?.ok ? `${total}椤规鏌ラ€氳繃` : `${failed}/${total}椤规湭閫氳繃`
+  return stage?.ok ? String(total) + '项检查通过' : String(failed) + '/' + String(total) + '项未通过'
 }
 const workflowCheckResult = (row) => {
-  if (row?.row_count !== undefined) return `rows ${row.row_count}`
-  if (row?.code_count !== undefined) return `codes ${row.code_count}`
-  if (row?.size !== undefined) return `${row.size} bytes`
+  if (row?.row_count !== undefined) return 'rows ' + String(row.row_count)
+  if (row?.code_count !== undefined) return 'codes ' + String(row.code_count)
+  if (row?.size !== undefined) return String(row.size) + ' bytes'
   if (row?.max_datetime) return row.max_datetime
   return row?.ok ? 'ok' : 'blocked'
 }
 const workflowLineageResult = (row) => {
   const status = row?.status || {}
-  return status.target_rows !== undefined && status.target_rows !== null ? `rows ${status.target_rows}` : (row?.ok ? 'ok' : 'pending')
+  return status.target_rows !== undefined && status.target_rows !== null ? 'rows ' + String(status.target_rows) : (row?.ok ? 'ok' : 'pending')
 }
 const gen2ShadowRows = computed(() => Array.isArray(gen2Shadow.value?.rows) ? gen2Shadow.value.rows : [])
 const actionableBuyRows = computed(() => gen2ShadowRows.value.filter((row) => gen2ShadowCanAddHolding(row)))
@@ -1431,22 +1730,22 @@ const ptradeActiveOrders = computed(() => {
 })
 const ptradeBridgeSummary = computed(() => {
   const status = ptradeBridgeStatus.value || {}
-  if (!status.ok) return '妯℃嫙鐩樻ˉ鎺ョ姸鎬佹湭璇诲彇銆?
-  const lastAck = status.last_ack_file ? '锛涘凡鏈夊洖鎵? : ''
-  const lastFill = status.last_fill_file ? '锛涘凡鏈夋垚浜ゅ洖鍐? : ''
+  if (!status.ok) return '模拟盘桥接状态未读取。'
+  const lastAck = status.last_ack_file ? '；已有回执' : ''
+  const lastFill = status.last_fill_file ? '；已有成交回写' : ''
   const processing = Number(status.processing_count || 0)
   const stale = Number(status.processing_stale_count || 0)
   const heartbeatAge = Number(status.ptrade_heartbeat_age_seconds)
-  const processingText = processing ? `锛宲rocessing ${processing}` : ''
-  const staleText = stale ? `锛岄檲鏃?processing ${stale}` : ''
-  const heartbeatText = Number.isFinite(heartbeatAge) ? `锛孭Trade蹇冭烦 ${Math.round(heartbeatAge)}s` : '锛孭Trade蹇冭烦鏈'
-  return `妯℃嫙鐩樻ˉ鎺ワ細pending ${status.pending_count || 0}${processingText}${staleText}${heartbeatText}锛屾椿鍔ㄨ鍗?${ptradeActiveOrders.value.length}锛宒ry_run 榛樿 ${status.dry_run_default ? '寮€' : '鍏?}锛屽鎵归粯璁?${status.require_approval_default ? '寮€' : '鍏?}${lastAck}${lastFill}`
+  const processingText = processing ? '; processing ' + String(processing) : ''
+  const staleText = stale ? '; stale processing ' + String(stale) : ''
+  const heartbeatText = Number.isFinite(heartbeatAge) ? '; PTrade心跳 ' + String(Math.round(heartbeatAge)) + 's' : '; PTrade心跳未见'
+  return '模拟盘桥接：pending ' + String(status.pending_count || 0) + processingText + staleText + heartbeatText + '；活动订单 ' + String(ptradeActiveOrders.value.length) + '；dry_run 默认 ' + (status.dry_run_default ? '开' : '关') + '；审批默认 ' + (status.require_approval_default ? '开' : '关') + lastAck + lastFill
 })
 const ptradeBridgeQueueText = computed(() => {
   const status = ptradeBridgeStatus.value || {}
   const queue = status.ptrade_strategy_queue || {}
-  if (!status.ok) return 'PTrade 闃熷垪閬ユ祴鏈鍙栥€?
-  if (!queue || !Object.keys(queue).length) return 'PTrade 绛栫暐绔槦鍒楅仴娴嬫湭瑙侊紱AiStock 浠嶅彧鍐欐湰鍦?pending锛屼笉绛夊緟 ack銆?
+  if (!status.ok) return 'PTrade 队列遥测未读取。'
+  if (!queue || !Object.keys(queue).length) return 'PTrade 策略端队列遥测未见；AiStock 仍只写本地 pending，不等待 ack。'
   const pending = Number(queue.pending_count)
   const processing = Number(queue.processing_count)
   const cancelRequests = Number(queue.cancel_request_count)
@@ -1454,15 +1753,15 @@ const ptradeBridgeQueueText = computed(() => {
   const oldestProcessing = Number(queue.oldest_processing_age_seconds)
   const processed = Number(queue.total_order_processed)
   const errors = Number(queue.total_bridge_errors)
-  const pendingText = Number.isFinite(pending) ? `pending ${pending}` : 'pending --'
-  const processingText = Number.isFinite(processing) ? `processing ${processing}` : 'processing --'
-  const cancelText = Number.isFinite(cancelRequests) ? `cancel ${cancelRequests}` : 'cancel --'
-  const pendingAgeText = Number.isFinite(oldestPending) ? `鏈€鑰乸ending ${Math.round(oldestPending)}s` : '鏈€鑰乸ending --'
-  const processingAgeText = Number.isFinite(oldestProcessing) ? `鏈€鑰乸rocessing ${Math.round(oldestProcessing)}s` : '鏈€鑰乸rocessing --'
-  const processedText = Number.isFinite(processed) ? `绱娑堣垂 ${processed}` : '绱娑堣垂 --'
-  const errorText = Number.isFinite(errors) ? `閿欒 ${errors}` : '閿欒 --'
-  const lastError = queue.last_bridge_error ? `锛涙渶杩戦敊璇細${queue.last_bridge_error}` : ''
-  return `PTrade 绛栫暐绔槦鍒楋細${pendingText}锛?{processingText}锛?{cancelText}锛?{pendingAgeText}锛?{processingAgeText}锛?{processedText}锛?{errorText}${lastError}`
+  const pendingText = Number.isFinite(pending) ? 'pending ' + String(pending) : 'pending --'
+  const processingText = Number.isFinite(processing) ? 'processing ' + String(processing) : 'processing --'
+  const cancelText = Number.isFinite(cancelRequests) ? 'cancel ' + String(cancelRequests) : 'cancel --'
+  const pendingAgeText = Number.isFinite(oldestPending) ? '最老 pending ' + String(Math.round(oldestPending)) + 's' : '最老 pending --'
+  const processingAgeText = Number.isFinite(oldestProcessing) ? '最老 processing ' + String(Math.round(oldestProcessing)) + 's' : '最老 processing --'
+  const processedText = Number.isFinite(processed) ? '累计消费 ' + String(processed) : '累计消费 --'
+  const errorText = Number.isFinite(errors) ? '错误 ' + String(errors) : '错误 --'
+  const lastError = queue.last_bridge_error ? '；最近错误：' + queue.last_bridge_error : ''
+  return 'PTrade 策略端队列：' + pendingText + '；' + processingText + '；' + cancelText + '；' + pendingAgeText + '；' + processingAgeText + '；' + processedText + '；' + errorText + lastError
 })
 const ptradeBridgeReadinessText = computed(() => {
   const gates = ptradeBridgeAudit.value?.gates || {}
@@ -1474,14 +1773,14 @@ const ptradeBridgeReadinessText = computed(() => {
       : null
     const liveEnabled = liveEnabledCheck ? (liveEnabledCheck.ok ? 'PTrade live enabled' : 'PTrade live disabled') : ''
     const next = Array.isArray(ptradeBridgeAudit.value?.next_actions) ? ptradeBridgeAudit.value.next_actions[0] : ''
-    return `PTrade readiness audit: ${dryRun}; ${live}${liveEnabled ? `; ${liveEnabled}` : ''}${next ? `; next: ${next}` : ''}`
+    return 'PTrade readiness audit: ' + dryRun + '; ' + live + (liveEnabled ? '; ' + liveEnabled : '') + (next ? '; next: ' + next : '')
   }
   const readiness = ptradeBridgeStatus.value?.readiness || {}
   const live = readiness.ready_for_live_order ? 'ready for approved live order' : 'not ready for approved live order'
   const heartbeat = readiness.ptrade_heartbeat_recent ? 'heartbeat ok' : 'heartbeat missing/stale'
   const probe = readiness.dry_run_probe_ack_recent ? 'dry-run ack ok' : 'dry-run ack missing/stale'
   const liveEnabled = readiness.ptrade_live_order_enabled ? 'PTrade live enabled' : 'PTrade live disabled'
-  return `PTrade readiness: ${live}; ${heartbeat}; ${probe}; ${liveEnabled}`
+  return 'PTrade readiness: ' + live + '; ' + heartbeat + '; ' + probe + '; ' + liveEnabled
 })
 const ptradeBridgeEvidenceSummary = computed(() => {
   const evidence = ptradeBridgeEvidence.value
@@ -1492,8 +1791,8 @@ const ptradeBridgeEvidenceSummary = computed(() => {
   const blocking = evidence.blocking || {}
   const reason = blocking.reason || evidence.blocking_reason || ''
   const stage = blocking.stage || evidence.blocking_stage || ''
-  const blockingText = reason ? `锛涢樆濉烇細${stage ? `${stage}锛宍 : ''}${reason}` : ''
-  return `PTrade evidence: ${evidence.ok ? 'ready' : 'not ready'}; failed ${failed.length}; generated ${generatedAt}${blockingText}`
+  const blockingText = reason ? ('；阻塞：' + (stage ? stage + '，' : '') + reason) : ''
+  return 'PTrade evidence: ' + (evidence.ok ? 'ready' : 'not ready') + '; failed ' + String(failed.length) + '; generated ' + String(generatedAt) + blockingText
 })
 const ptradeBridgeEvidenceRows = computed(() => {
   const checks = ptradeBridgeEvidence.value?.checks
@@ -1505,10 +1804,10 @@ const ptradeBridgeProbeSummary = computed(() => {
   const checks = Array.isArray(result.checks) ? result.checks : []
   const failed = checks.filter((item) => item?.required && !item?.ok)
   const heartbeat = Number(result.final_status?.ptrade_heartbeat_age_seconds)
-  const heartbeatText = Number.isFinite(heartbeat) ? `PTrade蹇冭烦 ${Math.round(heartbeat)}s` : 'PTrade蹇冭烦鏈'
+  const heartbeatText = Number.isFinite(heartbeat) ? 'PTrade心跳 ' + String(Math.round(heartbeat)) + 's' : 'PTrade心跳未见'
   const ackStatus = result.ack_result?.ack?.status
-  const ackText = result.submit_dry_run ? `锛沝ry-run ack ${ackStatus || '鏈敹鍒?}` : ''
-  return `${result.ok ? '鎺㈤拡閫氳繃' : '鎺㈤拡鏈€氳繃'}锛?{heartbeatText}${ackText}锛涘繀闇€妫€鏌ュけ璐?${failed.length}`
+  const ackText = result.submit_dry_run ? ('；dry-run ack ' + String(ackStatus || '未收到')) : ''
+  return (result.ok ? '探针通过' : '探针未通过') + '；' + heartbeatText + ackText + '；必需检查失败 ' + String(failed.length)
 })
 const ptradeBridgeAcceptanceSummary = computed(() => {
   const result = ptradeBridgeAcceptanceResult.value
@@ -1516,10 +1815,10 @@ const ptradeBridgeAcceptanceSummary = computed(() => {
   const checks = Array.isArray(result.checks) ? result.checks : []
   const failed = checks.filter((item) => item?.required && !item?.ok)
   const heartbeatAge = Number(result.heartbeat?.heartbeat_age_seconds)
-  const heartbeatText = Number.isFinite(heartbeatAge) ? `heartbeat ${Math.round(heartbeatAge)}s` : 'heartbeat 鏈'
+  const heartbeatText = Number.isFinite(heartbeatAge) ? 'heartbeat ' + String(Math.round(heartbeatAge)) + 's' : 'heartbeat 未见'
   const ackStatus = result.dry_run_probe?.ack_result?.ack?.status
   const liveReady = result.readiness_audit?.gates?.live_submit_ready ? 'live-submit ready' : 'live-submit not ready'
-  return `PTrade 楠屾敹${result.ok ? '閫氳繃' : '鏈€氳繃'}锛?{heartbeatText}锛沝ry-run ack ${ackStatus || '鏈敹鍒?}锛?{liveReady}锛涘け璐?${failed.length}`
+  return 'PTrade 验收' + (result.ok ? '通过' : '未通过') + '；' + heartbeatText + '；dry-run ack ' + String(ackStatus || '未收到') + '；' + liveReady + '；失败 ' + String(failed.length)
 })
 const ptradeBridgeWatchAcceptanceSummary = computed(() => {
   const result = ptradeBridgeWatchAcceptanceResult.value
@@ -1529,9 +1828,9 @@ const ptradeBridgeWatchAcceptanceSummary = computed(() => {
   const failed = checks.filter((item) => item?.required && !item?.ok)
   const heartbeat = result.heartbeat || acceptance.heartbeat || null
   const heartbeatAge = Number(heartbeat?.heartbeat_age_seconds)
-  const heartbeatText = Number.isFinite(heartbeatAge) ? `heartbeat ${Math.round(heartbeatAge)}s` : 'heartbeat 鏈'
+  const heartbeatText = Number.isFinite(heartbeatAge) ? 'heartbeat ' + String(Math.round(heartbeatAge)) + 's' : 'heartbeat 未见'
   const ackStatus = acceptance.dry_run_probe?.ack_result?.ack?.status
-  return `PTrade 绛夊緟楠屾敹${result.ok ? '閫氳繃' : '鏈€氳繃'}锛?{heartbeatText}锛沝ry-run ack ${ackStatus || '鏈敹鍒?}锛涘け璐?${failed.length}`
+  return 'PTrade 等待验收' + (result.ok ? '通过' : '未通过') + '；' + heartbeatText + '；dry-run ack ' + String(ackStatus || '未收到') + '；失败 ' + String(failed.length)
 })
 const ptradeBridgeLiveSubmitTestSummary = computed(() => {
   const result = ptradeBridgeLiveSubmitTestResult.value
@@ -1539,9 +1838,9 @@ const ptradeBridgeLiveSubmitTestSummary = computed(() => {
   const checks = Array.isArray(result.checks) ? result.checks : []
   const failed = checks.filter((item) => item?.required && !item?.ok)
   const submitElapsed = Number(result.submit_result?.submit_elapsed_seconds)
-  const submitText = Number.isFinite(submitElapsed) ? `submit ${submitElapsed.toFixed(3)}s` : 'submit not written'
+  const submitText = Number.isFinite(submitElapsed) ? 'submit ' + String(submitElapsed.toFixed(3)) + 's' : 'submit not written'
   const ackStatus = result.ack_result?.ack?.status || 'ack missing'
-  return `PTrade live-submit test ${result.ok ? 'passed' : 'blocked'}; ${submitText}; ${ackStatus}; failed checks ${failed.length}`
+  return 'PTrade live-submit test ' + (result.ok ? 'passed' : 'blocked') + '; ' + submitText + '; ' + ackStatus + '; failed checks ' + String(failed.length)
 })
 const ptradeLatestPositionRows = computed(() => {
   const rows = ptradeBridgePositions.value?.latest?.positions
@@ -1554,27 +1853,38 @@ const sellPriorityRows = computed(() => {
       let priority = 9
       const pnl = Number(row?.pnl_ratio)
       if (Number.isFinite(pnl) && pnl <= -6) {
-        flags.push('纭鎹熻揪鍒?-6%')
+        flags.push('硬止损达到 -6%')
         priority = Math.min(priority, 1)
       } else if (Number.isFinite(pnl) && pnl <= -4) {
-        flags.push('浜忔崯杈惧埌 -4%锛岀姝㈠姞浠撳苟浼樺厛瑙傚療')
+        flags.push('亏损达到 -4%，禁止加仓并优先观察')
         priority = Math.min(priority, 2)
       }
       if (isSingleTradeLossCapBreached(row)) {
-        flags.push(`缁勫悎鎷栫疮瓒呰繃 ${SINGLE_TRADE_LOSS_CAP_PCT_OF_TOTAL}%`)
+        flags.push('组合拖累超过 ' + String(SINGLE_TRADE_LOSS_CAP_PCT_OF_TOTAL) + '%')
         priority = Math.min(priority, 1)
       }
       if (isTrailingTakeProfitTriggered(row)) {
-        flags.push('瑙﹀彂绉诲姩姝㈢泩鍥炴挙')
+        flags.push('触发移动止盈回撤')
         priority = Math.min(priority, 2)
       }
       if (row?.score_pool_status === 'out_of_pool' || row?.in_score_pool === false) {
-        flags.push('宸叉帀鍑鸿瘎鍒嗘睜')
+        flags.push('离场提示')
         priority = Math.min(priority, 3)
       }
       if (row?.signal?.rsi15_signal?.detected || row?.signal?.rsi30_signal?.detected) {
-        flags.push('15m/30m 鍗栫偣瑙﹀彂')
+        flags.push('15m/30m 移动止盈触发')
         priority = Math.min(priority, 2)
+      }
+      const boxAction = String(row?.signal?.rsi_box_t?.action || '')
+      if (boxAction === 'sell_half' || boxAction === 'sell_part') {
+        flags.push(row?.signal?.rsi_box_t?.recommendation || '箱体内 RSI 做T减仓触发')
+        priority = Math.min(priority, boxAction === 'sell_half' ? 2 : 3)
+      } else if (boxAction === 'risk_control_no_t') {
+        flags.push(row?.signal?.rsi_box_t?.recommendation || '跌破箱体，停止做T并风控')
+        priority = Math.min(priority, 2)
+      } else if (boxAction === 'hold_trend_no_t') {
+        flags.push(row?.signal?.rsi_box_t?.recommendation || '突破箱体，停止做T')
+        priority = Math.min(priority, 5)
       }
       if (row?.signal?.suggestion) {
         flags.push(row.signal.suggestion)
@@ -1585,7 +1895,7 @@ const sellPriorityRows = computed(() => {
         ...row,
         holding_index: holdingIndex >= 0 ? holdingIndex : 0,
         risk_priority: priority,
-        risk_text: flags.join('锛?)
+        risk_text: flags.join('；')
       }
     })
     .filter((row) => row.risk_text)
@@ -1596,22 +1906,37 @@ const gen2VerificationOptions = computed(() => {
   const options = gen2Shadow.value?.verification_options
   if (Array.isArray(options) && options.length) return options
   return [
-    { value: '', label: '鏈爣璁?, type: 'info' },
-    { value: 'watch', label: '瑙傚療', type: 'warning' },
-    { value: 'paper', label: '妯℃嫙璺熻釜', type: 'primary' },
-    { value: 'small_buy', label: '灏忎粨涔板叆', type: 'success' },
-    { value: 'skip', label: '鏀惧純', type: 'info' },
-    { value: 'reject', label: '搴旇繃婊?, type: 'danger' }
+    { value: '', label: '未标记', type: 'info' },
+    { value: 'watch', label: '观察', type: 'warning' },
+    { value: 'paper', label: '模拟跟踪', type: 'primary' },
+    { value: 'small_buy', label: '小仓买入', type: 'success' },
+    { value: 'skip', label: '放弃', type: 'info' },
+    { value: 'reject', label: '应过滤', type: 'danger' }
   ]
 })
 const gen2ShadowSummary = computed(() => {
   const data = gen2Shadow.value || {}
-  if (!data.available) return data.message || 'G2 V3 User V2褰卞瓙瑙傚療寰呯敓鎴?
+  if (!data.available) return data.message || 'G2 V3 User V2 影子观察待生成'
   const counts = data.counts || {}
   const observable = counts.observable || 0
   const suspended = (counts.suspended_by_two_stop_cd3 || 0) + (counts.suspended_by_stop_cd5 || 0)
   const executed = counts.executed || 0
-  return `${data.signal_date || '--'} G2褰卞瓙 ${data.row_count || gen2ShadowRows.value.length} 鏉★紝鍙瀵?${observable}锛岀啍鏂殏鍋?${suspended}锛屽凡鎵ц褰卞瓙 ${executed}`
+  return String(data.signal_date || '--') + ' G2影子 ' + String(data.row_count || gen2ShadowRows.value.length) + ' 条，可观察 ' + String(observable) + '，熔断暂停 ' + String(suspended) + '，已执行影子 ' + String(executed)
+})
+const gen2ShadowSummaryDisplay = computed(() => {
+  const data = gen2Shadow.value || {}
+  if (!data.available) return data.message || 'G2 shadow review pending'
+  const counts = data.counts || {}
+  const observable = counts.observable || 0
+  const suspended = (counts.suspended_by_two_stop_cd3 || 0) + (counts.suspended_by_stop_cd5 || 0)
+  const executed = counts.executed || 0
+  const displayDate = String(data.display_signal_date || data.selection_signal_date || data.signal_date || '--')
+  const ledgerDate = String(data.ledger_signal_date || data.signal_date || '--')
+  const summaryCore = displayDate + ' shadow rows ' + String(data.row_count || gen2ShadowRows.value.length) + ', observable ' + String(observable) + ', suspended ' + String(suspended) + ', executed ' + String(executed)
+  if (data.is_ledger_fallback && ledgerDate && ledgerDate !== displayDate) {
+    return summaryCore + '; ledger=' + ledgerDate
+  }
+  return summaryCore
 })
 const gen2VerificationSummaryText = computed(() => {
   const summary = gen2Shadow.value?.verification_global_summary || gen2Shadow.value?.verification_summary || {}
@@ -1624,71 +1949,73 @@ const gen2VerificationSummaryText = computed(() => {
   const avg10 = Number(summary.avg_marked_fwd10_pct)
   const avg20 = Number(summary.avg_marked_fwd20_pct)
   const avgText = Number.isFinite(avg5)
-    ? `宸叉爣璁板潎鍊?5/10/20鏃?${avg5.toFixed(2)}% / ${Number.isFinite(avg10) ? avg10.toFixed(2) : '--'}% / ${Number.isFinite(avg20) ? avg20.toFixed(2) : '--'}%`
-    : '宸叉爣璁版牱鏈殏鏃犲畬鏁磋窡韪敹鐩?
-  return `鍏ㄥ眬楠岃瘉鍙拌处锛氬凡鏍囪 ${marked}/${total}锛岃瀵?妯℃嫙/灏忎粨 ${actionCount}锛屾斁寮?搴旇繃婊?${rejectedCount}锛?0m姝㈡崯 ${stopCount}锛?{avgText}`
+    ? '已标记均值 5/10/20日 ' + avg5.toFixed(2) + '% / ' + (Number.isFinite(avg10) ? avg10.toFixed(2) : '--') + '% / ' + (Number.isFinite(avg20) ? avg20.toFixed(2) : '--') + '%'
+    : '已标记样本暂无完整跟踪收益'
+  return '全局验证台账：已标记 ' + String(marked) + '/' + String(total) + '，观察/模拟/小仓 ' + String(actionCount) + '，放弃/应过滤 ' + String(rejectedCount) + '，30m止损 ' + String(stopCount) + '，' + avgText
 })
 const gen2VerificationPromotionSource = computed(() => gen2Shadow.value?.verification_global_summary || gen2Shadow.value?.verification_summary || {})
 const gen2VerificationPromotionType = computed(() => gen2VerificationPromotionSource.value?.promotion_type || 'info')
-const gen2VerificationPromotionLabel = computed(() => gen2VerificationPromotionSource.value?.promotion_label || '鏍锋湰鏀堕泦涓?)
-const gen2VerificationPromotionMessage = computed(() => gen2VerificationPromotionSource.value?.promotion_message || '鑷冲皯鍏堢疮璁?0鏉″凡鏍囪鏍锋湰锛屽啀鍒ゆ柇鏄惁杩涘叆灏忎粨瀹炵洏楠岃瘉銆?)
+const gen2VerificationPromotionLabel = computed(() => gen2VerificationPromotionSource.value?.promotion_label || '样本收集中')
+const gen2VerificationPromotionMessage = computed(() => gen2VerificationPromotionSource.value?.promotion_message || '至少先累计 20 条已标记样本，再判断是否进入小仓实盘验证。')
 const gen2ShadowFreshnessNote = computed(() => {
   const d = gen2Shadow.value?.data_freshness || {}
+  const dateNotice = String(gen2Shadow.value?.date_notice || '').trim()
+  if (dateNotice) return dateNotice
   if (!d.latest_daily_date || !d.latest_shadow_date || d.latest_daily_date <= d.latest_shadow_date) return ''
-  return `鏁版嵁鎻愮ず锛歏4鏃ョ嚎宸插埌 ${d.latest_daily_date}锛屼絾G2鏈夋晥褰卞瓙鍙拌处鏈€鏂颁负 ${d.latest_shadow_date}锛涜嫢椤甸潰浠嶆樉绀烘棫淇″彿鏃ワ紝璇存槑褰撳墠瑙勫垯灏氭湭浜х敓鏂扮殑鏈夋晥G2淇″彿銆俙
+  return '数据提示：V4日线已到 ' + String(d.latest_daily_date) + '，但G2有效影子台账最新为 ' + String(d.latest_shadow_date) + '；若页面仍显示旧信号日，说明当前规则尚未产生新的有效G2信号。'
 })
 const gen2ShadowUpdateText = computed(() => {
   const task = gen2ShadowUpdateTask.value || {}
   if (!task.status) return ''
   if (task.status === 'completed') {
     const result = task.result || {}
-    return `褰卞瓙浜ゆ槗宸叉洿鏂帮細鍘熷鍊欓€?${result.raw_candidates ?? '--'}锛岃繃婊ゅ悗 ${result.filtered_signals ?? '--'}锛屽綋鏃ュ奖瀛?${result.shadow_rows_for_date ?? '--'}銆俙
+    return '影子交易已更新：原始候选 ' + String(result.raw_candidates ?? '--') + '，过滤后 ' + String(result.filtered_signals ?? '--') + '，当日影子 ' + String(result.shadow_rows_for_date ?? '--') + '。'
   }
-  if (task.status === 'failed') return `褰卞瓙浜ゆ槗鏇存柊澶辫触锛?{task.error || '鏈煡閿欒'}`
-  return `褰卞瓙浜ゆ槗鏇存柊涓細${task.status} ${task.progress || 0}%`
+  if (task.status === 'failed') return '影子交易更新失败：' + String(task.error || '未知错误')
+  return '影子交易更新中：' + String(task.status) + ' ' + String(task.progress || 0) + '%'
 })
 const gen2ShadowMonitorText = computed(() => {
   const status = gen2ShadowMonitorStatus.value || {}
   const interval = Math.max(1, Math.round(Number(status.interval_seconds || 60) / 60))
-  const state = status.enabled ? `鑷姩鎺㈡祴涓紝姣?{interval}鍒嗛挓` : '鑷姩鎺㈡祴鏈紑鍚?
-  const gate = status.alpha191_gate ? `锛汚lpha191 ${status.alpha191_gate}` : ''
-  const nextRun = status.next_run_time ? `锛涗笅娆?${status.next_run_time}` : ''
-  const lastRun = status.last_run_at ? `锛涙渶杩?${status.last_run_at}` : ''
-  const lastMail = status.last_email_sent_at ? `锛涙渶杩戦偖浠?${status.last_email_sent_at}` : ''
-  const lastHeartbeat = status.last_heartbeat_sent_at ? `锛涙渶杩戝績璺?${status.last_heartbeat_sent_at}` : ''
-  const err = status.last_error ? `锛涢敊璇?${status.last_error}` : ''
-  return `${state}${gate}${nextRun}${lastRun}${lastMail}${lastHeartbeat}${err}`
+  const state = status.enabled ? ('自动探测中，每 ' + String(interval) + ' 分钟') : '自动探测未开启'
+  const gate = status.alpha191_gate ? ('；Alpha191 ' + String(status.alpha191_gate)) : ''
+  const nextRun = status.next_run_time ? ('；下次 ' + String(status.next_run_time)) : ''
+  const lastRun = status.last_run_at ? ('；最近 ' + String(status.last_run_at)) : ''
+  const lastMail = status.last_email_sent_at ? ('；最近邮件 ' + String(status.last_email_sent_at)) : ''
+  const lastHeartbeat = status.last_heartbeat_sent_at ? ('；最近心跳 ' + String(status.last_heartbeat_sent_at)) : ''
+  const err = status.last_error ? ('；错误 ' + String(status.last_error)) : ''
+  return state + gate + nextRun + lastRun + lastMail + lastHeartbeat + err
 })
 const gen2ShadowMonitorResultText = computed(() => {
   const result = gen2ShadowMonitorStatus.value?.last_result || {}
   if (!Object.keys(result).length) return ''
-  if (result.skipped) return `鏈€杩戞帰娴嬭烦杩囷細${result.reason || '--'}`
-  if (result.blocked) return `鏈€杩戞帰娴嬮樆濉烇細${result.blocker_count ?? '--'} 涓樆濉炵偣${result.blocker_email_sent ? '锛屽凡鍙戦€侀樆濉炴彁閱? : ''}`
+  if (result.skipped) return '最近探测跳过：' + String(result.reason || '--')
+  if (result.blocked) return '最近探测阻塞：' + String(result.blocker_count ?? '--') + ' 个阻塞点' + (result.blocker_email_sent ? '，已发送阻塞提醒' : '')
   const parts = [
-    `淇″彿鏃?${result.signal_date || '--'}`,
-    `鍘熷 ${result.raw_candidates ?? '--'}`,
-    `杩囨护 ${result.filtered_signals ?? '--'}`,
-    `褰卞瓙 ${result.shadow_rows_for_date ?? '--'}`,
-    `鍙彁閱?${result.candidate_count ?? '--'}`,
-    `鏂板 ${result.new_count ?? '--'}`
+    '信号日 ' + String(result.signal_date || '--'),
+    '原始 ' + String(result.raw_candidates ?? '--'),
+    '过滤 ' + String(result.filtered_signals ?? '--'),
+    '影子 ' + String(result.shadow_rows_for_date ?? '--'),
+    '可提醒 ' + String(result.candidate_count ?? '--'),
+    '新增 ' + String(result.new_count ?? '--')
   ]
-  if (result.email_sent) parts.push('宸插彂涔扮偣閭欢')
-  else if (result.heartbeat_email_sent) parts.push('宸插彂鏃犱拱鐐瑰績璺冲洖鎵?)
-  else parts.push('鏈疆鏃犳柊閭欢')
-  return `鏈€杩戞帰娴嬶細${parts.join('锛?)}`
+  if (result.email_sent) parts.push('已发送买点邮件')
+  else if (result.heartbeat_email_sent) parts.push('已发无买点心跳回执')
+  else parts.push('本轮无新邮件')
+  return '最近探测：' + parts.join('；')
 })
 const marketGateSummary = computed(() => {
   const gate = marketGate.value || {}
-  if (!gate.available) return gate.message || '涓婅瘉鎸囨暟鏁版嵁鏆備笉鍙敤'
+  if (!gate.available) return gate.message || '上证指数数据暂不可用'
   const close = Number(gate.close)
   const ma20 = Number(gate.ma20)
   const date = gate.trade_date || '--'
-  return `${date} 鏀剁洏 ${Number.isFinite(close) ? close.toFixed(2) : '--'} / MA20 ${Number.isFinite(ma20) ? ma20.toFixed(2) : '--'}`
+  return String(date) + ' 收盘 ' + (Number.isFinite(close) ? close.toFixed(2) : '--') + ' / MA20 ' + (Number.isFinite(ma20) ? ma20.toFixed(2) : '--')
 })
 const autoRefreshStatusText = computed(() => {
-  const running = autoRefreshRunning.value ? '鍒锋柊涓? : '寰呭懡'
-  const last = lastAutoRefreshAt.value ? `锛涙渶杩戝埛鏂?${lastAutoRefreshAt.value}` : ''
-  return `浜ゆ槗鏃舵鍒嗗眰鑷姩鍒锋柊锛氭ˉ鎺?鎸佷粨30绉掞紝澶х洏闂搁棬60绉掞紝G2褰卞瓙/宸ヤ綔娴?80绉掞紱褰撳墠${running}${last}`
+  const running = autoRefreshRunning.value ? '刷新中' : '待命'
+  const last = lastAutoRefreshAt.value ? ('；最近刷新 ' + String(lastAutoRefreshAt.value)) : ''
+  return '交易时段分层自动刷新：桥接/持仓30秒，大盘门槛60秒，G2影子/工作流180秒；当前' + running + last
 })
 const shouldRunAutoRefresh = (lastRef, minMs, nowMs) => {
   if (!lastRef.value) return true
@@ -1723,7 +2050,7 @@ const recentTrades = computed(() => {
       name: String(x?.name || ''),
       price: x?.price,
       shares: x?.shares,
-      reason: x?.reason || '瀹炵洏璁板綍'
+      reason: x?.reason || '实盘记录'
     }))
     .sort((a, b) => parseTimeMs(b.time) - parseTimeMs(a.time))
 })
@@ -1760,8 +2087,8 @@ const historyTradeGroups = computed(() => {
   return [...groups.values()]
     .map((group) => {
       const trades = [...group.trades].sort((a, b) => parseTimeMs(a?.time) - parseTimeMs(b?.time))
-      const buyTrades = trades.filter((item) => String(item?.side || '') === '涔板叆')
-      const sellTrades = trades.filter((item) => String(item?.side || '') === '鍗栧嚭')
+      const buyTrades = trades.filter((item) => String(item?.side || '') === '买入')
+      const sellTrades = trades.filter((item) => String(item?.side || '') === '卖出')
       const totalBought = buyTrades.reduce((sum, item) => sum + Math.max(0, Math.trunc(Number(item?.shares || 0))), 0)
       const totalSold = sellTrades.reduce((sum, item) => sum + Math.max(0, Math.trunc(Number(item?.shares || 0))), 0)
       const currentHolding = currentHoldingMap.get(group.code)
@@ -1788,7 +2115,7 @@ const historyTradeGroups = computed(() => {
         current_shares: currentShares,
         is_active: hasCurrentHolding && currentShares > 0,
         realized_pnl: realizedPnl,
-        summary: `涔板叆 ${buyTrades.length} 娆★紝鍗栧嚭 ${sellTrades.length} 娆★紱绱涔板叆 ${totalBought} 鑲★紝绱鍗栧嚭 ${totalSold} 鑲
+        summary: '买入 ' + String(buyTrades.length) + ' 次，卖出 ' + String(sellTrades.length) + ' 次；累计买入 ' + String(totalBought) + ' 股，累计卖出 ' + String(totalSold) + ' 股'
       }
     })
     .sort((a, b) => {
@@ -1810,9 +2137,9 @@ const focusName = computed(() => String(route.query?.focus_name || '').trim())
 const focusSource = computed(() => String(route.query?.source || '').trim())
 const focusSignalDate = computed(() => String(route.query?.signal_date || '').trim())
 const focusDescription = computed(() => {
-  const sourceText = focusSource.value ? `鏉ユ簮锛?{focusSource.value}` : '鏉ユ簮锛氭墜宸ュ叆鍙?
-  const signalText = focusSignalDate.value ? `锛涗俊鍙锋棩锛?{focusSignalDate.value}` : ''
-  return `${sourceText}${signalText}銆傝鍏ュ彛鐢ㄤ簬鎶婁氦鏄撻€夎偂涓殑鐩爣鑲＄洿鎺ュ姞鍏ュ疄鐩樹氦鏄撴寔浠撱€俙
+  const sourceText = focusSource.value ? ('来源：' + String(focusSource.value)) : '来源：手工入口'
+  const signalText = focusSignalDate.value ? ('；信号日：' + String(focusSignalDate.value)) : ''
+  return sourceText + signalText + '。该入口用于把交易选股中的目标股直接加入实盘交易持仓。'
 })
 const currentPriceMap = computed(() => {
   const m = new Map()
@@ -1823,20 +2150,20 @@ const currentPriceMap = computed(() => {
 })
 const disciplineText = computed(() => {
   const lines = []
-  if (manualHoldings.value.length >= 3) lines.push('绾緥1锛氭寔浠撳凡杈句笂闄?3 鍙紝绂佹鏂板')
+  if (manualHoldings.value.length >= 3) lines.push('纪律1：持仓已达上限 3 只，禁止新增')
   const hardRisk = manualHoldings.value.filter((x) => Number(x.pnl_ratio) <= -6).map((x) => x.code)
-  if (hardRisk.length) lines.push(`绾緥4锛?{hardRisk.join('銆?)} 宸茶Е鍙?-6%锛屽簲浼樺厛澶勭悊`)
+  if (hardRisk.length) lines.push('纪律4：' + hardRisk.join('、') + ' 已触发 -6%，应优先处理')
   const warnRisk = manualHoldings.value.filter((x) => Number(x.pnl_ratio) <= -4 && Number(x.pnl_ratio) > -6).map((x) => x.code)
-  if (warnRisk.length) lines.push(`绾緥4锛?{warnRisk.join('銆?)} 宸插埌 -4%锛岀姝㈠姞浠揱)
+  if (warnRisk.length) lines.push('纪律4：' + warnRisk.join('、') + ' 已到 -4%，禁止加仓')
   const trailingRisk = manualHoldings.value.filter((x) => isTrailingTakeProfitTriggered(x)).map((x) => x.code)
-  if (trailingRisk.length) lines.push(`绾緥5锛?{trailingRisk.join('銆?)} 瑙﹀彂绉诲姩姝㈢泩鍥炴挙锛屽缓璁垎鎵规鐩坄)
+  if (trailingRisk.length) lines.push('纪律5：' + trailingRisk.join('、') + ' 触发移动止盈回撤，建议分批止盈')
   const lossCapRisk = manualHoldings.value.filter((x) => isSingleTradeLossCapBreached(x)).map((x) => x.code)
-  if (lossCapRisk.length) lines.push(`绾緥6锛?{lossCapRisk.join('銆?)} 缁勫悎鎷栫疮瓒呰繃 ${SINGLE_TRADE_LOSS_CAP_PCT_OF_TOTAL}%`)
+  if (lossCapRisk.length) lines.push('纪律6：' + lossCapRisk.join('、') + ' 组合拖累超过 ' + String(SINGLE_TRADE_LOSS_CAP_PCT_OF_TOTAL) + '%')
   const outPoolRisk = manualHoldings.value
     .filter((x) => x?.score_pool_status === 'out_of_pool' || x?.in_score_pool === false)
     .map((x) => x.code)
-  if (outPoolRisk.length) lines.push(`绾緥7锛?{outPoolRisk.join('銆?)} 宸叉帀鍑鸿瘎鍒嗘睜锛屾寜鍗栧嚭瑙勫垯浼樺厛澶勭悊`)
-  return lines.join('锛?)
+  if (outPoolRisk.length) lines.push('纪律7：' + outPoolRisk.join('、') + ' 已掉出评分池，按卖出规则优先处理')
+  return lines.join('；')
 })
 const capitalSnapshot = computed(() => {
   let marketValue = 0
@@ -1901,7 +2228,7 @@ const focusRows = computed(() => {
   ]
   const hit = pools.find((item) => normalizeCode(item?.code) === normalizeCode(focusCode.value))
   if (hit) return [hit]
-  return [{ code: focusCode.value, name: focusName.value || '--', rank: '--', score_total: '--', reason_text: '褰撳墠蹇収鏈懡涓鑲★紝鍙洿鎺ュ姞鍏ユ寔浠撱€? }]
+  return [{ code: focusCode.value, name: focusName.value || '--', rank: '--', score_total: '--', reason_text: '当前快照未命中该股，可直接加入持仓。' }]
 })
 
 const v4SourceMap = computed(() => {
@@ -1959,18 +2286,18 @@ const toExchangeCode = (value) => {
   return code + '.SZ'
 }
 
-const THS_FILTER_KEYWORDS = ['鎵撴柊', '鏂拌偂', '閰嶅彿', '瓒呴厤', '绾㈠埄', '鑲℃伅', '娓呯畻', '鍒╃◣', '鍒╂伅', '閰嶅敭']
+const THS_FILTER_KEYWORDS = ['打新', '新股', '配号', '超配', '红利', '股息', '清算', '利税', '利息', '配售']
 
 const normalizeTradeTime = (dateText, timeText) => {
   const ds = String(dateText || '').replace(/\D/g, '')
   if (ds.length !== 8) return ''
-  const day = `${ds.slice(0, 4)}-${ds.slice(4, 6)}-${ds.slice(6, 8)}`
+  const day = ds.slice(0, 4) + '-' + ds.slice(4, 6) + '-' + ds.slice(6, 8)
   const rawTime = String(timeText || '').trim()
-  if (!rawTime) return `${day} 00:00:00`
+  if (!rawTime) return day + ' 00:00:00'
   const parts = rawTime.split(':').map((x) => x.padStart(2, '0'))
-  if (parts.length === 2) return `${day} ${parts[0]}:${parts[1]}:00`
-  if (parts.length >= 3) return `${day} ${parts[0]}:${parts[1]}:${parts[2]}`
-  return `${day} 00:00:00`
+  if (parts.length === 2) return day + ' ' + parts[0] + ':' + parts[1] + ':00'
+  if (parts.length >= 3) return day + ' ' + parts[0] + ':' + parts[1] + ':' + parts[2]
+  return day + ' 00:00:00'
 }
 
 const parseThsNumber = (value) => {
@@ -1982,8 +2309,8 @@ const parseThsNumber = (value) => {
 
 const parseThsTradeSide = (action) => {
   const text = String(action || '').trim()
-  if (text === '璇佸埜涔板叆' || text.includes('涔板叆')) return '涔板叆'
-  if (text === '璇佸埜鍗栧嚭' || text.includes('鍗栧嚭')) return '鍗栧嚭'
+  if (text === '买入' || text.includes('买入')) return '买入'
+  if (text === '卖出' || text.includes('卖出')) return '卖出'
   return ''
 }
 
@@ -2007,7 +2334,7 @@ const readThsTradesFromClipboard = async () => {
     thsImportRawText.value = text
     parseThsTradeText(text)
   } catch (error) {
-    ElMessage.warning(error?.message || '璇诲彇鍓创鏉垮け璐ワ紝璇锋墜鍔ㄧ矘璐?)
+    ElMessage.warning(error?.message || '读取剪贴板失败，请手动粘贴')
   } finally {
     thsImportLoading.value = false
   }
@@ -2020,17 +2347,17 @@ const readThsTradesFromWindow = async () => {
     const text = String(resp?.raw_text || '')
     thsImportRawText.value = text
     if (!resp?.ok) {
-      ElMessage.warning(resp?.message || '璇诲彇鍚岃姳椤虹獥鍙ｅけ璐?)
+      ElMessage.warning(resp?.message || '读取同花顺窗口失败')
       return
     }
     if (!resp?.recognized_recent_trade) {
-      const viewDesc = String(resp?.view_type_desc || '鏈煡琛ㄦ牸')
-      ElMessage.warning('褰撳墠璇诲彇鍒扮殑鏄? + viewDesc + '锛屼笉鏄€滃巻鍙叉垚浜も€?)
+      const viewDesc = String(resp?.view_type_desc || '未知表格')
+      ElMessage.warning('当前读取到的是 ' + viewDesc + '，不是“历史成交”')
       return
     }
     parseThsTradeText(text)
   } catch (error) {
-    ElMessage.warning(error?.message || '璇诲彇鍚岃姳椤虹獥鍙ｅけ璐?)
+    ElMessage.warning(error?.message || '读取同花顺窗口失败')
   } finally {
     thsImportLoading.value = false
   }
@@ -2043,16 +2370,16 @@ const readThsTradesFromDeliveryFile = async () => {
     const text = String(resp?.raw_text || '')
     thsImportRawText.value = text
     if (!resp?.ok) {
-      ElMessage.warning(resp?.message || '璇诲彇浜ゅ壊鍗曟枃浠跺け璐?)
+      ElMessage.warning(resp?.message || '读取交割单文件失败')
       return
     }
     parseThsTradeText(text)
     if (resp?.file_path) {
-      const fileTimeText = resp?.file_mtime ? '锛堟洿鏂颁簬 ' + resp.file_mtime + '锛? : ''
-      ElMessage.success('宸茶鍙栦氦鍓插崟鏂囦欢锛? + resp.file_path + fileTimeText)
+      const fileTimeText = resp?.file_mtime ? '（更新于 ' + resp.file_mtime + '）' : ''
+      ElMessage.success('已读取交割单文件：' + resp.file_path + fileTimeText)
     }
   } catch (error) {
-    ElMessage.warning(error?.message || '璇诲彇浜ゅ壊鍗曟枃浠跺け璐?)
+    ElMessage.warning(error?.message || '读取交割单文件失败')
   } finally {
     thsImportLoading.value = false
   }
@@ -2063,27 +2390,27 @@ const parseThsTradeText = (rawText) => {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   if (!lines.length) {
     thsImportRows.value = []
-    ElMessage.warning('鏈鍙栧埌鍚岃姳椤烘垚浜ゆ枃鏈?)
+    ElMessage.warning('未读取到同花顺成交文本')
     return
   }
   const rows = lines.map((line) => line.split('\t'))
-  const headerIndex = rows.findIndex((cells) => cells.includes('鎴愪氦鏃ユ湡') && cells.includes('璇佸埜浠ｇ爜') && cells.includes('鎿嶄綔'))
+  const headerIndex = rows.findIndex((cells) => cells.includes('成交日期') && cells.includes('证券代码') && cells.includes('操作'))
   if (headerIndex < 0) {
     thsImportRows.value = []
-    ElMessage.warning('鏈瘑鍒埌鍚岃姳椤烘垚浜よ〃澶达紝璇风‘璁ゅ鍒剁殑鏄€滃巻鍙叉垚浜も€濊〃鏍?)
+    ElMessage.warning('未识别到同花顺成交表头，请确认复制的是“历史成交”表格')
     return
   }
   const header = rows[headerIndex]
   const idx = (name) => header.indexOf(name)
-  const dateIdx = idx('鎴愪氦鏃ユ湡')
-  const timeIdx = idx('鎴愪氦鏃堕棿')
-  const codeIdx = idx('璇佸埜浠ｇ爜')
-  const nameIdx = idx('璇佸埜鍚嶇О')
-  const actionIdx = idx('鎿嶄綔')
-  const sharesIdx = idx('鎴愪氦鏁伴噺')
-  const priceIdx = idx('鎴愪氦鍧囦环')
-  const amountIdx = idx('鎴愪氦閲戦')
-  const remarkIdx = idx('澶囨敞')
+  const dateIdx = idx('成交日期')
+  const timeIdx = idx('成交时间')
+  const codeIdx = idx('证券代码')
+  const nameIdx = idx('证券名称')
+  const actionIdx = idx('操作')
+  const sharesIdx = idx('成交数量')
+  const priceIdx = idx('成交均价')
+  const amountIdx = idx('成交金额')
+  const remarkIdx = idx('备注')
   const parsed = []
   for (const cells of rows.slice(headerIndex + 1)) {
     const dateText = cells[dateIdx]
@@ -2104,7 +2431,7 @@ const parseThsTradeText = (rawText) => {
     if (!time || code.length !== 6 || !side) continue
     if (keywordHit) continue
     if (!(shares > 0 && Number.isFinite(price) && price > 0)) continue
-    if (!/^(璇佸埜涔板叆|璇佸埜鍗栧嚭)$/.test(action)) continue
+    if (!/^(证券买入|证券卖出)$/.test(action)) continue
     parsed.push({
       checked: true,
       time,
@@ -2115,7 +2442,7 @@ const parseThsTradeText = (rawText) => {
       price: Number(price.toFixed(3)),
       amount: Number.isFinite(amountRaw) ? Number(amountRaw.toFixed(3)) : null,
       remark,
-      filter_reason: '鐪熷疄璇佸埜鎴愪氦'
+      filter_reason: '真实证券成交'
     })
   }
   const dedup = []
@@ -2129,10 +2456,10 @@ const parseThsTradeText = (rawText) => {
   dedup.sort((a, b) => new Date(b.time.replace(' ', 'T')).getTime() - new Date(a.time.replace(' ', 'T')).getTime())
   thsImportRows.value = dedup
   if (!dedup.length) {
-    ElMessage.warning('宸茶鍙栧唴瀹癸紝浣嗚繃婊ゅ悗娌℃湁鍙鍏ョ殑鐪熷疄璇佸埜鎴愪氦')
+    ElMessage.warning('已读取内容，但过滤后没有可导入的真实证券成交')
     return
   }
-  ElMessage.success('宸茶瘑鍒?' + dedup.length + ' 鏉＄湡瀹炶瘉鍒告垚浜わ紝璇峰嬀閫夌‘璁?)
+  ElMessage.success('已识别 ' + String(dedup.length) + ' 条真实证券成交，请勾选确认')
 }
 
 const syncWatchlistHoldingByCode = async (code) => {
@@ -2162,7 +2489,7 @@ const syncWatchlistHoldingByCode = async (code) => {
 const confirmImportThsTrades = async () => {
   const selected = thsImportRows.value.filter((item) => !!item.checked)
   if (!selected.length) {
-    ElMessage.warning('璇疯嚦灏戝嬀閫変竴鏉℃垚浜よ褰?)
+    ElMessage.warning('请至少勾选一条成交记录')
     return
   }
   const existingSignatures = new Set((manualTradeLogs.value || []).map((item) => tradeSignature(item)))
@@ -2182,7 +2509,7 @@ const confirmImportThsTrades = async () => {
     const price = Number(tx.price)
     const time = String(tx.time || nowMinuteText())
     const existing = manualHoldings.value.find((item) => normalizeCode(item?.code) === code)
-    if (tx.side === '' || tx.side === '涔板叆') {
+    if (tx.side === '' || tx.side === '买入') {
       if (!existing) {
         manualHoldings.value.unshift({
           code,
@@ -2212,7 +2539,7 @@ const confirmImportThsTrades = async () => {
       }
       manualTradeLogs.value.unshift({
         time,
-        side: '涔板叆',
+        side: '买入',
         code,
         name: String(tx.name || existing?.name || ''),
         shares,
@@ -2220,7 +2547,7 @@ const confirmImportThsTrades = async () => {
         before_shares: existing ? Math.max(0, Math.trunc(Number(existing.shares || 0))) - shares : 0,
         after_shares: existing ? Math.max(0, Math.trunc(Number(existing.shares || 0))) : shares,
         realized_pnl: null,
-        reason: '鍚岃姳椤哄鍏?
+        reason: '同花顺导入'
       })
       imported += 1
       touchedCodes.add(code)
@@ -2230,7 +2557,7 @@ const confirmImportThsTrades = async () => {
     if (!existing) {
       manualTradeLogs.value.unshift({
         time,
-        side: '鍗栧嚭',
+        side: '卖出',
         code,
         name: String(tx.name || ''),
         shares,
@@ -2238,7 +2565,7 @@ const confirmImportThsTrades = async () => {
         before_shares: null,
         after_shares: null,
         realized_pnl: null,
-        reason: '鍚岃姳椤哄鍏ワ紙鏈尮閰嶅埌鐜版寔浠擄級'
+        reason: '同花顺导入（未匹配到现持仓）'
       })
       imported += 1
       orphanSell += 1
@@ -2259,7 +2586,7 @@ const confirmImportThsTrades = async () => {
     }
     manualTradeLogs.value.unshift({
       time,
-      side: '鍗栧嚭',
+      side: '卖出',
       code,
       name: String(tx.name || existing?.name || ''),
       shares,
@@ -2267,7 +2594,7 @@ const confirmImportThsTrades = async () => {
       before_shares: beforeShares,
       after_shares: nextShares,
       realized_pnl: realizedPnl,
-      reason: '鍚岃姳椤哄鍏?
+      reason: '同花顺导入'
     })
     imported += 1
     touchedCodes.add(code)
@@ -2282,9 +2609,9 @@ const confirmImportThsTrades = async () => {
   await refreshManualPnlByDetail()
   await refreshAllHoldingData()
   await refreshManualSignals()
-  const duplicateText = duplicated ? '锛岃烦杩囬噸澶?' + duplicated + ' 鏉? : ''
-  const orphanSellText = orphanSell ? '锛屽叾涓?' + orphanSell + ' 鏉″崠鍑轰粎璁板叆娴佹按' : ''
-  ElMessage.success('宸插鍏?' + imported + ' 鏉℃垚浜? + duplicateText + orphanSellText)
+  const duplicateText = duplicated ? '，跳过重复 ' + String(duplicated) + ' 条' : ''
+  const orphanSellText = orphanSell ? '，其中 ' + String(orphanSell) + ' 条卖出仅记入流水' : ''
+  ElMessage.success('已导入 ' + String(imported) + ' 条成交' + duplicateText + orphanSellText)
 }
 const displayCode = (value) => {
   const raw = String(value || '').trim().toUpperCase()
@@ -2299,7 +2626,7 @@ const displayCode = (value) => {
 const copyPlainCode = async (value) => {
   const code = normalizeCode(value)
   if (!code) {
-    ElMessage.warning('鑲＄エ浠ｇ爜鏃犳晥锛屾棤娉曞鍒?)
+    ElMessage.warning('股票代码无效，无法复制')
     return
   }
   try {
@@ -2316,9 +2643,9 @@ const copyPlainCode = async (value) => {
       document.execCommand('copy')
       document.body.removeChild(input)
     }
-      ElMessage.success('宸插鍒朵唬鐮侊細' + code)
+      ElMessage.success('已复制代码：' + code)
   } catch (error) {
-    ElMessage.warning('澶嶅埗澶辫触锛岃鎵嬪姩澶嶅埗浠ｇ爜')
+    ElMessage.warning('复制失败，请手动复制代码')
   }
 }
 const weekKeyFromTime = (buyTime) => {
@@ -2397,10 +2724,10 @@ const livePnlPct = computed(() => {
 
 const livePnlText = computed(() => {
   const quote = Number(liveQuotePrice.value)
-  if (!Number.isFinite(quote) || quote <= 0) return '鐜颁环寰呰幏鍙?
+  if (!Number.isFinite(quote) || quote <= 0) return '现价待获取'
   const pnl = livePnlPct.value
-  if (pnl === null) return '鐜颁环 ' + quote.toFixed(3) + '锛岃濉啓鎴愭湰浠?
-  return '鐜颁环 ' + quote.toFixed(3) + '锛岀泩浜?' + (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%'
+  if (pnl === null) return '现价 ' + quote.toFixed(3) + '，请填写成本价'
+  return '现价 ' + quote.toFixed(3) + '，盈亏 ' + (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%'
 })
 
 const livePnlColor = computed(() => {
@@ -2415,7 +2742,7 @@ const entryBacktestText = computed(() => {
   const data = entryBacktest.value
   if (!data || !data.ok) return ''
   const count = Number(data.sample_count || 0)
-  if (!count) return '璇ヨ偂鏆傛棤鍘嗗彶鍏ュ満鏍锋湰'
+  if (!count) return '该股暂无历史入场样本'
   const d3 = data?.horizons?.d3 || {}
   const d5 = data?.horizons?.d5 || {}
   const d10 = data?.horizons?.d10 || {}
@@ -2425,9 +2752,9 @@ const entryBacktestText = computed(() => {
     const n = Number(item?.sample_count || 0)
     const winText = Number.isFinite(Number(win)) ? Number(win).toFixed(2) + '%' : '--'
     const avgText = Number.isFinite(Number(avg)) ? Number(avg).toFixed(2) + '%' : '--'
-    return label + ' 鎴愬姛鐜?' + winText + '锛屽钩鍧囨定骞?' + avgText + '锛堟牱鏈?' + n + '锛?
+    return label + ' 胜率 ' + winText + '，平均收益 ' + avgText + '（样本 ' + String(n) + '）'
   }
-  return '鏍锋湰鎬绘暟 ' + count + '锛? + line('3鏃?, d3) + '锛? + line('5鏃?, d5) + '锛? + line('10鏃?, d10)
+  return '样本总数 ' + String(count) + '；' + line('3日', d3) + '；' + line('5日', d5) + '；' + line('10日', d10)
 })
 
 const resolveStockByCode = async (code) => {
@@ -2448,16 +2775,16 @@ const resolveStockByCode = async (code) => {
   const localHit = localPools.find((item) => normalizeCode(item?.code) === normalized && String(item?.name || '').trim())
   if (localHit?.name) {
     addForm.value.name = String(localHit.name)
-    codeLookupText.value = `宸插尮閰嶏細${normalized} ${String(localHit.name)}`
+    codeLookupText.value = '已匹配：' + normalized + ' ' + String(localHit.name)
   } else {
-    codeLookupText.value = '姝ｅ湪鍖归厤浠ｇ爜...'
+    codeLookupText.value = '正在匹配代码...'
   }
   try {
     const detail = await getStockDetail(toExchangeCode(normalized), { skipErrorHandler: true })
     const name = String(detail?.name || detail?.stock_name || '').trim()
     if (name) {
       addForm.value.name = name
-      codeLookupText.value = `宸插尮閰嶏細${normalized} ${name}`
+      codeLookupText.value = '已匹配：' + normalized + ' ' + name
       let detailPrice = Number(detail?.price ?? detail?.close ?? detail?.current_price ?? detail?.last_price)
       if (!(Number.isFinite(detailPrice) && detailPrice > 0)) {
         try {
@@ -2467,10 +2794,10 @@ const resolveStockByCode = async (code) => {
       }
       if (Number.isFinite(detailPrice) && detailPrice > 0) liveQuotePrice.value = detailPrice
     } else if (!localHit?.name) {
-      codeLookupText.value = '浠ｇ爜搴撴湭鍖归厤鍒拌鑲＄エ锛岃鎵嬪姩濉啓鍚嶇О'
+      codeLookupText.value = '代码未匹配到该股票，请手动补充名称'
     }
   } catch {
-    if (!localHit?.name) codeLookupText.value = '浠ｇ爜搴撴湭鍖归厤鍒拌鑲＄エ锛岃鎵嬪姩濉啓鍚嶇О'
+    if (!localHit?.name) codeLookupText.value = '代码未匹配到该股票，请手动补充名称'
   }
   if (addMode.value === 'new') {
     await loadEntryBacktest(normalized)
@@ -2521,7 +2848,7 @@ const saveManualTradeLogs = () => {
 const clearTradeLogs = () => {
   manualTradeLogs.value = []
   saveManualTradeLogs()
-  ElMessage.success('浜ゆ槗璁板綍宸叉竻绌?)
+  ElMessage.success('交易记录已清空')
 }
 
 const saveManualHoldings = () => {
@@ -2793,7 +3120,7 @@ const repairExistingManualHoldings = async () => {
   if (changed) {
     manualHoldings.value = repaired
     saveManualHoldings()
-    ElMessage.success('宸蹭慨澶嶅巻鍙叉寔浠擄細鍚嶇О涓庣泩浜忓凡鏇存柊')
+    ElMessage.success('手工持仓修复：名称与金额字段已更新')
   }
 }
 
@@ -2803,11 +3130,24 @@ const refreshManualSignals = async (options = {}) => {
   try {
     const resp = await getV4ManualHoldingSignals({ holdings: manualHoldings.value })
     const signalMap = new Map((resp?.rows || []).map((r) => [String(r.code || ''), r]))
-    manualHoldings.value = manualHoldings.value.map((item) => ({ ...item, signal: signalMap.get(String(item.code || '')) || null }))
+    manualHoldings.value = manualHoldings.value.map((item) => {
+      const hit = signalMap.get(String(item.code || ''))
+      if (!hit) return { ...item, signal: null }
+      return {
+        ...item,
+        signal: {
+          rsi15_signal: hit.rsi15_signal || null,
+          rsi30_signal: hit.rsi30_signal || null,
+          rsi_box_t: hit.rsi_box_t || null,
+          risk_level: hit.risk_level || '',
+          suggestion: hit.suggestion || ''
+        }
+      }
+    })
     applyTrailingTakeProfitState()
     saveManualHoldings()
   } catch (error) {
-    if (!options.silent) ElMessage.warning(error?.message || '鍒锋柊RSI鍗栫偣澶辫触')
+    if (!options.silent) ElMessage.warning(error?.message || '刷新 RSI 点位失败')
   } finally {
     signalLoading.value = false
   }
@@ -2827,7 +3167,7 @@ const refreshAllHoldingData = async (options = {}) => {
       }
       if (!options.silent) {
         ElMessage[options.includePool === false ? 'warning' : 'success'](
-          options.includePool === false ? '褰撳墠娌℃湁鎸佷粨鑲″彲鏇存柊' : '宸插埛鏂板ぇ鐩橀椄闂ㄤ笌涔板叆瑙傚療姹?
+          options.includePool === false ? '当前没有持仓可更新' : '已成功刷新买点与买入观察池'
         )
       }
       return
@@ -2850,6 +3190,7 @@ const refreshAllHoldingData = async (options = {}) => {
         signal: {
           rsi15_signal: hit.rsi15_signal || item?.signal?.rsi15_signal || null,
           rsi30_signal: hit.rsi30_signal || item?.signal?.rsi30_signal || null,
+          rsi_box_t: hit.rsi_box_t || item?.signal?.rsi_box_t || null,
           risk_level: hit.risk_level || item?.signal?.risk_level || '',
           suggestion: hit.suggestion || item?.signal?.suggestion || ''
         },
@@ -2873,10 +3214,10 @@ const refreshAllHoldingData = async (options = {}) => {
     }
     lastAutoRefreshAt.value = dayjs().format('YYYY-MM-DD HH:mm:ss')
     if (!options.silent) {
-      ElMessage.success(options.successMessage || '宸蹭竴閿埛鏂帮細浠锋牸/鐩堜簭/鍗栫偣/绉诲姩姝㈢泩/澶х洏闂搁棬/涔板叆姹?)
+      ElMessage.success(options.successMessage || '本次自动刷新：行情/规则/信号/动作/买卖/交投/买入池已更新')
     }
   } catch (error) {
-    if (!options.silent) ElMessage.warning(error?.message || '涓€閿埛鏂板け璐?)
+    if (!options.silent) ElMessage.warning(error?.message || '一次自动刷新失败')
   } finally {
     allRefreshLoading.value = false
   }
@@ -2887,7 +3228,7 @@ const refreshCurrentHoldings = async () => {
   try {
     await refreshAllHoldingData({
       includePool: false,
-      successMessage: '宸叉洿鏂版寔浠撹偂锛氳偂浠枫€佺泩浜忛噾棰濄€乂4鎺掑悕鍜屽崠鐐逛俊鍙?
+      successMessage: '刷新手动持仓与流水与行情：买入和卖出已更新'
     })
   } finally {
     holdingRefreshLoading.value = false
@@ -2925,7 +3266,7 @@ const refreshLiveTradingState = async (options = {}) => {
     }
     lastAutoRefreshAt.value = dayjs().format('YYYY-MM-DD HH:mm:ss')
   } catch (error) {
-    if (!options.silent) ElMessage.warning(error?.message || '鑷姩鍒锋柊瀹炵洏鐘舵€佸け璐?)
+    if (!options.silent) ElMessage.warning(error?.message || '自动刷新执行失败')
   } finally {
     autoRefreshRunning.value = false
   }
@@ -2951,7 +3292,7 @@ const syncCapitalAndHoldingsFromThs = async () => {
   try {
     const resp = await readV4ManualHoldingThsCapitalHoldings()
     if (!resp?.ok) {
-      ElMessage.warning(resp?.message || '璇诲彇鍚岃姳椤鸿祫閲戣偂绁ㄥけ璐?)
+      ElMessage.warning(resp?.message || '读取同花顺资金持股失败')
       return
     }
     const syncedHoldings = Array.isArray(resp?.holdings) ? resp.holdings : []
@@ -3006,14 +3347,14 @@ const syncCapitalAndHoldingsFromThs = async () => {
     saveManualHoldings()
     applyTrailingTakeProfitState()
     await refreshManualSignals()
-    const capitalText = capitalForm.value.synced_total_capital ? `锛涙€昏祫浜?${formatMoney(capitalForm.value.synced_total_capital)}` : ''
+    const capitalText = capitalForm.value.synced_total_capital ? ('；总资产 ' + formatMoney(capitalForm.value.synced_total_capital)) : ''
     if (resp?.fallback_cache) {
-      ElMessage.warning(`瀹炴椂绐楀彛璇诲彇澶辫触锛屽凡鍥為€€鍒版渶杩戜竴娆℃垚鍔熷悓姝ュ揩鐓э細${manualHoldings.value.length} 鍙?{capitalText}`)
+      ElMessage.warning('实时窗口读取失败，已回退到最近一次成功同步快照：' + String(manualHoldings.value.length) + ' 只' + capitalText)
     } else {
-      ElMessage.success(`宸插悓姝ュ悓鑺遍『璧勯噾鎸佽偂锛?{manualHoldings.value.length} 鍙?{capitalText}`)
+      ElMessage.success('已同步同花顺资金持股：' + String(manualHoldings.value.length) + ' 只' + capitalText)
     }
   } catch (error) {
-    ElMessage.warning(error?.message || '鍚屾鍚岃姳椤鸿祫閲戞寔鑲″け璐?)
+    ElMessage.warning(error?.message || '同步同花顺资金持股失败')
   } finally {
     thsCapitalSyncLoading.value = false
   }
@@ -3025,13 +3366,13 @@ const pullMonitorStatus = async () => {
     monitorEnabled.value = !!status?.enabled
     monitorTradingHoursOnly.value = status?.trading_hours_only !== false
     monitorQuietMinutes.value = Number(status?.quiet_minutes ?? 15)
-    const nextRun = status?.next_run_time ? `锛涗笅娆℃墽琛?${status.next_run_time}` : ''
-    const lastRun = status?.last_run_at ? `锛涙渶杩戞墽琛?${status.last_run_at}` : ''
-    const lastMail = status?.last_email_sent_at ? `锛涙渶杩戦偖浠?${status.last_email_sent_at}` : ''
-    const err = status?.last_error ? `锛涙渶杩戦敊璇?${status.last_error}` : ''
-    monitorStatusText.value = `${monitorEnabled.value ? '杩愯涓? : '鏈紑鍚?}${nextRun}${lastRun}${lastMail}${err}`
+    const nextRun = status?.next_run_time ? ('；下次执行 ' + String(status.next_run_time)) : ''
+    const lastRun = status?.last_run_at ? ('；最近执行 ' + String(status.last_run_at)) : ''
+    const lastMail = status?.last_email_sent_at ? ('；最近邮件 ' + String(status.last_email_sent_at)) : ''
+    const err = status?.last_error ? ('；最近错误 ' + String(status.last_error)) : ''
+    monitorStatusText.value = (monitorEnabled.value ? '运行中' : '未开启') + nextRun + lastRun + lastMail + err
   } catch {
-    monitorStatusText.value = '鐘舵€佽鍙栧け璐?
+    monitorStatusText.value = '状态读取失败'
   }
 }
 
@@ -3047,9 +3388,9 @@ const toggleMonitor = async () => {
       recipient_email: ''
     })
     await pullMonitorStatus()
-    ElMessage.success(monitorEnabled.value ? '宸插紑鍚瘡鍒嗛挓璺熻釜' : '宸插仠姝㈡瘡鍒嗛挓璺熻釜')
+    ElMessage.success(monitorEnabled.value ? '已开启每分钟跟踪' : '已停止每分钟跟踪')
   } catch (error) {
-    ElMessage.warning(error?.message || '璁剧疆鍒嗛挓璺熻釜澶辫触')
+    ElMessage.warning(error?.message || '设置每分钟跟踪失败')
   } finally {
     monitorLoading.value = false
   }
@@ -3063,10 +3404,10 @@ const runMonitorNow = async () => {
       force_send: true
     })
     await pullMonitorStatus()
-    if (resp?.email_sent) ElMessage.success('娴嬭瘯閭欢宸插彂閫?)
-    else ElMessage.info(resp?.message || '鏈鏃犳柊淇″彿锛屾湭鍙戦€侀偖浠?)
+    if (resp?.email_sent) ElMessage.success('测试邮件已发送')
+    else ElMessage.info(resp?.message || '本次暂未触发发送')
   } catch (error) {
-    ElMessage.warning(error?.message || '娴嬭瘯閫氱煡澶辫触')
+    ElMessage.warning(error?.message || '测试提醒发送失败')
   } finally {
     monitorLoading.value = false
   }
@@ -3076,7 +3417,7 @@ const quickAddHolding = async (row) => {
   const code = normalizeCode(row?.code)
   if (!code) return
   if (manualHoldings.value.length >= 3 && !manualHoldings.value.find((x) => normalizeCode(x.code) === code)) {
-    ElMessage.warning('鎸佷粨涓婇檺 3 鍙紝璇峰厛鏇挎崲鍚庡啀鏂板')
+    ElMessage.warning('持仓上限 3 只，请先移除后再新增')
     return
   }
   const weekKey = weekKeyFromTime(row?.buy_time)
@@ -3104,12 +3445,12 @@ const quickAddHolding = async (row) => {
   } else {
     const costPnl = Number(exists?.pnl_ratio)
     if (Number.isFinite(costPnl) && costPnl < 0) {
-      ElMessage.warning('浜忔崯鐘舵€佺姝㈣ˉ浠?)
+      ElMessage.warning('已建仓后盈利未正向，请先查看风险')
       return
     }
     const sameWeekCount = exists.buy_week_key === weekKey ? Number(exists.buy_count_week || 1) : 0
     if (sameWeekCount >= 2) {
-      ElMessage.warning('鍚屼竴鑲＄エ鏈懆鏈€澶氫拱鍏?2 娆?)
+      ElMessage.warning('同一自然周最多允许再买 2 次')
       return
     }
     exists.buy_week_key = weekKey
@@ -3141,7 +3482,7 @@ const quickAddHolding = async (row) => {
   }
   manualTradeLogs.value.unshift({
     time: String(row?.buy_time || nowMinuteText()),
-    side: '涔板叆',
+    side: '买入',
     code,
     name: String(row?.name || exists?.name || focusName.value || ''),
     shares: addShares,
@@ -3149,11 +3490,11 @@ const quickAddHolding = async (row) => {
     before_shares: beforeShares,
     after_shares: afterShares,
     realized_pnl: null,
-    reason: '鏂板鎸佷粨'
+    reason: '新增持仓'
   })
   saveManualTradeLogs()
   await syncWatchlistHoldingByCode(code)
-  ElMessage.success(`${code} 宸插姞鍏ュ疄鐩樻寔浠撴睜`)
+  ElMessage.success(String(code) + ' 已加入实盘持仓池')
   await refreshManualSignals()
   await refreshManualPnlByDetail()
 }
@@ -3182,11 +3523,11 @@ const openAddHoldingDialog = (row, mode = 'new') => {
 const confirmAddHolding = async () => {
   const normalizedCode = normalizeCode(addForm.value.code)
   if (!normalizedCode) {
-    ElMessage.warning('璇疯緭鍏?6 浣嶈偂绁ㄤ唬鐮?)
+    ElMessage.warning('新增持仓时请先输入有效股票代码')
     return
   }
   if (!String(addForm.value.buy_time || '').trim()) {
-    ElMessage.warning('璇峰～鍐欎拱鍏ユ椂闂达紙绮剧‘鍒板垎閽燂級')
+    ElMessage.warning('请填写买入时间')
     return
   }
   const payload = {
@@ -3247,29 +3588,29 @@ const evaluateNewHoldingRules = (holdingPayload) => {
     const alphaOk = !!gen2MainHit && Number.isFinite(alphaScore)
     const runupOk = !!gen2MainHit && (!Number.isFinite(runup) || runup <= 100)
     return [
-      { label: '涓荤瓥鐣ユ牎楠岋細Alpha191 volume5 涓诲€欓€夊懡涓?, pass: !!gen2MainHit, reason: gen2MainHit ? `Alpha191鎺掑悕 ${Number.isFinite(alphaRank) ? alphaRank : '--'}锛?{gen2MainHit.reason_text || ''}` : '褰撳墠鏍囩殑涓嶅湪 Alpha191 volume5 涓绘墽琛屽€欓€夋睜' },
-      { label: '涓荤瓥鐣ユ牎楠岋細鍊欓€夋湭琚啍鏂?鏆傚仠', pass: statusOk, reason: gen2MainHit ? (gen2MainHit.status_label || gen2MainHit.shadow_status || '鍊欓€夌姸鎬佸彲鐢?) : '鍊欓€変笉瀛樺湪' },
-      { label: '涓荤瓥鐣ユ牎楠岋細Alpha191 volume5 鍒嗘暟鏈夋晥', pass: alphaOk, reason: Number.isFinite(alphaScore) ? `Alpha191 volume5=${alphaScore.toFixed(4)}` : '缂哄皯 Alpha191 volume5 鍒嗘暟' },
-      { label: '涓荤瓥鐣ユ牎楠岋細runup_from_60d_low <= 100%', pass: runupOk, reason: Number.isFinite(runup) ? `60鏃ヤ綆鐐逛互鏉ユ定骞?${runup.toFixed(2)}%` : '鍊欓€夋湭鎻愪緵娑ㄥ箙瀛楁锛屾寜涓诲€欓€夌粨鏋滄斁琛? },
-      { label: '澶х洏闂搁棬锛氫笂璇佹寚鏁版敹鐩樹环 >= MA20', pass: marketGatePass, reason: gate.message || '涓婅瘉鎸囨暟寮€浠撶姸鎬佷笉鍙敤锛屾殏涓嶅厑璁告柊澧炴寔浠? },
-      { label: '绾緥1锛氭寔浠撴暟閲忎笂闄愶紙鏈€澶?鍙級', pass: manualHoldings.value.length < 3 || !!existing, reason: `褰撳墠鎸佷粨 ${manualHoldings.value.length}/3` },
-      { label: '绾緥2锛氬悓涓€鑲＄エ褰撳懆鏈€澶氫拱鍏?娆?, pass: sameWeekCount < 2, reason: `鏈懆宸蹭拱鍏?${sameWeekCount} 娆 },
-      { label: '绾緥3锛氫簭鎹熺姸鎬佷笉鍏佽琛ヤ粨', pass: !(Number.isFinite(existingPnl) && existingPnl < 0), reason: Number.isFinite(existingPnl) && existingPnl < 0 ? `褰撳墠鐩堜簭 ${existingPnl.toFixed(2)}%` : '褰撳墠鏃犱簭鎹熻ˉ浠撻闄? }
+      { label: '主策略校验：Alpha191 volume5 主候选命中', pass: !!gen2MainHit, reason: gen2MainHit ? ('Alpha191排名 ' + (Number.isFinite(alphaRank) ? String(alphaRank) : '--') + '；' + String(gen2MainHit.reason_text || '')) : '当前标的不在 Alpha191 volume5 主执行候选池' },
+      { label: '主策略校验：候选未被熔断/暂停', pass: statusOk, reason: gen2MainHit ? String(gen2MainHit.status_label || gen2MainHit.shadow_status || '候选状态可用') : '候选不存在' },
+      { label: '主策略校验：Alpha191 volume5 分数有效', pass: alphaOk, reason: Number.isFinite(alphaScore) ? ('Alpha191 volume5=' + alphaScore.toFixed(4)) : '缺少 Alpha191 volume5 分数' },
+      { label: '主策略校验：runup_from_60d_low <= 100%', pass: runupOk, reason: Number.isFinite(runup) ? ('60日低点以来涨幅 ' + runup.toFixed(2) + '%') : '候选未提供涨幅字段，按主候选结果放行' },
+      { label: '大盘门槛：上证指数收盘价 >= MA20', pass: marketGatePass, reason: gate.message || '上证指数开仓状态不可用，暂不允许新增持仓' },
+      { label: '纪律1：持仓数量上限（最多3只）', pass: manualHoldings.value.length < 3 || !!existing, reason: '当前持仓 ' + String(manualHoldings.value.length) + '/3' },
+      { label: '纪律2：同一股票当周最多买入2次', pass: sameWeekCount < 2, reason: '本周已买入 ' + String(sameWeekCount) + ' 次' },
+      { label: '纪律3：亏损状态不允许补仓', pass: !(Number.isFinite(existingPnl) && existingPnl < 0), reason: Number.isFinite(existingPnl) && existingPnl < 0 ? ('当前盈亏 ' + existingPnl.toFixed(2) + '%') : '当前无亏损补仓风险' }
     ]
   }
   return [
-    { label: '澶х洏闂搁棬锛氫笂璇佹寚鏁版敹鐩樹环 >= MA20', pass: marketGatePass, reason: gate.message || '涓婅瘉鎸囨暟寮€浠撶姸鎬佷笉鍙敤锛屾殏涓嶅厑璁告柊澧炴寔浠? },
-    { label: '寮烘牎楠岋細绛栫暐闃舵鍏佽寮€浠?, pass: canOpen, reason: payload.value?.decision?.message || '闇€澶勪簬鍙紑浠撻樁娈? },
-    { label: '寮烘牎楠岋細浠呭厑璁镐富鍗囨ā寮忓紑鏂颁粨', pass: mode === 'on', reason: `褰撳墠妯″紡 ${mode || '--'}锛涢€€娼?涓€ч樁娈电姝㈡柊澧瀈 },
-    { label: '寮烘牎楠岋細涔板叆瑙傚療姹犲懡涓?, pass: !!buyPoolHit, reason: buyPoolHit ? `涔板叆姹犵 ${buyPoolHit.pool_rank || '--'} 鍚嶏紱${buyPoolHit.reason_text || ''}` : '褰撳墠鏍囩殑涓嶅湪浠婃棩涔板叆瑙傚療姹? },
-    { label: '寮烘牎楠岋細鍔ㄩ噺宸茬粡鍑虹幇', pass: !!buyPoolHit?.momentum_pass, reason: buyPoolHit ? `5鏃ュ姩閲?${formatPct(buyPoolHit.mom5_pct)}锛?0鏃ュ姩閲?${formatPct(buyPoolHit.mom10_pct)}` : '涔板叆姹犳暟鎹笉瓒? },
-    { label: '寮烘牎楠岋細V4鍏ュ満闃堝€肩‘璁?, pass: !!buyPoolHit?.adjustment_pass, reason: buyPoolHit ? `${buyPoolHit.setup_label || '瑙傚療'}锛?{buyPoolHit.reason_text || ''}` : '涔板叆姹犳暟鎹笉瓒? },
-    { label: '寮烘牎楠岋細鍊欓€夋睜鍛戒腑锛堜富鍊欓€夋垨V4鍓?0锛?, pass: inPool, reason: inPool ? '褰撳墠鏍囩殑鍛戒腑鍊欓€夋睜' : '褰撳墠鏍囩殑涓嶅湪鍊欓€夋睜' },
-    { label: '寮烘牎楠岋細5鏃ラ鏈熻揪鏍?, pass: backtest5Pass, reason: backtestOk && backtestCount > 0 ? `5鏃ユ垚鍔熺巼 ${Number.isFinite(h5Win) ? h5Win.toFixed(2) : '--'}%锛?鏃ュ潎娑?${Number.isFinite(h5Avg) ? h5Avg.toFixed(2) : '--'}%锛堥槇鍊?${STRONG_CHECK_MIN_WIN_RATE_5D}% / ${STRONG_CHECK_MIN_AVG_RETURN_5D}%锛塦 : '鍘嗗彶鏍锋湰涓嶈冻鎴栧洖娴嬪け璐? },
-    { label: '寮烘牎楠岋細10鏃ラ鏈熻揪鏍?, pass: backtest10Pass, reason: backtestOk && backtestCount > 0 ? `10鏃ユ垚鍔熺巼 ${Number.isFinite(h10Win) ? h10Win.toFixed(2) : '--'}%锛?0鏃ュ潎娑?${Number.isFinite(h10Avg) ? h10Avg.toFixed(2) : '--'}%锛堥槇鍊?${STRONG_CHECK_MIN_WIN_RATE_10D}% / ${STRONG_CHECK_MIN_AVG_RETURN_10D}%锛塦 : '鍘嗗彶鏍锋湰涓嶈冻鎴栧洖娴嬪け璐? },
-    { label: '绾緥1锛氭寔浠撴暟閲忎笂闄愶紙鏈€澶?鍙級', pass: manualHoldings.value.length < 3 || !!existing, reason: `褰撳墠鎸佷粨 ${manualHoldings.value.length}/3` },
-    { label: '绾緥2锛氬悓涓€鑲＄エ褰撳懆鏈€澶氫拱鍏?娆?, pass: sameWeekCount < 2, reason: `鏈懆宸蹭拱鍏?${sameWeekCount} 娆 },
-    { label: '绾緥3锛氫簭鎹熺姸鎬佷笉鍏佽琛ヤ粨', pass: !(Number.isFinite(existingPnl) && existingPnl < 0), reason: Number.isFinite(existingPnl) && existingPnl < 0 ? `褰撳墠鐩堜簭 ${existingPnl.toFixed(2)}%` : '褰撳墠鏃犱簭鎹熻ˉ浠撻闄? }
+    { label: '大盘门槛：上证指数收盘价 >= MA20', pass: marketGatePass, reason: gate.message || '上证指数开仓状态不可用，暂不允许新增持仓' },
+    { label: '强校验：策略阶段允许开仓', pass: canOpen, reason: payload.value?.decision?.message || '需处于可开仓阶段' },
+    { label: '强校验：仅允许主升模式开新仓', pass: mode === 'on', reason: '当前模式 ' + String(mode || '--') + '；退潮/中性阶段禁止新增' },
+    { label: '强校验：买入观察池命中', pass: !!buyPoolHit, reason: buyPoolHit ? ('买入池第 ' + String(buyPoolHit.pool_rank || '--') + ' 名；' + String(buyPoolHit.reason_text || '')) : '当前标的不在今日买入观察池' },
+    { label: '强校验：动量已经出现', pass: !!buyPoolHit?.momentum_pass, reason: buyPoolHit ? ('5日动量 ' + formatPct(buyPoolHit.mom5_pct) + '；10日动量 ' + formatPct(buyPoolHit.mom10_pct)) : '买入池数据不足' },
+    { label: '强校验：V4入场阈值确认', pass: !!buyPoolHit?.adjustment_pass, reason: buyPoolHit ? (String(buyPoolHit.setup_label || '观察') + '；' + String(buyPoolHit.reason_text || '')) : '买入池数据不足' },
+    { label: '强校验：候选池命中（主候选或V4前30）', pass: inPool, reason: inPool ? '当前标的命中候选池' : '当前标的不在候选池' },
+    { label: '强校验：5日预期达标', pass: backtest5Pass, reason: backtestOk && backtestCount > 0 ? ('5日成功率 ' + (Number.isFinite(h5Win) ? h5Win.toFixed(2) : '--') + '%；日均收益 ' + (Number.isFinite(h5Avg) ? h5Avg.toFixed(2) : '--') + '%（阈值 ' + String(STRONG_CHECK_MIN_WIN_RATE_5D) + '% / ' + String(STRONG_CHECK_MIN_AVG_RETURN_5D) + '%）') : '历史样本不足或回测失败' },
+    { label: '强校验：10日预期达标', pass: backtest10Pass, reason: backtestOk && backtestCount > 0 ? ('10日成功率 ' + (Number.isFinite(h10Win) ? h10Win.toFixed(2) : '--') + '%；10日均收益 ' + (Number.isFinite(h10Avg) ? h10Avg.toFixed(2) : '--') + '%（阈值 ' + String(STRONG_CHECK_MIN_WIN_RATE_10D) + '% / ' + String(STRONG_CHECK_MIN_AVG_RETURN_10D) + '%）') : '历史样本不足或回测失败' },
+    { label: '纪律1：持仓数量上限（最多3只）', pass: manualHoldings.value.length < 3 || !!existing, reason: '当前持仓 ' + String(manualHoldings.value.length) + '/3' },
+    { label: '纪律2：同一股票当周最多买入2次', pass: sameWeekCount < 2, reason: '本周已买入 ' + String(sameWeekCount) + ' 次' },
+    { label: '纪律3：亏损状态不允许补仓', pass: !(Number.isFinite(existingPnl) && existingPnl < 0), reason: Number.isFinite(existingPnl) && existingPnl < 0 ? ('当前盈亏 ' + existingPnl.toFixed(2) + '%') : '当前无亏损补仓风险' }
   ]
 }
 
@@ -3295,7 +3636,7 @@ const openSellDialog = (row, index) => {
     shares: maxShares > 0 ? maxShares : 1,
     price: Number(row?.current_price || row?.cost_price || 0) || null,
     time: nowMinuteText(),
-    reason: '绛栫暐鍗栧嚭'
+    reason: '策略卖出'
   }
   sellDialogVisible.value = true
 }
@@ -3313,13 +3654,13 @@ const sellAllPosition = () => {
 const confirmSellHolding = async () => {
   const idx = Number(sellForm.value.index)
   if (idx < 0 || idx >= manualHoldings.value.length) {
-    ElMessage.warning('鎸佷粨绱㈠紩鏃犳晥')
+    ElMessage.warning('持仓索引无效')
     return
   }
   const shares = Math.max(0, Math.trunc(Number(sellForm.value.shares || 0)))
   const maxShares = Math.max(0, Math.trunc(Number(sellForm.value.max_shares || 0)))
   if (!Number.isFinite(shares) || shares <= 0 || shares > maxShares) {
-    ElMessage.warning('鍗栧嚭鏁伴噺涓嶅悎娉?)
+    ElMessage.warning('卖出股数必须介于 1 到可卖股数之间')
     return
   }
   const row = { ...manualHoldings.value[idx] }
@@ -3339,7 +3680,7 @@ const confirmSellHolding = async () => {
   }
   manualTradeLogs.value.unshift({
     time: String(sellForm.value.time || nowMinuteText()),
-    side: '鍗栧嚭',
+    side: '卖出',
     code: normalizeCode(sellForm.value.code),
     name: String(sellForm.value.name || row.name || ''),
     shares,
@@ -3353,31 +3694,59 @@ const confirmSellHolding = async () => {
   saveManualHoldings()
   await syncWatchlistHoldingByCode(sellForm.value.code)
   sellDialogVisible.value = false
-  ElMessage.success(remain <= 0 ? '宸叉竻浠撳苟鍚屾' : `宸插崠鍑?${shares} 鑲★紝鍓╀綑 ${remain} 鑲)
+  ElMessage.success(remain <= 0 ? '已清仓并同步' : ('已卖出 ' + String(shares) + ' 股，剩余 ' + String(remain) + ' 股'))
 }
 
 const disciplineTagText = (row) => {
-  if (isSingleTradeLossCapBreached(row)) return '瓒呴槇鍊?
-  if (isTrailingTakeProfitTriggered(row)) return '绉诲姩姝㈢泩'
+  if (isSingleTradeLossCapBreached(row)) return '超阈值'
+  if (isTrailingTakeProfitTriggered(row)) return '移动止盈'
   const pnl = Number(row?.pnl_ratio)
-  if (Number.isFinite(pnl) && pnl <= -6) return '搴斿鐞?
-  if (Number.isFinite(pnl) && pnl <= -4) return '绂佸姞浠?
-  return '鏈Е鍙?
+  if (Number.isFinite(pnl) && pnl <= -6) return '重度亏损'
+  if (Number.isFinite(pnl) && pnl <= -4) return '中度亏损'
+  return '轻度波动'
 }
 
 const disciplineTagType = (row) => {
   const text = disciplineTagText(row)
-  if (text === '瓒呴槇鍊?) return 'danger'
-  if (text === '绉诲姩姝㈢泩') return 'warning'
-  if (text === '搴斿鐞?) return 'danger'
-  if (text === '绂佸姞浠?) return 'warning'
+  if (text === '重度亏损') return 'danger'
+  if (text === '超阈值') return 'warning'
+  if (text === '轻度波动') return 'info'
+  if (text === '中度亏损') return 'warning'
   return 'success'
+}
+
+const rsiBoxTSignal = (row) => row?.signal?.rsi_box_t || null
+
+const rsiBoxTTagText = (row) => {
+  const signal = rsiBoxTSignal(row)
+  const action = String(signal?.action || '')
+  if (!signal) return '未检测'
+  if (action === 'sell_half') return '背离减半'
+  if (action === 'sell_part') return '跌80减仓'
+  if (action === 'buyback_t') return '回20买回'
+  if (action === 'wait_buyback') return '超卖等待'
+  if (action === 'hold_trend_no_t') return '突破停T'
+  if (action === 'risk_control_no_t') return '跌破停T'
+  if (signal?.enabled) return '箱内等待'
+  return '不做T'
+}
+
+const rsiBoxTTagType = (row) => {
+  const signal = rsiBoxTSignal(row)
+  const action = String(signal?.action || '')
+  if (action === 'sell_half' || action === 'sell_part') return 'warning'
+  if (action === 'buyback_t') return 'success'
+  if (action === 'hold_trend_no_t') return 'primary'
+  if (action === 'risk_control_no_t') return 'danger'
+  if (action === 'wait_buyback') return 'info'
+  if (signal?.enabled) return 'success'
+  return 'info'
 }
 
 const formatPct = (value) => {
   if (value === null || value === undefined || value === '') return '--'
   const n = Number(value)
-  return Number.isFinite(n) ? `${n.toFixed(2)}%` : '--'
+  return Number.isFinite(n) ? (n.toFixed(2) + '%') : '--'
 }
 
 const formatScore = (value) => {
@@ -3387,7 +3756,7 @@ const formatScore = (value) => {
 
 const formatRatio = (value) => {
   const n = Number(value)
-  return Number.isFinite(n) ? `${n.toFixed(2)}鍊峘 : '--'
+  return Number.isFinite(n) ? (n.toFixed(2) + '倍') : '--'
 }
 
 const formatMoney = (value) => {
@@ -3403,7 +3772,7 @@ const formatPrice = (value) => {
 const formatSignedPct = (value) => {
   const n = Number(value)
   if (!Number.isFinite(n)) return '--'
-  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
+  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%'
 }
 
 const aSharePnlStyle = (value, emphasize = false) => {
@@ -3418,9 +3787,9 @@ const aSharePnlStyle = (value, emphasize = false) => {
 }
 
 const buyPoolStatusText = (row) => {
-  if (row?.can_buy) return '鍙拱鍏?
-  if (row?.candidate_status === 'primary') return '寰呴椄闂?
-  return '鐟欏倸鐧?
+  if (row?.can_buy) return '可买'
+  if (row?.candidate_status === 'primary') return '主池'
+  return '观察'
 }
 
 const gen2ShadowTagType = (row) => {
@@ -3432,27 +3801,27 @@ const gen2ShadowTagType = (row) => {
 
 const gen2ShadowCanAddHolding = (row) => {
   if (!row || row.is_suspended) return false
-  return row.can_buy === true || row.buyable === true || row.stage_label === '鍙拱鍏ヨ瀵?
+  return row.can_buy === true || row.buyable === true || row.stage_label === '可买'
 }
 
 const gen2ShadowStatusText = (row) => {
   if (row?.status_label) return row.status_label
-  if (row?.shadow_status === 'suspended_by_two_stop_cd3' || row?.shadow_status === 'suspended_by_stop_cd5') return '鐔旀柇鏆傚仠'
-  if (row?.shadow_status === 'executed') return '宸叉墽琛屽奖瀛?
-  if (row?.shadow_status === 'observable') return '鍙瀵?
-  return '鏈煡'
+  if (row?.shadow_status === 'suspended_by_two_stop_cd3' || row?.shadow_status === 'suspended_by_stop_cd5') return '风控暂停'
+  if (row?.shadow_status === 'executed') return '已执行'
+  if (row?.shadow_status === 'observable') return '观察中'
+  return '未知'
 }
 
 const gen2VerificationTagType = (row) => row?.verification_type || 'info'
 
-const gen2VerificationText = (row) => row?.verification_label || '鏈爣璁?
+const gen2VerificationText = (row) => row?.verification_label || '未标记'
 
 const gen2VerificationNoteText = (row) => {
   const parts = []
   const position = Number(row?.verification_position_pct)
   const fill = Number(row?.verification_fill_price)
-  if (Number.isFinite(position) && position > 0) parts.push(`${position.toFixed(0)}%浠揱)
-  if (Number.isFinite(fill) && fill > 0) parts.push(`鎴愪氦${fill.toFixed(3)}`)
+  if (Number.isFinite(position) && position > 0) parts.push(position.toFixed(0) + '%仓位')
+  if (Number.isFinite(fill) && fill > 0) parts.push('成交 ' + fill.toFixed(3))
   if (row?.verification_note) parts.push(row.verification_note)
   return parts.join(' / ') || '--'
 }
@@ -3487,12 +3856,12 @@ const saveGen2Verification = async () => {
     }
     const saved = await saveGen2ShadowVerification(payload)
     if (!saved?.ok) {
-      ElMessage.warning(saved?.error || 'G2楠岃瘉璁板綍淇濆瓨澶辫触')
+      ElMessage.warning(saved?.error || 'G2 验证记录保存失败')
       return
     }
     row.verification_key = saved.verification_key || row.verification_key
     row.verification_status = saved.status || ''
-    row.verification_label = saved.label || '鏈爣璁?
+    row.verification_label = saved.label || '未标记'
     row.verification_type = saved.type || 'info'
     row.verification_note = saved.note || ''
     row.verification_position_pct = saved.position_pct ?? null
@@ -3500,9 +3869,9 @@ const saveGen2Verification = async () => {
     row.verification_updated_at = saved.updated_at || ''
     gen2VerificationDialogVisible.value = false
     await fetchGen2RiskCoolShadow(selectedDate.value)
-    ElMessage.success('G2楠岃瘉璁板綍宸蹭繚瀛?)
+    ElMessage.success('G2 验证记录已保存')
   } catch (err) {
-    ElMessage.warning(err?.message || 'G2楠岃瘉璁板綍淇濆瓨澶辫触')
+    ElMessage.warning(err?.message || 'G2 验证记录保存失败')
   } finally {
     gen2VerificationSaving.value = false
   }
@@ -3511,12 +3880,12 @@ const saveGen2Verification = async () => {
 const nowMinuteText = () => {
   const d = new Date()
   const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return String(d.getFullYear()) + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
 }
 
 const buildTradeMarkerKey = (row) => {
   const normalizedCode = normalizeCode(row?.code)
-  return `${STOCK_DETAIL_TRADE_MARKS_PREFIX}${normalizedCode || 'unknown'}_${Date.now()}`
+  return STOCK_DETAIL_TRADE_MARKS_PREFIX + (normalizedCode || 'unknown') + '_' + String(Date.now())
 }
 
 const saveTradeMarkersForDetail = (row) => {
@@ -3540,7 +3909,7 @@ const saveTradeMarkersForDetail = (row) => {
 const openStockDetail = (row) => {
   const code = toExchangeCode(row?.code)
   if (!code) {
-    ElMessage.warning('鑲＄エ浠ｇ爜鏃犳晥锛屾棤娉曟墦寮€璇︽儏')
+    ElMessage.warning('股票代码无效，无法打开详情')
     return
   }
   const tradeMarksKey = saveTradeMarkersForDetail(row)
@@ -3563,7 +3932,7 @@ const fetchMarketGate = async (tradeDate) => {
     marketGate.value = {
       available: false,
       can_open: false,
-      message: '澶х洏寮€浠撻椄闂ㄨ鍙栧け璐ワ紝鏆備笉鍏佽鏂板鎸佷粨銆?
+      message: '行情服务异常，暂不建议下单'
     }
   } finally {
     marketGateLoading.value = false
@@ -3594,8 +3963,8 @@ const fetchGen2RiskCoolShadow = async (tradeDate) => {
       available: previousRows.length > 0,
       rows: previousRows,
       message: previousRows.length > 0
-        ? 'G2褰卞瓙瑙傚療鏈鍒锋柊澶辫触锛屽凡淇濈暀涓婁竴娆℃垚鍔熺粨鏋溿€?
-        : 'G2褰卞瓙瑙傚療璇诲彇澶辫触锛岃绋嶅悗閲嶈瘯銆?
+        ? 'G2主图买点池刷新失败，先用旧缓存展示'
+        : 'G2主图买点池读取失败，请稍后再试'
     }
   } finally {
     gen2ShadowLoading.value = false
@@ -3614,12 +3983,162 @@ const fetchWorkflowStatus = async (tradeDate) => {
     workflowStatus.value = {
       available: false,
       ok: false,
-      message: err?.message || '绛栫暐宸ヤ綔娴佺姸鎬佽鍙栧け璐?,
+      message: err?.message || '策略工作流抓取失败，请稍后重试',
       pipeline_stages: [],
       blockers: []
     }
   } finally {
     workflowLoading.value = false
+  }
+}
+
+const fetchDailyTradeTicket = async (tradeDate) => {
+  dailyTradeTicketLoading.value = true
+  try {
+    const params = { limit: 30, formal_limit: 3, persist: true }
+    if (typeof tradeDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) {
+      params.signal_date = tradeDate
+    }
+    dailyTradeTicket.value = await getGen2DailyTradeTicket(params)
+  } catch (err) {
+    dailyTradeTicket.value = {
+      available: false,
+      can_open: false,
+      formal_candidates: [],
+      forbidden_actions: [],
+      message: err?.message || 'G2 V4 今日交易单生成失败'
+    }
+  } finally {
+    dailyTradeTicketLoading.value = false
+  }
+}
+
+const applyDailyExecutionRecord = (record) => {
+  dailyExecutionForm.value = {
+    execution_status: record?.execution_status || 'pending',
+    executed: !!record?.executed,
+    discipline_ok: record?.discipline_ok !== false,
+    violation_tags: Array.isArray(record?.violation_tags) ? record.violation_tags : [],
+    execution_note: record?.execution_note || '',
+    t1_review: record?.t1_review || '',
+    t3_review: record?.t3_review || '',
+    t5_review: record?.t5_review || ''
+  }
+}
+
+const fetchDailyExecution = async (tradeDate) => {
+  dailyExecutionLoading.value = true
+  try {
+    const params = {}
+    if (typeof tradeDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) {
+      params.signal_date = tradeDate
+    }
+    const resp = await getGen2DailyTradeExecution(params)
+    dailyExecution.value = resp
+    applyDailyExecutionRecord(resp?.record || dailyTradeTicket.value?.execution_record || null)
+  } catch (err) {
+    dailyExecution.value = {
+      available: false,
+      record: dailyTradeTicket.value?.execution_record || null,
+      message: err?.message || '今日执行台账读取失败'
+    }
+    applyDailyExecutionRecord(dailyExecution.value.record)
+  } finally {
+    dailyExecutionLoading.value = false
+  }
+}
+
+const isBuyTradeSide = (value) => {
+  const text = String(value || '').trim().toLowerCase()
+  return text === 'buy' || text.includes('买') || text.includes('涔')
+}
+
+const isSellTradeSide = (value) => {
+  const text = String(value || '').trim().toLowerCase()
+  return text === 'sell' || text.includes('卖') || text.includes('鍗')
+}
+
+const inferDailyExecutionFromLocalTrades = async () => {
+  const signalDate = dailyTradeTicket.value?.signal_date || selectedDate.value
+  if (!signalDate || signalDate === '--') {
+    ElMessage.warning('缺少交易单信号日，无法自动归因')
+    return
+  }
+  const tradeRows = (manualTradeLogs.value || [])
+    .filter((item) => String(item?.time || '').slice(0, 10) === signalDate)
+    .map((item) => ({
+      ...item,
+      code6: normalizeCode(item?.code),
+      side_text: String(item?.side || '')
+    }))
+  const buyRows = tradeRows.filter((item) => isBuyTradeSide(item.side_text))
+  const sellRows = tradeRows.filter((item) => isSellTradeSide(item.side_text))
+  const formalCodes = new Set(
+    (dailyTradeTicketFormalRows.value || [])
+      .map((item) => normalizeCode(item?.code || item?.code6))
+      .filter(Boolean)
+  )
+  const illegalBuys = buyRows.filter((item) => !dailyTradeTicket.value?.can_open || !formalCodes.has(item.code6))
+  const matchedBuys = buyRows.filter((item) => formalCodes.has(item.code6))
+  let status = 'no_trade'
+  let disciplineOk = true
+  if (illegalBuys.length) {
+    status = 'violated'
+    disciplineOk = false
+  } else if (matchedBuys.length && matchedBuys.length === buyRows.length) {
+    status = buyRows.length >= Math.max(1, formalCodes.size || 1) ? 'followed' : 'partial'
+  } else if (buyRows.length || sellRows.length) {
+    status = 'partial'
+  }
+  const parts = [
+    `auto attribution from local trade logs: signal_date=${signalDate}`,
+    `trades=${tradeRows.length}`,
+    `buys=${buyRows.length}`,
+    `sells=${sellRows.length}`,
+    `formal_candidates=${formalCodes.size}`,
+    `illegal_buys=${illegalBuys.map((item) => displayCode(item.code6)).join(',') || '-'}`
+  ]
+  dailyExecutionForm.value = {
+    ...dailyExecutionForm.value,
+    execution_status: status,
+    executed: tradeRows.length > 0,
+    discipline_ok: disciplineOk,
+    violation_tags: illegalBuys.length ? ['outside_daily_trade_ticket'] : [],
+    execution_note: parts.join('; ')
+  }
+  await saveDailyExecution(status)
+}
+
+const saveDailyExecution = async (status) => {
+  const signalDate = dailyTradeTicket.value?.signal_date || selectedDate.value
+  if (!signalDate || signalDate === '--') {
+    ElMessage.warning('缺少交易单信号日，无法保存执行记录')
+    return
+  }
+  dailyExecutionSaving.value = true
+  try {
+    const payload = {
+      signal_date: signalDate,
+      strategy_code: dailyTradeTicket.value?.strategy_code || 'g2_v2_complete',
+      ...dailyExecutionForm.value
+    }
+    if (status) {
+      payload.execution_status = status
+      dailyExecutionForm.value.execution_status = status
+    }
+    const resp = await saveGen2DailyTradeExecution(payload)
+    if (!resp?.ok) {
+      ElMessage.warning(resp?.error || '今日执行记录保存失败')
+      return
+    }
+    dailyExecution.value = { available: true, record: resp.record, ledger_path: resp.ledger_path }
+    applyDailyExecutionRecord(resp.record)
+    await fetchDailyTradeTicket(signalDate)
+    ElMessage.success('今日执行记录已保存')
+  } catch (err) {
+    ElMessage.warning(err?.message || '今日执行记录保存失败')
+  } finally {
+    dailyExecutionSaving.value = false
   }
 }
 
@@ -3646,13 +4165,13 @@ const updateGen2RiskCoolShadow = async (tradeDate) => {
     gen2ShadowUpdateTask.value = task || {}
     const finalTask = task?.task_id ? await waitForGen2ShadowUpdateTask(task.task_id) : task
     if (finalTask?.status === 'completed') {
-      ElMessage.success('G2褰卞瓙浜ゆ槗宸叉洿鏂?)
+      ElMessage.success('G2买点数据刷新已提交')
       await fetchGen2RiskCoolShadow(tradeDate)
     } else {
-      ElMessage.warning(finalTask?.error || 'G2褰卞瓙浜ゆ槗鏇存柊鏈畬鎴?)
+      ElMessage.warning(finalTask?.error || 'G2买点刷新未完成')
     }
   } catch (err) {
-    ElMessage.warning(err?.message || 'G2褰卞瓙浜ゆ槗鏇存柊澶辫触')
+    ElMessage.warning(err?.message || 'G2 影子交易更新失败')
   } finally {
     gen2ShadowUpdateLoading.value = false
   }
@@ -3664,11 +4183,56 @@ const pullGen2ShadowMonitorStatus = async () => {
     if (gen2ShadowMonitorStatus.value?.alpha191_gate) {
       gen2Alpha191Gate.value = isGen2LiveMode.value ? GEN2_MAIN_ALPHA191_GATE : gen2ShadowMonitorStatus.value.alpha191_gate
     }
-  } catch {
-    gen2ShadowMonitorStatus.value = {
+    } catch {
+      gen2ShadowMonitorStatus.value = {
+        enabled: false,
+        last_error: '运行状态读取失败'
+      }
+  }
+}
+
+const fetchGen2StrategyRefreshStatus = async () => {
+  gen2StrategyRefreshLoading.value = true
+  try {
+    gen2StrategyRefreshStatus.value = await getGen2StrategyRefreshStatus()
+  } catch (err) {
+    gen2StrategyRefreshStatus.value = {
       enabled: false,
-      last_error: '鐘舵€佽鍙栧け璐?
+      last_error: err?.message || 'G2 30m策略刷新接口未加载，请重启PyCharm后端服务',
+      last_result: {
+        ok: false,
+        error: err?.message || 'strategy-refresh status unavailable'
+      }
     }
+  } finally {
+    gen2StrategyRefreshLoading.value = false
+  }
+}
+
+const runGen2StrategyRefreshOnce = async () => {
+  gen2StrategyRefreshRunning.value = true
+  try {
+    const result = await runGen2StrategyRefreshNow({ force: true })
+    gen2StrategyRefreshStatus.value = {
+      ...(gen2StrategyRefreshStatus.value || {}),
+      last_result: result,
+      last_run_at: result?.finished_at || result?.started_at || gen2StrategyRefreshStatus.value?.last_run_at,
+      last_success_at: result?.ok ? (result?.finished_at || gen2StrategyRefreshStatus.value?.last_success_at) : gen2StrategyRefreshStatus.value?.last_success_at,
+      last_error: result?.ok === false ? (result?.error || '刷新失败') : null
+    }
+    await fetchGen2StrategyRefreshStatus()
+    if (result?.ok === false) {
+      ElMessage.warning(result?.error || 'G2 30m策略刷新失败')
+    } else if (result?.skipped) {
+      ElMessage.info(result?.reason || 'G2 30m策略刷新已跳过')
+    } else {
+      ElMessage.success('G2 30m策略刷新已执行')
+    }
+  } catch (err) {
+    ElMessage.warning(err?.message || 'G2 30m策略刷新接口未加载，请重启PyCharm后端服务')
+    await fetchGen2StrategyRefreshStatus()
+  } finally {
+    gen2StrategyRefreshRunning.value = false
   }
 }
 
@@ -3692,7 +4256,7 @@ const fetchPtradeBridgeState = async () => {
   } catch (err) {
     ptradeBridgeStatus.value = {
       ok: false,
-      message: err?.message || '妯℃嫙鐩樻ˉ鎺ョ姸鎬佽鍙栧け璐?
+      message: err?.message || '模拟盘桥接状态抓取失败'
     }
     ptradeBridgeAudit.value = null
     ptradeBridgeEvidence.value = null
@@ -3719,13 +4283,13 @@ const runPtradeBridgeProbe = async (submitDryRun = false) => {
     ptradeBridgeProbeResult.value = result || null
     ptradeBridgeStatus.value = result?.final_status || ptradeBridgeStatus.value
     if (result?.ok) {
-      ElMessage.success(submitDryRun ? 'PTrade dry-run 鎺㈤拡閫氳繃' : 'PTrade 鍙鎺㈤拡瀹屾垚')
+      ElMessage.success(submitDryRun ? 'PTrade dry-run 探针通过' : 'PTrade 提交已接受')
     } else {
-      ElMessage.warning(result?.message || 'PTrade 鎺㈤拡鏈€氳繃锛岃鏌ョ湅妗ユ帴鐘舵€?)
+      ElMessage.warning(result?.message || 'PTrade 探针失败，请检查关联配置')
     }
     await fetchPtradeBridgeState()
   } catch (err) {
-    ElMessage.warning(err?.message || 'PTrade 鎺㈤拡鎵ц澶辫触')
+    ElMessage.warning(err?.message || 'PTrade 探针执行失败')
   } finally {
     ptradeBridgeProbeLoading.value = false
   }
@@ -3741,7 +4305,7 @@ const waitForPtradeBridgeAcceptanceTask = async (taskId) => {
     }
     await new Promise((resolve) => setTimeout(resolve, 2000))
   }
-  return latest || { status: 'timeout', error: 'PTrade 楠屾敹闂ㄧ绛夊緟瓒呮椂' }
+  return latest || { status: 'timeout', error: 'PTrade 连通性探测超时' }
 }
 
 const runPtradeBridgeAcceptanceGate = async () => {
@@ -3761,14 +4325,14 @@ const runPtradeBridgeAcceptanceGate = async () => {
     ptradeBridgeStatus.value = result?.readiness_audit?.status || ptradeBridgeStatus.value
     ptradeBridgeAudit.value = result?.readiness_audit || ptradeBridgeAudit.value
     if (result?.ok) {
-      ElMessage.success('PTrade 楠屾敹闂ㄧ閫氳繃锛屽彲杩涘叆灏忛浜哄伐鎵瑰噯 live-submit 娴嬭瘯')
+      ElMessage.success('PTrade 连通性通过，可继续做 live-submit 压测')
     } else {
       const nextAction = Array.isArray(result?.next_actions) ? result.next_actions[0] : ''
-      ElMessage.warning(finalTask?.error || nextAction || 'PTrade 楠屾敹闂ㄧ鏈€氳繃')
+      ElMessage.warning(finalTask?.error || nextAction || 'PTrade 连通性失败')
     }
     await fetchPtradeBridgeState()
   } catch (err) {
-    ElMessage.warning(err?.message || 'PTrade 楠屾敹闂ㄧ鎵ц澶辫触')
+    ElMessage.warning(err?.message || 'PTrade 连通性执行失败')
   } finally {
     ptradeBridgeAcceptanceLoading.value = false
   }
@@ -3784,7 +4348,7 @@ const waitForPtradeBridgeWatchAcceptanceTask = async (taskId) => {
     }
     await new Promise((resolve) => setTimeout(resolve, 2000))
   }
-  return latest || { status: 'timeout', error: 'PTrade 绛夊緟楠屾敹瓒呮椂' }
+  return latest || { status: 'timeout', error: 'PTrade 观察验收等待超时' }
 }
 
 const runPtradeBridgeWatchAcceptance = async () => {
@@ -3805,14 +4369,14 @@ const runPtradeBridgeWatchAcceptance = async () => {
     ptradeBridgeStatus.value = result?.readiness_audit?.status || result?.acceptance?.readiness_audit?.status || ptradeBridgeStatus.value
     ptradeBridgeAudit.value = result?.readiness_audit || result?.acceptance?.readiness_audit || ptradeBridgeAudit.value
     if (result?.ok) {
-      ElMessage.success('PTrade 绛夊緟楠屾敹閫氳繃')
+      ElMessage.success('PTrade 等待验收通过')
     } else {
       const nextAction = Array.isArray(result?.next_actions) ? result.next_actions[0] : ''
-      ElMessage.warning(finalTask?.error || nextAction || 'PTrade 绛夊緟楠屾敹鏈€氳繃')
+      ElMessage.warning(finalTask?.error || nextAction || 'PTrade 等待验收失败')
     }
     await fetchPtradeBridgeState()
   } catch (err) {
-    ElMessage.warning(err?.message || 'PTrade 绛夊緟楠屾敹鎵ц澶辫触')
+    ElMessage.warning(err?.message || 'PTrade 等待验收执行失败')
   } finally {
     ptradeBridgeWatchAcceptanceLoading.value = false
   }
@@ -3886,34 +4450,34 @@ const hasActivePaperOrder = (row) => {
 
 const paperOrderBlockReason = (row) => {
   const code = normalizeCode(row?.code)
-  if (!code) return '缂哄皯鑲＄エ浠ｇ爜'
-  if (isSubmittingPaperOrder(row)) return '鎻愪氦涓?
-  if (hasActivePaperOrder(row)) return '宸叉湁鎸傚崟'
+  if (!code) return '代码无效'
+  if (isSubmittingPaperOrder(row)) return '提交中'
+  if (hasActivePaperOrder(row)) return '已有订单'
   const signalDate = String(row?.entry_date || selectedDate.value || '')
-  if (!signalDate) return '缂哄皯淇″彿鏃ユ湡'
+  if (!signalDate) return '信号日期缺失'
   const rowDate = String(row?.entry_date || row?.signal_date || row?.trade_date || row?.date || selectedDate.value || '')
-  if (!row || normalizeCode(row?.code) !== code || rowDate !== signalDate) return '闇€鍒锋柊蹇収'
+  if (!row || normalizeCode(row?.code) !== code || rowDate !== signalDate) return '请刷新标的'
   const gate = marketGate.value || {}
   const gateDate = String(gate.trade_date || gate.signal_date || gate.snapshot_date || gate.date || '')
-  if (!gateDate || gateDate !== signalDate || typeof gate.available === 'undefined' || typeof gate.can_open === 'undefined') return '闇€鍒锋柊闂ㄧ'
-  if (!gate.available) return '闂ㄧ涓嶅彲鐢?
-  if (!gate.can_open) return '闂ㄧ鏈€氳繃'
+  if (!gateDate || gateDate !== signalDate || typeof gate.available === 'undefined' || typeof gate.can_open === 'undefined') return '请刷新行情门控'
+  if (!gate.available) return '门控不可开'
+  if (!gate.can_open) return '仅测试时段'
   return ''
 }
 
 const canSubmitPaperOrder = (row) => !paperOrderBlockReason(row)
 
-const paperOrderButtonText = (row) => paperOrderBlockReason(row) || '妯℃嫙鐩樹笅鍗?
+const paperOrderButtonText = (row) => paperOrderBlockReason(row) || '模拟盘下单'
 
 const submitPaperOrderForRow = async (row) => {
   const code = normalizeCode(row?.code)
   if (!code) {
-    ElMessage.warning('缂哄皯鑲＄エ浠ｇ爜锛屾棤娉曟彁浜ゆā鎷熺洏璁㈠崟')
+    ElMessage.warning('缺少股票代码，无法提交模拟盘订单')
     return
   }
   const blockReason = paperOrderBlockReason(row)
   if (blockReason) {
-    ElMessage.warning(`${code} ${blockReason}锛岃鍒锋柊 G2 瀹炵洏椤靛悗閲嶈瘯`)
+    ElMessage.warning(code + ' ' + blockReason + '，请刷新 G2 实盘页后重试')
     return
   }
   paperOrderSubmittingCode.value = code
@@ -3927,13 +4491,13 @@ const submitPaperOrderForRow = async (row) => {
       require_approval: true
     })
     if (resp?.ok) {
-      ElMessage.success(resp?.message || `${code} 宸叉彁浜ゅ埌妯℃嫙鐩樻ˉ鎺ョ洰褰昤)
+      ElMessage.success(resp?.message || (code + ' 已提交到模拟盘桥接队列'))
       await fetchPtradeBridgeState()
     } else {
-      ElMessage.warning(resp?.message || `${code} 妯℃嫙鐩樹笅鍗曞け璐)
+      ElMessage.warning(resp?.message || (code + ' 模拟盘下单失败'))
     }
   } catch (err) {
-    ElMessage.warning(err?.message || `${code} 妯℃嫙鐩樹笅鍗曞け璐)
+    ElMessage.warning(err?.message || (code + ' 模拟盘下单失败'))
   } finally {
     paperOrderSubmittingCode.value = ''
   }
@@ -3942,7 +4506,7 @@ const submitPaperOrderForRow = async (row) => {
 const importPtradePositionsToManualHoldings = async () => {
   const rows = ptradeLatestPositionRows.value
   if (!rows.length) {
-    ElMessage.warning('鏆傛棤鍙鍏ョ殑妯℃嫙鐩樻寔浠撳揩鐓?)
+    ElMessage.warning('暂无可导入的模拟盘持仓快照')
     return
   }
   const oldMap = new Map((manualHoldings.value || []).map((item) => [normalizeCode(item?.code), item]))
@@ -3980,7 +4544,7 @@ const importPtradePositionsToManualHoldings = async () => {
     .filter(Boolean)
   saveManualHoldings()
   await refreshManualSignals()
-  ElMessage.success(`宸插鍏ユā鎷熺洏鎸佷粨锛?{manualHoldings.value.length} 鍙猔)
+  ElMessage.success('已导入模拟盘持仓，共 ' + String(manualHoldings.value.length) + ' 只')
 }
 
 const toggleGen2ShadowMonitor = async () => {
@@ -3995,9 +4559,9 @@ const toggleGen2ShadowMonitor = async () => {
       trading_hours_only: true,
       recipient_email: ''
     })
-    ElMessage.success(enabled ? '宸插紑鍚疓2 15鍒嗛挓涔扮偣鎺㈡祴' : '宸插仠姝2涔扮偣鎺㈡祴')
+    ElMessage.success(enabled ? '已开启 G2 15 分钟买点探测' : '已停止 G2 买点探测')
   } catch (err) {
-    ElMessage.warning(err?.message || '璁剧疆G2涔扮偣鎺㈡祴澶辫触')
+    ElMessage.warning(err?.message || '设置 G2 买点探测失败')
   } finally {
     gen2ShadowMonitorLoading.value = false
   }
@@ -4010,10 +4574,10 @@ const runGen2ShadowMonitorOnce = async () => {
     await pullGen2ShadowMonitorStatus()
     await fetchGen2RiskCoolShadow(resp?.signal_date || selectedDate.value)
     await fetchWorkflowStatus(resp?.signal_date || selectedDate.value)
-    if (resp?.email_sent) ElMessage.success('G2涔扮偣鎻愰啋閭欢宸插彂閫?)
-    else ElMessage.info(resp?.message || '鏈娌℃湁鏂板G2涔扮偣锛屾湭鍙戦€侀偖浠?)
+    if (resp?.email_sent) ElMessage.success('G2 买点提醒邮件已发送')
+    else ElMessage.info(resp?.message || '本次没有新增 G2 买点，未发送邮件')
   } catch (err) {
-    ElMessage.warning(err?.message || 'G2涔扮偣鎺㈡祴澶辫触')
+    ElMessage.warning(err?.message || 'G2 买点探测失败')
   } finally {
     gen2ShadowMonitorLoading.value = false
   }
@@ -4033,7 +4597,10 @@ const fetchData = async () => {
       buyPool.value = null
     }
     await fetchGen2RiskCoolShadow(resp?.selected_date || targetDate.value || undefined)
+    await fetchDailyTradeTicket(resp?.selected_date || targetDate.value || undefined)
+    await fetchDailyExecution(dailyTradeTicket.value?.signal_date || resp?.selected_date || targetDate.value || undefined)
     await fetchWorkflowStatus(resp?.selected_date || targetDate.value || undefined)
+    await fetchGen2StrategyRefreshStatus()
     mergeMarketStats()
     saveManualHoldings()
     if (manualHoldings.value.length) {
@@ -4051,7 +4618,8 @@ const refreshSnapshot = async () => {
     const signalDate = candidateDate || undefined
     await updateGen2RiskCoolShadow(signalDate)
     await fetchData()
-    ElMessage.success('宸叉洿鏂板揩鐓?)
+    await fetchGen2StrategyRefreshStatus()
+    ElMessage.success('已更新快照')
   } finally {
     refreshing.value = false
   }
@@ -4138,7 +4706,24 @@ onBeforeUnmount(() => {
 .decision-label { font-size:12px; color:#66708b; }
 .decision-card strong { font-size:22px; line-height:1.2; }
 .decision-card small { color:#66708b; line-height:1.45; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.trade-ticket-panel { border-color:#91caff; background: linear-gradient(135deg, #ffffff 0%, #f4f9ff 100%); }
+.command-workbench { border-width:1px; }
+.ticket-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin: 10px 0 12px; }
+.ticket-metric { border:1px solid #d6e4ff; border-radius:8px; padding:10px 12px; background:rgba(255,255,255,0.78); min-height:68px; color:#24355d; }
+.ticket-metric.ok { border-left:4px solid #52c41a; }
+.ticket-metric.warn { border-left:4px solid #faad14; }
+.ticket-metric label { display:block; margin-bottom:6px; color:#66708b; font-size:12px; }
+.ticket-metric strong { display:block; font-size:16px; line-height:1.35; word-break:break-word; }
+.ticket-discipline { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.daily-execution-box { margin-top:14px; border-top:1px solid #d6e4ff; padding-top:12px; }
+.daily-execution-form { margin-top:8px; }
+.daily-execution-form :deep(.el-form-item) { margin-bottom:10px; }
 .execution-panel { border-color:#d6e4ff; }
+.strategy-refresh-panel { border-color:#b7eb8f; background: linear-gradient(135deg, #ffffff 0%, #f8ffef 100%); }
+.refresh-grid { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px; }
+.refresh-item { border:1px solid #e4f4cf; border-radius:8px; padding:10px 12px; background:rgba(255,255,255,0.72); color:#24355d; min-height:66px; }
+.refresh-item label { display:block; margin-bottom:6px; color:#66708b; font-size:12px; }
+.refresh-item strong { display:block; font-size:14px; line-height:1.35; word-break:break-word; }
 .workflow-panel { border-color:#d9f7be; }
 .workflow-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-top:8px; }
 .workflow-step { border:1px solid #e6ebff; border-left:4px solid #8c9ab8; border-radius:8px; padding:10px; background:#fbfcff; min-height:72px; }
@@ -4173,9 +4758,13 @@ onBeforeUnmount(() => {
 .history-pagination { margin-top: 12px; display: flex; justify-content: flex-end; }
 @media (max-width: 1200px) {
   .decision-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .refresh-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ticket-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
   .head-card { align-items:flex-start; flex-direction:column; }
   .decision-strip { grid-template-columns: 1fr; }
+  .refresh-grid { grid-template-columns: 1fr; }
+  .ticket-grid { grid-template-columns: 1fr; }
 }
 </style>

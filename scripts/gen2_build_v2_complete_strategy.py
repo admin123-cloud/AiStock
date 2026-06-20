@@ -17,15 +17,16 @@ if str(ROOT) not in sys.path:
 
 from scripts.gen2_backtest_open_v1_portfolio import _json_default, _pct  # noqa: E402
 from scripts.gen2_backtest_risk_cool_dynamic_circuit import _run_dynamic  # noqa: E402
+from utils.paths import report_path  # noqa: E402
 
-
-DEFAULT_VOLUME5 = ROOT / "reports" / "g2_volume5_sector_layer_probe" / "volume5_sector_enriched.parquet"
-DEFAULT_BREAKOUT = ROOT / "reports" / "g2_sector_integration_probe" / "sources" / "base.parquet"
-DEFAULT_LATEST_DATA = ROOT / "reports" / "gen2_event_study_full" / "v4_event_dataset.parquet"
-DEFAULT_OUTPUT_DIR = ROOT / "reports" / "gen2_v2_complete_strategy"
-DEFAULT_OFFICIAL_RUN_DIR = (
-    ROOT / "reports" / "gen2_alpha191_light_constraint_matrix" / "backtests" / "volume5_keep80_runup_le100"
-)
+DEFAULT_VOLUME5 = report_path("g2_volume5_sector_layer_probe", "volume5_sector_enriched.parquet")
+DEFAULT_BREAKOUT = report_path("g2_sector_integration_probe", "sources", "base.parquet")
+DEFAULT_LATEST_DATA = report_path("gen2_event_study_full", "v4_event_dataset.parquet")
+DEFAULT_OUTPUT_DIR = report_path("gen2_v2_complete_strategy")
+DEFAULT_OFFICIAL_RUN_DIR = report_path("gen2_v2_complete_strategy", "runs", "official", "full")
+DEFAULT_LEGACY_330_RUN_DIR = report_path("gen2_v2_complete_strategy", "runs", "official_legacy_330", "full")
+DEFAULT_SORT_PROBE_DIR = report_path("gen2_v2_complete_strategy", "runs", "sort_probe")
+SORT_PROBE_MODES = ("rank", "score", "trigger_time", "g2_v2")
 
 WINDOW_STARTS = {
     "full": "2024-07-09",
@@ -133,11 +134,14 @@ def _prepare_breakout(path: Path, volume5_keys: set[tuple[str, str]]) -> pd.Data
     return df
 
 
-def build_source(volume5_path: Path, breakout_path: Path) -> pd.DataFrame:
+def build_source(volume5_path: Path, breakout_path: Path, include_breakout: bool = True) -> pd.DataFrame:
     volume5 = _prepare_volume5(volume5_path)
-    volume5_keys = set(zip(volume5["entry_date"].astype(str), volume5["code"].astype(str)))
-    breakout = _prepare_breakout(breakout_path, volume5_keys)
-    merged = pd.concat([volume5, breakout], ignore_index=True, sort=False)
+    if include_breakout:
+        volume5_keys = set(zip(volume5["entry_date"].astype(str), volume5["code"].astype(str)))
+        breakout = _prepare_breakout(breakout_path, volume5_keys)
+        merged = pd.concat([volume5, breakout], ignore_index=True, sort=False)
+    else:
+        merged = volume5.copy()
     merged = merged.dropna(subset=["entry_date", "code", "entry_price", "confirm_datetime"]).copy()
     merged["code"] = merged["code"].astype(str)
     merged["v4_rank"] = pd.to_numeric(merged["v4_rank"], errors="coerce").fillna(999).astype(int)
@@ -192,11 +196,27 @@ def _write_report(output_dir: Path, source: pd.DataFrame, rows: list[dict[str, A
 
 
 def _copy_run(src: Path, dst: Path) -> None:
+    if src.resolve() == dst.resolve():
+        return
     dst.mkdir(parents=True, exist_ok=True)
     for name in ["summary.json", "equity_curve.csv", "trades.csv", "signals.csv", "segment_summary.csv", "decision_ledger.csv"]:
         source = src / name
         if source.exists():
             shutil.copy2(source, dst / name)
+
+
+def _build_sort_probe(
+    source_path: Path,
+    sort_probe_root: Path,
+    windows: dict[str, tuple[str, str]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for sort_mode in SORT_PROBE_MODES:
+        for window, (start, end) in windows.items():
+            run_dir = sort_probe_root / sort_mode / window
+            summary = _run_dynamic(source_path, run_dir, "stop_cd3_skip", start, end, sort_mode=sort_mode)
+            rows.append({"sort_mode": sort_mode, "window": window, **summary, **_trade_lot_summary(run_dir)})
+    return rows
 
 
 def _latest_source_date(source: pd.DataFrame) -> str:
@@ -235,7 +255,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     source_dir = output_dir / "sources"
     run_root = output_dir / "runs" / "official"
     source_dir.mkdir(parents=True, exist_ok=True)
-    source = build_source(Path(args.volume5), Path(args.breakout))
+    use_legacy_330 = bool(getattr(args, "legacy_330", False))
+    source_only = bool(getattr(args, "source_only", False))
+    source = build_source(Path(args.volume5), Path(args.breakout), include_breakout=not use_legacy_330)
     latest_data_path = Path(args.latest_data)
     windows = _resolve_windows(source, latest_data_path, str(getattr(args, "end_date", "") or "").strip() or None)
     source_path = source_dir / "g2_v2_complete.parquet"
@@ -243,10 +265,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     source.to_csv(source_path.with_suffix(".csv"), index=False, encoding="utf-8-sig")
 
     rows: list[dict[str, Any]] = []
-    for window, (start, end) in windows.items():
-        run_dir = run_root / window
-        summary = _run_dynamic(source_path, run_dir, "stop_cd3_skip", start, end, sort_mode="g2_v2")
-        rows.append({"window": window, "sort_mode": "g2_v2", **summary, **_trade_lot_summary(run_dir)})
+    if not source_only:
+        for window, (start, end) in windows.items():
+            run_dir = run_root / window
+            summary = _run_dynamic(source_path, run_dir, "stop_cd3_skip", start, end, sort_mode="g2_v2")
+            rows.append({"window": window, "sort_mode": "g2_v2", **summary, **_trade_lot_summary(run_dir)})
+
+    sort_probe_rows: list[dict[str, Any]] = []
+    if bool(getattr(args, "populate_sort_probe", False)) and not source_only:
+        sort_probe_rows = _build_sort_probe(source_path, Path(args.sort_probe_dir), windows)
 
     result = pd.DataFrame(rows)
     result.to_csv(output_dir / "summary.csv", index=False, encoding="utf-8-sig")
@@ -254,7 +281,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         json.dumps(
             {
                 "schema_version": 1,
-                "strategy_code": "g2_alpha191_volume5_keep80_runup",
+                "strategy_code": "g2_alpha191_volume5_keep80_runup_legacy_330" if use_legacy_330 else "g2_alpha191_volume5_keep80_runup",
                 "strategy_name": "G2 Alpha191 volume5 + breakout sector v2",
                 "source": str(source_path),
                 "latest_source_date": _latest_source_date(source),
@@ -265,6 +292,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "sector_strong_threshold": SECTOR_STRONG_THRESHOLD,
                     "volume5_sector_score_bonus": VOLUME5_SECTOR_SCORE_BONUS,
                     "sort_mode": "g2_v2",
+                    "legacy_330_mode": use_legacy_330,
+                    "source_only": source_only,
                 },
             },
             ensure_ascii=False,
@@ -275,8 +304,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     _write_report(output_dir, source, rows)
 
-    if bool(args.replace_official):
-        _copy_run(run_root / "full", Path(args.official_run_dir))
+    official_target = None
+    if bool(args.replace_official) and not source_only:
+        official_target = Path(args.official_legacy_run_dir if use_legacy_330 else args.official_run_dir)
+        _copy_run(run_root / "full", official_target)
 
     payload = {
         "output_dir": str(output_dir),
@@ -284,8 +315,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "latest_source_date": _latest_source_date(source),
         "latest_data_date": _latest_data_date(source, latest_data_path),
         "backtest_end_date": max(end for _, end in windows.values()) if windows else "",
-        "official_run_dir": str(args.official_run_dir) if bool(args.replace_official) else "",
+        "official_run_dir": str(official_target) if official_target else "",
         "rows": rows,
+        "source_only": source_only,
+        "sort_probe_dir": str(args.sort_probe_dir) if bool(getattr(args, "populate_sort_probe", False)) else "",
+        "sort_probe_rows": sort_probe_rows,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
     return payload
@@ -298,8 +332,13 @@ def main() -> None:
     parser.add_argument("--latest-data", default=str(DEFAULT_LATEST_DATA))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--official-run-dir", default=str(DEFAULT_OFFICIAL_RUN_DIR))
+    parser.add_argument("--legacy-330", action="store_true", help="Legacy 330%% mode: only use volume5 family and skip breakout complement.")
+    parser.add_argument("--official-legacy-run-dir", default=str(DEFAULT_LEGACY_330_RUN_DIR))
     parser.add_argument("--end-date", default="", help="Optional backtest end date; blank means latest source entry_date.")
     parser.add_argument("--replace-official", action="store_true")
+    parser.add_argument("--source-only", action="store_true", help="Only refresh official source and freshness summary; skip backtests.")
+    parser.add_argument("--populate-sort-probe", action="store_true")
+    parser.add_argument("--sort-probe-dir", default=str(DEFAULT_SORT_PROBE_DIR))
     run(parser.parse_args())
 
 

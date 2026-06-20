@@ -26,10 +26,11 @@ from scripts.gen3_test_v4_strong_position_scale_v1 import (  # noqa: E402
     simulate_scaled,
     summarize,
 )
+from utils.paths import report_path  # noqa: E402
 
 
-SRC_DIR = ROOT / "reports" / "gen3_v4_strong_position_scale_probe_v1"
-OUT_DIR = ROOT / "reports" / "gen3_v4_strong_second_093_execution_stress_v1"
+SRC_DIR = report_path("gen3_v4_strong_position_scale_probe_v1")
+OUT_DIR = report_path("gen3_v4_strong_second_093_execution_stress_v1")
 VARIANT = "strong_second_score_ge_093"
 
 WINDOWS = {

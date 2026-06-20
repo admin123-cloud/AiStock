@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -16,9 +17,10 @@ if str(ROOT) not in sys.path:
 
 from execution.ptrade_bridge import PTradeFileBridge
 from scripts.ptrade_bridge_readiness_audit import run_audit, write_json
+from utils.paths import runtime_path
 
 
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+DEFAULT_BRIDGE_DIR = runtime_path("ptrade_bridge")
 DEFAULT_OUT_DIR = ROOT / "reports" / "ptrade_bridge_operator_checklist"
 
 
@@ -78,6 +80,30 @@ def _probe_check_ok(report: Dict[str, Any], name: str) -> bool:
     return any(isinstance(item, dict) and item.get("name") == name and item.get("ok") for item in checks)
 
 
+def _refresh_order_path_probe_report_subprocess() -> Dict[str, Any]:
+    report_path = ROOT / "reports" / "ptrade_order_path_probe" / "latest.json"
+    script_path = ROOT / "scripts" / "ptrade_order_path_probe.py"
+    cmd = [sys.executable, str(script_path), "--report", str(report_path)]
+    completed = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "ptrade_order_path_probe subprocess failed: "
+            f"returncode={completed.returncode}; stderr={completed.stderr.strip() or completed.stdout.strip() or '--'}"
+        )
+    data = _read_json(report_path)
+    if not isinstance(data, dict):
+        raise RuntimeError(f"ptrade_order_path_probe report missing or invalid: {report_path}")
+    return data
+
+
 def _blocking_diagnosis(
     *,
     local_submit_ready: bool,
@@ -90,7 +116,7 @@ def _blocking_diagnosis(
         return {
             "stage": "local_bridge_not_ready",
             "reason": "本地桥接目录不可写或配置异常，AiStock 还不能可靠写入 pending。",
-            "next_action": "修复 data/runtime/ptrade_bridge 目录权限、config.json 或本地桥接初始化。",
+            "next_action": "修复 F:\\Stock\\AiStockData\\data\\runtime\\ptrade_bridge 目录权限、config.json 或本地桥接初始化。",
             "external_wait": False,
         }
     if not nonblocking_order_path_ok:
@@ -104,7 +130,7 @@ def _blocking_diagnosis(
         return {
             "stage": "ptrade_heartbeat_missing",
             "reason": "长时间阻塞原因：湘财证券 PTrade 云仿真交易端尚未写出真实策略心跳 status/latest.json，说明 PTrade 内部桥接策略未启动、未运行到轮询，或 BRIDGE_DIR 不一致。",
-            "next_action": "在 PTrade 云仿真交易端启动/重启内部桥接策略，并确认策略里的 BRIDGE_DIR 指向本项目 data/runtime/ptrade_bridge。",
+            "next_action": "在 PTrade 云仿真交易端启动/重启内部桥接策略，并确认策略里的 BRIDGE_DIR 指向 F:\\Stock\\AiStockData\\data\\runtime\\ptrade_bridge。",
             "external_wait": True,
         }
     if not bool(readiness.get("dry_run_probe_ack_recent")):
@@ -152,10 +178,8 @@ def build_evidence(
     status = bridge.status()
     audit = run_audit(bridge_dir=bridge.paths.root, require_empty_queue_for_live=True)
     if refresh_order_path_probe:
-        from scripts.ptrade_order_path_probe import DEFAULT_PROBE_ROOT, DEFAULT_REPORT, run_probe
-
-        order_path_probe = run_probe(bridge_dir=DEFAULT_PROBE_ROOT)
-        write_json(DEFAULT_REPORT, order_path_probe)
+        order_path_probe = _refresh_order_path_probe_report_subprocess()
+        write_json(_latest_report("ptrade_order_path_probe"), order_path_probe)
     reports = {
         "preflight": _report_status(_latest_report("ptrade_bridge_preflight")),
         "watch_acceptance": _report_status(_latest_report("ptrade_bridge_watch_acceptance")),
@@ -190,7 +214,7 @@ def build_evidence(
             "本地下单写入路径可用",
             bool(readiness.get("local_submit_ready")),
             "execution.ptrade_bridge.PTradeFileBridge.status().readiness.local_submit_ready",
-            "修复 data/runtime/ptrade_bridge 目录权限或配置后再验收。",
+            "修复 F:\\Stock\\AiStockData\\data\\runtime\\ptrade_bridge 目录权限或配置后再验收。",
         ),
         _check(
             "正常下单路径非阻塞已验证",
@@ -201,7 +225,7 @@ def build_evidence(
         _check(
             "真实 PTrade 策略心跳可见",
             bool(readiness.get("ptrade_heartbeat_recent")),
-            str(heartbeat_file or "缺少 data/runtime/ptrade_bridge/status/latest.json"),
+            str(heartbeat_file or "缺少 F:\\Stock\\AiStockData\\data\\runtime\\ptrade_bridge\\status\\latest.json"),
             "在湘财证券 PTrade 云仿真交易端启动内部桥接策略，等待 status/latest.json 更新。",
         ),
         _check(
@@ -297,7 +321,7 @@ def render_markdown(result: Dict[str, Any]) -> str:
             "## 现场操作顺序",
             "",
             "1. 只读检查本地状态：`python F:\\Stock\\AiStock\\scripts\\ptrade_bridge_readiness_audit.py`",
-            "2. 在湘财证券 PTrade 云仿真交易端启动内部桥接策略，确认 `data/runtime/ptrade_bridge/status/latest.json` 持续更新。",
+            "2. 在湘财证券 PTrade 云仿真交易端启动内部桥接策略，确认 `F:\\Stock\\AiStockData\\data\\runtime\\ptrade_bridge\\status\\latest.json` 持续更新。",
             "3. 跑等待式 dry-run 验收：`python F:\\Stock\\AiStock\\scripts\\ptrade_bridge_watch_acceptance.py --watch-timeout-seconds 600 --dry-run-timeout-seconds 30`",
             "4. dry-run ack 通过后，现场再把 PTrade 策略 `ENABLE_LIVE_ORDER` 切换为 `True`，等待心跳写出 `enable_live_order=true`。",
             "5. `live_submit_ready=true` 且账户/价格/数量人工确认后，才运行：`python F:\\Stock\\AiStock\\scripts\\ptrade_bridge_live_submit_test.py --approve-live-submit --code 600000 --price 10.5 --quantity 100`",

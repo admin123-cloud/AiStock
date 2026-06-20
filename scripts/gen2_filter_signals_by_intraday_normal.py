@@ -12,15 +12,16 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+from utils.paths import report_path, reports_root  # noqa: E402
 
 from api.gen2_strategy import GEN2_OPEN_RULE_V1  # noqa: E402
 from scripts.gen2_backtest_open_v1_portfolio import _json_default  # noqa: E402
 from scripts.gen2_runtime_dates import add_end_date_argument, resolve_end_date  # noqa: E402
 from utils.market_warehouse import clickhouse_client  # noqa: E402
 
-DEFAULT_INPUT = REPO_ROOT / "reports" / "gen2_30m_fractal_restart_realistic_d1_w2" / "fractal_triggers.parquet"
-DEFAULT_STATE_DAILY = REPO_ROOT / "reports" / "gen2_open_state_research_full" / "g2_open_state_daily.csv"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "reports" / "gen2_intraday_normal_signal_filters"
+DEFAULT_INPUT = report_path("gen2_30m_fractal_restart_realistic_d1_w2", "fractal_triggers.parquet")
+DEFAULT_STATE_DAILY = report_path("gen2_open_state_research_full", "g2_open_state_daily.csv")
+DEFAULT_OUTPUT_DIR = report_path("gen2_intraday_normal_signal_filters")
 
 INDEX_CODES = {
     "999999.SH": "shanghai",
@@ -358,7 +359,12 @@ def run(input_path: Path, state_daily: Path, output_dir: Path, start_date: str, 
             output_path = output_dir / f"signals_intraday_normal_{period}m_{mode}.parquet"
             _write_output(filtered, output_path)
             key = f"{period}m_{mode}"
-            outputs[key] = str(output_path.relative_to(output_dir))
+            reports_root_path = reports_root()
+            outputs[key] = (
+                str(output_path.relative_to(reports_root_path))
+                if output_path.is_relative_to(reports_root_path)
+                else str(output_path)
+            )
             rows.append(
                 {
                     "key": key,

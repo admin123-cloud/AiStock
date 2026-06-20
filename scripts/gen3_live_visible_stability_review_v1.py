@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -8,12 +9,17 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "reports" / "gen3_live_visible_stability_review_v1"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-PACKAGE_DIR = ROOT / "reports" / "gen3_guarded_candidate_package_v1"
-STRESS_DIR = ROOT / "reports" / "gen3_guarded_execution_stress_v1"
-LIVE_DIR = ROOT / "reports" / "gen3_guarded_live_safe_payload_v1"
-INTEGRITY_DIR = ROOT / "reports" / "gen3_live_visible_combo_integrity_audit_v1"
+from utils.paths import report_path
+
+OUT_DIR = report_path("gen3_live_visible_stability_review_v1")
+
+PACKAGE_DIR = report_path("gen3_guarded_candidate_package_v1")
+STRESS_DIR = report_path("gen3_guarded_execution_stress_v1")
+LIVE_DIR = report_path("gen3_guarded_live_safe_payload_v1")
+INTEGRITY_DIR = report_path("gen3_live_visible_combo_integrity_audit_v1")
 
 
 def _pct(v: float | int | None) -> str:

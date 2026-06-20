@@ -23,7 +23,7 @@
             :class="{ active: isRouteActive(item.path) }"
             @click="handleNavigate(item.path)"
           >
-            <span class="item-icon">{{ item.icon || "•" }}</span>
+            <span v-if="item.icon" class="item-icon">{{ item.icon }}</span>
             <span class="item-title">{{ item.label }}</span>
           </router-link>
         </div>
@@ -115,7 +115,14 @@ const toggleGroup = (groupKey) => {
 
 const isRouteActive = (path) => {
   if (path === '/') return route.path === '/'
-  return route.path === path || route.path.startsWith(`${path}/`)
+  if (route.path === path) return true
+  if (!route.path.startsWith(`${path}/`)) return false
+  const visibleItems = menuGroups.value.flatMap((group) => group.items || [])
+  return !visibleItems.some((item) => {
+    if (!item.path || item.path === path) return false
+    if (!item.path.startsWith(`${path}/`)) return false
+    return route.path === item.path || route.path.startsWith(`${item.path}/`)
+  })
 }
 
 const ensureCurrentGroupExpanded = () => {

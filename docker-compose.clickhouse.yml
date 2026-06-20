@@ -2,13 +2,13 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: aistock-clickhouse
-    restart: unless-stopped
+    restart: "no"
     cpus: "1.5"
-    mem_limit: 12g
-    memswap_limit: 12g
+    mem_limit: 4g
+    memswap_limit: 4g
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
     environment:
       CLICKHOUSE_DB: stock
       CLICKHOUSE_USER: default
@@ -21,4 +21,8 @@ services:
 
 volumes:
   clickhouse_data:
+    external: true
+    name: aistock_clickhouse_data
   clickhouse_log:
+    external: true
+    name: aistock_clickhouse_log

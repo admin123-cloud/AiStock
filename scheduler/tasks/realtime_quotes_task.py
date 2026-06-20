@@ -1,18 +1,17 @@
-﻿"""瀹炴椂琛屾儏浠诲姟銆?""
+"""Realtime quote sync task."""
 
-from utils.logger import get_logger
 from scheduler.trading_calendar import TradingCalendar
+from utils.logger import get_logger
+
 
 logger = get_logger("RealtimeQuotesTask")
 
 
 class RealtimeQuotesTask:
-    """瀹炴椂鑲＄エ琛屾儏鍚屾銆?""
-
+    """Synchronize realtime stock quotes during trading hours."""
 
     async def execute(self):
         if not TradingCalendar.is_trading_time():
-            logger.debug("闈炰氦鏄撴椂闂达紝璺宠繃瀹炴椂琛屾儏鍚屾")
+            logger.debug("Skip realtime quote sync outside trading hours")
             return
-        logger.info("寮€濮嬫墽琛屽疄鏃惰鎯呭悓姝ヤ换鍔?)
-
+        logger.info("Start realtime quote sync task")

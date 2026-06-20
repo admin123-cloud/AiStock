@@ -2,27 +2,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "reports" / "gen3_guarded_live_safe_payload_v1" / "g3_guarded_live_safe_payload.csv"
-SUMMARY_SOURCE = ROOT / "reports" / "gen3_guarded_candidate_package_v1" / "summary.json"
-OUT_DIR = ROOT / "reports" / "gen3_guarded_shadow_only_v1"
-RUNTIME_DIR = ROOT / "data" / "runtime" / "gen3_guarded_shadow"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from utils.paths import report_path, runtime_path
+
+SOURCE = report_path("gen3_guarded_live_safe_payload_v1", "g3_guarded_live_safe_payload.csv")
+SUMMARY_SOURCE = report_path("gen3_guarded_candidate_package_v1", "summary.json")
+OUT_DIR = report_path("gen3_guarded_shadow_only_v1")
+RUNTIME_DIR = runtime_path("gen3_guarded_shadow")
 
 FORBIDDEN_PATHS = [
-    ROOT / "reports" / "gen3_shadow_live_daily_update_v1",
-    ROOT / "reports" / "gen3_live_payload_v1",
-    ROOT / "data" / "runtime" / "v4_live_monitor",
-    ROOT / "reports" / "gen2_v2_complete_strategy",
-    ROOT / "data" / "runtime" / "gen3_panic_shadow",
-    ROOT / "data" / "runtime" / "gen3_range_shadow",
-    ROOT / "data" / "runtime" / "gen3_strong_shadow",
+    report_path("gen3_shadow_live_daily_update_v1"),
+    report_path("gen3_live_payload_v1"),
+    runtime_path("v4_live_monitor"),
+    report_path("gen2_v2_complete_strategy"),
+    runtime_path("gen3_panic_shadow"),
+    runtime_path("gen3_range_shadow"),
+    runtime_path("gen3_strong_shadow"),
 ]
 
 

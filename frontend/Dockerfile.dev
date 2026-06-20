@@ -1,0 +1,16 @@
+FROM node:20-alpine
+
+ENV TZ=Asia/Shanghai
+
+RUN apk add --no-cache tzdata
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

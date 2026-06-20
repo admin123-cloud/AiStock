@@ -16,8 +16,9 @@ if str(ROOT) not in sys.path:
 
 from scripts.gen2_backtest_risk_cool_dynamic_circuit import _run_dynamic  # noqa: E402
 from scripts.gen2_runtime_dates import add_end_date_argument, resolve_end_date  # noqa: E402
+from utils.paths import report_path  # noqa: E402
 
-BASE = ROOT / "reports" / "gen2_breakout_buy_point_research"
+BASE = report_path("gen2_breakout_buy_point_research")
 PROBE = BASE / "breakout_family_intraday_strength_probe"
 OUT = PROBE / "combo_policy_probe"
 START_DATE = "2024-07-09"
@@ -39,6 +40,41 @@ def _read_source(path: Path, label: str) -> pd.DataFrame:
     return df
 
 
+def _resolve_existing_path(candidates: list[Path], label: str) -> Path:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(f"{label} source missing. tried: " + " | ".join(str(item) for item in candidates))
+
+
+def _load_volume5_source() -> pd.DataFrame:
+    path = _resolve_existing_path(
+        [
+            BASE / "sources" / "volume5_dynamic_stop_cd3_mapped.parquet",
+            report_path("gen2_alpha191_light_constraint_matrix", "sources", "volume5_keep80_runup_le100.parquet"),
+            report_path("gen2_v2_complete_strategy", "sources", "g2_v2_complete.parquet"),
+        ],
+        "volume5",
+    )
+    return _read_source(path, "volume5")
+
+
+def _load_bigbull_source() -> pd.DataFrame:
+    direct_path = BASE / "breakout_family_dynamic_probe" / "sources" / "pool_rank200_box__big_bull_rebreak_2_5d_vol12_prior60_mapped.parquet"
+    if direct_path.exists():
+        return _read_source(direct_path, "big_bull")
+    signals_path = _resolve_existing_path([BASE / "signals.parquet"], "big_bull fallback signals")
+    signals = pd.read_parquet(signals_path).copy()
+    pattern_col = signals.get("pattern")
+    if pattern_col is not None:
+        mask = pattern_col.astype(str).eq("pool_rank200_box__big_bull_rebreak_2_5d_vol12")
+    else:
+        mask = signals.get("setup_type", pd.Series("", index=signals.index)).astype(str).eq("big_bull_rebreak_2_5d")
+    signals = signals.loc[mask].copy()
+    signals["source_family"] = "big_bull"
+    return signals
+
+
 def _dedupe_source(df: pd.DataFrame) -> pd.DataFrame:
     sort_cols = [c for c in ["entry_date", "confirm_datetime", "source_priority", "v4_rank"] if c in df.columns]
     if "source_priority" not in df.columns:
@@ -49,6 +85,17 @@ def _dedupe_source(df: pd.DataFrame) -> pd.DataFrame:
     if len(keys) == 2:
         df = df.drop_duplicates(keys, keep="first")
     return df.reset_index(drop=True)
+
+
+def _normalize_for_concat(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.loc[:, ~df.columns.duplicated()].copy()
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            if col in {"trade_date", "entry_date"}:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+            else:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+    return df
 
 
 def _write_source(name: str, df: pd.DataFrame) -> Path:
@@ -129,14 +176,8 @@ def _monthly(run_dir: Path) -> dict[str, Any]:
 
 def run(end_date: str) -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
-    volume5 = _read_source(BASE / "sources" / "volume5_dynamic_stop_cd3_mapped.parquet", "volume5")
-    bigbull = _read_source(
-        BASE
-        / "breakout_family_dynamic_probe"
-        / "sources"
-        / "pool_rank200_box__big_bull_rebreak_2_5d_vol12_prior60_mapped.parquet",
-        "big_bull",
-    )
+    volume5 = _load_volume5_source()
+    bigbull = _load_bigbull_source()
     candidates = pd.read_csv(BASE / "candidates.csv")
     candidates["trade_date"] = pd.to_datetime(candidates["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
     candidates["entry_date"] = pd.to_datetime(candidates["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -171,7 +212,13 @@ def run(end_date: str) -> dict[str, Any]:
 
     rows: list[dict[str, Any]] = []
     for name, mask in configs.items():
-        source_df = _dedupe_source(pd.concat([volume5, bigbull[mask].copy()], ignore_index=True, sort=False))
+        source_df = _dedupe_source(
+            pd.concat(
+                [_normalize_for_concat(volume5), _normalize_for_concat(bigbull[mask].copy())],
+                ignore_index=True,
+                sort=False,
+            )
+        )
         source_path = _write_source(name, source_df)
         for policy in ["stop_cd3_skip", "dd8_half_stop_cd3_skip"]:
             run_dir = OUT / "runs" / name / policy

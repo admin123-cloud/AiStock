@@ -1,10 +1,10 @@
-﻿<template>
+<template>
   <div class="gen2-selection-page">
     <section class="top-band">
       <div>
         <p class="eyebrow">Gen2 Selection Pool</p>
-        <h1>绛栫暐閫夎偂姹</h1>
-        <p class="subtitle">{{ strategyName }} 路 {{ selectedDate || '--' }}</p>
+        <h1>策略股票池</h1>
+        <p class="subtitle">{{ strategyName }} 路径 {{ selectedDate || '--' }}</p>
       </div>
       <div class="actions">
         <el-date-picker
@@ -12,14 +12,14 @@
           type="date"
           value-format="YYYY-MM-DD"
           format="YYYY-MM-DD"
-          placeholder="Select signal date"
+          placeholder="选择信号日"
           clearable
           :disabled-date="disabledSignalDate"
           style="width: 180px"
           @change="fetchData"
         />
-        <el-button :icon="Search" type="primary" :loading="loading" @click="fetchData">鏌ヨ</el-button>
-        <el-button :icon="Refresh" :loading="updateLoading" @click="updatePool">鏇存柊褰撴棩瀹炴椂姹</el-button>
+        <el-button :icon="Search" type="primary" :loading="loading" @click="fetchData">查询</el-button>
+        <el-button :icon="Refresh" :loading="updateLoading" @click="updatePool">更新当日实时池</el-button>
       </div>
     </section>
 
@@ -76,23 +76,23 @@
 
       <section class="status-strip">
         <div class="status-item">
-          <span>璇锋眰鏃ユ湡</span>
+          <span>请求日期</span>
           <strong>{{ requestedDate || '--' }}</strong>
         </div>
         <div class="status-item">
-          <span>瀹為檯灞曠ず</span>
+          <span>实际展示</span>
           <strong>{{ selectedDate || '--' }}</strong>
         </div>
         <div class="status-item">
-          <span>绛栫暐妯″紡</span>
+          <span>策略模式</span>
           <strong>{{ strategyMode || '--' }}</strong>
         </div>
         <div class="status-item">
-          <span>鍙拱瑙傚療</span>
+          <span>可买观察</span>
           <strong class="up">{{ buyableCount }}</strong>
         </div>
         <div class="status-item">
-          <span>鏁版嵁鐘舵€</span>
+          <span>数据状态</span>
           <strong :class="{ warn: freshnessWarning }">{{ freshnessText }}</strong>
         </div>
       </section>
@@ -100,10 +100,10 @@
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>褰撴棩瑙﹀彂淇″彿</h2>
-            <p>{{ selectedDate || '--' }} 鐩樹腑宸茬粡瑙﹀彂 G2 30m 搴曞垎鍨嬫斁閲忕‘璁ょ殑涓偂銆</p>
+            <h2>当日触发信号</h2>
+            <p>{{ selectedDate || '--' }} 盘中已触发 G2 30m 底分型放量确认的个股</p>
           </div>
-          <el-tag effect="plain">{{ triggerRows.length }} 鍙</el-tag>
+          <el-tag effect="plain">{{ triggerRows.length }} 只</el-tag>
         </div>
 
         <el-table
@@ -112,53 +112,53 @@
           stripe
           size="small"
           height="360"
-          empty-text="鏆傛棤褰撴棩瑙﹀彂淇″彿"
+          empty-text="暂无当日触发信号"
         >
-          <el-table-column label="鐘舵€?" width="118" fixed>
+          <el-table-column label="状态" width="118" fixed>
             <template #default="{ row }">
               <el-tag :type="row.stage_type || 'info'" effect="light">{{ row.stage_label || '--' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="浠ｇ爜" width="126" fixed>
+          <el-table-column label="代码" width="126" fixed>
             <template #default="{ row }">
-              <button class="copy-code" type="button" title="澶嶅埗浠ｇ爜" @click="copyCode(row.code)">
+              <button class="copy-code" type="button" title="复制代码" @click="copyCode(row.code)">
                 <span>{{ row.code }}</span>
                 <el-icon><DocumentCopy /></el-icon>
               </button>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="鍚嶇О" min-width="110" fixed />
-          <el-table-column prop="confirm_datetime" label="鐩樹腑纭" width="165" />
-          <el-table-column label="V4鎺掑悕" width="90" align="right">
+          <el-table-column prop="name" label="名称" min-width="110" fixed />
+          <el-table-column prop="confirm_datetime" label="盘中确认" width="165" />
+          <el-table-column label="V4排名" width="90" align="right">
             <template #default="{ row }">{{ row.v4_rank || '--' }}</template>
           </el-table-column>
-          <el-table-column label="鐩樹腑娑ㄥ箙" width="100" align="right">
+          <el-table-column label="盘中涨幅" width="100" align="right">
             <template #default="{ row }">{{ pctNumber(row.rt_return_pct) }}</template>
           </el-table-column>
-          <el-table-column label="30m閲忔瘮" width="100" align="right">
+          <el-table-column label="30m量比" width="100" align="right">
             <template #default="{ row }">{{ score(row.amount_ratio, 2) }}</template>
           </el-table-column>
-          <el-table-column label="璺緞" min-width="240">
+          <el-table-column label="路径" min-width="240">
             <template #default="{ row }">
               <div class="path-line">
-                <el-tag :type="row.pass_risk_cool ? 'success' : 'danger'" effect="plain">椋庢帶</el-tag>
+                <el-tag :type="row.pass_risk_cool ? 'success' : 'danger'" effect="plain">风控</el-tag>
                 <el-tag :type="row.pass_mainline1 ? 'success' : 'info'" effect="plain">volume5</el-tag>
-                <el-tag :type="row.pass_mainline2 ? 'success' : 'info'" effect="plain">绐佺牬</el-tag>
-                <el-tag :type="row.buyable ? 'success' : 'info'" effect="plain">鍙拱</el-tag>
+                <el-tag :type="row.pass_mainline2 ? 'success' : 'info'" effect="plain">突破</el-tag>
+                <el-tag :type="row.buyable ? 'success' : 'info'" effect="plain">可买</el-tag>
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="reason_text" label="璁板綍璇存槑" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="reason_text" label="记录说明" min-width="260" show-overflow-tooltip />
         </el-table>
       </section>
 
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>瀹屾暣鐗堜袱濂椾綋绯</h2>
-            <p>灞曠ず绗簩浠ｅ畬鏁寸増涓?volume5 涓荤嚎涓庣獊鐮?鏉垮潡涓荤嚎閫夊嚭鐨勫叏閮ㄨ偂绁ㄣ€</p>
+            <h2>完整第二代</h2>
+            <p>展示第二代完整体，含 volume5 主线与突破主线选出的全部股票</p>
           </div>
-          <el-tag effect="plain">{{ completeRows.length }} 鍙</el-tag>
+          <el-tag effect="plain">{{ completeRows.length }} 只</el-tag>
         </div>
 
         <el-table
@@ -167,50 +167,51 @@
           stripe
           size="small"
           height="420"
-          empty-text="鏆傛棤瀹屾暣鐗堜富绾夸俊鍙?"`r`n        >
-          <el-table-column label="浣撶郴" width="170" fixed>
+          empty-text="暂无完整主线信号"
+        >
+          <el-table-column label="体系" width="170" fixed>
             <template #default="{ row }">
               <div class="path-line">
                 <el-tag v-if="row.pass_mainline1" type="success" effect="light">volume5</el-tag>
-                <el-tag v-if="row.pass_mainline2" type="warning" effect="light">绐佺牬+鏉垮潡</el-tag>
-                <el-tag v-if="row.pass_breakout_stage" type="warning" effect="light">{{ row.breakout_stage_label || '浜岀獊瑙傚療' }}</el-tag>
-                <el-tag v-if="!row.pass_mainline1 && !row.pass_mainline2 && !row.pass_breakout_stage" effect="light">瑙傚療</el-tag>
+                <el-tag v-if="row.pass_mainline2" type="warning" effect="light">突破+板块</el-tag>
+                <el-tag v-if="row.pass_breakout_stage" type="warning" effect="light">{{ row.breakout_stage_label || '二突观察' }}</el-tag>
+                <el-tag v-if="!row.pass_mainline1 && !row.pass_mainline2 && !row.pass_breakout_stage" effect="light">观察</el-tag>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="浠ｇ爜" width="126" fixed>
+          <el-table-column label="代码" width="126" fixed>
             <template #default="{ row }">
-              <button class="copy-code" type="button" title="澶嶅埗浠ｇ爜" @click="copyCode(row.code)">
+              <button class="copy-code" type="button" title="复制代码" @click="copyCode(row.code)">
                 <span>{{ row.code }}</span>
                 <el-icon><DocumentCopy /></el-icon>
               </button>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="鍚嶇О" min-width="110" fixed />
-          <el-table-column prop="confirm_datetime" label="鐩樹腑纭" width="165" />
-          <el-table-column label="V4鎺掑悕" width="90" align="right">
+          <el-table-column prop="name" label="名称" min-width="110" fixed />
+          <el-table-column prop="confirm_datetime" label="盘中确认" width="165" />
+          <el-table-column label="V4排名" width="90" align="right">
             <template #default="{ row }">{{ row.v4_rank || '--' }}</template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'volume5'" label="volume5鍒?" width="105" align="right">
+          <el-table-column v-if="qualityMode === 'volume5'" label="volume5分" width="105" align="right">
             <template #default="{ row }">{{ score(row.alpha191_volume5_score) }}</template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'volume5'" label="volume5鎺掑悕" width="110" align="right">
+          <el-table-column v-if="qualityMode === 'volume5'" label="volume5排名" width="110" align="right">
             <template #default="{ row }">{{ row.alpha191_volume5_rank_in_day || '--' }}</template>
           </el-table-column>
-          <el-table-column label="L3寮?%" width="100" align="right">
+          <el-table-column label="L3强度%" width="100" align="right">
             <template #default="{ row }">{{ pct(row.l3_rt_strong3_ratio) }}</template>
           </el-table-column>
-          <el-table-column label="60鏃ヤ綆鐐规定骞?" width="120" align="right">
+          <el-table-column label="60日低点涨幅%" width="120" align="right">
             <template #default="{ row }">{{ pct(row.runup_from_60d_low) }}</template>
           </el-table-column>
-          <el-table-column prop="reason_text" label="璁板綍璇存槑" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="reason_text" label="记录说明" min-width="260" show-overflow-tooltip />
         </el-table>
       </section>
 
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>鏅嬬骇琛</h2>
+            <h2>晋级池</h2>
             <p>{{ message }}</p>
           </div>
           <el-segmented v-model="stageFilter" :options="stageOptions" size="small" />
@@ -222,71 +223,72 @@
           stripe
           size="small"
           height="560"
-          empty-text="鏆傛棤閫夎偂姹犺褰?"`r`n        >
-          <el-table-column label="鐘舵€?" width="118" fixed>
+          empty-text="暂无选股池记录"
+        >
+          <el-table-column label="状态" width="118" fixed>
             <template #default="{ row }">
               <el-tag :type="row.stage_type || 'info'" effect="light">{{ row.stage_label || '--' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="浠ｇ爜" width="126" fixed>
+          <el-table-column label="代码" width="126" fixed>
             <template #default="{ row }">
-              <button class="copy-code" type="button" title="澶嶅埗浠ｇ爜" @click="copyCode(row.code)">
+              <button class="copy-code" type="button" title="复制代码" @click="copyCode(row.code)">
                 <span>{{ row.code }}</span>
                 <el-icon><DocumentCopy /></el-icon>
               </button>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="鍚嶇О" min-width="110" fixed />
-          <el-table-column prop="confirm_datetime" label="鐩樹腑纭" width="165" />
-          <el-table-column label="璺緞" min-width="280">
+          <el-table-column prop="name" label="名称" min-width="110" fixed />
+          <el-table-column prop="confirm_datetime" label="盘中确认" width="165" />
+          <el-table-column label="路径" min-width="280">
             <template #default="{ row }">
               <div class="path-line">
-                <el-tag :type="row.pass_v4_pool ? 'success' : 'info'" effect="plain">V4姹</el-tag>
-                <el-tag :type="row.pass_v4_g2_trigger ? 'success' : 'info'" effect="plain">G2瑙﹀彂</el-tag>
-                <el-tag :type="row.pass_risk_cool ? 'success' : 'danger'" effect="plain">椋庢帶</el-tag>
-                <el-tag :type="row.pass_mainline1 ? 'success' : 'warning'" effect="plain">涓荤嚎涓€</el-tag>
-                <el-tag :type="row.pass_mainline2 || row.pass_breakout_stage ? 'success' : 'info'" effect="plain">涓荤嚎浜</el-tag>
-                <el-tag v-if="row.pass_volume5_trigger" type="success" effect="plain">v5瑙﹀彂</el-tag>
-                <el-tag v-if="row.pass_breakout_stage" type="warning" effect="plain">{{ row.breakout_stage_label || '浜岀獊灞傜骇' }}</el-tag>
-                <el-tag :type="row.buyable ? 'success' : 'info'" effect="plain">鍙拱</el-tag>
+                <el-tag :type="row.pass_v4_pool ? 'success' : 'info'" effect="plain">V4筛选</el-tag>
+                <el-tag :type="row.pass_v4_g2_trigger ? 'success' : 'info'" effect="plain">G2触发</el-tag>
+                <el-tag :type="row.pass_risk_cool ? 'success' : 'danger'" effect="plain">风控</el-tag>
+                <el-tag :type="row.pass_mainline1 ? 'success' : 'warning'" effect="plain">主线一</el-tag>
+                <el-tag :type="row.pass_mainline2 || row.pass_breakout_stage ? 'success' : 'info'" effect="plain">主线二</el-tag>
+                <el-tag v-if="row.pass_volume5_trigger" type="success" effect="plain">v5触发</el-tag>
+                <el-tag v-if="row.pass_breakout_stage" type="warning" effect="plain">{{ row.breakout_stage_label || '二突层级' }}</el-tag>
+                <el-tag :type="row.buyable ? 'success' : 'info'" effect="plain">可买</el-tag>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="V4鎺掑悕" width="90" align="right">
+          <el-table-column label="V4排名" width="90" align="right">
             <template #default="{ row }">{{ row.v4_rank || '--' }}</template>
           </el-table-column>
-          <el-table-column label="涓荤嚎鍒?" width="105" align="right">
+          <el-table-column label="主线分" width="105" align="right">
             <template #default="{ row }">{{ score(row.alpha191_volume5_score) }}</template>
           </el-table-column>
-          <el-table-column label="涓荤嚎鎺掑悕" width="95" align="right">
+          <el-table-column label="主线排名" width="95" align="right">
             <template #default="{ row }">{{ row.alpha191_volume5_rank_in_day || '--' }}</template>
           </el-table-column>
-          <el-table-column label="L3寮?%" width="100" align="right">
+          <el-table-column label="L3强度%" width="100" align="right">
             <template #default="{ row }">{{ pct(row.l3_rt_strong3_ratio) }}</template>
           </el-table-column>
-          <el-table-column label="60鏃ヤ綆鐐规定骞?" width="120" align="right">
+          <el-table-column label="60日低点涨幅%" width="120" align="right">
             <template #default="{ row }">{{ pct(row.runup_from_60d_low) }}</template>
           </el-table-column>
-          <el-table-column label="鐩樹腑娑ㄥ箙" width="100" align="right">
+          <el-table-column label="盘中涨幅" width="100" align="right">
             <template #default="{ row }">{{ pctNumber(row.rt_return_pct) }}</template>
           </el-table-column>
-          <el-table-column label="30m閲忔瘮" width="100" align="right">
+          <el-table-column label="30m量比" width="100" align="right">
             <template #default="{ row }">{{ score(row.amount_ratio, 2) }}</template>
           </el-table-column>
-          <el-table-column prop="reason_text" label="璁板綍璇存槑" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="reason_text" label="记录说明" min-width="260" show-overflow-tooltip />
         </el-table>
       </section>
 
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>鍊欓€夎偂璐ㄩ噺鎺掑簭</h2>
-            <p>D-1 V4鍙傝€冩睜鎸?Alpha150/070/095/132/144 璁＄畻 volume5锛屽啀妫€鏌?keep80 涓?runup&lt;=100%銆</p>
+            <h2>候选股质量排序</h2>
+            <p>D-1 V4参考池；Alpha150/070/095/132/144 计算 volume5，再筛 keep80 + runup&lt;=100%</p>
           </div>
           <div class="panel-tools">
             <el-segmented v-model="qualityMode" :options="qualityModeOptions" size="small" />
-            <el-tag type="success" effect="plain">閫氳繃 {{ qualityVisiblePassCount }} 鍙</el-tag>
-            <el-tag effect="plain">鍏?{{ qualityVisibleRows.length }} 鍙</el-tag>
+            <el-tag type="success" effect="plain">通过 {{ qualityVisiblePassCount }} 只</el-tag>
+            <el-tag effect="plain">{{ qualityVisibleRows.length }} 只</el-tag>
           </div>
         </div>
 
@@ -296,83 +298,83 @@
           stripe
           size="small"
           height="520"
-          empty-text="鏆傛棤鍊欓€夎偂璐ㄩ噺鎺掑簭"
+          empty-text="暂无候选股质量排序"
         >
-          <el-table-column label="璐ㄩ噺" width="105" fixed>
+          <el-table-column label="质量" width="105" fixed>
             <template #default="{ row }">
               <el-tag :type="row.quality_type || 'info'" effect="light">{{ row.quality_label || '--' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="浠ｇ爜" width="126" fixed>
+          <el-table-column label="代码" width="126" fixed>
             <template #default="{ row }">
-              <button class="copy-code" type="button" title="澶嶅埗浠ｇ爜" @click="copyCode(row.code)">
+              <button class="copy-code" type="button" title="复制代码" @click="copyCode(row.code)">
                 <span>{{ row.code }}</span>
                 <el-icon><DocumentCopy /></el-icon>
               </button>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="鍚嶇О" min-width="110" fixed />
-          <el-table-column label="V4鎺掑悕" width="90" align="right">
+          <el-table-column prop="name" label="名称" min-width="110" fixed />
+          <el-table-column label="V4排名" width="90" align="right">
             <template #default="{ row }">{{ row.v4_rank || '--' }}</template>
           </el-table-column>
-          <el-table-column label="V4鎬诲垎" width="100" align="right">
+          <el-table-column label="V4总分" width="100" align="right">
             <template #default="{ row }">{{ score(row.v4_score) }}</template>
           </el-table-column>
-          <el-table-column label="volume5鍒?" width="105" align="right">
+          <el-table-column label="volume5分" width="105" align="right">
             <template #default="{ row }">{{ score(row.alpha191_volume5_score) }}</template>
           </el-table-column>
-          <el-table-column label="volume5鎺掑悕" width="110" align="right">
+          <el-table-column label="volume5排名" width="110" align="right">
             <template #default="{ row }">{{ row.alpha191_volume5_rank_in_day || '--' }}</template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'volume5'" label="keep80闃堝€?" width="105" align="right">
+          <el-table-column v-if="qualityMode === 'volume5'" label="keep80阈值" width="105" align="right">
             <template #default="{ row }">{{ score(row.alpha191_gate_threshold) }}</template>
           </el-table-column>
           <el-table-column v-if="qualityMode === 'volume5'" label="keep80" width="90" align="center">
             <template #default="{ row }">
               <el-tag :type="row.pass_keep80 ? 'success' : 'warning'" effect="plain">
-                {{ row.pass_keep80 ? '閫氳繃' : '鏈繃' }}
+                {{ row.pass_keep80 ? '通过' : '未过' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'volume5'" label="60鏃ヤ綆鐐规定骞?" width="125" align="right">
+          <el-table-column v-if="qualityMode === 'volume5'" label="60日低点涨幅%" width="125" align="right">
             <template #default="{ row }">{{ pct(row.runup_from_60d_low) }}</template>
           </el-table-column>
           <el-table-column v-if="qualityMode === 'volume5'" label="runup" width="90" align="center">
             <template #default="{ row }">
               <el-tag :type="row.pass_runup ? 'success' : 'warning'" effect="plain">
-                {{ row.pass_runup ? '閫氳繃' : '鏈繃' }}
+                {{ row.pass_runup ? '通过' : '未过' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'breakout'" label="灞傜骇" width="120">
+          <el-table-column v-if="qualityMode === 'breakout'" label="层级" width="120">
             <template #default="{ row }">{{ row.breakout_stage_label || '--' }}</template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'breakout'" label="澶ч槼鏃?" width="115">
+          <el-table-column v-if="qualityMode === 'breakout'" label="大阳线" width="115">
             <template #default="{ row }">{{ row.setup_big_bull_date || '--' }}</template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'breakout'" label="璺濈椤?" width="100" align="right">
+          <el-table-column v-if="qualityMode === 'breakout'" label="距箱体" width="100" align="right">
             <template #default="{ row }">{{ pct(row.close_vs_box_top) }}</template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'breakout'" label="绠变綋瀹藉害" width="105" align="right">
+          <el-table-column v-if="qualityMode === 'breakout'" label="箱体宽度" width="105" align="right">
             <template #default="{ row }">{{ pct(row.setup_box_range) }}</template>
           </el-table-column>
-          <el-table-column v-if="qualityMode === 'breakout'" label="澶ч槼閲忔瘮" width="100" align="right">
+          <el-table-column v-if="qualityMode === 'breakout'" label="大阳量比" width="100" align="right">
             <template #default="{ row }">{{ score(row.setup_big_bull_amount_ratio, 2) }}</template>
           </el-table-column>
-          <el-table-column prop="factor_date" label="鍥犲瓙鏃?" width="115" />
-          <el-table-column prop="reason_text" label="璇存槑" min-width="240" show-overflow-tooltip />
+          <el-table-column prop="factor_date" label="因子日" width="115" />
+          <el-table-column prop="reason_text" label="说明" min-width="240" show-overflow-tooltip />
         </el-table>
       </section>
 
       <section class="panel">
         <div class="panel-head">
           <div>
-            <h2>V4鍙傝€冮€夎偂姹</h2>
-            <p>{{ v4PoolDateLabel }} V4 rank鍓?00锛汥-1鐢ㄤ簬G2鐩樹腑鎵弿鍏ュ彛锛孌鏃ョ敤浜庡鐩樺鐓с€</p>
+            <h2>V4参考选股池</h2>
+            <p>{{ v4PoolDateLabel }} V4 rank00；D-1 用于 G2 盘中扫描入口，D 日用于复盘对照</p>
           </div>
           <div class="panel-tools">
             <el-segmented v-model="v4PoolMode" :options="v4PoolModeOptions" size="small" />
-            <el-tag effect="plain">{{ v4DisplayRows.length }} 鍙</el-tag>
+            <el-tag effect="plain">{{ v4DisplayRows.length }} 只</el-tag>
           </div>
         </div>
 
@@ -382,42 +384,42 @@
           stripe
           size="small"
           height="520"
-          :empty-text="v4PoolMode === 'd1' ? '鏆傛棤D-1 V4鍙傝€冮€夎偂' : '鏆傛棤D鏃4鍙傝€冮€夎偂'"
+          :empty-text="v4PoolMode === 'd1' ? '暂无 D-1 V4 参考选股' : '暂无 D 日 V4 参考选股'"
         >
-          <el-table-column label="鎺掑悕" width="70" align="right">
+          <el-table-column label="排名" width="70" align="right">
             <template #default="{ row }">{{ row.v4_rank || '--' }}</template>
           </el-table-column>
-          <el-table-column label="浠ｇ爜" width="126" fixed>
+          <el-table-column label="代码" width="126" fixed>
             <template #default="{ row }">
-              <button class="copy-code" type="button" title="澶嶅埗浠ｇ爜" @click="copyCode(row.code)">
+              <button class="copy-code" type="button" title="复制代码" @click="copyCode(row.code)">
                 <span>{{ row.code }}</span>
                 <el-icon><DocumentCopy /></el-icon>
               </button>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="鍚嶇О" min-width="120" fixed />
-          <el-table-column label="V4鎬诲垎" width="100" align="right">
+          <el-table-column prop="name" label="名称" min-width="120" fixed />
+          <el-table-column label="V4总分" width="100" align="right">
             <template #default="{ row }">{{ score(row.v4_score) }}</template>
           </el-table-column>
-          <el-table-column label="5鏃ュ姩閲?" width="100" align="right">
+          <el-table-column label="5日动量" width="100" align="right">
             <template #default="{ row }">{{ pct(row.mom5) }}</template>
           </el-table-column>
-          <el-table-column label="10鏃ュ姩閲?" width="105" align="right">
+          <el-table-column label="10日动量" width="105" align="right">
             <template #default="{ row }">{{ pct(row.mom10) }}</template>
           </el-table-column>
-          <el-table-column label="20鏃ュ姩閲?" width="105" align="right">
+          <el-table-column label="20日动量" width="105" align="right">
             <template #default="{ row }">{{ pct(row.mom20) }}</template>
           </el-table-column>
-          <el-table-column label="閲忔瘮" width="90" align="right">
+          <el-table-column label="量比" width="90" align="right">
             <template #default="{ row }">{{ score(row.vol_ratio, 2) }}</template>
           </el-table-column>
-          <el-table-column label="10鏃ユ尝鍔?" width="100" align="right">
+          <el-table-column label="10日波动" width="100" align="right">
             <template #default="{ row }">{{ pct(row.vol10) }}</template>
           </el-table-column>
-          <el-table-column label="姹犳棩鏈?" width="120">
+          <el-table-column label="池日期" width="120">
             <template #default="{ row }">{{ row.v4_pool_date || '--' }}</template>
           </el-table-column>
-          <el-table-column prop="reason_text" label="璇存槑" min-width="280" show-overflow-tooltip />
+          <el-table-column prop="reason_text" label="说明" min-width="280" show-overflow-tooltip />
         </el-table>
       </section>
     </template>
@@ -449,7 +451,7 @@ const UPDATE_POLL_TIMEOUT_MS = 120000
 
 const available = computed(() => !!payload.value?.available)
 const message = computed(() => payload.value?.message || '')
-const strategyName = computed(() => payload.value?.strategy_name || 'G2 绗簩浠ｅ畬鏁寸増锛歷olume5涓荤嚎 + 绐佺牬涓荤嚎 + 鏉垮潡鎵╂暎')
+const strategyName = computed(() => payload.value?.strategy_name || 'G2 第二代完整体：volume5主线 + 突破主线 + 板块扩散')
 const selectedDate = computed(() => payload.value?.signal_date || '')
 const requestedDate = computed(() => payload.value?.requested_date || signalDate.value || '')
 const dateResolution = computed(() => payload.value?.date_resolution || null)
@@ -492,9 +494,12 @@ const completeRows = computed(() => {
   if (Array.isArray(payload.value?.complete_rows)) return payload.value.complete_rows
   return rows.value.filter((row) => row.pass_official_v2_live || row.pass_mainline1 || row.pass_mainline2 || row.pass_breakout_stage || row.buyable)
 })
+const promotedRows = computed(() => {
+  if (Array.isArray(payload.value?.promoted_rows)) return payload.value.promoted_rows
+  return rows.value
+})
 const qualityRows = computed(() => Array.isArray(payload.value?.quality_rows) ? payload.value.quality_rows : [])
 const qualityVisibleRows = computed(() => qualityRows.value.filter((row) => String(row.quality_family || 'volume5') === qualityMode.value))
-const qualityPassCount = computed(() => Number(payload.value?.quality_pass_count ?? qualityRows.value.filter((row) => row.pass_quality).length))
 const qualityVisiblePassCount = computed(() => qualityVisibleRows.value.filter((row) => row.pass_quality).length)
 const v4D1Rows = computed(() => {
   if (Array.isArray(payload.value?.v4_d1_rows)) return payload.value.v4_d1_rows
@@ -525,17 +530,18 @@ const freshnessWarning = computed(() => {
 })
 const freshnessText = computed(() => {
   if (freshnessWarning.value) {
-    return `鏃ョ嚎${dataFreshness.value.latest_daily_date}`
+    return `日线${dataFreshness.value.latest_daily_date}`
   }
-  return '鍚屾'
+  return '同步'
 })
+const buyableCount = computed(() => promotedRows.value.filter((row) => row.buyable).length)
 
 const stageOptions = [
-  { label: '鍏ㄩ儴', value: 'all' },
-  { label: '鍙拱', value: 'buyable' },
-  { label: '涓荤嚎杩囨护', value: 'alpha' },
-  { label: '椋庢帶杩囨护', value: 'risk' },
-  { label: '鐔旀柇', value: 'suspended' }
+  { label: '全部', value: 'all' },
+  { label: '可买', value: 'buyable' },
+  { label: '主线过滤', value: 'alpha' },
+  { label: '风控过滤', value: 'risk' },
+  { label: '熔断', value: 'suspended' }
 ]
 
 const qualityModeOptions = [
@@ -553,18 +559,6 @@ const disabledSignalDate = (date) => {
   const weekday = day.day()
   return weekday === 0 || weekday === 6 || day.isAfter(dayjs(), 'day')
 }
-
-const visibleRows = computed(() => {
-  if (stageFilter.value === 'v4') return rows.value.filter((row) => row.pass_v4_pool)
-  if (stageFilter.value === 'no_trigger') return rows.value.filter((row) => row.pass_v4_pool && !row.pass_v4_g2_trigger)
-  if (stageFilter.value === 'buyable') return rows.value.filter((row) => row.buyable)
-  if (stageFilter.value === 'alpha') return rows.value.filter((row) => row.pass_risk_cool && !row.pass_mainline1 && !row.pass_mainline2)
-  if (stageFilter.value === 'risk') return rows.value.filter((row) => row.pass_v4_g2_trigger && !row.pass_risk_cool)
-  if (stageFilter.value === 'suspended') {
-    return rows.value.filter((row) => ['suspended_by_two_stop_cd3', 'suspended_by_stop_cd5'].includes(row.shadow_status))
-  }
-  return rows.value
-})
 
 const promotedVisibleRows = computed(() => {
   if (stageFilter.value === 'buyable') return promotedRows.value.filter((row) => row.buyable)
@@ -595,7 +589,7 @@ const pollUpdateTask = async (taskId) => {
     if (['done', 'completed', 'success'].includes(status)) {
       updateLoading.value = false
       updatePollStartedAt = 0
-      ElMessage.success('绛栫暐閫夎偂姹犲凡鏇存柊')
+      ElMessage.success('策略股票池已更新')
       await fetchData()
       return
     }
@@ -882,5 +876,3 @@ h2 {
   }
 }
 </style>
-
-

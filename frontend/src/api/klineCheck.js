@@ -74,6 +74,17 @@ export function repairKlineDataBatch(data) {
   })
 }
 
+/**
+ * One-click repair previous trade date data, then optionally refresh G3.
+ */
+export function repairPreviousTradeDateData(data) {
+  return request({
+    url: '/kline-check/repair-previous-trade-date',
+    method: 'post',
+    data
+  })
+}
+
 export function getRepairProgress(taskId) {
   return request({
     url: `/kline-check/repair-progress/${taskId}`,

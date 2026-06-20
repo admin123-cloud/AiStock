@@ -1,6 +1,6 @@
 """交易日历工具（ClickHouse 查询）"""
 from datetime import datetime, time as dt_time, timedelta
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from utils.logger import get_logger
 from utils.market_warehouse import clickhouse_scalar, clickhouse_query_df, clickhouse_available, clickhouse_table_exists
@@ -41,13 +41,48 @@ class TradingCalendar:
             return ok
         return True
 
+    @staticmethod
+    def _normalize_db_date(value: Any):
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+            try:
+                return datetime(int(value.year), int(value.month), int(value.day)).date()
+            except Exception:
+                pass
+        try:
+            return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    @classmethod
+    def _db_calendar_bounds(cls):
+        min_dt = clickhouse_scalar(
+            """
+            SELECT min(trade_date)
+            FROM trade_calendar
+            WHERE market = 'SH' AND is_trading = 1
+            """
+        )
+        max_dt = clickhouse_scalar(
+            """
+            SELECT max(trade_date)
+            FROM trade_calendar
+            WHERE market = 'SH' AND is_trading = 1
+            """
+        )
+        return cls._normalize_db_date(min_dt), cls._normalize_db_date(max_dt)
+
     @classmethod
     def is_trading_day(cls, date: datetime = None) -> bool:
         if date is None:
             date = datetime.now()
 
         try:
-            trade_date = date.date().isoformat()
+            target_date = date.date()
+            trade_date = target_date.isoformat()
             if cls._db_calendar_available():
                 row = clickhouse_scalar(
                     """
@@ -60,6 +95,9 @@ class TradingCalendar:
                 )
                 if row is not None:
                     return bool(row)
+                min_date, max_date = cls._db_calendar_bounds()
+                if min_date and max_date and min_date <= target_date <= max_date:
+                    return False
         except Exception as e:
             cls._warn_calendar_fallback(f"数据库判断交易日失败，回退到周末判断: {e}")
 

@@ -18,15 +18,18 @@ if str(ROOT) not in sys.path:
 
 from scripts.ptrade_bridge_preflight import run_preflight
 from scripts.ptrade_bridge_readiness_audit import run_audit
+from utils.paths import runtime_path
 
 
 DEFAULT_OUT_DIR = ROOT / "reports" / "ptrade_bridge_deploy_package"
-DEFAULT_BRIDGE_DIR = ROOT / "data" / "runtime" / "ptrade_bridge"
+DEFAULT_BRIDGE_DIR = runtime_path("ptrade_bridge")
 STRATEGY_SOURCE = ROOT / "scripts" / "ptrade_file_bridge_strategy.py"
 EVIDENCE_REPORT_SOURCE = ROOT / "scripts" / "ptrade_bridge_evidence_report.py"
 ORDER_PATH_PROBE_SOURCE = ROOT / "scripts" / "ptrade_order_path_probe.py"
 HEARTBEAT_DIAGNOSE_SOURCE = ROOT / "scripts" / "ptrade_bridge_heartbeat_diagnose.py"
 HEARTBEAT_SMOKE_SOURCE = ROOT / "scripts" / "ptrade_heartbeat_smoke_strategy.py"
+GEN3_ACCEPTANCE_SOURCE = ROOT / "scripts" / "gen3_ptrade_bridge_acceptance.py"
+GEN3_INTERNAL_ACCEPTANCE_SOURCE = ROOT / "scripts" / "gen3_ptrade_internal_strategy_acceptance.py"
 
 
 def _now_text() -> str:
@@ -96,6 +99,13 @@ python F:\\Stock\\AiStock\\scripts\\ptrade_bridge_evidence_report.py --skip-orde
 
 ```powershell
 python F:\\Stock\\AiStock\\scripts\\ptrade_bridge_live_probe.py --submit-dry-run --require-heartbeat --timeout-seconds 30
+```
+
+启动 PTrade 内部策略任务后，执行 G3 内部策略买卖验收。该门禁要求心跳来源必须是
+`ptrade_file_bridge_strategy`，否则不会写入 dry-run 订单：
+
+```powershell
+python F:\\Stock\\AiStock-core\\scripts\\gen3_ptrade_internal_strategy_acceptance.py --timeout-seconds 30
 ```
 
 7. dry-run 探针确认 ack 最近后，将 PTrade 策略里的 `ENABLE_LIVE_ORDER` 切换为 `True`，等待心跳写出 `enable_live_order=true`，且 `live_submit_ready=true` 后，才允许人工批准一笔小额云仿真 live-submit 测试。
@@ -228,10 +238,14 @@ def build_package(
     order_path_probe_target = out_dir / "ptrade_order_path_probe.py"
     heartbeat_diagnose_target = out_dir / "ptrade_bridge_heartbeat_diagnose.py"
     heartbeat_smoke_target = out_dir / "ptrade_heartbeat_smoke_strategy.py"
+    gen3_acceptance_target = out_dir / "gen3_ptrade_bridge_acceptance.py"
+    gen3_internal_acceptance_target = out_dir / "gen3_ptrade_internal_strategy_acceptance.py"
     shutil.copy2(EVIDENCE_REPORT_SOURCE, evidence_report_target)
     shutil.copy2(ORDER_PATH_PROBE_SOURCE, order_path_probe_target)
     shutil.copy2(HEARTBEAT_DIAGNOSE_SOURCE, heartbeat_diagnose_target)
     shutil.copy2(HEARTBEAT_SMOKE_SOURCE, heartbeat_smoke_target)
+    shutil.copy2(GEN3_ACCEPTANCE_SOURCE, gen3_acceptance_target)
+    shutil.copy2(GEN3_INTERNAL_ACCEPTANCE_SOURCE, gen3_internal_acceptance_target)
 
     config = {
         "dry_run_default": True,
@@ -272,6 +286,8 @@ def build_package(
             "order_path_probe_script": str(order_path_probe_target),
             "heartbeat_diagnose_script": str(heartbeat_diagnose_target),
             "heartbeat_smoke_strategy": str(heartbeat_smoke_target),
+            "gen3_acceptance_script": str(gen3_acceptance_target),
+            "gen3_internal_acceptance_script": str(gen3_internal_acceptance_target),
             "readme": str(readme_path),
             "operator_checklist": str(operator_checklist_path),
         },

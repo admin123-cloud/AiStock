@@ -101,7 +101,7 @@ class ConfigManager:
         
         # 构建配置文件路径
         config_path = self._config_dir / filename
-        
+
         if not config_path.exists():
             raise ConfigException(
                 f"Config file not found: {config_path}",
@@ -111,20 +111,37 @@ class ConfigManager:
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f) or {}
-                
-                # 处理环境变量替换
-                config = self._process_env_vars(config)
-                
-                # 缓存配置
-                if use_cache:
-                    self._config_cache[filename] = config
-                
-                return config
+
+            # settings.local.yaml 对 settings.yaml 做本地覆盖，避免敏感配置写回版本库。
+            if filename == "settings.yaml":
+                local_path = self._config_dir / "settings.local.yaml"
+                if local_path.exists():
+                    with open(local_path, 'r', encoding='utf-8') as f:
+                        local_config = yaml.safe_load(f) or {}
+                    config = self._deep_merge_dict(config, local_config)
+
+            # 处理环境变量替换
+            config = self._process_env_vars(config)
+
+            # 缓存配置
+            if use_cache:
+                self._config_cache[filename] = config
+
+            return config
         except yaml.YAMLError as e:
             raise ConfigException(
                 f"Failed to parse config file: {filename}",
                 {"error": str(e)}
             )
+
+    def _deep_merge_dict(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(base)
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = self._deep_merge_dict(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
     
     def _process_env_vars(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """

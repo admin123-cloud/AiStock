@@ -435,9 +435,13 @@ def get_market_indices(code: Optional[str] = None):
                     kline_table = _resolve_table_name("kline_daily")
                     date_counts_df = clickhouse_query_df(
                         """
-                        SELECT k.trade_date, COUNT(DISTINCT k.code) AS row_count
+                        SELECT k.trade_date AS trade_date, COUNT(DISTINCT k.code) AS row_count
                         FROM {kline_table} k
                         JOIN {stocks_table} s ON s.code = k.code
+                        JOIN trade_calendar c
+                          ON c.trade_date = k.trade_date
+                         AND c.market = 'SH'
+                         AND c.is_trading = 1
                         WHERE s.type = 'index'
                         GROUP BY k.trade_date
                         ORDER BY k.trade_date DESC
@@ -585,8 +589,11 @@ def get_market_indices(code: Optional[str] = None):
             if date_count_rows:
                 max_count = max(int(row_count or 0) for _, row_count in date_count_rows)
                 min_count = max(1, int(max_count * 0.70))
+                from scheduler.trading_calendar import TradingCalendar
+
                 for trade_date, row_count in date_count_rows:
-                    if int(row_count or 0) >= min_count:
+                    trade_dt = trade_date if hasattr(trade_date, "hour") else SimpleNamespace(date=lambda value=trade_date: value)
+                    if int(row_count or 0) >= min_count and TradingCalendar.is_trading_day(trade_dt):
                         latest_date = trade_date
                         break
             if not latest_date:
@@ -732,6 +739,11 @@ def _legacy_get_market_sentiment():
         ).scalar()
         if not latest_date:
             latest_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        if latest_date:
+            from scheduler.trading_calendar import TradingCalendar
+
+            if not TradingCalendar.is_trading_day(latest_date):
+                latest_date = TradingCalendar.get_previous_trading_day(latest_date).date()
         if not latest_date:
             return {"error": "数据库中没有K线数据"}
 
@@ -823,6 +835,10 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
         SELECT MAX(k.trade_date)
         FROM {kline_table} k
         JOIN {stocks_table} s ON s.code = k.code
+        JOIN trade_calendar c
+          ON c.trade_date = k.trade_date
+         AND c.market = 'SH'
+         AND c.is_trading = 1
         WHERE s.type = 'stock'
         """.format(kline_table=kline_table, stocks_table=stocks_table)
     )
@@ -1075,6 +1091,12 @@ def get_market_sentiment():
             latest_date = session.query(func.max(KlineDaily.trade_date)).scalar()
         if not latest_date:
             return {"error": "数据库中没有K线数据"}
+
+        if latest_date:
+            from scheduler.trading_calendar import TradingCalendar
+
+            if not TradingCalendar.is_trading_day(latest_date):
+                latest_date = TradingCalendar.get_previous_trading_day(latest_date).date()
 
         effective_change_pct = case(
             (KlineDaily.change_pct.isnot(None), KlineDaily.change_pct),
@@ -1671,7 +1693,7 @@ def get_emotion_trend(days: int = 30, granularity: str = "daily"):
                     SELECT
                         toStartOfHour(k.datetime) AS hour_time,
                         avg(if(k.close > k.open, 1, 0)) * 100 AS close_up_rate,
-                        avg(if(k.high > k.open, 1, 0)) * 100 AS intraday_up_rate,
+                        avg(if(k.close > k.open, 1, 0)) * 100 AS intraday_up_rate,
                         avg(if(k.code LIKE '%.SH' AND k.close > k.open, 1, if(k.code LIKE '%.SH', 0, NULL))) * 100 AS sh_up_rate,
                         avg(if(k.code LIKE '%.SZ' AND k.close > k.open, 1, if(k.code LIKE '%.SZ', 0, NULL))) * 100 AS sz_up_rate,
                         avg(if((k.code LIKE '300%.SZ' OR k.code LIKE '301%.SZ') AND k.close > k.open, 1, if((k.code LIKE '300%.SZ' OR k.code LIKE '301%.SZ'), 0, NULL))) * 100 AS cyb_up_rate,

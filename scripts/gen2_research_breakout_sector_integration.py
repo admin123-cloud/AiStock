@@ -14,21 +14,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from api.gen2_strategy import GEN2_OPEN_RULE_V1  # noqa: E402
 from scripts.gen2_backtest_risk_cool_dynamic_circuit import _run_dynamic  # noqa: E402
 from scripts.gen2_runtime_dates import add_end_date_argument, resolve_end_date, resolve_window_ends  # noqa: E402
+from utils.paths import report_path  # noqa: E402
 
 
-BASE = (
-    ROOT
-    / "reports"
-    / "gen2_breakout_buy_point_research"
-    / "breakout_family_intraday_strength_probe"
-    / "combo_policy_probe"
-    / "sector_context_probe"
-    / "sector_filter_matrix"
+BASE = report_path(
+    "gen2_breakout_buy_point_research",
+    "breakout_family_intraday_strength_probe",
+    "combo_policy_probe",
+    "sector_context_probe",
+    "sector_filter_matrix",
 )
 ENRICHED = BASE / "sector_enriched_combo_or.parquet"
-OUT = ROOT / "reports" / "g2_sector_integration_probe"
+OUT = report_path("g2_sector_integration_probe")
 def _json_default(obj: Any) -> Any:
     if isinstance(obj, (np.integer,)):
         return int(obj)
@@ -183,6 +183,18 @@ def _empty_summary() -> dict[str, Any]:
     }
 
 
+def _has_open_v1_compatible_rows(df: pd.DataFrame) -> bool:
+    required = ["pattern", "g2_open_state", "trigger_type"]
+    if any(col not in df.columns for col in required):
+        return False
+    mask = (
+        df["pattern"].astype(str).eq(str(GEN2_OPEN_RULE_V1["pattern"]))
+        & df["g2_open_state"].astype(str).eq(str(GEN2_OPEN_RULE_V1["g2_open_state"]))
+        & df["trigger_type"].astype(str).eq(str(GEN2_OPEN_RULE_V1["trigger_type"]))
+    )
+    return bool(mask.any())
+
+
 def run(end_date: str) -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
     base = _prepare_base()
@@ -194,7 +206,9 @@ def run(end_date: str) -> dict[str, Any]:
         for sort_mode in ["trigger_time"]:
             for window, (start, end) in windows.items():
                 run_dir = OUT / "runs" / variant / sort_mode / window
-                summary = _empty_summary() if source_df.empty else _run_or_read(source_path, run_dir, start, end, sort_mode)
+                summary = _empty_summary()
+                if not source_df.empty and _has_open_v1_compatible_rows(source_df):
+                    summary = _run_or_read(source_path, run_dir, start, end, sort_mode)
                 rows.append(
                     {
                         "variant": variant,
