@@ -21,14 +21,14 @@
     <section class="panel current-shadow-panel">
       <div class="panel-head">
         <div>
-          <h2>今日影子买入</h2>
-          <p>这里读取运行态影子台账；下方成交明细是历史回测闭合成交，不包含今天尚未退出的影子票。</p>
+          <h2>当前影子持有</h2>
+          <p>这里合并最新影子票和影子台账；下方成交明细是历史回测闭合成交。</p>
         </div>
-        <el-tag :type="currentShadowTickets.length ? 'warning' : 'info'" effect="dark">
-          {{ currentSummary.entry_date || '--' }} / {{ currentShadowTickets.length ? '有影子票' : '暂无影子票' }}
+        <el-tag :type="currentShadowRows.length ? 'warning' : 'info'" effect="dark">
+          {{ currentSummary.entry_date || '--' }} / {{ currentShadowRows.length ? '有影子持有' : '暂无影子持有' }}
         </el-tag>
       </div>
-      <el-table :data="currentShadowTickets" stripe size="small" empty-text="暂无今日影子买入">
+      <el-table :data="currentShadowRows" stripe size="small" empty-text="暂无当前影子持有">
         <el-table-column prop="entry_date" label="入场日" width="104" />
         <el-table-column prop="code" label="代码" width="110" />
         <el-table-column prop="name" label="名称" min-width="110" />
@@ -44,6 +44,9 @@
         </el-table-column>
         <el-table-column label="状态" width="190" show-overflow-tooltip>
           <template #default="{ row }">{{ compactStatusWithZh(row.shadow_status) }}</template>
+        </el-table-column>
+        <el-table-column label="来源" width="96">
+          <template #default="{ row }">{{ row.source_type === 'runtime_shadow_ledger' ? '影子台账' : '最新票据' }}</template>
         </el-table-column>
         <el-table-column prop="block_reason" label="阻断/说明" min-width="220" show-overflow-tooltip />
       </el-table>
@@ -438,7 +441,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="当前接口尚未返回该日全量候选归档；已先展示历史成交切片。后续补后端候选归档后，这里会承接全周期逐日候选复盘。"
+        title="该日暂无候选归档；已先展示历史成交切片。"
       />
 
       <div class="replay-summary-grid">
@@ -637,6 +640,17 @@ const currentSummary = computed(() => currentPayload.value.summary || {})
 const currentShadowTickets = computed(() => (
   Array.isArray(currentPayload.value.shadow_tickets) ? currentPayload.value.shadow_tickets : []
 ))
+const currentShadowLedger = computed(() => (
+  Array.isArray(currentPayload.value.shadow_ledger) ? currentPayload.value.shadow_ledger : []
+))
+const currentShadowRows = computed(() => dedupeReplayRows([
+  ...currentShadowTickets.value,
+  ...currentShadowLedger.value.map((row) => ({
+    ...row,
+    trade_status: row.trade_status || 'open_shadow',
+    source_type: row.source_type || 'runtime_shadow_ledger'
+  }))
+]))
 const currentAfterhoursTickets = computed(() => (
   Array.isArray(currentPayload.value.afterhours_shadow_tickets) ? currentPayload.value.afterhours_shadow_tickets : []
 ))
@@ -646,17 +660,24 @@ const currentNextTradeTickets = computed(() => (
 const currentAllCandidates = computed(() => (
   Array.isArray(currentPayload.value.all_source_candidates) ? currentPayload.value.all_source_candidates : []
 ))
+const historicalReplayCandidates = computed(() => (
+  Array.isArray(payload.value.historical_replay_candidates) ? payload.value.historical_replay_candidates : []
+))
 const fusionText = computed(() => assessment.value.verdict || 'G3 正在按最终版合同融合 G2 补位能力；观察期内保留深链验收，不再作为独立主策略展示。')
 const replayDateOptions = computed(() => {
   const dates = new Set()
   trades.value.forEach((row) => {
     if (row.entry_date) dates.add(String(row.entry_date))
   })
+  historicalReplayCandidates.value.forEach((row) => {
+    const date = replayRowDate(row)
+    if (date) dates.add(String(date).slice(0, 10))
+  })
   currentAllCandidates.value.forEach((row) => {
     const date = replayRowDate(row)
     if (date) dates.add(String(date).slice(0, 10))
   })
-  ;[currentNextTradeTickets.value, currentAfterhoursTickets.value, currentShadowTickets.value].forEach((rows) => {
+  ;[currentNextTradeTickets.value, currentAfterhoursTickets.value, currentShadowRows.value].forEach((rows) => {
     rows.forEach((row) => {
       const date = replayRowDate(row)
       if (date) dates.add(String(date).slice(0, 10))
@@ -671,7 +692,10 @@ const replayTrades = computed(() => {
 })
 const currentReplayCandidates = computed(() => {
   if (!activeReplayDate.value) return []
-  return currentAllCandidates.value.filter((row) => {
+  return [
+    ...historicalReplayCandidates.value,
+    ...currentAllCandidates.value
+  ].filter((row) => {
     const date = replayRowDate(row)
     return String(date || '').slice(0, 10) === activeReplayDate.value
   })
@@ -681,7 +705,7 @@ const currentReplayTickets = computed(() => {
   return dedupeReplayRows([
     ...currentNextTradeTickets.value,
     ...currentAfterhoursTickets.value,
-    ...currentShadowTickets.value
+    ...currentShadowRows.value
   ].filter((row) => String(replayRowDate(row) || '').slice(0, 10) === activeReplayDate.value))
 })
 const currentReplayRows = computed(() => dedupeReplayRows([
@@ -729,7 +753,7 @@ function replayRowDate(row) {
 }
 
 function isReplayTicket(row) {
-  return Boolean(row?.ticket_key || row?.qualified_shadow_buy || row?.paper_trade_ready)
+  return Boolean(row?.ticket_key || row?.qualified_shadow_buy || row?.paper_trade_ready || row?.replay_decision === 'bought')
 }
 
 function replayRowKind(row) {

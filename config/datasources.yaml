@@ -11,10 +11,25 @@
 # enabled 为 false 的数据源不会被使用
 
 data_sources:
-  # 通达信量化平台（官方数据源）
-  tdxquant:
+  qmt_xtquant:
     enabled: true
     priority: 0
+    name: "QMT xtquant"
+    description: "QMT/MiniQMT xtquant data source"
+    timeout: 30
+    max_retries: 2
+    retry_delay: 1
+    supported_types:
+      - "stock_quote"
+      - "stock_history"
+      - "stock_info"
+      - "stock_list"
+      - "realtime_quote"
+
+  # 通达信量化平台（官方数据源）
+  tdxquant:
+    enabled: false
+    priority: 90
     name: "通达信量化平台"
     description: "通达信量化平台官方API数据源"
 
@@ -61,8 +76,8 @@ data_sources:
 
   # 通达信量化平台（池化版本）
   tdxquant_pool:
-    enabled: true
-    priority: 1
+    enabled: false
+    priority: 91
     name: "通达信量化平台（池化）"
     description: "通达信量化平台官方API数据源（池化版本）"
 

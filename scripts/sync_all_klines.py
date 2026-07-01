@@ -1,8 +1,7 @@
 """
-全量K线数据同步脚本
+Full K-line data synchronization.
 
-同步所有 stock 和 index 类型的历史 K 线数据。
-支持所有周期：1m, 5m, 15m, 30m, 60m, 1d, 1w, 1mon, 1q, 1y。
+Synchronizes stock and index history for supported daily and minute periods.
 """
 
 import sys
@@ -16,13 +15,12 @@ import math
 import threading
 from contextlib import nullcontext
 
-# 添加项目根目录到 Python 搜索路径
+# 濞ｈ濮炴い鍦窗閺嶅湱娲拌ぐ鏇炲煂 Python 閹兼粎鍌ㄧ捄顖氱窞
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from data_fetcher.sources.tdxquant import TdxQuantDataSource
-from data_fetcher.sources.tdxquant_pool import tdxquant_pool
+from data_fetcher.manager import DataSourceManager
 from utils.config import ConfigManager
 from utils.logger import get_logger
 from utils.database import db
@@ -35,16 +33,16 @@ EARLY_MORNING_CUTOFF_HOUR = 6
 
 
 class KlineSyncer:
-    """K线数据同步器"""
+    """Synchronize K-line data."""
     
     def __init__(self):
-        """初始化"""
+        """Initialize syncer."""
         self.config = {'enabled': True, 'priority': 0}
-        self.tdxquant = TdxQuantDataSource(name="tdxquant", config=self.config)
+        self.market_data_source = DataSourceManager()
         self.config_manager = ConfigManager()
 
         sync_settings = self.config_manager.get("data_sync", {}, config_file="settings.yaml") or {}
-        self.preferred_source = str(sync_settings.get("preferred_source", "tdxquant")).strip().lower()
+        self.preferred_source = str(sync_settings.get("preferred_source", "qmt_xtquant")).strip().lower()
         self.external_fallback_enabled = bool(sync_settings.get("external_fallback_enabled", True))
         self.external_fallback_periods = set(sync_settings.get("external_fallback_periods", ["1d"]) or ["1d"])
         self.external_fallback_providers = [
@@ -62,12 +60,11 @@ class KlineSyncer:
         self._security_type_cache: Dict[str, str] = {}
         self._canonical_code_cache: Dict[str, str] = {}
         
-        # 支持的周期列表（使用统一的时间单位标准）。
-        # 标准格式：1m, 5m, 15m, 30m, 60m, 1d, 1w, 1mon, 1q, 1y
+        # 閺€顖涘瘮閻ㄥ嫬鎳嗛張鐔峰灙鐞涱煉绱欐担璺ㄦ暏缂佺喍绔撮惃鍕闂傛潙宕熸担宥嗙垼閸戝棴绱氶妴?        # 閺嶅洤鍣弽鐓庣础閿?m, 5m, 15m, 30m, 60m, 1d, 1w, 1mon, 1q, 1y
         from utils.period_constants import PERIOD_DISPLAY_NAMES
         self.periods = PERIOD_DISPLAY_NAMES
         
-        # 统计信息
+        # 缂佺喕顓告穱鈩冧紖
         self.stats = {
             'total': 0,
             'success': 0,
@@ -114,8 +111,16 @@ class KlineSyncer:
             return None
 
         rename_map = {
-            "日期": "date",
-            "交易日期": "date",
+            "\u65e5\u671f": "date",
+            "\u4ea4\u6613\u65e5\u671f": "date",
+            "\u80a1\u7968\u4ee3\u7801": "code",
+            "\u4ee3\u7801": "code",
+            "\u5f00\u76d8": "open",
+            "\u6700\u9ad8": "high",
+            "\u6700\u4f4e": "low",
+            "\u6536\u76d8": "close",
+            "\u6210\u4ea4\u91cf": "volume",
+            "\u6210\u4ea4\u989d": "amount",
             "trade_date": "date",
             "open": "open",
             "high": "high",
@@ -126,11 +131,10 @@ class KlineSyncer:
             "open_price": "open",
             "high_price": "high",
             "low_price": "low",
-            "鏀剁洏": "close",
+            "close_price": "close",
             "turnover_volume": "volume",
             "turnover_amount": "amount",
             "vol": "volume",
-            "amount(鍗冨厓)": "amount",
         }
         work_df = df.rename(columns=rename_map).copy()
         required = ["date", "open", "high", "low", "close"]
@@ -316,7 +320,7 @@ class KlineSyncer:
 
         if not trade_date:
             fallback = (reference_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-            logger.warning(f"朻交易日历解析到已收盘交易日，使用回??日期 {fallback}")
+            logger.warning(f"閺堣姘﹂弰鎾存）閸樺棜袙閺嬫劕鍩屽鍙夋暪閻╂ü姘﹂弰鎾存）閿涘奔濞囬悽銊ユ礀??閺冦儲婀?{fallback}")
             return fallback
         return str(trade_date)
 
@@ -416,7 +420,7 @@ class KlineSyncer:
         target_stocks = stocks if stocks is not None else self._get_missing_stocks_for_trade_date(trade_date, sync_type)
 
         logger.info(
-            f"开始修复 trade_date={trade_date}, scope={sync_type or 'all'}, "
+            f"瀵偓婵鎱ㄦ径?trade_date={trade_date}, scope={sync_type or 'all'}, "
             f"before={before['actual_count']}/{before['baseline_count']}, missing_targets={len(target_stocks)}"
         )
 
@@ -472,7 +476,7 @@ class KlineSyncer:
             "status": "completed" if not after["is_incomplete"] else "failed",
         }
         logger.info(
-            f"补齐完成 trade_date={trade_date}, after={after['actual_count']}/{after['baseline_count']}, "
+            f"琛ラ綈屾?trade_date={trade_date}, after={after['actual_count']}/{after['baseline_count']}, "
             f"status={result['status']}, remaining={result['remaining_count']}"
         )
         return result
@@ -503,9 +507,9 @@ class KlineSyncer:
             }
 
         logger.warning(
-            f"?测到异常必 trade_date={target_trade_date}, "
+            f"?濞村鍩屽鍌氱埗韫?trade_date={target_trade_date}, "
             f"actual={before['actual_count']}, baseline={before['baseline_count']}, "
-            f"ratio={before['ratio']:.2%}, 开始自动修复..."
+            f"ratio={before['ratio']:.2%}, 寮€濮嬭嚜鍔ㄤ慨?.."
         )
         return self.repair_trade_date(
             trade_date=target_trade_date,
@@ -515,10 +519,10 @@ class KlineSyncer:
         )
     
     def get_all_stocks_and_indices(self) -> List[dict]:
-        """获取全部股票和指数代码。"""
+        """Load stock and index universe from ClickHouse."""
         try:
             if not (clickhouse_available() and clickhouse_table_exists("stocks")):
-                logger.warning("ClickHouse stocks 表不可用，返回空证券列表")
+                logger.warning("ClickHouse stocks table unavailable")
                 return []
             df = clickhouse_query_df(
                 """
@@ -537,18 +541,18 @@ class KlineSyncer:
                 }
                 for r in df.itertuples(index=False)
             ]
-            logger.info(f"获取到 {len(result)} 只 stock/index 类型证券")
+            logger.info(f"閼惧嘲褰囬崚?{len(result)} 閸?stock/index 缁鐎风拠浣稿煖")
             return result
             
         except Exception as e:
-            logger.error(f"获取股票列表失败: {e}")
+            logger.error(f"閼惧嘲褰囬懖锛勩偍閸掓銆冩径杈Е: {e}")
             return []
     
     def get_all_stocks(self) -> List[dict]:
-        """获取全部股票代码。"""
+        """Load stock universe from ClickHouse."""
         try:
             if not (clickhouse_available() and clickhouse_table_exists("stocks")):
-                logger.warning("ClickHouse stocks 表不可用，返回空股票列表")
+                logger.warning("ClickHouse stocks table unavailable")
                 return []
             df = clickhouse_query_df(
                 """
@@ -567,18 +571,18 @@ class KlineSyncer:
                 }
                 for r in df.itertuples(index=False)
             ]
-            logger.info(f"获取到 {len(result)} 只 stock 类型股票")
+            logger.info(f"閼惧嘲褰囬崚?{len(result)} 閸?stock 缁鐎烽懖锛勩偍")
             return result
             
         except Exception as e:
-            logger.error(f"获取股票列表失败: {e}")
+            logger.error(f"閼惧嘲褰囬懖锛勩偍閸掓銆冩径杈Е: {e}")
             return []
     
     def get_all_indices(self) -> List[dict]:
-        """获取全部指数代码。"""
+        """Load index universe from ClickHouse."""
         try:
             if not (clickhouse_available() and clickhouse_table_exists("stocks")):
-                logger.warning("ClickHouse stocks 表不可用，返回空指数列表")
+                logger.warning("ClickHouse stocks table unavailable")
                 return []
             df = clickhouse_query_df(
                 """
@@ -597,11 +601,11 @@ class KlineSyncer:
                 }
                 for r in df.itertuples(index=False)
             ]
-            logger.info(f"获取到 {len(result)} 只 index 类型股票")
+            logger.info(f"Loaded {len(result)} index records from ClickHouse")
             return result
             
         except Exception as e:
-            logger.error(f"获取指数列表失败: {e}")
+            logger.error(f"Failed to load indices from ClickHouse: {e}")
             return []
 
     def _get_security_type(self, code: str) -> str:
@@ -702,37 +706,26 @@ class KlineSyncer:
         if "trade_date" not in work_df.columns or "volume" not in work_df.columns:
             return work_df
 
-        date_values = (
-            pd.to_datetime(work_df["trade_date"], errors="coerce")
-            .dropna()
-            .dt.strftime("%Y%m%d")
-            .drop_duplicates()
-            .tolist()
-        )
-        if not date_values:
-            return work_df
-
         try:
-            rows = tdxquant_pool.get_gb_info(stock_code=code, date_list=date_values, count=len(date_values))
+            source = self.market_data_source.get_source("qmt_xtquant")
+            info = source.get_stock_info(code) if source and hasattr(source, "get_stock_info") else None
+            float_share = float((info or {}).get("float_share") or 0.0)
         except Exception as e:
-            logger.warning(f"index turnover ltgb fetch failed ({code}): {e}")
-            rows = None
+            logger.warning(f"index turnover float-share fetch failed ({code}): {e}")
+            float_share = 0.0
 
-        ltgb_by_date = self._parse_ltgb_rows(rows)
-        if not ltgb_by_date:
+        if float_share <= 0:
             return work_df
 
-        trade_dates = pd.to_datetime(work_df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
         volumes = pd.to_numeric(work_df["volume"], errors="coerce")
-        ltgb = trade_dates.map(ltgb_by_date)
-        turnover = (volumes * 10000.0) / ltgb
+        turnover = (volumes * 10000.0) / float_share
         mask = turnover.notna() & (turnover > 0)
         if mask.any():
             work_df.loc[mask, "turnover_rate"] = turnover.loc[mask]
         return work_df
 
     def get_watchlist_and_holding_stocks(self) -> List[dict]:
-        """获取自选股和持仓股。"""
+        """Load user watchlist and holding stocks."""
         try:
             if clickhouse_available():
                 if clickhouse_table_exists("user_stocks") and clickhouse_table_exists("stocks"):
@@ -753,9 +746,9 @@ class KlineSyncer:
                         }
                         for r in df.itertuples(index=False)
                     ]
-                    logger.info(f"获取到 {len(result)} 只自选股和持仓股")
+                    logger.info(f"Loaded {len(result)} watchlist/holding stocks from ClickHouse")
                     return result
-                logger.info("ClickHouse 缺少 user_stocks 表，按空自选池处理")
+                logger.info("ClickHouse user_stocks table unavailable; skip watchlist sync")
                 return []
 
             from models.stock_models import UserStock, Stock
@@ -764,7 +757,7 @@ class KlineSyncer:
             watchlist_codes = [stock.code for stock in user_stocks]
             if not watchlist_codes:
                 session.close()
-                logger.info("暂无自选股和持仓股")
+                logger.info("No watchlist/holding stocks found")
                 return []
             stocks = session.query(Stock).filter(Stock.code.in_(watchlist_codes)).all()
             result = [
@@ -772,15 +765,15 @@ class KlineSyncer:
                 for stock in stocks
             ]
             session.close()
-            logger.info(f"获取到 {len(result)} 只自选股和持仓股")
+            logger.info(f"Loaded {len(result)} watchlist/holding stocks")
             return result
 
         except Exception as e:
-            logger.error(f"获取自选股和持仓股失败: {e}")
+            logger.error(f"Failed to load watchlist/holding stocks: {e}")
             return []
     
     def get_kline_start_date(self, period: str) -> str:
-        """根据周期返回默认的 K 线起始日期。"""
+        """Return sync start date for a K-line period."""
         today = datetime.now()
 
         if period in ['1m', '5m', '15m', '30m', '1h', '60m']:
@@ -857,14 +850,13 @@ class KlineSyncer:
             return df
     
     def sync_kline_for_stock(self, stock: dict, period: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> bool:
-        """同单只股票的K线数?"""
+        """Sync one stock/index K-line period."""
         code = stock['code']
         name = stock['name']
         
-        df = None  # 初始化df变量
+        df = None  # 閸掓繂顫愰崠鏉乫閸欐﹢鍣?
         
         try:
-            # 确日期范围
             end_date = end_date or datetime.now().strftime('%Y-%m-%d')
             start_date = start_date or self.get_kline_start_date(period)
 
@@ -874,7 +866,7 @@ class KlineSyncer:
                     return []
                 out = []
                 out.append(s)
-                # 避免向底?SDK 传?裸代码（ 600000），仅在纕字时补全后缀候??                # 600000 -> 600000.SH / 600000.SZ / 600000.BJ (尽量覆盖常市场后缀)
+                # 闁灝鍘ら崥鎴濈俺?SDK 娴?鐟侀晲鍞惍渚婄礄 600000閿涘绱濇禒鍛躬缁炬洖鐡ч弮鎯八夐崗銊ユ倵缂傗偓閸??                # 600000 -> 600000.SH / 600000.SZ / 600000.BJ (鐏忎粙鍣虹憰鍡欐磰鐢绔堕崷鍝勬倵缂傗偓)
                 if s.isdigit() and len(s) == 6:
                     for suf in ("SH", "SZ", "BJ"):
                         v = f"{s}.{suf}"
@@ -882,18 +874,16 @@ class KlineSyncer:
                             out.append(v)
                 return out
 
-            # 获取 K 线数据，对数据源 code 格式做容错
-            last_err = None
+            # 鑾峰?K 绾挎暟鎹紝瀵规暟鎹簮 code 鏍煎紡鍋氬?            last_err = None
             df = None
-            source_used = self.preferred_source or "tdxquant"
+            source_used = self.preferred_source or "qmt_xtquant"
             for fetch_code in _candidate_codes(code):
                 try:
-                    df = self.tdxquant.get_stock_history(
+                    df = self.market_data_source.get_stock_history(
                         stock_code=fetch_code,
                         start_date=start_date,
                         end_date=end_date,
                         period=period,
-                        dividend_type='front'  # 前复权
                     )
                     if df is not None and not df.empty:
                         break
@@ -920,7 +910,7 @@ class KlineSyncer:
                 same_day_query = bool(start_date and end_date and start_date == end_date)
                 minute_periods = {"1m", "5m", "15m", "30m", "60m", "1h"}
                 log_fn = logger.debug if (same_day_query and period in minute_periods) else logger.warning
-                log_fn(f"{code} {name} {period} 无数据(start={start_date}, end={end_date}) err={last_err}")
+                log_fn(f"{code} {name} {period} 閺冪姵鏆熼幑?start={start_date}, end={end_date}) err={last_err}")
                 return False
 
             if self._is_index_stock(stock, code):
@@ -929,7 +919,7 @@ class KlineSyncer:
                     logger.warning(f"{code} {name} {period} data empty after anomaly filtering, skip insert")
                     return False
             
-            # 保存到数据库
+            # 娣囨繂鐡ㄩ崚鐗堟殶閹诡喖绨?
             serialize_minute_write = bool(self._is_index_stock(stock, code) and period in {'15m', '30m', '1h', '60m'})
             saved_rows = self._save_kline_to_db(code, period, df, serialize_minute_write=serialize_minute_write)
             if int(saved_rows or 0) <= 0:
@@ -938,7 +928,7 @@ class KlineSyncer:
 
             logger.info(f"{code} {name} {period} sync success: source={source_used}, saved_rows={saved_rows}, raw_rows={len(df)}")
             
-            # 释放 DataFrame 内存
+            # 閲婃?DataFrame 鍐呭?
             del df
             import gc
             gc.collect()
@@ -946,8 +936,7 @@ class KlineSyncer:
             return True
             
         except Exception as e:
-            logger.error(f"{code} {name} {period} 同步失败: {e}")
-            # 硿异常时也释放内存
+            logger.error(f"{code} {name} {period} sync failed: {e}")
             if df is not None:
                 del df
                 import gc
@@ -955,18 +944,18 @@ class KlineSyncer:
             return False
     
     def _save_kline_to_db(self, code: str, period: str, df: pd.DataFrame, serialize_minute_write: bool = False):
-        """保存 K 线数据到数据库。"""
+        """Save K-line data into database."""
         try:
             from sqlalchemy import text
             from utils.database import db
             from utils.market_warehouse import market_source
             
-            # 重用全局数据库连接池
+            # 闁插秶鏁ら崗銊ョ湰閺佺増宓佹惔鎾圭箾閹恒儲鐫?
             engine = db._engine
             dialect_name = str(getattr(getattr(engine, "dialect", None), "name", "") or "").lower()
             is_clickhouse = ("clickhouse" in dialect_name) or (str(market_source() or "").lower() == "clickhouse")
             
-            # 根据周期确定表名
+            # 閺嶈宓侀崨銊︽埂绾喖鐣剧悰銊ユ倳
             table_map = {
                 '1m': 'kline_minute_1',
                 '5m': 'kline_minute_5',
@@ -984,15 +973,14 @@ class KlineSyncer:
             table_name = table_map.get(period, 'kline_daily')
             # ClickHouse single-path mode: write directly to base table.
             
-            # 数据准备（统一 code 为 stocks 表中的规范 code）
-            canonical_code = self._canonical_storage_code(code)
+            # 閺佺増宓侀崙鍡楊槵閿涘牏绮烘稉鈧?code 娑?stocks 鐞涖劋鑵戦惃鍕潐閼?code閿?            canonical_code = self._canonical_storage_code(code)
             df = df.copy()
             df['code'] = canonical_code
             df['created_at'] = datetime.now()
             
-            # 根据表类型确定列名映射和数据处理
+            # 閺嶈宓佺悰銊ц閸ㄥ鈥樼€规艾鍨崥宥嗘Ё鐏忓嫬鎷伴弫鐗堝祦婢跺嫮鎮?
             if table_name.startswith('kline_minute'):
-                # 分钟线表使用 datetime 字段
+                # 鍒嗛挓绾胯浣跨敤 datetime 瀛楁?
                 column_map = {
                     'date': 'datetime',
                     'open': 'open',
@@ -1009,7 +997,6 @@ class KlineSyncer:
                 df = df[[col for col in columns if col in df.columns]]
                 
             elif table_name == 'kline_daily':
-                # 日线表使?trade_date 字，并计算涨跌幅等信息
                 column_map = {
                     'date': 'trade_date',
                     'open': 'open',
@@ -1025,12 +1012,12 @@ class KlineSyncer:
                 df = df.sort_values('trade_date')
                 
                 if len(df) > 1:
-                    # 如果有多天数据，使用diff和shift计算
+                    # 濡傛灉鏈夊澶╂暟鎹紝浣跨敤diff鍜宻hift璁＄?
                     df['change_amount'] = df['close'].diff()
                     df['change_pct'] = (df['change_amount'] / df['close'].shift(1)) * 100
                     df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
                     
-                    # 笸天没有前?天数捼设置?
+                    # 绗60ぉ娌℃湁?澶╂暟鎹艰?
                     df.loc[df.index[0], 'change_amount'] = 0
                     df.loc[df.index[0], 'change_pct'] = 0
                     df.loc[df.index[0], 'amplitude'] = 0
@@ -1066,13 +1053,13 @@ class KlineSyncer:
                                 df['change_pct'] = ((df['close'] - prev_close) / prev_close) * 100
                             else:
                                 df['change_pct'] = 0
-                            # 计算振幅
+                            # 鐠侊紕鐣婚幐顖氱畽
                             if prev_close > 0:
                                 df['amplitude'] = ((df['high'] - df['low']) / prev_close) * 100
                             else:
                                 df['amplitude'] = 0
                         else:
-                            # 没有前一天的数据，罸0
+                            # 濞屸剝婀侀崜宥勭婢垛晝娈戦弫鐗堝祦閿涘瞼绀?
                             df['change_amount'] = 0
                             df['change_pct'] = 0
                             df['amplitude'] = 0
@@ -1089,7 +1076,7 @@ class KlineSyncer:
                 df = df[[col for col in columns if col in df.columns]]
                 
             elif table_name == 'kline_weekly':
-                # 鍛ㄧ嚎琛ㄤ娇鐢?week_start_date 瀛楁
+                # 闁告稏鍔庨崵搴ｆ偘閵娿倕鈻忛柣?week_start_date 閻庢稒顨?
                 column_map = {
                     'date': 'week_start_date',
                     'open': 'open',
@@ -1106,7 +1093,7 @@ class KlineSyncer:
                 df = df[[col for col in columns if col in df.columns]]
                 
             elif table_name == 'kline_monthly':
-                # 鏈堢嚎琛ㄤ娇鐢?month_start_date 瀛楁
+                # 闁哄牆鐗忛崵搴ｆ偘閵娿倕鈻忛柣?month_start_date 閻庢稒顨?
                 column_map = {
                     'date': 'month_start_date',
                     'open': 'open',
@@ -1123,7 +1110,7 @@ class KlineSyncer:
                 df = df[[col for col in columns if col in df.columns]]
                 
             elif table_name == 'kline_quarterly':
-                # 季度线表?要特殊理，从date丏取year和quarter
+                # 鐎涳絽瀹崇痪鑳€?鐟曚胶澹掑▓濠勬倞閿涘奔绮燿ate娑撳繐褰噛ear閸滃uarter
                 df['year'] = pd.to_datetime(df['date']).dt.year
                 df['quarter'] = pd.to_datetime(df['date']).dt.quarter
                 
@@ -1142,7 +1129,7 @@ class KlineSyncer:
                 df = df[[col for col in columns if col in df.columns]]
                 
             elif table_name == 'kline_yearly':
-                # 年线表需要特殊理，从date丏取year
+                # 楠炲鍤庣悰銊╂付鐟曚胶澹掑▓濠勬倞閿涘奔绮燿ate娑撳繐褰噛ear
                 df['year'] = pd.to_datetime(df['date']).dt.year
                 
                 column_map = {
@@ -1159,8 +1146,7 @@ class KlineSyncer:
                 columns = ['code', 'year', 'open', 'high', 'low', 'close', 'volume', 'amount', 'created_at']
                 df = df[[col for col in columns if col in df.columns]]
             
-            # 批量处理数据，减少数捺操作次数
-            # 统一清洗：将非法数?标准化，避?NaN/inf 入库
+            # 閹靛綊鍣烘径鍕倞閺佺増宓侀敍灞藉櫤鐏忔垶鏆熼幑鐑樻惙娴ｆ粍顐奸弫?            # 缂佺喍绔村〒鍛閿涙艾鐨㈤棃鐐寸《閺?閺嶅洤鍣崠鏍电礉闁?NaN/inf 閸忋儱绨?
             key_fields_map = {
                 'kline_daily': ['trade_date'],
                 'kline_weekly': ['week_start_date'],
@@ -1185,8 +1171,7 @@ class KlineSyncer:
                 if dropped_rows > 0:
                     logger.warning(f"{code} {period} dropped invalid kline rows: {dropped_rows}")
             
-            # 对于分钟线数据，额外确保datetime列没有None值
-            if table_name.startswith('kline_minute') and 'datetime' in df.columns:
+            # 鐎甸€涚艾閸掑棝鎸撶痪鎸庢殶閹诡噯绱濇０婵嗩樆绾喕绻歞atetime閸掓鐥呴張濉弌ne閸?            if table_name.startswith('kline_minute') and 'datetime' in df.columns:
                 before_rows = len(df)
                 df = df.dropna(subset=['datetime'])
                 dropped_rows = before_rows - len(df)
@@ -1306,8 +1291,7 @@ class KlineSyncer:
             # Keep all writes on the active SQLAlchemy engine path.
 
             if not df.empty:
-                # 按批次理，每批50条（减少批大小以降低锁率）
-                batch_size = 50
+                # 閹稿澹掑▎锛勬倞閿涘本鐦￠幍?0閺夆槄绱欓崙蹇撶毌閹电懓銇囩亸蹇庝簰闂勫秳缍嗛柨浣哄芳閿?                batch_size = 50
                 total_rows = len(df)
                 inserted_rows = 0
                 write_guard = nullcontext()
@@ -1347,8 +1331,7 @@ class KlineSyncer:
                                         :amplitude, :change_pct, :change_amount, :turnover_rate, :created_at)
                                 """
                             elif table_name == 'kline_weekly':
-                                # 周线?- 先删除后插入，确保数捜新且避免死锁
-                                # 获取批业日期范围
+                                # 鍛ㄧ?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟鏃ユ湡鑼冨洿
                                 date_range = batch_df['week_start_date'].tolist()
                                 min_date = min(date_range)
                                 max_date = max(date_range)
@@ -1373,8 +1356,7 @@ class KlineSyncer:
                                 VALUES (:code, :week_start_date, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             elif table_name == 'kline_monthly':
-                                # 月线?- 先删除后插入，确保数捜新且避免死锁
-                                # 获取批业日期范围
+                                # 鏈堢?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟鏃ユ湡鑼冨洿
                                 date_range = batch_df['month_start_date'].tolist()
                                 min_date = min(date_range)
                                 max_date = max(date_range)
@@ -1399,15 +1381,13 @@ class KlineSyncer:
                                 VALUES (:code, :month_start_date, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             elif table_name == 'kline_quarterly':
-                                # 季度线表 - 先删除后插入，确保数捜新且避免死锁
-                                years = batch_df['year'].tolist()
+                                # 瀛ｅ害绾胯?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                years = batch_df['year'].tolist()
                                 quarters = batch_df['quarter'].tolist()
                                 min_year = min(years)
                                 max_year = max(years)
                                 min_quarter = min(quarters)
                                 max_quarter = max(quarters)
                                 
-                                # 先删除股票在年份和季度范围内的数据
                                 delete_sql = f"""
                                 DELETE FROM {table_name} 
                                 WHERE code = :code AND year >= :min_year AND year <= :max_year
@@ -1422,8 +1402,7 @@ class KlineSyncer:
                                 VALUES (:code, :year, :quarter, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             elif table_name == 'kline_yearly':
-                                # 年线?- 先删除后插入，确保数捜新且避免死锁
-                                # 获取批业年份范围
+                                # 骞寸?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟骞翠唤鑼冨洿
                                 years = batch_df['year'].tolist()
                                 min_year = min(years)
                                 max_year = max(years)
@@ -1441,8 +1420,7 @@ class KlineSyncer:
                                 VALUES (:code, :year, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             else:
-                                # 默情况 - 先删除后插入，确保数捜新且避免死锁
-                                # 获取批业日期范围
+                                # 榛樻儏鍐?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟鏃ユ湡鑼冨洿
                                 date_range = batch_df['trade_date'].tolist()
                                 min_date = min(date_range)
                                 max_date = max(date_range)
@@ -1467,7 +1445,7 @@ class KlineSyncer:
                                 VALUES (:code, :trade_date, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             
-                            # 带重试机制的批量插入
+                            # 鐢箓鍣哥拠鏇熸簚閸掑墎娈戦幍褰掑櫤閹绘帒鍙?
                             max_retries = 3
                             retry_count = 0
                             success = False
@@ -1485,28 +1463,27 @@ class KlineSyncer:
                                 except Exception as e:
                                     retry_count += 1
                                     if retry_count >= max_retries:
-                                        logger.exception(f"批量插入数据失败 {code} {period}，已重试{max_retries}: {e}")
-                                        # 回滚事务
+                                        logger.exception(f"閹靛綊鍣洪幓鎺戝弳閺佺増宓佹径杈Е {code} {period}閿涘苯鍑￠柌宥堢槸{max_retries}: {e}")
+                                        # 閸ョ偞绮存禍瀣
                                         conn.rollback()
-                                        # 尝试单条插入
+                                        # 灏濊瘯鍗曟潯鎻掑?
                                         for _, row in batch_df.iterrows():
                                             try:
                                                 conn.execute(text(insert_sql), _sanitize_record_for_sql(row.to_dict()))
                                                 conn.commit()
                                                 inserted_rows += 1
                                             except Exception as single_e:
-                                                logger.exception(f"单条插入数据失败 {code} {period}: {single_e}")
+                                                logger.exception(f"閸楁洘娼幓鎺戝弳閺佺増宓佹径杈Е {code} {period}: {single_e}")
                                                 conn.rollback()
                                     else:
-                                        logger.warning(f"批量插入数据失败 {code} {period}，第 {retry_count} 次重试: {e}")
+                                        logger.warning(f"閹靛綊鍣洪幓鎺戝弳閺佺増宓佹径杈Е {code} {period}閿涘瞼顑?{retry_count} 濞嗭繝鍣哥拠? {e}")
                                         conn.rollback()
-                                        time.sleep(0.5 * retry_count)  # 指数退避，减少锁冲突
-
+                                        time.sleep(0.5 * retry_count)  # 閹稿洦鏆熼柅鈧柆鍖＄礉閸戝繐鐨柨浣稿暱缁?
                 return inserted_rows
             return 0
                 
         except Exception as e:
-            logger.error(f"保存K线数据失败 {code} {period}: {e}")
+            logger.error(f"娣囨繂鐡↘缁炬寧鏆熼幑顔笺亼鐠?{code} {period}: {e}")
             raise
     
     def sync_all_klines(self, max_workers: int = 2, periods: Optional[List[str]] = None, type: Optional[str] = None):
@@ -1515,13 +1492,13 @@ class KlineSyncer:
         # periods: target periods such as ['1m', '15m', '1d']
         # type: target asset type, e.g. 'index' or 'stock'
         logger.info("=" * 80)
-        logger.info(f"开始同步 K 线数据，类型: {type}")
+        logger.info(f"Start K-line sync, type={type}")
         logger.info("=" * 80)
         
-        # 确定要同步的周期
+        # 绾喖鐣剧憰浣告倱濮濄儳娈戦崨銊︽埂
         sync_periods = periods or list(self.periods.keys())
         
-        # 逐个周期同步
+        # 闁劒閲滈崨銊︽埂閸氬本顒?
         for period in sync_periods:
             if period not in self.periods:
                 logger.warning(f"Unknown period {period}, skip")
@@ -1529,28 +1506,26 @@ class KlineSyncer:
             
             period_name = self.periods[period]
             logger.info(f"\n{'='*80}")
-            logger.info(f"开始同步 {period_name} ({period}) 数据")
+            logger.info(f"Start period sync: {period_name} ({period})")
             logger.info(f"{'='*80}")
             
-            # 根据周期和类型选择证券列表
+            # 閺嶈宓侀崨銊︽埂閸滃瞼琚崹瀣偓澶嬪鐠囦礁鍩滈崚妤勩€?
             if period == '1m':
-                # 1分钟数据只同步自选股和持仓股
+                # 1閸掑棝鎸撻弫鐗堝祦閸欘亜鎮撳銉ㄥ殰闁鍋傞崪灞惧瘮娴犳捁鍋?
                 stocks = self.get_watchlist_and_holding_stocks()
             else:
-                # 根据类型选择证券列表
+                # 閺嶈宓佺猾璇茬€烽柅澶嬪鐠囦礁鍩滈崚妤勩€?
                 if type == 'index':
                     stocks = self.get_all_indices()
                 elif type == 'stock':
                     stocks = self.get_all_stocks()
                 else:
-                    # 同步全部股票和指数
                     stocks = self.get_all_stocks_and_indices()
             
             if not stocks:
-                logger.warning(f"没有获取到证券列表，跳过 {period_name} 同步")
+                logger.warning(f"No targets found for {period_name}; skip")
                 continue
             
-            # 更新统信息
             self.stats['total'] += len(stocks)
             
             period_success = 0
@@ -1562,7 +1537,7 @@ class KlineSyncer:
                 job_anchor_datetime = datetime.now()
                 anchor_trade_date = self._get_latest_closed_trade_date(job_anchor_datetime)
                 logger.info(
-                    f"任务已锁定基准日 anchor_trade_date={anchor_trade_date}, "
+                    f"Daily sync anchor_trade_date={anchor_trade_date}, "
                     f"job_start={job_anchor_datetime.isoformat()}"
                 )
             
@@ -1584,7 +1559,7 @@ class KlineSyncer:
                         for stock in stocks
                     }
                 
-                # 处理结果
+                # 婢跺嫮鎮婄紒鎾寸亯
                 for future in as_completed(future_to_stock):
                     stock = future_to_stock[future]
                     try:
@@ -1595,38 +1570,38 @@ class KlineSyncer:
                             period_failed += 1
                             self.stats['failed'] += 1
                     except Exception as e:
-                        logger.error(f"处理 {stock['code']} 时出? {e}")
+                        logger.error(f"婢跺嫮鎮?{stock['code']} 閺冭泛鍤? {e}")
                         period_failed += 1
                         self.stats['failed'] += 1
                     finally:
-                        # 删除future释放内存
+                        # 閸掔娀娅巉uture闁插﹥鏂侀崘鍛摠
                         del future
                     
-                    # 每处理100只打印进度并强制垃圾回收
+                    # 濮ｅ繐顦╅悶?00閸欘亝澧﹂崡鎷岀箻鎼达箑鑻熷鍝勫煑閸ㄥ啫婧囬崶鐐存暪
                     if (period_success + period_failed) % 100 == 0:
-                        logger.info(f"进度: {period_success + period_failed}/{len(stocks)}, "
-                                  f"成功: {period_success}, 失败: {period_failed}")
-                        # 强制垃圾回收
+                        logger.info(f"杩涘? {period_success + period_failed}/{len(stocks)}, "
+                                  f"閹存劕濮? {period_success}, 婢惰精瑙? {period_failed}")
+                        # 寮哄埗鍨冨溇鍥炴?
                         import gc
                         gc.collect()
             
-            # 清理future_to_stock释放内存
+            # 娓呯悊future_to_stock閲婃斁鍐呭瓨
             del future_to_stock
             import gc
             gc.collect()
             
-            logger.info(f"{period_name} 同步完成: 成功 {period_success}, 失败 {period_failed}")
+            logger.info(f"{period_name} 閸氬本顒炵€瑰本鍨? 閹存劕濮?{period_success}, 婢惰精瑙?{period_failed}")
 
             if period == '1d' and anchor_trade_date:
                 crossed_midnight = datetime.now().date() != job_anchor_datetime.date()
                 if crossed_midnight:
                     logger.warning(
-                        f"任务执期间跨过午，但已继绔定基准日 anchor_trade_date={anchor_trade_date}"
+                        f"浠诲姟鎵ф湡闂磋法杩囧崍锛屼絾宸茬户缁斿畾鍩哄噯鏃?anchor_trade_date={anchor_trade_date}"
                     )
 
                 snapshot = self._get_trade_date_candidates(anchor_trade_date, type)
                 logger.info(
-                    f"完整性?trade_date={anchor_trade_date}, actual={snapshot['actual_count']}, "
+                    f"鐎瑰本鏆ｉ幀?trade_date={anchor_trade_date}, actual={snapshot['actual_count']}, "
                     f"baseline={snapshot['baseline_count']}, minimum_required={snapshot['minimum_required']}, "
                     f"ratio={snapshot['ratio']:.2%}, crossed_midnight={crossed_midnight}"
                 )
@@ -1639,22 +1614,21 @@ class KlineSyncer:
                     )
                     if repair_result["status"] != "completed":
                         logger.error(
-                            f"臊后仍不完?trade_date={anchor_trade_date}, "
+                            f"閼峰﹤鎮楁禒宥勭瑝鐎?trade_date={anchor_trade_date}, "
                             f"after={repair_result['after']['actual_count']}/{repair_result['after']['baseline_count']}, "
                             f"remaining={repair_result['remaining_count']}"
                         )
             
-            # 每个周期结束后暂停一下，避免请求过于频繁
+            # 姣忎釜鍛ㄦ湡缁撴潫鍚庢殏鍋滀竴涓嬶紝閬垮厤璇锋眰杩囦簬棰戠箒
             time.sleep(5)
         
-        # 打印最终统计
         logger.info(f"\n{'='*80}")
-        logger.info("全量 K 线数据同步完成")
+        logger.info("K-line sync finished")
         logger.info(
-            f"总计: {self.stats['total']}, 成功: {self.stats['success']}, "
-            f"失败: {self.stats['failed']}, 跳过: {self.stats['skipped']}, "
-            f"外部回填成功: {self.stats['external_fallback_success']}, "
-            f"外部回填失败: {self.stats['external_fallback_failed']}"
+            f"total={self.stats['total']}, success={self.stats['success']}, "
+            f"failed={self.stats['failed']}, skipped={self.stats['skipped']}, "
+            f"external_success={self.stats['external_fallback_success']}, "
+            f"external_failed={self.stats['external_fallback_failed']}"
         )
         logger.info(f"{'='*80}")
 

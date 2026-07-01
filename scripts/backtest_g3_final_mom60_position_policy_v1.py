@@ -19,6 +19,11 @@ from utils.paths import report_path  # noqa: E402
 
 OUT_DIR = report_path("g3_final_mom60_position_policy_v1")
 MODEL = "g3_final_with_g2_gap_supplement"
+CURRENT_FORMAL_POLICY = "mainwave_hard_le_5_50"
+LEGACY_SENSITIVITY_POLICIES = {
+    "mainwave_tier_5_10_50_25_0",
+    "all_g3_tier_5_10_50_25_0",
+}
 POLICIES = [
     "base_50",
     "mainwave_tier_5_10_50_25_0",
@@ -287,8 +292,8 @@ def write_report(summary: pd.DataFrame, windows: pd.DataFrame, buckets: pd.DataF
         "- Base candidates: current final G3 + G2 gap supplement replay inputs.",
         "- Market heat uses previous trading day's `mom60` from `gen3_four_path_independent_candidates/market_context.csv`.",
         "- This audit changes entry sizing/blocking only; exits and candidate ranking are unchanged.",
-        "- `mainwave_tier_5_10_50_25_0` applies the rule only to G3 institutional mainwave rows.",
-        "- `all_g3_tier_5_10_50_25_0` is a sensitivity test and is not the default contract.",
+        f"- Current formal contract: `{CURRENT_FORMAL_POLICY}`; institutional mainwave uses `index_mom60<=5%`, otherwise observe/block with no 25% reduced buy.",
+        "- `mainwave_tier_5_10_50_25_0` and `all_g3_tier_5_10_50_25_0` are legacy sensitivity tests only; they must not be used as current shadow/buy-ticket policy.",
         "",
         "## Full Period",
         "",
@@ -377,6 +382,9 @@ def run() -> dict[str, Any]:
         "selected_candidates": int(len(selected)),
         "calendar_days": int(len(calendar)),
         "policies": POLICIES,
+        "current_formal_policy": CURRENT_FORMAL_POLICY,
+        "legacy_sensitivity_policies": sorted(LEGACY_SENSITIVITY_POLICIES),
+        "formal_contract_note": "institutional_mainwave index_mom60>5% observe/block only; no 25% reduced buy",
     }
     write_report(summary, windows, buckets, meta)
     (OUT_DIR / "summary.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

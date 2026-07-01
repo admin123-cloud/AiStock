@@ -50,6 +50,28 @@ def _has_clickhouse_table(table_name: str) -> bool:
         return False
 
 
+def _latest_daily_trade_date_from_calendar():
+    if not clickhouse_available():
+        return None
+    kline_table = _resolve_table_name("kline_daily")
+    if not _has_clickhouse_table(kline_table) or not _has_clickhouse_table("trade_calendar"):
+        return None
+    try:
+        return clickhouse_scalar(
+            """
+            SELECT MAX(k.trade_date)
+            FROM {kline_table} k
+            JOIN trade_calendar c
+              ON c.trade_date = k.trade_date
+             AND c.market = 'SH'
+             AND c.is_trading = 1
+            """.format(kline_table=kline_table)
+        )
+    except Exception as exc:
+        logger.warning(f"latest daily trade date calendar query failed: {exc}")
+        return None
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
@@ -326,7 +348,7 @@ def _legacy_get_market_indices(code: Optional[str] = None):
                 stock_query = stock_query.filter(Stock.code == code)
             stocks = stock_query.all()
 
-            latest_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+            latest_date = _latest_daily_trade_date_from_calendar() or session.query(func.max(KlineDaily.trade_date)).scalar()
             if not latest_date:
                 return {"indices": [], "trading_date": None}
 
@@ -1835,11 +1857,13 @@ def calculate_emotion_cycle():
     """计算最新交易日情绪周期数据。"""
     session = next(db.get_session())
     try:
-        latest_kline = session.query(KlineDaily).order_by(KlineDaily.trade_date.desc()).first()
-        if not latest_kline:
+        trade_date = _latest_daily_trade_date_from_calendar()
+        latest_kline = None if trade_date else session.query(KlineDaily).order_by(KlineDaily.trade_date.desc()).first()
+        if not trade_date and not latest_kline:
             return {"success": False, "error": "数据库中没有K线数据，请先获取行情数据"}
 
-        trade_date = latest_kline.trade_date
+        if not trade_date:
+            trade_date = latest_kline.trade_date
         existing = session.query(EmotionCycle).filter(EmotionCycle.date == trade_date).first()
         if existing:
             session.delete(existing)

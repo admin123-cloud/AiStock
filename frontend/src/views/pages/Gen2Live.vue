@@ -355,9 +355,6 @@
           <div>
             <div class="panel-title">今日正式买入执行区</div>
             <div class="toolbar-note">这里只显示已经通过策略状态、盘中触发和风控候选状态的可买入标的；影子样本不会进入这里。</div>
-            <div class="toolbar-note">{{ ptradeBridgeSummary }}</div>
-            <div class="toolbar-note">{{ ptradeBridgeQueueText }}</div>
-            <div class="toolbar-note">{{ ptradeBridgeReadinessText }}</div>
           </div>
           <div class="actions">
             <el-button type="primary" :loading="gen2ShadowMonitorLoading" @click="runGen2ShadowMonitorOnce">立即探测买点</el-button>
@@ -970,154 +967,6 @@
         </el-table>
       </div>
 
-      <div class="panel">
-        <div class="sub-panel-header">
-          <div>
-            <div class="panel-title">模拟盘桥接回放</div>
-            <div class="toolbar-note">统一查看 bridge 订单、成交与最新持仓快照；等 PTrade 开始回写后，这里就是模拟盘闭环核对面板。</div>
-            <div class="toolbar-note">{{ ptradeBridgeSummary }}</div>
-            <div class="toolbar-note">{{ ptradeBridgeQueueText }}</div>
-          </div>
-          <div class="actions">
-            <el-button :loading="ptradeBridgeLoading" @click="fetchPtradeBridgeState">刷新桥接状态</el-button>
-            <el-button :loading="ptradeBridgeProbeLoading" @click="runPtradeBridgeProbe(false)">只读探针</el-button>
-            <el-button type="warning" plain :loading="ptradeBridgeProbeLoading" @click="runPtradeBridgeProbe(true)">dry-run 探针</el-button>
-            <el-button type="success" plain :loading="ptradeBridgeAcceptanceLoading" @click="runPtradeBridgeAcceptanceGate">PTrade 验收门禁</el-button>
-            <el-button type="info" plain :loading="ptradeBridgeWatchAcceptanceLoading" @click="runPtradeBridgeWatchAcceptance">等待 PTrade 并验收</el-button>
-            <el-button
-              type="danger"
-              plain
-              :loading="ptradeBridgeLiveSubmitTestLoading"
-              :disabled="!ptradeBridgeAudit?.gates?.live_submit_ready"
-              @click="runPtradeBridgeLiveSubmitTest"
-            >
-              live-submit 小额验收
-            </el-button>
-            <el-button
-              type="primary"
-              :disabled="!(ptradeBridgePositions?.latest?.ok && (ptradeBridgePositions?.latest?.positions || []).length)"
-              @click="importPtradePositionsToManualHoldings"
-            >
-              导入模拟盘持仓</el-button>
-          </div>
-        </div>
-        <el-alert
-          v-if="ptradeBridgePositions?.latest?.snapshot_time"
-          type="info"
-          :closable="false"
-          :title="`最近模拟盘持仓快照：${ptradeBridgePositions.latest.snapshot_time}`"
-          :description="ptradeBridgePositions.latest.file || ''"
-          class="panel-alert"
-        />
-        <el-alert
-          v-if="ptradeBridgeProbeResult"
-          :type="ptradeBridgeProbeResult.ok ? 'success' : 'warning'"
-          :closable="false"
-          :title="ptradeBridgeProbeSummary"
-          :description="ptradeBridgeProbeResult.note || ''"
-          class="panel-alert"
-        />
-        <el-alert
-          v-if="ptradeBridgeAcceptanceResult"
-          :type="ptradeBridgeAcceptanceResult.ok ? 'success' : 'warning'"
-          :closable="false"
-          :title="ptradeBridgeAcceptanceSummary"
-          :description="ptradeBridgeAcceptanceResult.note || ''"
-          class="panel-alert"
-        />
-        <el-alert
-          v-if="ptradeBridgeWatchAcceptanceResult"
-          :type="ptradeBridgeWatchAcceptanceResult.ok ? 'success' : 'warning'"
-          :closable="false"
-          :title="ptradeBridgeWatchAcceptanceSummary"
-          :description="ptradeBridgeWatchAcceptanceResult.note || ''"
-          class="panel-alert"
-        />
-        <el-alert
-          v-if="ptradeBridgeLiveSubmitTestResult"
-          :type="ptradeBridgeLiveSubmitTestResult.ok ? 'success' : 'warning'"
-          :closable="false"
-          :title="ptradeBridgeLiveSubmitTestSummary"
-          :description="ptradeBridgeLiveSubmitTestResult.note || ''"
-          class="panel-alert"
-        />
-        <el-alert
-          v-if="ptradeBridgeEvidence"
-          :type="ptradeBridgeEvidence.ok ? 'success' : 'warning'"
-          :closable="false"
-          :title="ptradeBridgeEvidenceSummary"
-          :description="Array.isArray(ptradeBridgeEvidence.next_actions) ? ptradeBridgeEvidence.next_actions[0] : ''"
-          class="panel-alert"
-        />
-        <div v-if="ptradeBridgeEvidenceRows.length" class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">PTrade 验收证据</div>
-          <el-table :data="ptradeBridgeEvidenceRows" stripe size="small" empty-text="暂无 PTrade 验收证据">
-            <el-table-column prop="name" label="条件" min-width="180" />
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.ok ? 'success' : 'warning'" size="small">{{ row.ok ? '通过' : '未通过' }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="evidence" label="证据" min-width="260" show-overflow-tooltip />
-            <el-table-column prop="next_action" label="下一步" min-width="320" show-overflow-tooltip />
-          </el-table>
-        </div>
-        <div class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">最新模拟盘持仓</div>
-          <el-table :data="ptradeLatestPositionRows" stripe size="small" empty-text="暂无模拟盘持仓快照">
-            <el-table-column prop="code" label="代码" width="110">
-              <template #default="{ row }">{{ displayCode(row.code) }}</template>
-            </el-table-column>
-            <el-table-column prop="name" label="名称" min-width="120" />
-            <el-table-column prop="shares" label="数量" width="90" />
-            <el-table-column label="成本" width="90">
-              <template #default="{ row }">{{ formatPrice(row.cost_price) }}</template>
-            </el-table-column>
-            <el-table-column label="现价" width="90">
-              <template #default="{ row }">{{ formatPrice(row.current_price) }}</template>
-            </el-table-column>
-            <el-table-column label="市值" width="110">
-              <template #default="{ row }">{{ formatMoney(row.market_value) }}</template>
-            </el-table-column>
-            <el-table-column label="盈亏%" width="90">
-              <template #default="{ row }"><span :style="aSharePnlStyle(row.pnl_ratio)">{{ formatPct(row.pnl_ratio) }}</span></template>
-            </el-table-column>
-          </el-table>
-        </div>
-        <div class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">最近模拟盘成交</div>
-          <el-table :data="ptradeBridgeFills" stripe size="small" empty-text="暂无模拟盘成交回放">
-            <el-table-column prop="order_id" label="订单号" width="180" show-overflow-tooltip />
-            <el-table-column prop="code" label="代码" width="110">
-              <template #default="{ row }">{{ displayCode(row.code) }}</template>
-            </el-table-column>
-            <el-table-column prop="side" label="方向" width="80" />
-            <el-table-column prop="quantity" label="数量" width="90" />
-            <el-table-column label="成交价" width="90">
-              <template #default="{ row }">{{ formatPrice(row.fill_price ?? row.price) }}</template>
-            </el-table-column>
-            <el-table-column prop="filled_at" label="成交时间" width="168" show-overflow-tooltip />
-            <el-table-column prop="message" label="说明" min-width="180" show-overflow-tooltip />
-          </el-table>
-        </div>
-        <div class="sub-panel" style="margin-top: 12px;">
-          <div class="sub-panel-title">最近模拟盘订单</div>
-          <el-table :data="ptradeBridgeOrders.slice(0, 10)" stripe size="small" empty-text="暂无模拟盘订单">
-            <el-table-column prop="order_id" label="订单号" width="180" show-overflow-tooltip />
-            <el-table-column prop="code" label="代码" width="110">
-              <template #default="{ row }">{{ displayCode(row.code) }}</template>
-            </el-table-column>
-            <el-table-column prop="side" label="方向" width="80" />
-            <el-table-column prop="quantity" label="数量" width="90" />
-            <el-table-column label="价格" width="90">
-              <template #default="{ row }">{{ formatPrice(row.price) }}</template>
-            </el-table-column>
-            <el-table-column prop="_bridge_status" label="状态" width="110" />
-            <el-table-column prop="created_at" label="创建时间" width="168" show-overflow-tooltip />
-            <el-table-column prop="reason" label="说明" min-width="180" show-overflow-tooltip />
-          </el-table>
-        </div>
-      </div>
     </template>
 
     <el-dialog v-model="gen2VerificationDialogVisible" title="G2候选确认验证" width="480px">
@@ -1373,19 +1222,6 @@ import {
   readV4ManualHoldingThsCurrentTable,
   readV4ManualHoldingThsDeliveryFile,
   readV4ManualHoldingThsCapitalHoldings,
-  getPtradeBridgeStatus,
-  getPtradeBridgeReadinessAudit,
-  getPtradeBridgeEvidenceReport,
-  listPtradeBridgeOrders,
-  listPtradeBridgeFills,
-  getPtradeBridgePositions,
-  runPtradeBridgeLiveProbe,
-  startPtradeBridgeAcceptance,
-  getPtradeBridgeAcceptanceTask,
-  startPtradeBridgeWatchAcceptance,
-  getPtradeBridgeWatchAcceptanceTask,
-  startPtradeBridgeLiveSubmitTest,
-  getPtradeBridgeLiveSubmitTestTask,
   submitGen2PaperOrder
 } from '@/api/trading'
 import { getStockDetail, getStockHistory } from '@/api/stock'
@@ -1447,21 +1283,6 @@ const dailyExecutionForm = ref({
   t3_review: '',
   t5_review: ''
 })
-const ptradeBridgeLoading = ref(false)
-const ptradeBridgeStatus = ref(null)
-const ptradeBridgeAudit = ref(null)
-const ptradeBridgeEvidence = ref(null)
-const ptradeBridgeOrders = ref([])
-const ptradeBridgeFills = ref([])
-const ptradeBridgePositions = ref(null)
-const ptradeBridgeProbeLoading = ref(false)
-const ptradeBridgeProbeResult = ref(null)
-const ptradeBridgeAcceptanceLoading = ref(false)
-const ptradeBridgeAcceptanceResult = ref(null)
-const ptradeBridgeWatchAcceptanceLoading = ref(false)
-const ptradeBridgeWatchAcceptanceResult = ref(null)
-const ptradeBridgeLiveSubmitTestLoading = ref(false)
-const ptradeBridgeLiveSubmitTestResult = ref(null)
 const paperOrderSubmittingCode = ref('')
 const gen2VerificationDialogVisible = ref(false)
 const gen2VerificationSaving = ref(false)
@@ -1511,7 +1332,6 @@ const TRAILING_TP_DRAWDOWN = 4
 const SINGLE_TRADE_LOSS_CAP_PCT_OF_TOTAL = 2
 const AUTO_REFRESH_INTERVAL_MS = 15 * 1000
 const AUTO_REFRESH_HOLDINGS_MIN_MS = 30 * 1000
-const AUTO_REFRESH_PTRADE_BRIDGE_MIN_MS = 30 * 1000
 const AUTO_REFRESH_MARKET_GATE_MIN_MS = 60 * 1000
 const AUTO_REFRESH_GEN2_SHADOW_MIN_MS = 180 * 1000
 const AUTO_REFRESH_WORKFLOW_MIN_MS = 180 * 1000
@@ -1519,7 +1339,6 @@ let autoRefreshTimer = null
 const autoRefreshRunning = ref(false)
 const lastAutoRefreshAt = ref('')
 const lastHoldingAutoRefreshAt = ref(0)
-const lastPtradeBridgeAutoRefreshAt = ref(0)
 const lastMarketGateAutoRefreshAt = ref(0)
 const lastGen2ShadowAutoRefreshAt = ref(0)
 const lastWorkflowAutoRefreshAt = ref(0)
@@ -1724,128 +1543,6 @@ const workflowLineageResult = (row) => {
 const gen2ShadowRows = computed(() => Array.isArray(gen2Shadow.value?.rows) ? gen2Shadow.value.rows : [])
 const actionableBuyRows = computed(() => gen2ShadowRows.value.filter((row) => gen2ShadowCanAddHolding(row)))
 const shadowReviewRows = computed(() => gen2ShadowRows.value.filter((row) => !gen2ShadowCanAddHolding(row)))
-const ptradeActiveOrders = computed(() => {
-  const rows = Array.isArray(ptradeBridgeOrders.value) ? ptradeBridgeOrders.value : []
-  return rows.filter((item) => ['pending', 'processing', 'ack', 'dry_run', 'waiting_approval', 'submitted', 'cancel_requested'].includes(String(item?._bridge_status || '').toLowerCase()))
-})
-const ptradeBridgeSummary = computed(() => {
-  const status = ptradeBridgeStatus.value || {}
-  if (!status.ok) return '模拟盘桥接状态未读取。'
-  const lastAck = status.last_ack_file ? '；已有回执' : ''
-  const lastFill = status.last_fill_file ? '；已有成交回写' : ''
-  const processing = Number(status.processing_count || 0)
-  const stale = Number(status.processing_stale_count || 0)
-  const heartbeatAge = Number(status.ptrade_heartbeat_age_seconds)
-  const processingText = processing ? '; processing ' + String(processing) : ''
-  const staleText = stale ? '; stale processing ' + String(stale) : ''
-  const heartbeatText = Number.isFinite(heartbeatAge) ? '; PTrade心跳 ' + String(Math.round(heartbeatAge)) + 's' : '; PTrade心跳未见'
-  return '模拟盘桥接：pending ' + String(status.pending_count || 0) + processingText + staleText + heartbeatText + '；活动订单 ' + String(ptradeActiveOrders.value.length) + '；dry_run 默认 ' + (status.dry_run_default ? '开' : '关') + '；审批默认 ' + (status.require_approval_default ? '开' : '关') + lastAck + lastFill
-})
-const ptradeBridgeQueueText = computed(() => {
-  const status = ptradeBridgeStatus.value || {}
-  const queue = status.ptrade_strategy_queue || {}
-  if (!status.ok) return 'PTrade 队列遥测未读取。'
-  if (!queue || !Object.keys(queue).length) return 'PTrade 策略端队列遥测未见；AiStock 仍只写本地 pending，不等待 ack。'
-  const pending = Number(queue.pending_count)
-  const processing = Number(queue.processing_count)
-  const cancelRequests = Number(queue.cancel_request_count)
-  const oldestPending = Number(queue.oldest_pending_age_seconds)
-  const oldestProcessing = Number(queue.oldest_processing_age_seconds)
-  const processed = Number(queue.total_order_processed)
-  const errors = Number(queue.total_bridge_errors)
-  const pendingText = Number.isFinite(pending) ? 'pending ' + String(pending) : 'pending --'
-  const processingText = Number.isFinite(processing) ? 'processing ' + String(processing) : 'processing --'
-  const cancelText = Number.isFinite(cancelRequests) ? 'cancel ' + String(cancelRequests) : 'cancel --'
-  const pendingAgeText = Number.isFinite(oldestPending) ? '最老 pending ' + String(Math.round(oldestPending)) + 's' : '最老 pending --'
-  const processingAgeText = Number.isFinite(oldestProcessing) ? '最老 processing ' + String(Math.round(oldestProcessing)) + 's' : '最老 processing --'
-  const processedText = Number.isFinite(processed) ? '累计消费 ' + String(processed) : '累计消费 --'
-  const errorText = Number.isFinite(errors) ? '错误 ' + String(errors) : '错误 --'
-  const lastError = queue.last_bridge_error ? '；最近错误：' + queue.last_bridge_error : ''
-  return 'PTrade 策略端队列：' + pendingText + '；' + processingText + '；' + cancelText + '；' + pendingAgeText + '；' + processingAgeText + '；' + processedText + '；' + errorText + lastError
-})
-const ptradeBridgeReadinessText = computed(() => {
-  const gates = ptradeBridgeAudit.value?.gates || {}
-  if (Object.keys(gates).length) {
-    const dryRun = gates.dry_run_probe_ready ? 'dry-run probe ready' : 'dry-run probe not ready'
-    const live = gates.live_submit_ready ? 'live-submit test ready' : 'live-submit test not ready'
-    const liveEnabledCheck = Array.isArray(ptradeBridgeAudit.value?.checks)
-      ? ptradeBridgeAudit.value.checks.find((item) => item?.name === 'ptrade_live_order_enabled')
-      : null
-    const liveEnabled = liveEnabledCheck ? (liveEnabledCheck.ok ? 'PTrade live enabled' : 'PTrade live disabled') : ''
-    const next = Array.isArray(ptradeBridgeAudit.value?.next_actions) ? ptradeBridgeAudit.value.next_actions[0] : ''
-    return 'PTrade readiness audit: ' + dryRun + '; ' + live + (liveEnabled ? '; ' + liveEnabled : '') + (next ? '; next: ' + next : '')
-  }
-  const readiness = ptradeBridgeStatus.value?.readiness || {}
-  const live = readiness.ready_for_live_order ? 'ready for approved live order' : 'not ready for approved live order'
-  const heartbeat = readiness.ptrade_heartbeat_recent ? 'heartbeat ok' : 'heartbeat missing/stale'
-  const probe = readiness.dry_run_probe_ack_recent ? 'dry-run ack ok' : 'dry-run ack missing/stale'
-  const liveEnabled = readiness.ptrade_live_order_enabled ? 'PTrade live enabled' : 'PTrade live disabled'
-  return 'PTrade readiness: ' + live + '; ' + heartbeat + '; ' + probe + '; ' + liveEnabled
-})
-const ptradeBridgeEvidenceSummary = computed(() => {
-  const evidence = ptradeBridgeEvidence.value
-  if (!evidence) return ''
-  const checks = Array.isArray(evidence.checks) ? evidence.checks : []
-  const failed = checks.filter((item) => !item?.ok)
-  const generatedAt = evidence.generated_at || '--'
-  const blocking = evidence.blocking || {}
-  const reason = blocking.reason || evidence.blocking_reason || ''
-  const stage = blocking.stage || evidence.blocking_stage || ''
-  const blockingText = reason ? ('；阻塞：' + (stage ? stage + '，' : '') + reason) : ''
-  return 'PTrade evidence: ' + (evidence.ok ? 'ready' : 'not ready') + '; failed ' + String(failed.length) + '; generated ' + String(generatedAt) + blockingText
-})
-const ptradeBridgeEvidenceRows = computed(() => {
-  const checks = ptradeBridgeEvidence.value?.checks
-  return Array.isArray(checks) ? checks : []
-})
-const ptradeBridgeProbeSummary = computed(() => {
-  const result = ptradeBridgeProbeResult.value
-  if (!result) return ''
-  const checks = Array.isArray(result.checks) ? result.checks : []
-  const failed = checks.filter((item) => item?.required && !item?.ok)
-  const heartbeat = Number(result.final_status?.ptrade_heartbeat_age_seconds)
-  const heartbeatText = Number.isFinite(heartbeat) ? 'PTrade心跳 ' + String(Math.round(heartbeat)) + 's' : 'PTrade心跳未见'
-  const ackStatus = result.ack_result?.ack?.status
-  const ackText = result.submit_dry_run ? ('；dry-run ack ' + String(ackStatus || '未收到')) : ''
-  return (result.ok ? '探针通过' : '探针未通过') + '；' + heartbeatText + ackText + '；必需检查失败 ' + String(failed.length)
-})
-const ptradeBridgeAcceptanceSummary = computed(() => {
-  const result = ptradeBridgeAcceptanceResult.value
-  if (!result) return ''
-  const checks = Array.isArray(result.checks) ? result.checks : []
-  const failed = checks.filter((item) => item?.required && !item?.ok)
-  const heartbeatAge = Number(result.heartbeat?.heartbeat_age_seconds)
-  const heartbeatText = Number.isFinite(heartbeatAge) ? 'heartbeat ' + String(Math.round(heartbeatAge)) + 's' : 'heartbeat 未见'
-  const ackStatus = result.dry_run_probe?.ack_result?.ack?.status
-  const liveReady = result.readiness_audit?.gates?.live_submit_ready ? 'live-submit ready' : 'live-submit not ready'
-  return 'PTrade 验收' + (result.ok ? '通过' : '未通过') + '；' + heartbeatText + '；dry-run ack ' + String(ackStatus || '未收到') + '；' + liveReady + '；失败 ' + String(failed.length)
-})
-const ptradeBridgeWatchAcceptanceSummary = computed(() => {
-  const result = ptradeBridgeWatchAcceptanceResult.value
-  if (!result) return ''
-  const acceptance = result.acceptance || {}
-  const checks = Array.isArray(acceptance.checks) ? acceptance.checks : []
-  const failed = checks.filter((item) => item?.required && !item?.ok)
-  const heartbeat = result.heartbeat || acceptance.heartbeat || null
-  const heartbeatAge = Number(heartbeat?.heartbeat_age_seconds)
-  const heartbeatText = Number.isFinite(heartbeatAge) ? 'heartbeat ' + String(Math.round(heartbeatAge)) + 's' : 'heartbeat 未见'
-  const ackStatus = acceptance.dry_run_probe?.ack_result?.ack?.status
-  return 'PTrade 等待验收' + (result.ok ? '通过' : '未通过') + '；' + heartbeatText + '；dry-run ack ' + String(ackStatus || '未收到') + '；失败 ' + String(failed.length)
-})
-const ptradeBridgeLiveSubmitTestSummary = computed(() => {
-  const result = ptradeBridgeLiveSubmitTestResult.value
-  if (!result) return ''
-  const checks = Array.isArray(result.checks) ? result.checks : []
-  const failed = checks.filter((item) => item?.required && !item?.ok)
-  const submitElapsed = Number(result.submit_result?.submit_elapsed_seconds)
-  const submitText = Number.isFinite(submitElapsed) ? 'submit ' + String(submitElapsed.toFixed(3)) + 's' : 'submit not written'
-  const ackStatus = result.ack_result?.ack?.status || 'ack missing'
-  return 'PTrade live-submit test ' + (result.ok ? 'passed' : 'blocked') + '; ' + submitText + '; ' + ackStatus + '; failed checks ' + String(failed.length)
-})
-const ptradeLatestPositionRows = computed(() => {
-  const rows = ptradeBridgePositions.value?.latest?.positions
-  return Array.isArray(rows) ? rows : []
-})
 const sellPriorityRows = computed(() => {
   return currentHoldingRows.value
     .map((row) => {
@@ -3241,10 +2938,6 @@ const refreshLiveTradingState = async (options = {}) => {
   try {
     const nowMs = Date.now()
     const tasks = []
-    if (shouldRunAutoRefresh(lastPtradeBridgeAutoRefreshAt, AUTO_REFRESH_PTRADE_BRIDGE_MIN_MS, nowMs)) {
-      markAutoRefresh(lastPtradeBridgeAutoRefreshAt, nowMs)
-      tasks.push(fetchPtradeBridgeState())
-    }
     if (manualHoldings.value.length && shouldRunAutoRefresh(lastHoldingAutoRefreshAt, AUTO_REFRESH_HOLDINGS_MIN_MS, nowMs)) {
       markAutoRefresh(lastHoldingAutoRefreshAt, nowMs)
       tasks.push(refreshAllHoldingData({ silent: true, includePool: false }))
@@ -4236,217 +3929,9 @@ const runGen2StrategyRefreshOnce = async () => {
   }
 }
 
-const fetchPtradeBridgeState = async () => {
-  ptradeBridgeLoading.value = true
-  try {
-    const [status, audit, evidence, orders, fills, positions] = await Promise.all([
-      getPtradeBridgeStatus(),
-      getPtradeBridgeReadinessAudit({ require_empty_queue_for_live: true }),
-      getPtradeBridgeEvidenceReport(),
-      listPtradeBridgeOrders({ limit: 50 }),
-      listPtradeBridgeFills({ limit: 50 }),
-      getPtradeBridgePositions({ limit: 20 })
-    ])
-    ptradeBridgeStatus.value = status || {}
-    ptradeBridgeAudit.value = audit || null
-    ptradeBridgeEvidence.value = evidence || null
-    ptradeBridgeOrders.value = Array.isArray(orders?.rows) ? orders.rows : []
-    ptradeBridgeFills.value = Array.isArray(fills?.rows) ? fills.rows : []
-    ptradeBridgePositions.value = positions || null
-  } catch (err) {
-    ptradeBridgeStatus.value = {
-      ok: false,
-      message: err?.message || '模拟盘桥接状态抓取失败'
-    }
-    ptradeBridgeAudit.value = null
-    ptradeBridgeEvidence.value = null
-    ptradeBridgeOrders.value = []
-    ptradeBridgeFills.value = []
-    ptradeBridgePositions.value = null
-  } finally {
-    ptradeBridgeLoading.value = false
-  }
-}
-
-const runPtradeBridgeProbe = async (submitDryRun = false) => {
-  ptradeBridgeProbeLoading.value = true
-  try {
-    const result = await runPtradeBridgeLiveProbe({
-      submit_dry_run: !!submitDryRun,
-      require_heartbeat: false,
-      timeout_seconds: submitDryRun ? 30 : 3,
-      poll_seconds: 1,
-      code: '600000',
-      price: 10.5,
-      quantity: 100
-    })
-    ptradeBridgeProbeResult.value = result || null
-    ptradeBridgeStatus.value = result?.final_status || ptradeBridgeStatus.value
-    if (result?.ok) {
-      ElMessage.success(submitDryRun ? 'PTrade dry-run 探针通过' : 'PTrade 提交已接受')
-    } else {
-      ElMessage.warning(result?.message || 'PTrade 探针失败，请检查关联配置')
-    }
-    await fetchPtradeBridgeState()
-  } catch (err) {
-    ElMessage.warning(err?.message || 'PTrade 探针执行失败')
-  } finally {
-    ptradeBridgeProbeLoading.value = false
-  }
-}
-
-const waitForPtradeBridgeAcceptanceTask = async (taskId) => {
-  let latest = null
-  for (let i = 0; i < 90; i += 1) {
-    const task = await getPtradeBridgeAcceptanceTask(taskId)
-    latest = task || latest
-    if (task?.status === 'completed' || task?.status === 'failed' || task?.status === 'missing') {
-      return task
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-  }
-  return latest || { status: 'timeout', error: 'PTrade 连通性探测超时' }
-}
-
-const runPtradeBridgeAcceptanceGate = async () => {
-  ptradeBridgeAcceptanceLoading.value = true
-  try {
-    const task = await startPtradeBridgeAcceptance({
-      heartbeat_timeout_seconds: 120,
-      dry_run_timeout_seconds: 30,
-      poll_seconds: 1,
-      code: '600000',
-      price: 10.5,
-      quantity: 100
-    })
-    const finalTask = task?.task_id ? await waitForPtradeBridgeAcceptanceTask(task.task_id) : task
-    const result = finalTask?.result || null
-    ptradeBridgeAcceptanceResult.value = result || null
-    ptradeBridgeStatus.value = result?.readiness_audit?.status || ptradeBridgeStatus.value
-    ptradeBridgeAudit.value = result?.readiness_audit || ptradeBridgeAudit.value
-    if (result?.ok) {
-      ElMessage.success('PTrade 连通性通过，可继续做 live-submit 压测')
-    } else {
-      const nextAction = Array.isArray(result?.next_actions) ? result.next_actions[0] : ''
-      ElMessage.warning(finalTask?.error || nextAction || 'PTrade 连通性失败')
-    }
-    await fetchPtradeBridgeState()
-  } catch (err) {
-    ElMessage.warning(err?.message || 'PTrade 连通性执行失败')
-  } finally {
-    ptradeBridgeAcceptanceLoading.value = false
-  }
-}
-
-const waitForPtradeBridgeWatchAcceptanceTask = async (taskId) => {
-  let latest = null
-  for (let i = 0; i < 360; i += 1) {
-    const task = await getPtradeBridgeWatchAcceptanceTask(taskId)
-    latest = task || latest
-    if (task?.status === 'completed' || task?.status === 'failed' || task?.status === 'missing') {
-      return task
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-  }
-  return latest || { status: 'timeout', error: 'PTrade 观察验收等待超时' }
-}
-
-const runPtradeBridgeWatchAcceptance = async () => {
-  ptradeBridgeWatchAcceptanceLoading.value = true
-  try {
-    const task = await startPtradeBridgeWatchAcceptance({
-      watch_timeout_seconds: 600,
-      dry_run_timeout_seconds: 30,
-      poll_seconds: 1,
-      code: '600000',
-      price: 10.5,
-      quantity: 100
-    })
-    const finalTask = task?.task_id ? await waitForPtradeBridgeWatchAcceptanceTask(task.task_id) : task
-    const result = finalTask?.result || null
-    ptradeBridgeWatchAcceptanceResult.value = result || null
-    ptradeBridgeAcceptanceResult.value = result?.acceptance || ptradeBridgeAcceptanceResult.value
-    ptradeBridgeStatus.value = result?.readiness_audit?.status || result?.acceptance?.readiness_audit?.status || ptradeBridgeStatus.value
-    ptradeBridgeAudit.value = result?.readiness_audit || result?.acceptance?.readiness_audit || ptradeBridgeAudit.value
-    if (result?.ok) {
-      ElMessage.success('PTrade 等待验收通过')
-    } else {
-      const nextAction = Array.isArray(result?.next_actions) ? result.next_actions[0] : ''
-      ElMessage.warning(finalTask?.error || nextAction || 'PTrade 等待验收失败')
-    }
-    await fetchPtradeBridgeState()
-  } catch (err) {
-    ElMessage.warning(err?.message || 'PTrade 等待验收执行失败')
-  } finally {
-    ptradeBridgeWatchAcceptanceLoading.value = false
-  }
-}
-
-const waitForPtradeBridgeLiveSubmitTestTask = async (taskId) => {
-  let latest = null
-  for (let i = 0; i < 90; i += 1) {
-    const task = await getPtradeBridgeLiveSubmitTestTask(taskId)
-    latest = task || latest
-    if (task?.status === 'completed' || task?.status === 'failed' || task?.status === 'missing') {
-      return task
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-  }
-  return latest || { status: 'timeout', error: 'PTrade live-submit test timeout' }
-}
-
-const runPtradeBridgeLiveSubmitTest = async () => {
-  if (!ptradeBridgeAudit.value?.gates?.live_submit_ready) {
-    ElMessage.warning('PTrade live-submit test is not ready')
-    return
-  }
-  try {
-    await ElMessageBox.confirm(
-      'Confirm one approved small live-submit test in Xiangcai PTrade cloud simulation?',
-      'PTrade live-submit test',
-      { confirmButtonText: 'Confirm', cancelButtonText: 'Cancel', type: 'warning' }
-    )
-  } catch {
-    return
-  }
-  ptradeBridgeLiveSubmitTestLoading.value = true
-  try {
-    const task = await startPtradeBridgeLiveSubmitTest({
-      approve_live_submit: true,
-      code: '600000',
-      side: 'BUY',
-      price: 10.5,
-      quantity: 100,
-      timeout_seconds: 30,
-      poll_seconds: 1,
-      max_submit_seconds: 0.5,
-      max_order_value: 20000
-    })
-    const finalTask = task?.task_id ? await waitForPtradeBridgeLiveSubmitTestTask(task.task_id) : task
-    const result = finalTask?.result || null
-    ptradeBridgeLiveSubmitTestResult.value = result || null
-    ptradeBridgeStatus.value = result?.final_status || ptradeBridgeStatus.value
-    ptradeBridgeAudit.value = result?.readiness_audit || ptradeBridgeAudit.value
-    if (result?.ok) {
-      ElMessage.success('PTrade live-submit test passed')
-    } else {
-      ElMessage.warning(finalTask?.error || 'PTrade live-submit test blocked')
-    }
-    await fetchPtradeBridgeState()
-  } catch (err) {
-    ElMessage.warning(err?.message || 'PTrade live-submit test failed')
-  } finally {
-    ptradeBridgeLiveSubmitTestLoading.value = false
-  }
-}
-
 const isSubmittingPaperOrder = (row) => paperOrderSubmittingCode.value && normalizeCode(row?.code) === paperOrderSubmittingCode.value
 
-const hasActivePaperOrder = (row) => {
-  const code = normalizeCode(row?.code)
-  const signalDate = String(row?.entry_date || selectedDate.value || '')
-  return ptradeActiveOrders.value.some((item) => normalizeCode(item?.code) === code && String(item?.signal_date || '') === signalDate && String(item?.side || '').toUpperCase() === 'BUY')
-}
+const hasActivePaperOrder = () => false
 
 const paperOrderBlockReason = (row) => {
   const code = normalizeCode(row?.code)
@@ -4492,7 +3977,6 @@ const submitPaperOrderForRow = async (row) => {
     })
     if (resp?.ok) {
       ElMessage.success(resp?.message || (code + ' 已提交到模拟盘桥接队列'))
-      await fetchPtradeBridgeState()
     } else {
       ElMessage.warning(resp?.message || (code + ' 模拟盘下单失败'))
     }
@@ -4501,50 +3985,6 @@ const submitPaperOrderForRow = async (row) => {
   } finally {
     paperOrderSubmittingCode.value = ''
   }
-}
-
-const importPtradePositionsToManualHoldings = async () => {
-  const rows = ptradeLatestPositionRows.value
-  if (!rows.length) {
-    ElMessage.warning('暂无可导入的模拟盘持仓快照')
-    return
-  }
-  const oldMap = new Map((manualHoldings.value || []).map((item) => [normalizeCode(item?.code), item]))
-  manualHoldings.value = rows
-    .map((item) => {
-      const code = normalizeCode(item?.code)
-      if (!code) return null
-      const old = oldMap.get(code) || {}
-      const shares = Math.max(0, Math.trunc(Number(item?.shares || item?.quantity || 0)))
-      const costPrice = Number(item?.cost_price ?? item?.avg_cost)
-      const currentPrice = Number(item?.current_price ?? item?.price)
-      const pnlRatio = Number(item?.pnl_ratio)
-      return {
-        ...old,
-        code: displayCode(code),
-        name: String(item?.name || old?.name || ''),
-        shares,
-        cost_price: Number.isFinite(costPrice) && costPrice > 0 ? Number(costPrice.toFixed(3)) : old?.cost_price ?? null,
-        current_price: Number.isFinite(currentPrice) && currentPrice > 0 ? Number(currentPrice.toFixed(3)) : old?.current_price ?? null,
-        pnl_ratio: Number.isFinite(pnlRatio) ? pnlRatio : old?.pnl_ratio ?? null,
-        market_value: item?.market_value ?? old?.market_value ?? null,
-        source: 'ptrade_bridge',
-        buy_time: old?.buy_time || '',
-        buy_count_week: old?.buy_count_week || 0,
-        buy_week_key: old?.buy_week_key || '',
-        signal_date: old?.signal_date || '',
-        signal: old?.signal || null,
-        v4_rank: old?.v4_rank ?? null,
-        v4_score: old?.v4_score ?? null,
-        v4_signal_date: old?.v4_signal_date ?? '',
-        in_score_pool: typeof old?.in_score_pool === 'boolean' ? old.in_score_pool : null,
-        score_pool_status: old?.score_pool_status || ''
-      }
-    })
-    .filter(Boolean)
-  saveManualHoldings()
-  await refreshManualSignals()
-  ElMessage.success('已导入模拟盘持仓，共 ' + String(manualHoldings.value.length) + ' 只')
 }
 
 const toggleGen2ShadowMonitor = async () => {
@@ -4676,7 +4116,6 @@ onMounted(async () => {
   await refreshManualPnlByDetail()
   await pullMonitorStatus()
   await pullGen2ShadowMonitorStatus()
-  await fetchPtradeBridgeState()
   startAutoRefreshTimer()
   if (String(route.query?.add_hold || '') === '1' && focusCode.value) {
     openAddHoldingDialog({ code: focusCode.value, name: focusName.value })

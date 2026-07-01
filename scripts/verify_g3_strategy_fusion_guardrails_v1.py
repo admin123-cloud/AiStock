@@ -23,6 +23,12 @@ DAILY_RECALL_DIR = report_path("g3_profitable_signal_recall_v1")
 NATIVE_M30_DIR = report_path("g3_native_bridge_native_m30_semantics_v1")
 STATE_ALPHA_SUMMARY_PATH = runtime_path("gen3_state_alpha", "latest_summary.json")
 STATE_ROUTER_SUMMARY_PATH = runtime_path("gen3_state_router_shadow", "latest_summary.json")
+FORMAL_GATE_FILES = [
+    ROOT / "scripts" / "gen3_institutional_mainwave_current_v1.py",
+    ROOT / "scripts" / "gen3_state_router_shadow_daily_v1.py",
+    ROOT / "scripts" / "gen3_hard_gate_daily_closure_audit_v1.py",
+    ROOT / "api" / "gen3_state_alpha.py",
+]
 
 REQUIRED_STRATEGIES = {
     "institutional_score120_mainwave": "机构主升Score120",
@@ -72,7 +78,15 @@ def _bool(value: Any) -> bool:
 
 
 def _latest_current_summary() -> dict[str, Any]:
-    return _read_json(STATE_ALPHA_SUMMARY_PATH) or _read_json(STATE_ROUTER_SUMMARY_PATH)
+    candidates = [_read_json(STATE_ALPHA_SUMMARY_PATH), _read_json(STATE_ROUTER_SUMMARY_PATH)]
+    for item in candidates:
+        source = _state_source(item, "institutional_mainwave_current_builder_v1")
+        if source.get("mainwave_dynamic_cooldown"):
+            return item
+    for item in candidates:
+        if _state_source(item, "institutional_mainwave_current_builder_v1"):
+            return item
+    return candidates[0] or candidates[1]
 
 
 def _state_source(summary: dict[str, Any], source_name: str) -> dict[str, Any]:
@@ -253,16 +267,61 @@ def _build_guardrails() -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
     heat_state = str(inst_source.get("index_mom60_heat_state") or "")
     max_index_mom60 = _num(inst_source.get("max_index_mom60"), default=0.0)
     inst_rows = int(_num(inst_source.get("rows")))
+    cooldown = inst_source.get("mainwave_dynamic_cooldown") if isinstance(inst_source.get("mainwave_dynamic_cooldown"), dict) else {}
+    cooldown_policy = str(cooldown.get("policy") or "")
+    cooldown_active = bool(cooldown.get("cooldown_active", False))
     _check(
         checks,
-        "current_score120_not_blocked_by_5pct_heat",
-        "当前 Score120 不再被 5% 市场热度硬阻断",
-        max_index_mom60 >= 0.10 or inst_rows == 0,
+        "current_score120_respects_5pct_strategy_gate",
+        "当前 Score120 按原策略执行 index_mom60<=5% 硬准入",
+        max_index_mom60 <= 0.05 or inst_rows == 0,
         "fail",
         f"rows={inst_rows}, max_index_mom60={_pct(max_index_mom60)}, heat_state={heat_state or '--'}",
-        "必须执行 <=5%正常、5%-10%观察、>10%阻断的新合同。",
+        "必须执行 institutional_mainwave index_mom60<=5% 才进入影子盘/买入候选的新合同。",
         max_index_mom60,
-        ">= 10% hard gate",
+        "<= 5% strategy gate",
+    )
+    _check(
+        checks,
+        "current_score120_dynamic_cooldown_contract_visible",
+        "当前 Score120 暴露机构主升动态冷却合同",
+        cooldown_policy == "institutional_mainwave_consecutive_loss_dynamic_recovery",
+        "fail",
+        f"policy={cooldown_policy or '--'}, active={cooldown_active}",
+        "必须把连续2笔已平仓亏损后的动态冷却作为 institutional_mainwave 的正式准入合同暴露给影子盘、API 和页面。",
+        cooldown_policy,
+        "institutional_mainwave_consecutive_loss_dynamic_recovery",
+    )
+    _check(
+        checks,
+        "current_score120_dynamic_cooldown_blocks_rows",
+        "机构主升动态冷却触发时不出票",
+        (not cooldown_active) or inst_rows == 0,
+        "fail",
+        f"rows={inst_rows}, active={cooldown_active}, reason={cooldown.get('cooldown_reason', '--')}",
+        "动态冷却暂停期只能观察，不允许进入影子盘/买入候选。",
+        inst_rows,
+        "0 when cooldown_active",
+    )
+
+    hard_stop_cooldown_hits = []
+    for path in FORMAL_GATE_FILES:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if "hard_stop_cooldown_pause_new_buy" in text or "hard_stop_30m_count>=2" in text:
+            hard_stop_cooldown_hits.append(str(path))
+    _check(
+        checks,
+        "formal_gate_no_hard_stop_cooldown_pause",
+        "正式链路不再使用硬止损次数冷却暂停新买",
+        not hard_stop_cooldown_hits,
+        "fail",
+        f"hits={hard_stop_cooldown_hits or '--'}",
+        "机构主升新买冷却必须使用连续2笔已平仓亏损后的动态恢复合同，硬止损次数只能作为观察指标。",
+        len(hard_stop_cooldown_hits),
+        "0",
     )
 
     g2_source = _state_source(current_summary, "g2_gap_supplement_current_builder_v1")
@@ -326,6 +385,7 @@ def _build_guardrails() -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
         "current_sources": {
             "institutional_rows": inst_rows,
             "institutional_max_index_mom60": max_index_mom60,
+            "institutional_mainwave_dynamic_cooldown": cooldown,
             "g2_fresh_for_entry_date": g2_fresh,
             "g2_latest_live_update_date": g2_source.get("latest_live_update_date") if g2_source else None,
             "g2_stale_reason": g2_source.get("stale_reason") if g2_source else None,

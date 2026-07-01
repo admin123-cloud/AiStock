@@ -13,6 +13,12 @@ services:
     memswap_limit: 9g
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/check', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     environment:
       TZ: Asia/Shanghai
       AISTOCK_CLICKHOUSE_HOST: host.docker.internal
@@ -24,8 +30,11 @@ services:
       AISTOCK_REPORTS_ROOT: /aistock/reports
       AISTOCK_ARTIFACTS_ROOT: /aistock/artifacts
       AISTOCK_LOGS_ROOT: /aistock/logs
+      AISTOCK_HOST_REPO_ROOT: "F:\\Stock\\AiStock-core"
       AISTOCK_LOCAL_TDX_ROOT: /tdx/vipdoc
       AISTOCK_STRICT_TDXQ_STARTUP: "0"
+      AISTOCK_STARTUP_SCHEDULERS_ENABLED: "1"
+      AISTOCK_STARTUP_TDXQUANT_CHECK_ENABLED: "0"
       AISTOCK_TDX_GATEWAY_URL: http://host.docker.internal:8765
     volumes:
       - .:/app
@@ -51,6 +60,12 @@ services:
       - backend
     ports:
       - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     environment:
       TZ: Asia/Shanghai
       VITE_API_PROXY_TARGET: http://backend:8000

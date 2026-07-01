@@ -151,6 +151,31 @@ def query_kline_batch(
 def get_latest_trade_date(period: str = "1d") -> Optional[date]:
     table = _get_table_name(period)
     time_col = _get_time_column(period)
+    try:
+        if clickhouse_table_exists("trade_calendar"):
+            if _is_minute_period(period):
+                return clickhouse_scalar(
+                    f"""
+                    SELECT max(toDate(k.{time_col}))
+                    FROM {table} k
+                    JOIN trade_calendar c
+                      ON c.trade_date = toDate(k.{time_col})
+                     AND c.market = 'SH'
+                     AND c.is_trading = 1
+                    """
+                )
+            return clickhouse_scalar(
+                f"""
+                SELECT max(k.{time_col})
+                FROM {table} k
+                JOIN trade_calendar c
+                  ON c.trade_date = k.{time_col}
+                 AND c.market = 'SH'
+                 AND c.is_trading = 1
+                """
+            )
+    except Exception as exc:
+        logger.warning(f"latest trade date calendar filter failed, fallback to raw max: {exc}")
     return clickhouse_scalar(f"SELECT max({time_col}) FROM {table}")
 
 

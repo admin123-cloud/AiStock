@@ -4,7 +4,7 @@
       <div>
         <div class="eyebrow">G3 第三代策略 / institutional_mainwave</div>
         <h1>主升行业机会</h1>
-        <p>用机构主升浪路线识别当下的板块扩散、主升分和下一交易日买入关注。</p>
+        <p>把行业机会、板块内观察票和正式买入候选分层展示，避免把强板块里的观察票误当成买点。</p>
       </div>
       <div class="actions">
         <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
@@ -16,10 +16,10 @@
       type="info"
       :closable="false"
       show-icon
-      title="当前 G3 中识别机构集体机会或行业机会的策略是 institutional_mainwave（机构主升浪）。"
+      title="页面分层说明"
     >
       <template #default>
-        <span>{{ strategyText }}</span>
+        <span>行业机会来自板块扩散和主升观察池；正式买入候选仍必须满足 score>=120、板块扩散、30m 确认和 index_mom60 合同。</span>
       </template>
     </el-alert>
 
@@ -30,29 +30,29 @@
         <small>决策日 {{ summary.decision_date || '--' }}</small>
       </div>
       <div class="metric-card">
-        <span>主升行业</span>
-        <strong>{{ fmt(summary.strong_sector_count, 0) }}</strong>
-        <small>重要机会 {{ fmt(summary.important_sector_count, 0) }} / 全部 {{ fmt(summary.sector_count, 0) }}</small>
+        <span>行业机会</span>
+        <strong>{{ fmt(summary.sector_count, 0) }}</strong>
+        <small>重要 {{ fmt(summary.important_sector_count, 0) }} / 强主升 {{ fmt(summary.strong_sector_count, 0) }}</small>
       </div>
       <div class="metric-card accent">
-        <span>下一交易日推荐</span>
+        <span>正式买入票</span>
         <strong>{{ fmt(summary.recommended_count, 0) }}</strong>
-        <small>{{ recommendedNames || '暂无推荐买入票据' }}</small>
+        <small>{{ recommendedNames || '暂无正式推荐' }}</small>
       </div>
       <div class="metric-card">
-        <span>机构主升候选</span>
+        <span>正式候选</span>
         <strong>{{ fmt(summary.candidate_count, 0) }}</strong>
         <small>30m 通过 {{ fmt(summary.m30_ok_count, 0) }}</small>
+      </div>
+      <div class="metric-card warning">
+        <span>板块观察票</span>
+        <strong>{{ fmt(summary.sector_watch_candidate_count, 0) }}</strong>
+        <small>观察池 {{ fmt(summary.watch_candidate_count, 0) }}</small>
       </div>
       <div class="metric-card" :class="heatCardClass">
         <span>指数60日热度</span>
         <strong>{{ pct(summary.index_mom60) }}</strong>
         <small>{{ summary.index_heat_label || '--' }}</small>
-      </div>
-      <div class="metric-card locked">
-        <span>最强行业</span>
-        <strong>{{ summary.strongest_sector || '--' }}</strong>
-        <small>{{ summary.strongest_sector_state || '--' }}</small>
       </div>
     </section>
 
@@ -61,7 +61,7 @@
         <div class="panel-head">
           <div>
             <h2>行业机会排序</h2>
-            <p>按板块扩散、最高主升分、候选密度和下一交易日推荐票综合排序。</p>
+            <p>正式候选和观察票分开计数；点击行业后，下方两张表同步过滤。</p>
           </div>
         </div>
         <el-table
@@ -70,32 +70,32 @@
           stripe
           size="small"
           highlight-current-row
-          empty-text="暂无机构主升行业机会"
+          empty-text="暂无行业机会"
           @row-click="selectSector"
         >
-          <el-table-column label="行业/板块" min-width="135">
+          <el-table-column label="行业/板块" min-width="140">
             <template #default="{ row }">
               <div class="sector-cell">
-                <strong>{{ row.sector_name }}</strong>
+                <strong>{{ row.sector_name || '--' }}</strong>
                 <small>{{ row.top_candidate_names || '--' }}</small>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="112">
+          <el-table-column label="状态" width="106">
             <template #default="{ row }">
-              <el-tag size="small" :type="sectorTagType(row.state)">{{ row.state_label }}</el-tag>
+              <el-tag size="small" :type="sectorTagType(row.state)">{{ row.state_label || statusLabel(row.state) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="扩散分" width="90" align="right">
+          <el-table-column label="扩散分" width="88" align="right">
             <template #default="{ row }">{{ fmt(row.avg_sector_diffusion_score, 1) }}</template>
           </el-table-column>
-          <el-table-column label="候选" width="76" align="right">
+          <el-table-column label="正式" width="72" align="right">
             <template #default="{ row }">{{ fmt(row.candidate_count, 0) }}</template>
           </el-table-column>
-          <el-table-column label="推荐" width="76" align="right">
-            <template #default="{ row }">{{ fmt(row.recommended_count, 0) }}</template>
+          <el-table-column label="观察" width="72" align="right">
+            <template #default="{ row }">{{ fmt(row.watch_candidate_count, 0) }}</template>
           </el-table-column>
-          <el-table-column label="最高主升" width="96" align="right">
+          <el-table-column label="最高主升" width="94" align="right">
             <template #default="{ row }">{{ fmt(row.max_wave_style_score, 1) }}</template>
           </el-table-column>
         </el-table>
@@ -104,51 +104,51 @@
       <div class="panel">
         <div class="panel-head">
           <div>
-            <h2>策略口径</h2>
-            <p>这不是新策略，是把当前 G3 主路由的行业机会证据集中展示。</p>
+            <h2>策略合同</h2>
+            <p>这里说明为什么“有板块机会”仍可能没有买点。</p>
           </div>
         </div>
         <div class="rule-list">
           <div>
-            <span>识别策略</span>
-            <strong>{{ payload.strategy?.route_label || '机构主升浪' }}</strong>
-            <small>{{ payload.strategy?.route || 'institutional_mainwave' }}</small>
-          </div>
-          <div>
             <span>主升分门槛</span>
             <strong>{{ fmt(summary.min_score, 0) }}</strong>
-            <small>wave_style_score 主升分</small>
+            <small>低于门槛只进观察，不出票</small>
           </div>
           <div>
             <span>板块扩散门槛</span>
             <strong>{{ fmt(summary.min_sector_diffusion, 0) }}</strong>
-            <small>sector_diffusion_score</small>
+            <small>用于识别行业机会</small>
           </div>
           <div>
             <span>市场热度上限</span>
             <strong>{{ pct(summary.max_index_mom60) }}</strong>
-            <small>5%-10% 仅观察，>10% 不开新仓</small>
+            <small>超过只观察，不降仓买入</small>
+          </div>
+          <div>
+            <span>动态冷却</span>
+            <strong>{{ cooldown.cooldown_active ? '暂停' : '可进攻' }}</strong>
+            <small>{{ cooldown.cooldown_reason || '--' }}</small>
           </div>
         </div>
 
         <div class="recommend-box">
           <div class="recommend-head">
-            <strong>下一交易日买入关注</strong>
+            <strong>下一交易日正式买入票</strong>
             <el-tag size="small" type="success">{{ fmt(recommendedRows.length, 0) }} 张</el-tag>
           </div>
           <div v-if="recommendedRows.length" class="recommend-list">
             <div v-for="item in recommendedRows" :key="item.code" class="recommend-row">
               <div>
-                <strong>{{ item.name }}</strong>
-                <small>{{ item.code }} / {{ item.sector_name }}</small>
+                <strong>{{ item.name || item.code }}</strong>
+                <small>{{ item.code }} / {{ item.sector_name || '--' }}</small>
               </div>
               <div class="recommend-score">
                 <span>{{ fmt(item.wave_style_score, 1) }}</span>
-                <small>{{ fmt(item.position_pct * 100, 1) }}%</small>
+                <small>{{ pct(item.position_pct) }}</small>
               </div>
             </div>
           </div>
-          <el-empty v-else description="暂无下一交易日推荐买入票据" />
+          <el-empty v-else description="暂无正式买入票" />
         </div>
       </div>
     </section>
@@ -156,8 +156,8 @@
     <section class="panel">
       <div class="panel-head table-head">
         <div>
-          <h2>{{ selectedSector || '全部' }} 候选明细</h2>
-          <p>推荐票来自下一交易日票据，其余为机构主升预确认候选；当前持仓不在这里冒充候选。</p>
+          <h2>{{ selectedSector || '全部' }} 正式候选</h2>
+          <p>只展示已经进入 G3 主升候选链或票据链的股票。</p>
         </div>
         <div class="filters">
           <el-select v-model="selectedSector" clearable filterable placeholder="全部行业" size="small">
@@ -166,10 +166,10 @@
           <el-segmented v-model="candidateMode" :options="candidateModeOptions" size="small" />
         </div>
       </div>
-      <el-table v-loading="loading" :data="filteredCandidates" stripe size="small" empty-text="暂无机构主升候选">
+      <el-table v-loading="loading" :data="filteredCandidates" stripe size="small" empty-text="暂无正式候选">
         <el-table-column label="代码" width="108" prop="code" />
         <el-table-column label="名称" width="116" prop="name" />
-        <el-table-column label="行业" width="116" prop="sector_name" />
+        <el-table-column label="行业" width="120" prop="sector_name" />
         <el-table-column label="类型" width="104">
           <template #default="{ row }">
             <el-tag size="small" :type="row.is_recommended ? 'success' : 'info'">
@@ -178,23 +178,54 @@
           </template>
         </el-table-column>
         <el-table-column label="模板" min-width="130" prop="template_label" show-overflow-tooltip />
-        <el-table-column label="计划日" width="108" prop="entry_date" />
-        <el-table-column label="主升分" width="92" align="right">
+        <el-table-column label="主升分" width="88" align="right">
           <template #default="{ row }">{{ fmt(row.wave_style_score, 1) }}</template>
         </el-table-column>
-        <el-table-column label="扩散分" width="92" align="right">
+        <el-table-column label="扩散分" width="88" align="right">
           <template #default="{ row }">{{ fmt(row.sector_diffusion_score, 1) }}</template>
         </el-table-column>
-        <el-table-column label="30m" width="82">
+        <el-table-column label="30m" width="88">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.m30_confirmed ? 'success' : 'warning'">
-              {{ statusLabel(row.m30_status) }}
-            </el-tag>
+            <el-tag size="small" :type="row.m30_confirmed ? 'success' : 'warning'">{{ statusLabel(row.m30_status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="来源" min-width="150">
           <template #default="{ row }">{{ sourceLabel(row.source) }}</template>
         </el-table-column>
+      </el-table>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head table-head">
+        <div>
+          <h2>{{ selectedSector || '全部' }} 板块内观察票</h2>
+          <p>展示强板块里的观察票，例如江化微这类“板块强、个股未达正式买点”的股票。</p>
+        </div>
+        <div class="filters">
+          <el-segmented v-model="watchMode" :options="watchModeOptions" size="small" />
+        </div>
+      </div>
+      <el-table v-loading="loading" :data="filteredWatchCandidates" stripe size="small" empty-text="暂无板块观察票">
+        <el-table-column label="代码" width="108" prop="code" />
+        <el-table-column label="名称" width="116" prop="name" />
+        <el-table-column label="行业" width="120" prop="sector_name" />
+        <el-table-column label="标签" width="126" prop="template_label" />
+        <el-table-column label="主升分" width="88" align="right">
+          <template #default="{ row }">{{ fmt(row.wave_style_score, 1) }}</template>
+        </el-table-column>
+        <el-table-column label="差正式线" width="92" align="right">
+          <template #default="{ row }">{{ fmt(row.score_gap_to_formal, 1) }}</template>
+        </el-table-column>
+        <el-table-column label="扩散分" width="88" align="right">
+          <template #default="{ row }">{{ fmt(row.sector_diffusion_score, 1) }}</template>
+        </el-table-column>
+        <el-table-column label="5日" width="82" align="right">
+          <template #default="{ row }">{{ pct(row.ret5) }}</template>
+        </el-table-column>
+        <el-table-column label="20日" width="82" align="right">
+          <template #default="{ row }">{{ pct(row.ret20) }}</template>
+        </el-table-column>
+        <el-table-column label="阻断原因" min-width="210" prop="block_reason" show-overflow-tooltip />
       </el-table>
     </section>
 
@@ -225,6 +256,7 @@ const loading = ref(false)
 const payload = ref({})
 const selectedSector = ref('')
 const candidateMode = ref('all')
+const watchMode = ref('sector')
 
 const candidateModeOptions = [
   { label: '全部', value: 'all' },
@@ -232,16 +264,19 @@ const candidateModeOptions = [
   { label: '候选观察', value: 'watch' }
 ]
 
-const summary = computed(() => payload.value.summary || {})
-const sectorRows = computed(() => payload.value.sector_opportunities || [])
-const candidateRows = computed(() => payload.value.candidates || [])
-const recommendedRows = computed(() => payload.value.recommended_tickets || [])
-const diagnostics = computed(() => payload.value.diagnostics || {})
+const watchModeOptions = [
+  { label: '强板块', value: 'sector' },
+  { label: '全部观察', value: 'all' }
+]
 
-const strategyText = computed(() => {
-  const strategy = payload.value.strategy || {}
-  return strategy.purpose || '机构主升浪用于识别机构集体主升、板块扩散和重要行业机会，并输出下一交易日候选。'
-})
+const summary = computed(() => payload.value.summary || {})
+const cooldown = computed(() => summary.value.mainwave_dynamic_cooldown || {})
+const sectorRows = computed(() => Array.isArray(payload.value.sector_opportunities) ? payload.value.sector_opportunities : [])
+const candidateRows = computed(() => Array.isArray(payload.value.candidates) ? payload.value.candidates : [])
+const watchRows = computed(() => Array.isArray(payload.value.watch_candidates) ? payload.value.watch_candidates : [])
+const sectorWatchRows = computed(() => Array.isArray(payload.value.sector_watch_candidates) ? payload.value.sector_watch_candidates : [])
+const recommendedRows = computed(() => Array.isArray(payload.value.recommended_tickets) ? payload.value.recommended_tickets : [])
+const diagnostics = computed(() => payload.value.diagnostics || {})
 
 const recommendedNames = computed(() => recommendedRows.value.map((item) => item.name || item.code).filter(Boolean).join(' / '))
 
@@ -264,6 +299,11 @@ const filteredCandidates = computed(() => {
   })
 })
 
+const filteredWatchCandidates = computed(() => {
+  const base = watchMode.value === 'sector' ? sectorWatchRows.value : watchRows.value
+  return base.filter((item) => !selectedSector.value || item.sector_name === selectedSector.value)
+})
+
 const diagnosticsText = computed(() => {
   const code = diagnostics.value.diagnosis_code || 'NO_DIAGNOSIS'
   const source = summary.value.source_label || '--'
@@ -280,7 +320,10 @@ const artifactRows = computed(() => {
     state_alpha_tickets: '当前票据',
     mainwave_runtime_summary: '机构主升摘要',
     mainwave_runtime_candidates: '机构主升候选',
-    mainwave_runtime_blocked_candidates: '机构主升阻断'
+    mainwave_runtime_blocked_candidates: '机构主升阻断',
+    mainwave_watch_pool: '主升观察池',
+    current_wave_top_candidates: '观察池Top',
+    current_wave_template_pass: '模板通过池'
   }
   return Object.entries(labels).map(([key, label]) => ({
     key,
@@ -326,16 +369,18 @@ function pct(value) {
 function sectorTagType(state) {
   if (state === 'strong_mainwave') return 'success'
   if (state === 'important_industry') return 'warning'
+  if (state === 'sector_watch') return 'info'
   return 'info'
 }
 
 function statusLabel(value) {
   const raw = String(value || 'unknown')
   const labels = {
-    ok: 'ok（通过）',
-    blocked: 'blocked（阻断）',
-    missing: 'missing（缺失）',
-    unknown: 'unknown（未知）'
+    ok: '通过',
+    blocked: '阻断',
+    missing: '缺失',
+    unknown: '未确认',
+    not_formal_candidate: '非正式候选'
   }
   return labels[raw] || raw
 }
@@ -345,7 +390,9 @@ function sourceLabel(value) {
   const labels = {
     next_trade_ticket: '下一交易日票据',
     pre_confirm_preview: '机构主升预确认',
-    mainwave_latest_candidates: '机构主升当前候选'
+    mainwave_latest_candidates: '机构主升当前候选',
+    mainwave_pool_top500: '主升观察池',
+    current_wave_top_candidates: '观察池Top'
   }
   return labels[raw] || raw || '--'
 }
@@ -412,10 +459,6 @@ small {
   gap: 8px;
 }
 
-.strategy-alert {
-  padding: 0;
-}
-
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -441,10 +484,6 @@ small {
 
 .metric-card.danger {
   border-left-color: #d92d20;
-}
-
-.metric-card.locked {
-  border-left-color: #3760a8;
 }
 
 .metric-card span,

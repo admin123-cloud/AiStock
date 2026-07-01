@@ -8,16 +8,100 @@ import sys
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import and_
+from sqlalchemy import and_, text
 
 # 添加项目根目录到路径
 sys.path.append('.')
 
 from utils.database import db
-from models.stock_models import Sector, SectorStock, KlineDaily, SectorKlineDaily
+from models.stock_models import Sector, SectorStock, KlineDaily
 from utils.logger import get_logger
 
 logger = get_logger("generate_sector_kline")
+
+
+def _to_float(value):
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    return float(value)
+
+
+def _to_decimal(value):
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def _to_int(value):
+    if value is None:
+        return None
+    return int(value)
+
+
+def _sector_kline_exists(session, sector_code, trade_date) -> bool:
+    row = session.execute(
+        text(
+            """
+            SELECT 1
+            FROM sector_kline_daily
+            WHERE code = :code AND trade_date = :trade_date
+            LIMIT 1
+            """
+        ),
+        {"code": sector_code, "trade_date": trade_date},
+    ).first()
+    return row is not None
+
+
+def _get_prev_sector_close(session, sector_code, trade_date):
+    # sector_kline_daily 实体中未保留 close 字段，按当前口径仅用于异常兼容留空。
+    # 需要严格前日收盘可复算时请改造存储结构后再补回历史值。
+    return None
+
+
+def _upsert_sector_kline_daily(session, kline_data: dict) -> None:
+    sector_code = kline_data["code"]
+    trade_date = kline_data["trade_date"]
+
+    session.execute(
+        text(
+            """
+            DELETE FROM sector_kline_daily
+            WHERE code = :code AND trade_date = :trade_date
+            """
+        ),
+        {"code": sector_code, "trade_date": trade_date},
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO sector_kline_daily
+              (code, trade_date, change_pct, stock_count, rise_count, fall_count, flat_count,
+               limit_up_count, limit_down_count, total_amount, total_volume, created_at)
+            VALUES
+              (:code, :trade_date, :change_pct, :stock_count, :rise_count, :fall_count, :flat_count,
+               :limit_up_count, :limit_down_count, :total_amount, :total_volume, :created_at)
+            """
+        ),
+        {
+            "code": sector_code,
+            "trade_date": trade_date,
+            "change_pct": _to_float(kline_data["change_pct"]),
+            "stock_count": _to_int(kline_data["stock_count"]),
+            "rise_count": _to_int(kline_data["rise_count"]),
+            "fall_count": _to_int(kline_data["fall_count"]),
+            "flat_count": _to_int(kline_data["flat_count"]),
+            "limit_up_count": _to_int(kline_data["limit_up_count"]),
+            "limit_down_count": _to_int(kline_data["limit_down_count"]),
+            "total_amount": _to_float(kline_data["total_amount"]),
+            "total_volume": _to_int(kline_data["total_volume"]),
+            "created_at": kline_data.get("created_at"),
+        },
+    )
 
 
 def calculate_sector_kline(session, sector_code, trade_date):
@@ -91,7 +175,7 @@ def calculate_sector_kline(session, sector_code, trade_date):
         # 计算板块K线统计数据
         total_change_pct = 0
         total_amount = Decimal('0')
-        total_volume = 0
+        total_volume = Decimal('0')
         total_open = Decimal('0')
         total_high = Decimal('0')
         total_low = Decimal('0')
@@ -107,16 +191,16 @@ def calculate_sector_kline(session, sector_code, trade_date):
 
         for kline in kline_data:
             # 累加各项指标
-            total_amount += kline.amount if kline.amount else Decimal('0')
-            total_volume += kline.volume if kline.volume else 0
+            total_amount += Decimal(str(kline.amount)) if kline.amount is not None else Decimal('0')
+            total_volume += Decimal(str(kline.volume if kline.volume is not None else 0))
 
             # 计算加权价格（按成交量加权）
-            volume = kline.volume if kline.volume else 0
-            if volume > 0:
-                total_open += (Decimal(str(kline.open)) * volume) if kline.open else Decimal('0')
-                total_high += (Decimal(str(kline.high)) * volume) if kline.high else Decimal('0')
-                total_low += (Decimal(str(kline.low)) * volume) if kline.low else Decimal('0')
-                total_close += (Decimal(str(kline.close)) * volume) if kline.close else Decimal('0')
+            volume_dec = Decimal(str(kline.volume if kline.volume is not None else 0))
+            if volume_dec > 0:
+                total_open += (Decimal(str(kline.open)) * volume_dec) if kline.open else Decimal('0')
+                total_high += (Decimal(str(kline.high)) * volume_dec) if kline.high else Decimal('0')
+                total_low += (Decimal(str(kline.low)) * volume_dec) if kline.low else Decimal('0')
+                total_close += (Decimal(str(kline.close)) * volume_dec) if kline.close else Decimal('0')
 
             if kline.change_pct is not None:
                 total_change_pct += float(kline.change_pct)
@@ -149,17 +233,10 @@ def calculate_sector_kline(session, sector_code, trade_date):
         # 计算板块涨跌幅（使用加权平均收盘价）
         avg_change_pct = 0
         if total_volume > 0:
-            # 查询前一天的板块K线数据，获取前一天的收盘价
-            prev_sector_kline = session.query(SectorKlineDaily.close).filter(
-                SectorKlineDaily.code == sector_code,
-                SectorKlineDaily.trade_date < trade_date
-            ).order_by(
-                SectorKlineDaily.trade_date.desc()
-            ).first()
-            
-            if prev_sector_kline and prev_sector_kline[0] is not None and prev_sector_kline[0] > 0:
-                prev_close = prev_sector_kline[0]
-                avg_change_pct = float((close_price - prev_close) / prev_close * 100)
+            prev_close = _get_prev_sector_close(session, sector_code, trade_date)
+            prev_close_dec = _to_decimal(prev_close)
+            if prev_close_dec is not None and prev_close_dec > 0:
+                avg_change_pct = float((close_price - prev_close_dec) / prev_close_dec * Decimal('100'))
 
         return {
             'code': sector_code,
@@ -214,27 +291,9 @@ def generate_sector_klines_for_date(session, trade_date):
             kline_data = calculate_sector_kline(session, sector_code, trade_date)
 
             if kline_data:
-                # 检查是否已存在
-                existing = session.query(SectorKlineDaily).filter(
-                    and_(
-                        SectorKlineDaily.code == sector_code,
-                        SectorKlineDaily.trade_date == trade_date
-                    )
-                ).first()
-
-                if existing:
-                    # 更新现有记录
-                    for key, value in kline_data.items():
-                        if key not in ['code', 'trade_date']:
-                            setattr(existing, key, value)
-                    logger.debug(f"更新板块 {sector_code} 在 {trade_date} 的K线数据")
-                else:
-                    # 插入新记录
-                    sector_kline = SectorKlineDaily(**kline_data)
-                    session.add(sector_kline)
-                    logger.debug(f"插入板块 {sector_code} 在 {trade_date} 的K线数据")
-
+                _upsert_sector_kline_daily(session, dict(kline_data))
                 success_count += 1
+                continue
             else:
                 skip_count += 1
                 logger.debug(f"板块 {sector_code} 在 {trade_date} 无有效K线数据，跳过")
@@ -286,19 +345,9 @@ def generate_sector_klines_for_sector_range(session, sector_code, start_date, en
             skipped += 1
             continue
 
-        existing = session.query(SectorKlineDaily).filter(
-            and_(SectorKlineDaily.code == sector_code, SectorKlineDaily.trade_date == trade_date)
-        ).first()
-        if existing:
-            for key, value in kline_data.items():
-                if key not in ["code", "trade_date"]:
-                    setattr(existing, key, value)
-            # 统一刷新时间，便于排查
-            existing.created_at = _dt.now()
-        else:
-            kline_data = dict(kline_data)
-            kline_data["created_at"] = _dt.now()
-            session.add(SectorKlineDaily(**kline_data))
+        kline_data = dict(kline_data)
+        kline_data["created_at"] = _dt.now()
+        _upsert_sector_kline_daily(session, kline_data)
 
         saved += 1
 

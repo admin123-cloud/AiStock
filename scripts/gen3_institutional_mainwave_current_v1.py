@@ -25,9 +25,16 @@ from utils.paths import report_path, runtime_path  # noqa: E402
 
 OUT_DIR = report_path("gen3_institutional_mainwave_current_v1")
 RUNTIME_DIR = runtime_path("gen3_institutional_mainwave_current")
+STATE_ALPHA_RUNTIME_DIR = runtime_path("gen3_state_alpha")
 CURRENT_WAVE_SCAN_DIR = report_path("current_wave_style_candidate_scan_v1")
 MARKET_CONTEXT_ARCHIVE = report_path("gen3_four_path_independent_candidates", "market_context.csv")
 STATE_ROUTER_CONTEXT_ARCHIVE = report_path("gen3_state_router_shadow_daily_v1", "g3_state_router_market_context.csv")
+MAINWAVE_DYNAMIC_COOLDOWN = {
+    "policy": "institutional_mainwave_consecutive_loss_dynamic_recovery",
+    "trigger_consecutive_losses": 2,
+    "min_cooldown_trading_days": 3,
+    "max_cooldown_trading_days": 15,
+}
 
 
 def _date_text(value: Any) -> str:
@@ -318,8 +325,164 @@ def _index_mom60(decision_date: str) -> tuple[float | None, dict[str, Any]]:
     df = df.dropna(subset=["trade_date", "close"]).sort_values("trade_date")
     if len(df) < 61:
         return None, {"status": "insufficient_index_rows_after_clean", "rows": int(len(df))}
+    close = float(df["close"].iloc[-1])
+    ma20 = float(df["close"].tail(20).mean()) if len(df) >= 20 else None
+    mom20 = float(df["close"].iloc[-1] / df["close"].iloc[-21] - 1.0) if len(df) >= 21 else None
     mom60 = float(df["close"].iloc[-1] / df["close"].iloc[-61] - 1.0)
-    return mom60, {"status": "ok", "rows": int(len(df)), "index_code": INDEX_CODE}
+    return mom60, {
+        "status": "ok",
+        "rows": int(len(df)),
+        "index_code": INDEX_CODE,
+        "index_close": close,
+        "index_ma20": ma20,
+        "index_mom20": mom20,
+        "index_mom60": mom60,
+        "index_recovery_ok": bool((ma20 is not None and close >= ma20) or (mom20 is not None and mom20 >= 0.0)),
+    }
+
+
+def _trade_calendar_between(start: str, end: str) -> list[str]:
+    start_text = _date_text(start)
+    end_text = _date_text(end)
+    if not start_text or not end_text:
+        return []
+    try:
+        df = clickhouse_query_df(
+            """
+            SELECT DISTINCT trade_date
+            FROM kline_daily
+            WHERE trade_date BETWEEN ? AND ?
+            ORDER BY trade_date
+            """,
+            [start_text, end_text],
+        )
+        if not df.empty:
+            return pd.to_datetime(df["trade_date"], errors="coerce").dropna().dt.strftime("%Y-%m-%d").tolist()
+    except Exception:
+        pass
+    start_ts = pd.Timestamp(start_text)
+    end_ts = pd.Timestamp(end_text)
+    days: list[str] = []
+    current = start_ts
+    while current <= end_ts:
+        if current.weekday() < 5:
+            days.append(current.strftime("%Y-%m-%d"))
+        current += pd.Timedelta(days=1)
+    return days
+
+
+def _closed_mainwave_trades() -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for path in [STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv", RUNTIME_DIR / "shadow_ledger.csv"]:
+        df = _read_csv(path)
+        if not df.empty:
+            df["_ledger_path"] = str(path)
+            frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    d = pd.concat(frames, ignore_index=True, sort=False)
+    if "ticket_key" in d.columns:
+        d = d.drop_duplicates("ticket_key", keep="last")
+    route = d.get("route", pd.Series("", index=d.index)).fillna("").astype(str)
+    strategy = d.get("trade_strategy", pd.Series("", index=d.index)).fillna("").astype(str)
+    d = d[route.eq("institutional_mainwave") | strategy.eq("institutional_score120_mainwave")].copy()
+    if d.empty:
+        return d
+    for col in ["net_ret", "realized_ret", "account_ret"]:
+        if col in d.columns:
+            d[col] = pd.to_numeric(d[col], errors="coerce")
+    if "net_ret" in d.columns:
+        d["_ret"] = d["net_ret"]
+    elif "realized_ret" in d.columns:
+        d["_ret"] = d["realized_ret"]
+    elif "account_ret" in d.columns:
+        d["_ret"] = d["account_ret"]
+    else:
+        d["_ret"] = pd.NA
+    status = d.get("last_state", d.get("trade_status", pd.Series("", index=d.index))).fillna("").astype(str).str.lower()
+    exit_reason = d.get("exit_reason", d.get("last_exit_reason", pd.Series("", index=d.index))).fillna("").astype(str).str.lower()
+    closed_mask = pd.to_numeric(d["_ret"], errors="coerce").notna() | status.str.contains("closed|exit|sold|stopped|hard_stop", regex=True) | exit_reason.str.contains("hard_stop|take_profit|prev_low|policy_exit", regex=True)
+    d = d[closed_mask].copy()
+    if d.empty:
+        return d
+    date_col = None
+    for candidate in ["exit_date", "policy_exit_date", "closed_at", "updated_at", "created_at", "entry_date"]:
+        if candidate in d.columns:
+            date_col = candidate
+            break
+    d["_exit_date"] = pd.to_datetime(d[date_col], errors="coerce").dt.strftime("%Y-%m-%d") if date_col else ""
+    d = d[pd.to_numeric(d["_ret"], errors="coerce").notna() & d["_exit_date"].astype(str).ne("")]
+    return d.sort_values(["_exit_date", "ticket_key" if "ticket_key" in d.columns else d.columns[0]]).reset_index(drop=True)
+
+
+def _dynamic_cooldown_state(entry_date: str, recovery_signal_ok: bool) -> dict[str, Any]:
+    base = {
+        **MAINWAVE_DYNAMIC_COOLDOWN,
+        "cooldown_active": False,
+        "cooldown_reason": "no_closed_institutional_mainwave_loss_streak",
+        "cooldown_scope": "institutional_mainwave_new_buys",
+        "recovery_signal_ok": bool(recovery_signal_ok),
+        "closed_mainwave_count": 0,
+        "consecutive_loss_count": 0,
+    }
+    closed = _closed_mainwave_trades()
+    if closed.empty:
+        return base | {"cooldown_reason": "no_closed_institutional_mainwave_history"}
+    rets = pd.to_numeric(closed["_ret"], errors="coerce").tolist()
+    consecutive = 0
+    for value in reversed(rets):
+        if value < 0:
+            consecutive += 1
+        else:
+            break
+    base["closed_mainwave_count"] = int(len(closed))
+    base["consecutive_loss_count"] = int(consecutive)
+    base["last_closed_exit_date"] = str(closed["_exit_date"].iloc[-1])
+    base["last_closed_ret"] = _safe_float(closed["_ret"].iloc[-1])
+    if consecutive < int(MAINWAVE_DYNAMIC_COOLDOWN["trigger_consecutive_losses"]):
+        return base | {"cooldown_reason": "consecutive_loss_below_trigger"}
+
+    trigger_row = closed.iloc[-int(MAINWAVE_DYNAMIC_COOLDOWN["trigger_consecutive_losses"])]
+    trigger_date = str(trigger_row["_exit_date"])
+    cal = _trade_calendar_between(trigger_date, entry_date)
+    if not cal:
+        return base | {
+            "cooldown_active": True,
+            "cooldown_reason": "cooldown_calendar_unavailable",
+            "cooldown_trigger_date": trigger_date,
+        }
+    try:
+        trigger_idx = cal.index(trigger_date)
+    except ValueError:
+        trigger_idx = 0
+    entry_text = _date_text(entry_date)
+    try:
+        entry_idx = cal.index(entry_text)
+    except ValueError:
+        entry_idx = len(cal) - 1
+    elapsed = max(0, entry_idx - trigger_idx)
+    min_days = int(MAINWAVE_DYNAMIC_COOLDOWN["min_cooldown_trading_days"])
+    max_days = int(MAINWAVE_DYNAMIC_COOLDOWN["max_cooldown_trading_days"])
+    if elapsed <= min_days:
+        active = True
+        reason = "min_3_trading_days_cooldown"
+    elif elapsed > max_days:
+        active = False
+        reason = "max_15_trading_days_recheck_release"
+    elif recovery_signal_ok:
+        active = False
+        reason = "market_recovery_signal_release"
+    else:
+        active = True
+        reason = "waiting_market_recovery_signal"
+    return base | {
+        "cooldown_active": bool(active),
+        "cooldown_reason": reason,
+        "cooldown_trigger_date": trigger_date,
+        "cooldown_elapsed_trading_days": int(elapsed),
+        "cooldown_min_release_trading_days": min_days,
+        "cooldown_max_recheck_trading_days": max_days,
+    }
 
 
 def _decorate_signal_rows(rows: pd.DataFrame, entry: str, decision: str, *, eligible: bool) -> pd.DataFrame:
@@ -339,7 +502,7 @@ def _decorate_signal_rows(rows: pd.DataFrame, entry: str, decision: str, *, elig
     out["strategy_id"] = "g3_market_state_router_strategy_v1"
     out["score"] = pd.to_numeric(out["wave_style_score"], errors="coerce")
     out["policy"] = "state_router_institutional_mainwave_shadow"
-    out["confirm_rule"] = "score120_current_diffusion65_m30_ma20_index_mom60_soft_5pct_hard_10pct"
+    out["confirm_rule"] = "score120_current_diffusion65_m30_ma20_index_mom60_le_5pct_strategy_gate"
     out["confirm_datetime"] = pd.Timestamp(decision).strftime("%Y-%m-%d 15:00:00")
     out["entry_ts"] = pd.Timestamp(entry).strftime("%Y-%m-%d 09:30:00")
     out["reference_close"] = pd.to_numeric(out.get("close"), errors="coerce")
@@ -353,17 +516,21 @@ def _decorate_signal_rows(rows: pd.DataFrame, entry: str, decision: str, *, elig
         out["shadow_status"] = "confirmed_shadow_candidate"
         out["block_reason"] = ""
     else:
+        cooldown_active = pd.Series(out.get("mainwave_dynamic_cooldown_active", False), index=out.index).fillna(False).astype(bool)
         status = out.get("m30_status", pd.Series("", index=out.index)).astype(str)
         missing_minute = status.isin(["minute_query_failed", "missing_minute_bars", "insufficient_minute_bars"])
         out["shadow_status"] = "blocked_waiting_confirmation"
         out["block_reason"] = "institutional_wait_30m_confirm_or_no_intraday_data"
-        out.loc[~pd.Series(out.get("index_mom60_gate", False), index=out.index).fillna(False).astype(bool), "block_reason"] = "institutional_index_mom60_gt_10pct_hard_gate"
+        out.loc[~pd.Series(out.get("index_mom60_gate", False), index=out.index).fillna(False).astype(bool), "block_reason"] = "institutional_index_mom60_gt_5pct_strategy_gate"
         out.loc[missing_minute, "block_reason"] = "institutional_30m_data_unavailable"
         out.loc[
             pd.Series(out.get("m30_ok", False), index=out.index).fillna(False).astype(bool)
             & ~pd.Series(out.get("m30_confirmed", False), index=out.index).fillna(False).astype(bool),
             "block_reason",
         ] = "institutional_30m_ma20_not_confirmed"
+        if cooldown_active.any():
+            out.loc[cooldown_active, "shadow_status"] = "blocked_mainwave_dynamic_cooldown"
+            out.loc[cooldown_active, "block_reason"] = "institutional_mainwave_dynamic_cooldown_pause_new_buy"
     return out
 
 
@@ -375,7 +542,7 @@ def build_current_candidates(
     min_amount20: float = 30000.0,
     min_score: float = 120.0,
     min_sector_diffusion: float = 65.0,
-    max_index_mom60: float = 0.10,
+    max_index_mom60: float = 0.05,
     period: int = 30,
     top_n: int = 20,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
@@ -420,13 +587,13 @@ def build_current_candidates(
     if not candidates.empty:
         candidates["index_mom60"] = index_mom60
         candidates["index_mom60_gate"] = index_gate
+        candidates["index_close"] = index_meta.get("index_close")
+        candidates["index_ma20"] = index_meta.get("index_ma20")
+        candidates["index_mom20"] = index_meta.get("index_mom20")
         candidates["index_mom60_heat_state"] = "normal"
         candidates["market_heat_position_scale"] = 1.0
-        if index_mom60 is not None and index_mom60 > 0.05:
-            candidates["index_mom60_heat_state"] = "high_heat_observe"
-            candidates["market_heat_position_scale"] = 1.0
         if index_mom60 is not None and index_mom60 > float(max_index_mom60):
-            candidates["index_mom60_heat_state"] = "extreme_heat_no_open"
+            candidates["index_mom60_heat_state"] = "institutional_mom60_gt_5_block"
             candidates["market_heat_position_scale"] = 0.0
         m30_above_ma20 = pd.to_numeric(
             candidates["m30_close_above_ma20"] if "m30_close_above_ma20" in candidates.columns else pd.Series(np.nan, index=candidates.index),
@@ -438,6 +605,29 @@ def build_current_candidates(
         )
         pre_confirm_candidates = candidates.copy()
         candidates = candidates[candidates["index_mom60_gate"] & candidates["m30_confirmed"]].copy()
+
+    index_recovery_ok = bool(index_meta.get("index_recovery_ok"))
+    candidate_recovery_ok = (
+        bool((pre_confirm_candidates["index_mom60_gate"].fillna(False).astype(bool) & pre_confirm_candidates["m30_confirmed"].fillna(False).astype(bool)).any())
+        if not pre_confirm_candidates.empty and {"index_mom60_gate", "m30_confirmed"}.issubset(pre_confirm_candidates.columns)
+        else False
+    )
+    recovery_signal_ok = bool(index_gate and index_recovery_ok and candidate_recovery_ok)
+    cooldown = _dynamic_cooldown_state(entry, recovery_signal_ok)
+    cooldown_active = bool(cooldown.get("cooldown_active"))
+    if not pre_confirm_candidates.empty:
+        pre_confirm_candidates["mainwave_dynamic_cooldown_active"] = cooldown_active
+        pre_confirm_candidates["mainwave_dynamic_cooldown_reason"] = cooldown.get("cooldown_reason", "")
+        pre_confirm_candidates["mainwave_cooldown_elapsed_trading_days"] = cooldown.get("cooldown_elapsed_trading_days")
+        pre_confirm_candidates["mainwave_recovery_signal_ok"] = recovery_signal_ok
+    if not candidates.empty:
+        candidates["mainwave_dynamic_cooldown_active"] = cooldown_active
+        candidates["mainwave_dynamic_cooldown_reason"] = cooldown.get("cooldown_reason", "")
+        candidates["mainwave_cooldown_elapsed_trading_days"] = cooldown.get("cooldown_elapsed_trading_days")
+        candidates["mainwave_recovery_signal_ok"] = recovery_signal_ok
+    if cooldown_active and not candidates.empty:
+        candidates = candidates.iloc[0:0].copy()
+
     confirmed = _decorate_signal_rows(candidates, entry, decision, eligible=True)
     blocked = pre_confirm_candidates.drop(candidates.index, errors="ignore") if not pre_confirm_candidates.empty else pre_confirm_candidates
     blocked = _decorate_signal_rows(blocked, entry, decision, eligible=False)
@@ -468,6 +658,13 @@ def build_current_candidates(
         "index_mom60": _safe_float(index_mom60),
         "index": index_meta,
         "m30": m30_meta,
+        "mainwave_dynamic_cooldown": cooldown,
+        "mainwave_recovery_signal_ok": recovery_signal_ok,
+        "strategy_contract": {
+            "entry_gate": "score>=120 && sector_diffusion>=65 && 30m_close>=MA20 && index_mom60<=5%",
+            "slot_policy": "2 slots, 50% per slot, max 2 new buys per day",
+            "cooldown_policy": "after 2 consecutive closed institutional_mainwave losses, pause new buys for at least 3 trading days; release only after market recovery signal, or max 15 trading-day recheck",
+        },
     }
     return confirmed.reset_index(drop=True), blocked.reset_index(drop=True), pool.reset_index(drop=True), sector.reset_index(drop=True), meta
 
@@ -537,7 +734,7 @@ def main() -> int:
     parser.add_argument("--min-amount20", type=float, default=30000.0)
     parser.add_argument("--min-score", type=float, default=120.0)
     parser.add_argument("--min-sector-diffusion", type=float, default=65.0)
-    parser.add_argument("--max-index-mom60", type=float, default=0.10)
+    parser.add_argument("--max-index-mom60", type=float, default=0.05)
     parser.add_argument("--period", type=int, default=30, choices=[15, 30])
     parser.add_argument("--top-n", type=int, default=20)
     args = parser.parse_args()

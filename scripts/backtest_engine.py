@@ -107,13 +107,12 @@ class BacktestEngine:
     
     def _get_stock_list(self) -> List[Dict[str, str]]:
         """获取股票列表"""
-        from data_fetcher.sources.tdxquant import TdxQuantDataSource
-        
-        tdxquant = TdxQuantDataSource("tdxquant", {"enabled": True, "priority": 0})
-        
         if self.stock_pool == 'all':
             # 全部股票
-            result = tdxquant.get_stock_list(market='ALL', stock_type='stock')
+            from data_fetcher.manager import DataSourceManager
+
+            data_sources = DataSourceManager()
+            result = data_sources.get_stock_list(market='ALL', stock_type='stock')
         elif self.stock_pool == 'watchlist':
             # 自选股（从数据库查询）
             from models.stock_models import UserStock
@@ -180,16 +179,14 @@ class BacktestEngine:
     
     def _get_kline_data(self, code: str) -> pd.DataFrame:
         """获取K线数据"""
-        from data_fetcher.sources.tdxquant import TdxQuantDataSource
-        
-        tdxquant = TdxQuantDataSource("tdxquant", {"enabled": True, "priority": 0})
-        
-        df = tdxquant.get_stock_history(
+        from data_fetcher.manager import DataSourceManager
+
+        data_sources = DataSourceManager()
+        df = data_sources.get_stock_history(
             stock_code=code,
             start_date=self.start_date,
             end_date=self.end_date,
             period=self.period,
-            dividend_type='front'
         )
         
         return df

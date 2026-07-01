@@ -82,7 +82,7 @@ def _fetch_sector_close_tdxquant(
     for i in range(0, len(codes), int(batch_size)):
         batch = codes[i : i + int(batch_size)]
         data = tdxquant_pool.get_market_data(
-            field_list=[],
+            field_list=["Open", "High", "Low", "Close", "Volume", "Amount"],
             stock_list=batch,
             period="1d",
             start_time=start_date.replace("-", ""),

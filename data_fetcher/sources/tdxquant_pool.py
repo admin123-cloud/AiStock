@@ -14,6 +14,12 @@ import smtplib
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 
+if str(os.environ.get("AISTOCK_ALLOW_LEGACY_TDX") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+    raise RuntimeError(
+        "Legacy TDX market-data source is disabled. "
+        "Use qmt_xtquant for market data, or set AISTOCK_ALLOW_LEGACY_TDX=1 for a one-off migration script."
+    )
+
 # 添加项目根目录到Python搜索路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if project_root not in sys.path:

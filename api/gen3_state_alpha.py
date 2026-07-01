@@ -27,7 +27,6 @@ import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import APIRouter, Body, Query
 
-from execution.ptrade_bridge import PTradeFileBridge
 from scheduler.trading_calendar import TradingCalendar
 from utils.config import config as app_config
 from utils.logger import get_logger
@@ -38,28 +37,38 @@ router = APIRouter(prefix="/gen3-state-alpha", tags=["G3 State Alpha"])
 logger = get_logger("gen3_state_alpha")
 
 STRATEGY_ID = "g3_final_with_g2_gap_supplement"
-STRATEGY_NAME = "G3 Final With G2 Gap Supplement"
+STRATEGY_NAME = "G3 Full Formal Policy"
 STRATEGY_NAME_CN = "G3最终版"
 FINAL_G3_PROFILE = "g3_final_with_g2_gap_supplement"
+FINAL_G3_FORMAL_POLICY = "mainwave_hard_le_5_50"
 FINAL_G3_PROFILE_NAME = "G3最终版：二槽主升 + G2空档补位"
+FINAL_G3_PROFILE_NAME = "G3 Full Formal Policy: mainwave_hard_le_5_50"
 FINAL_G3_LEGACY_BASE_PROFILE = "g3_final_top2_mainwave_sector_exempt_v1"
+FULL_G3_DISABLED_REPLAY_ROUTES = {"panic_repair", "old_g3_route_v3", "g2_gap_supplement"}
+G2_GAP_SUPPLEMENT_LIVE_ENABLED = False
+G2_GAP_SUPPLEMENT_RETIRE_REASON = "historical_replay_negative_and_no_portfolio_improvement_retired_from_live_trading_2026_06_21"
 
 BLUEPRINT_DIR = report_path("gen3_strategy_rebuild_blueprint_v1")
 STATE_ALPHA_RUNTIME_DIR = runtime_path("gen3_state_alpha")
 STATE_ROUTER_RUNTIME_DIR = runtime_path("gen3_state_router_shadow")
 STATE_ROUTER_REPORT_DIR = report_path("gen3_state_router_shadow_daily_v1")
+STATE_ROUTER_DAILY_ARCHIVE_DIR = STATE_ROUTER_REPORT_DIR / "daily_archive"
 MAINWAVE_RUNTIME_DIR = runtime_path("gen3_institutional_mainwave_current")
 MAINWAVE_REPORT_DIR = report_path("gen3_institutional_mainwave_current_v1")
+CURRENT_WAVE_SCAN_DIR = report_path("current_wave_style_candidate_scan_v1")
 PROMOTION_REPORT_DIR = report_path("gen3_promotion_self_test_v1")
-FINAL_G3_BACKTEST_DIR = report_path("g2_g3_market_style_router_v1")
+FULL_G3_BACKTEST_ROOT = report_path("g3_final_mom60_position_policy_v1")
+FINAL_G3_BACKTEST_DIR = FULL_G3_BACKTEST_ROOT / FINAL_G3_FORMAL_POLICY
 LATEST_G3_PROFILE = FINAL_G3_PROFILE
-HISTORICAL_TRADES_PATH = FINAL_G3_BACKTEST_DIR / f"{LATEST_G3_PROFILE}_closed_trades.csv"
+HISTORICAL_TRADES_PATH = FINAL_G3_BACKTEST_DIR / "closed_trades.csv"
 SCORE120_CORE_TRADES_PATH = report_path("gen3_score120_core_strategy_v1", "g3_route_execution_mandate_candidate_closed_trades.csv")
-EQUITY_CURVE_PATH = FINAL_G3_BACKTEST_DIR / f"{LATEST_G3_PROFILE}_equity_curve.csv"
-MTM_EQUITY_CURVE_PATH = FINAL_G3_BACKTEST_DIR / f"{LATEST_G3_PROFILE}_mtm_equity_curve.csv"
-PROMOTION_SUMMARY_PATH = FINAL_G3_BACKTEST_DIR / "summary.json"
-PROMOTION_SUMMARY_CSV_PATH = FINAL_G3_BACKTEST_DIR / "summary.csv"
-FINAL_G3_WINDOW_SUMMARY_PATH = FINAL_G3_BACKTEST_DIR / "window_summary.csv"
+SCORE120_ENTRY_TIMING_DIR = report_path("score120_entry_timing_variants_v1")
+SCORE120_ENTRY_SOURCE_SIGNALS_PATH = SCORE120_ENTRY_TIMING_DIR / "source_signals.csv"
+EQUITY_CURVE_PATH = FINAL_G3_BACKTEST_DIR / "equity_curve.csv"
+MTM_EQUITY_CURVE_PATH = FINAL_G3_BACKTEST_DIR / "mtm_equity_curve.csv"
+PROMOTION_SUMMARY_PATH = FULL_G3_BACKTEST_ROOT / "summary.json"
+PROMOTION_SUMMARY_CSV_PATH = FULL_G3_BACKTEST_ROOT / "summary.csv"
+FINAL_G3_WINDOW_SUMMARY_PATH = FULL_G3_BACKTEST_ROOT / "window_summary.csv"
 PROMOTION_GATES_PATH = PROMOTION_REPORT_DIR / "gates.csv"
 STRATEGY_REDUCTION_RECOVERY_DIR = report_path("g3_strategy_reduction_recovery_v1")
 NATIVE_BRIDGE_BACKTEST_DIR = report_path("g3_five_strategies_native_bridge_v1")
@@ -79,6 +88,7 @@ GATE_LAYER_AUDIT_SUMMARY_PATH = GATE_LAYER_AUDIT_DIR / "summary.json"
 GATE_LAYER_AUDIT_REPORT_PATH = GATE_LAYER_AUDIT_DIR / "REPORT_CN.md"
 OPERATIONS_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "operations_state.json"
 MONITOR_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_monitor_state.json"
+EXIT_MONITOR_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_exit_monitor_state.json"
 OBSERVATION_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "observation_scheduler_state.json"
 VERIFICATION_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_verifications.json"
 MONITOR_EVENTS_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_monitor_events.json"
@@ -87,26 +97,52 @@ PAPER_EXECUTIONS_PATH = STATE_ALPHA_RUNTIME_DIR / "paper_executions.json"
 OBSERVATION_SNAPSHOTS_PATH = STATE_ALPHA_RUNTIME_DIR / "observation_snapshots.json"
 PRETRADE_TICKET_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "pretrade_ticket_reviews.json"
 PAPER_WATCH_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "paper_watch_reviews.json"
+CANDIDATE_OMISSION_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "candidate_omission_reviews.json"
+NO_TRADE_DAY_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "no_trade_day_reviews.json"
+FORMAL_ACTION_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "formal_action_reviews.json"
+DAILY_REVIEW_CHECKLIST_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "daily_review_checklist_reviews.json"
+LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "launch_day_playbook_reviews.json"
+LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH = STATE_ALPHA_RUNTIME_DIR / "live_launch_review_snapshots.json"
+PREMARKET_ACTION_ATTEMPTS_PATH = STATE_ALPHA_RUNTIME_DIR / "premarket_action_attempts.json"
+STRATEGY_TUNING_TASK_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "strategy_tuning_task_reviews.json"
 BROKER_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_state.json"
 BROKER_SYNC_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_sync_state.json"
 PRETRADE_SMOKE_DIR = report_path("gen3_pretrade_smoke_test_v1")
 PRETRADE_SMOKE_PATH = PRETRADE_SMOKE_DIR / "latest_pretrade_smoke.json"
 PRETRADE_SMOKE_GATES_PATH = PRETRADE_SMOKE_DIR / "latest_pretrade_gates.csv"
 REALTIME_READINESS_REVIEW_DIR = report_path("g3_realtime_readiness_review_v1")
-PTRADE_E2E_ACCEPTANCE_PATH = report_path("gen3_ptrade_e2e_acceptance") / "latest.json"
-PTRADE_INTERNAL_ACCEPTANCE_PATH = report_path("gen3_ptrade_internal_strategy_acceptance") / "latest.json"
+LIVE_LAUNCH_PACKET_DIR = report_path("g3_live_launch_packet_v1")
+LIVE_LAUNCH_PACKET_PATH = LIVE_LAUNCH_PACKET_DIR / "launch_packet.json"
+LIVE_LAUNCH_REVIEW_ARCHIVE_DIR = report_path("g3_live_launch_review_snapshots_v1")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATE_ROUTER_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_state_router_shadow_daily_v1.py"
 STATE_ROUTER_RESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_market_state_router_v1.py"
 PRETRADE_SMOKE_SCRIPT = PROJECT_ROOT / "scripts" / "gen3_pretrade_smoke_test_v1.py"
 REALTIME_READINESS_REVIEW_SCRIPT = PROJECT_ROOT / "scripts" / "audit_g3_realtime_readiness_review_v1.py"
+LIVE_LAUNCH_PACKET_SCRIPT = PROJECT_ROOT / "scripts" / "build_g3_live_launch_packet_v1.py"
 REFRESH_TASKS: dict[str, dict[str, Any]] = {}
 REFRESH_TASK_LOCK = threading.Lock()
 _monitor_scheduler: BackgroundScheduler | None = None
 _monitor_job_id = "g3_state_alpha_shadow_monitor"
+_exit_monitor_job_id = "g3_state_alpha_shadow_exit_monitor"
 _observation_job_id = "g3_state_alpha_observation_snapshot"
 _broker_sync_job_id = "g3_state_alpha_broker_sync"
-PTRADE_BRIDGE = PTradeFileBridge()
+
+
+def _startup_schedulers_enabled() -> bool:
+    value = str(os.environ.get("AISTOCK_STARTUP_SCHEDULERS_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _scheduler_disabled_result(state: dict[str, Any], job_id: str) -> dict[str, Any]:
+    return {
+        **state,
+        "scheduler_enabled": False,
+        "scheduler_wired": False,
+        "job_id": job_id,
+        "next_run_time": None,
+        "scheduler_disabled_reason": "AISTOCK_STARTUP_SCHEDULERS_ENABLED=0",
+    }
 
 
 def _path_status(path: Path) -> dict[str, Any]:
@@ -131,6 +167,18 @@ def _date_text(value: Any) -> str:
     return "" if pd.isna(ts) else ts.strftime("%Y-%m-%d")
 
 
+def _clean_review_text(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return default if text.lower() in {"nan", "nat", "none"} else text
+
+
 def _is_trading_day_text(value: Any) -> bool:
     date_text = _date_text(value)
     if not date_text:
@@ -146,18 +194,71 @@ def _filter_next_trade_buy_tickets(
     current_summary: dict[str, Any],
     current_tickets: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    current_entry = _date_text(
-        current_tickets[0].get("entry_date") if current_tickets else current_summary.get("entry_date")
-    )
+    current_entry = _date_text(current_tickets[0].get("entry_date")) if current_tickets else ""
     out: list[dict[str, Any]] = []
     for item in tickets:
         if not isinstance(item, dict):
+            continue
+        if _truthy(item.get("retired_from_live_trading")) or _is_g2_gap_supplement_record(item):
+            continue
+        if not _truthy(item.get("qualified_shadow_buy")):
             continue
         entry_date = _date_text(item.get("entry_date") or item.get("planned_entry_ts"))
         if not entry_date or not _is_trading_day_text(entry_date):
             continue
         if current_entry and entry_date <= current_entry:
             continue
+        out.append(item)
+    return out
+
+
+def _is_g2_gap_supplement_record(item: dict[str, Any]) -> bool:
+    route = str(item.get("route") or item.get("mode") or "").strip()
+    strategy = str(item.get("trade_strategy") or "").strip()
+    return route == "g2_gap_supplement" or strategy == "volume_runup_supplement"
+
+
+def _retire_g2_gap_supplement_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if G2_GAP_SUPPLEMENT_LIVE_ENABLED:
+        return records
+    out: list[dict[str, Any]] = []
+    for row in records or []:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        if _is_g2_gap_supplement_record(item):
+            existing = str(item.get("block_reason") or "").strip()
+            item["router_eligible"] = False
+            item["qualified_shadow_buy"] = False
+            item["formal_buy_signal"] = False
+            item["auto_order_allowed"] = False
+            item["order_path_enabled"] = False
+            item["paper_trade_allowed"] = False
+            item["retired_from_live_trading"] = True
+            item["retire_reason"] = G2_GAP_SUPPLEMENT_RETIRE_REASON
+            item["shadow_status"] = "retired_g2_gap_supplement_observe"
+            item["block_reason"] = G2_GAP_SUPPLEMENT_RETIRE_REASON if not existing else f"{existing}|{G2_GAP_SUPPLEMENT_RETIRE_REASON}"
+        out.append(item)
+    return out
+
+
+def _retire_g2_gap_supplement_diagnostics(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if G2_GAP_SUPPLEMENT_LIVE_ENABLED:
+        return records
+    out: list[dict[str, Any]] = []
+    for row in records or []:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        if str(item.get("route") or "").strip() == "g2_gap_supplement":
+            rows = item.get("rows") or item.get("source_rows") or 0
+            item["eligible_rows"] = 0
+            item["blocked_rows"] = rows
+            item["route_health_observation"] = G2_GAP_SUPPLEMENT_RETIRE_REASON
+            item["top_block_reason"] = G2_GAP_SUPPLEMENT_RETIRE_REASON
+            item["live_enabled"] = False
+            item["retired_from_live_trading"] = True
+            item["retire_reason"] = G2_GAP_SUPPLEMENT_RETIRE_REASON
         out.append(item)
     return out
 
@@ -179,9 +280,7 @@ def _build_date_display_analysis(
     afterhours_tickets: list[dict[str, Any]],
     next_trade_tickets: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    current_entry = _date_text(
-        current_tickets[0].get("entry_date") if current_tickets else current_summary.get("entry_date")
-    )
+    current_entry = _date_text(current_tickets[0].get("entry_date")) if current_tickets else ""
     afterhours_entry = _date_text((afterhours_summary or {}).get("entry_date"))
     if not afterhours_entry and afterhours_tickets:
         afterhours_entry = _date_text(afterhours_tickets[0].get("entry_date") or afterhours_tickets[0].get("planned_entry_ts"))
@@ -202,16 +301,16 @@ def _build_date_display_analysis(
 
     if next_trade_tickets:
         status = "ready"
-        message = f"已识别 {display_entry} 的下一交易日买入候选。"
+        message = f"已识别 {display_entry} 的买入建议；日期用于标记候选批次，不强制等同下一交易日。"
     elif non_trading_count:
         status = "filtered_non_trading"
         message = f"已过滤 {non_trading_count} 条非交易日候选；当前按 {display_entry or expected_entry or '--'} 口径等待有效买入票。"
     elif afterhours_entry and expected_entry and afterhours_entry != expected_entry:
-        status = "date_mismatch"
-        message = f"盘后候选日 {afterhours_entry} 与下一交易日 {expected_entry} 不一致，页面不直接展示为买入建议。"
+        status = "date_note"
+        message = f"盘后候选日 {afterhours_entry} 与下一交易日 {expected_entry} 不一致；页面按当前买入建议展示，执行前以真实账户和交易时点复核。"
     else:
         status = "no_candidate"
-        message = f"{display_entry or expected_entry or '下一交易日'} 暂无合格买入候选。"
+        message = f"{display_entry or expected_entry or '当前'} 暂无合格买入建议。"
 
     return {
         "status": status,
@@ -224,7 +323,7 @@ def _build_date_display_analysis(
         "next_trade_ticket_count": len(next_trade_tickets),
         "filtered_non_trading_ticket_count": non_trading_count,
         "filtered_stale_or_current_ticket_count": stale_or_current_count,
-        "display_label": "下一交易日买入关注",
+        "display_label": "买入建议",
     }
 
 
@@ -241,6 +340,18 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
+def _load_premarket_action_attempts() -> list[dict[str, Any]]:
+    data = _read_json(PREMARKET_ACTION_ATTEMPTS_PATH)
+    rows = data.get("attempts") if isinstance(data, dict) else []
+    return rows if isinstance(rows, list) else []
+
+
+def _append_premarket_action_attempt(attempt: dict[str, Any]) -> None:
+    rows = _load_premarket_action_attempts()
+    rows.append(attempt)
+    _write_json(PREMARKET_ACTION_ATTEMPTS_PATH, {"attempts": rows[-200:]})
 
 
 def _read_csv_records(path: Path, limit: int | None = None) -> list[dict[str, Any]]:
@@ -323,9 +434,14 @@ def _mainwave_summary_candidates() -> list[tuple[str, Path, dict[str, Any]]]:
 
 def _select_mainwave_summary_source() -> tuple[str, Path | None, dict[str, Any], dict[str, Any]]:
     fallback: tuple[str, Path | None, dict[str, Any], dict[str, Any]] = ("", None, {}, {})
-    for label, path, summary in _mainwave_summary_candidates():
+    candidates = _mainwave_summary_candidates()
+    for label, path, summary in candidates:
         source = _find_institutional_mainwave_source(summary)
-        if source and (source.get("pre_confirm_preview") or source.get("rows")):
+        if source.get("mainwave_dynamic_cooldown") and (source.get("pre_confirm_preview") or source.get("rows") or "rows" in source):
+            return label, path, summary, source
+    for label, path, summary in candidates:
+        source = _find_institutional_mainwave_source(summary)
+        if source and (source.get("pre_confirm_preview") or source.get("rows") or "rows" in source):
             return label, path, summary, source
         if not fallback[2]:
             fallback = (label, path, summary, source)
@@ -373,6 +489,10 @@ def _mainwave_candidate_from_row(row: dict[str, Any], source: str, recommended_c
         "reference_close": _to_float_or_none(row.get("reference_close") or row.get("close")),
         "position_pct": _to_float_or_none(row.get("position_pct") or row.get("max_position_pct")),
         "block_reason": row.get("block_reason") or "",
+        "mainwave_dynamic_cooldown_active": _truthy(row.get("mainwave_dynamic_cooldown_active")),
+        "mainwave_dynamic_cooldown_reason": row.get("mainwave_dynamic_cooldown_reason") or "",
+        "mainwave_cooldown_elapsed_trading_days": _to_int_or_zero(row.get("mainwave_cooldown_elapsed_trading_days")),
+        "mainwave_recovery_signal_ok": _truthy(row.get("mainwave_recovery_signal_ok")),
         "source": source,
     }
 
@@ -412,6 +532,100 @@ def _build_mainwave_candidates(source_meta: dict[str, Any], ticket_rows: list[di
         reverse=True,
     )
     return out[:limit]
+
+
+def _mainwave_watch_candidate_from_row(row: dict[str, Any], source: str, diffusion_by_sector: dict[str, float]) -> dict[str, Any]:
+    code = _row_code(row.get("code") or row.get("code_raw"), row.get("code6"))
+    sector = row.get("sector_name") or row.get("l2_sector_name") or row.get("industry") or ""
+    score = _to_float_or_none(row.get("wave_style_score") or row.get("score"))
+    diffusion = _to_float_or_none(row.get("sector_diffusion_score"))
+    if diffusion is None:
+        diffusion = diffusion_by_sector.get(str(sector))
+    template_pass = _truthy(row.get("template_pass"))
+    block_parts: list[str] = []
+    if score is not None and score < 120:
+        block_parts.append("score<120")
+    if not template_pass:
+        block_parts.append("template_pass=false")
+    if diffusion is not None and diffusion < 65:
+        block_parts.append("sector_diffusion<65")
+    return {
+        "code": code,
+        "name": row.get("name") or row.get("stock_name") or "",
+        "sector_name": sector,
+        "route": "institutional_mainwave",
+        "route_label": "机构主升浪",
+        "trade_strategy": "institutional_score120_mainwave",
+        "trade_strategy_label": "机构主升Score120",
+        "template_label": row.get("template_label") or "",
+        "template_pass": template_pass,
+        "wave_style_score": score,
+        "score": score,
+        "score_gap_to_formal": None if score is None else round(max(0.0, 120.0 - score), 6),
+        "sector_diffusion_score": diffusion,
+        "trade_date": _date_text(row.get("trade_date")),
+        "decision_date": _date_text(row.get("trade_date")),
+        "reference_close": _to_float_or_none(row.get("close")),
+        "ret5": _to_float_or_none(row.get("ret5")),
+        "ret20": _to_float_or_none(row.get("ret20")),
+        "mom60": _to_float_or_none(row.get("mom60")),
+        "amount5_20": _to_float_or_none(row.get("amount5_20")),
+        "max_dd20": _to_float_or_none(row.get("max_dd20")),
+        "near_high60": _truthy(row.get("near_high60")),
+        "m30_status": "not_formal_candidate",
+        "m30_confirmed": False,
+        "is_recommended": False,
+        "watch_only": True,
+        "watch_tier": "sector_watch",
+        "block_reason": "|".join(block_parts) or "watch_only_not_formal_ticket",
+        "source": source,
+    }
+
+
+def _build_mainwave_watch_candidates(limit: int) -> list[dict[str, Any]]:
+    sector_df = _read_csv_df(MAINWAVE_REPORT_DIR / "current_sector_diffusion.csv")
+    diffusion_by_sector: dict[str, float] = {}
+    if not sector_df.empty and {"l2_sector_name", "sector_diffusion_score"}.issubset(sector_df.columns):
+        for _, row in sector_df.iterrows():
+            sector = str(row.get("l2_sector_name") or "")
+            value = _to_float_or_none(row.get("sector_diffusion_score"))
+            if sector and value is not None:
+                diffusion_by_sector[sector] = value
+
+    frames: list[tuple[str, pd.DataFrame]] = []
+    for source, path in [
+        ("mainwave_pool_top500", MAINWAVE_REPORT_DIR / "current_wave_pool_top500.csv"),
+        ("current_wave_top_candidates", CURRENT_WAVE_SCAN_DIR / "top_candidates.csv"),
+    ]:
+        df = _read_csv_df(path)
+        if not df.empty:
+            frames.append((source, df))
+
+    by_code: dict[str, dict[str, Any]] = {}
+    for source, df in frames:
+        records = json.loads(df.astype(object).where(pd.notna(df), None).to_json(orient="records", force_ascii=False))
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            item = _mainwave_watch_candidate_from_row(row, source, diffusion_by_sector)
+            code = str(item.get("code") or "")
+            if not code:
+                continue
+            existing = by_code.get(code)
+            if not existing or (_to_float_or_none(item.get("wave_style_score")) or 0) > (_to_float_or_none(existing.get("wave_style_score")) or 0):
+                by_code[code] = item
+
+    rows = list(by_code.values())
+    rows = [item for item in rows if not item.get("template_pass") or (_to_float_or_none(item.get("wave_style_score")) or 0) < 120]
+    rows.sort(
+        key=lambda item: (
+            _to_float_or_none(item.get("sector_diffusion_score")) or 0,
+            _to_float_or_none(item.get("wave_style_score")) or 0,
+            _to_float_or_none(item.get("ret20")) or 0,
+        ),
+        reverse=True,
+    )
+    return rows[:limit]
 
 
 def _mainwave_sector_state(avg_diffusion: float, max_score: float, candidate_count: int, recommended_count: int) -> tuple[str, str]:
@@ -455,6 +669,56 @@ def _build_mainwave_sector_opportunities(candidates: list[dict[str, Any]]) -> li
                 "top_candidate_names": " / ".join([str(item.get("name") or item.get("code") or "") for item in top_rows[:3]]),
                 "template_labels": templates,
                 "rank_score": avg_diffusion * 0.55 + max_score * 0.35 + min(len(rows), 8) * 2.0 + len(recommended) * 5.0,
+            }
+        )
+    out.sort(key=lambda item: _to_float_or_none(item.get("rank_score")) or 0, reverse=True)
+    return out
+
+
+def _build_mainwave_sector_opportunities_v2(candidates: list[dict[str, Any]], watch_candidates: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in candidates:
+        groups.setdefault(str(item.get("sector_name") or ""), []).append(item)
+    watch_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in watch_candidates or []:
+        watch_groups.setdefault(str(item.get("sector_name") or ""), []).append(item)
+    for sector in watch_groups:
+        groups.setdefault(sector, [])
+
+    out: list[dict[str, Any]] = []
+    for sector, rows in groups.items():
+        watch_rows = watch_groups.get(sector, [])
+        scoring_rows = rows or watch_rows
+        scores = [_to_float_or_none(item.get("wave_style_score")) for item in scoring_rows]
+        scores = [value for value in scores if value is not None]
+        diffusions = [_to_float_or_none(item.get("sector_diffusion_score")) for item in scoring_rows]
+        diffusions = [value for value in diffusions if value is not None]
+        max_score = max(scores) if scores else 0.0
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+        avg_diffusion = sum(diffusions) / len(diffusions) if diffusions else 0.0
+        recommended = [item for item in rows if item.get("is_recommended")]
+        m30_ok = [item for item in rows if item.get("m30_confirmed") or str(item.get("m30_status") or "") == "ok"]
+        state, state_label = _mainwave_sector_state(avg_diffusion, max_score, len(rows), len(recommended))
+        if not rows and watch_rows:
+            state, state_label = "sector_watch", "板块观察"
+        top_rows = sorted(scoring_rows, key=lambda item: _to_float_or_none(item.get("wave_style_score")) or 0, reverse=True)[:5]
+        templates = sorted({str(item.get("template_label") or "") for item in scoring_rows if item.get("template_label")})
+        out.append(
+            {
+                "sector_name": sector,
+                "state": state,
+                "state_label": state_label,
+                "candidate_count": len(rows),
+                "watch_candidate_count": len(watch_rows),
+                "recommended_count": len(recommended),
+                "m30_ok_count": len(m30_ok),
+                "max_wave_style_score": max_score,
+                "avg_wave_style_score": avg_score,
+                "avg_sector_diffusion_score": avg_diffusion,
+                "top_candidates": top_rows,
+                "top_candidate_names": " / ".join([str(item.get("name") or item.get("code") or "") for item in top_rows[:3]]),
+                "template_labels": templates,
+                "rank_score": avg_diffusion * 0.55 + max_score * 0.35 + min(len(rows), 8) * 2.0 + min(len(watch_rows), 8) * 1.2 + len(recommended) * 5.0,
             }
         )
     out.sort(key=lambda item: _to_float_or_none(item.get("rank_score")) or 0, reverse=True)
@@ -604,6 +868,46 @@ def _read_shadow_ledger_records(path: Path, limit: int | None = None) -> list[di
     return json.loads(df.to_json(orient="records", force_ascii=False))
 
 
+def _filter_open_shadow_ledger_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    open_states = {
+        "open",
+        "opened",
+        "holding",
+        "open_shadow",
+        "shadow_holding",
+        "position_open",
+        "active",
+    }
+    planned_only_states = {"planned", "qualified_shadow_buy", "candidate", "ticket"}
+    closed_states = {"closed", "sold", "exit", "exited", "cancelled", "canceled", "rejected"}
+    for row in records or []:
+        if not isinstance(row, dict):
+            continue
+        exit_date = _date_text(
+            row.get("exit_date")
+            or row.get("policy_exit_date")
+            or row.get("closed_at")
+            or row.get("sell_date")
+            or row.get("sell_datetime")
+        )
+        if exit_date:
+            continue
+        state_text = " ".join(
+            str(row.get(key) or "").strip().lower()
+            for key in ["trade_status", "position_status", "holding_status", "last_state", "shadow_status"]
+        )
+        states = {part for part in re.split(r"[^a-z0-9_]+", state_text) if part}
+        if states & closed_states:
+            continue
+        if states & open_states:
+            out.append(row)
+            continue
+        if states and states <= planned_only_states:
+            continue
+    return out
+
+
 def _enrich_trade_strategy_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not records:
         return []
@@ -658,6 +962,8 @@ def _extract_g2_gap_supplement_status(summary: dict[str, Any]) -> dict[str, Any]
 
     rows = int(float(source.get("rows") or 0))
     fresh_for_entry_date = _truthy(source.get("fresh_for_entry_date"))
+    live_enabled = _truthy(source.get("live_enabled")) and G2_GAP_SUPPLEMENT_LIVE_ENABLED
+    retire_reason = source.get("retire_reason") or summary.get("g2_gap_supplement_retire_reason") or G2_GAP_SUPPLEMENT_RETIRE_REASON
     requested_entry_date = source.get("requested_entry_date") or source.get("entry_date") or summary.get("entry_date")
     latest_dates = [
         source.get("latest_live_update_date"),
@@ -668,7 +974,10 @@ def _extract_g2_gap_supplement_status(summary: dict[str, Any]) -> dict[str, Any]
     latest_source_date = max([str(item) for item in latest_dates if item] or [""])
     stale_reason = source.get("stale_reason") or ""
     status = "fresh" if fresh_for_entry_date else ("stale" if stale_reason else str(source.get("status") or "no_candidate"))
-    if fresh_for_entry_date:
+    if not live_enabled:
+        status = "retired_from_live_trading_observe"
+        message = f"G2 空档补位已退出实盘交易，仅保留观察；当前源候选 {rows} 条。"
+    elif fresh_for_entry_date:
         message = f"G2 空档补位源已覆盖 {requested_entry_date}，当前源候选 {rows} 条。"
     elif stale_reason:
         message = f"G2 空档补位源未覆盖 {requested_entry_date}，最新源日期 {latest_source_date or '--'}。"
@@ -676,7 +985,10 @@ def _extract_g2_gap_supplement_status(summary: dict[str, Any]) -> dict[str, Any]
         message = f"G2 空档补位源已读取，但当前无候选，状态 {status}。"
 
     return {
-        "ok": fresh_for_entry_date,
+        "ok": bool(fresh_for_entry_date and live_enabled),
+        "live_enabled": bool(live_enabled),
+        "retired_from_live_trading": not live_enabled,
+        "retire_reason": retire_reason,
         "fresh_for_entry_date": fresh_for_entry_date,
         "status": status,
         "message": message,
@@ -881,8 +1193,105 @@ def _load_monitor_state() -> dict[str, Any]:
     return base
 
 
+def _compact_monitor_value(value: Any, depth: int = 0) -> Any:
+    if depth >= 3:
+        if isinstance(value, dict):
+            return {"omitted": True, "type": "dict", "keys": list(value.keys())[:20]}
+        if isinstance(value, list):
+            return {"omitted": True, "type": "list", "count": len(value)}
+        if isinstance(value, str) and len(value) > 1000:
+            return value[:1000] + "...[truncated]"
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _compact_monitor_value(item, depth + 1)
+            for key, item in list(value.items())[:50]
+        }
+    if isinstance(value, list):
+        return [_compact_monitor_value(item, depth + 1) for item in value[:20]]
+    if isinstance(value, str) and len(value) > 1000:
+        return value[:1000] + "...[truncated]"
+    return value
+
+
+def _compact_monitor_last_result(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return _compact_monitor_value(result)
+    keep_keys = [
+        "ok",
+        "status",
+        "skipped",
+        "reason",
+        "message",
+        "checked_at",
+        "started_at",
+        "finished_at",
+        "entry_date",
+        "decision_date",
+        "diagnosis_code",
+        "selected_route",
+        "task_id",
+        "source",
+        "duration_seconds",
+        "error",
+        "blockers",
+        "open_holding_count",
+        "exit_candidate_count",
+        "triggered_exit_count",
+        "skipped_count",
+        "saved_exits",
+        "skipped",
+        "pipeline_checks",
+        "last_result",
+    ]
+    compacted = {
+        key: _compact_monitor_value(result.get(key))
+        for key in keep_keys
+        if key in result
+    }
+    compacted["compacted"] = True
+    return compacted
+
+
 def _save_monitor_state(state: dict[str, Any]) -> None:
-    _write_json(MONITOR_STATE_PATH, state)
+    payload = dict(state)
+    if "last_result" in payload:
+        payload["last_result"] = _compact_monitor_last_result(payload.get("last_result"))
+    _write_json(MONITOR_STATE_PATH, payload)
+
+
+def _default_exit_monitor_state() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "interval_seconds": 120,
+        "trading_hours_only": True,
+        "paper_exit_enabled": True,
+        "update_ledger_enabled": True,
+        "last_run_at": None,
+        "last_success_at": None,
+        "last_error": None,
+        "last_result": None,
+    }
+
+
+def _load_exit_monitor_state() -> dict[str, Any]:
+    state = _read_json(EXIT_MONITOR_STATE_PATH)
+    base = _default_exit_monitor_state()
+    if isinstance(state, dict):
+        base.update(state)
+    base["enabled"] = bool(base.get("enabled"))
+    base["interval_seconds"] = max(120, int(base.get("interval_seconds") or 120))
+    base["trading_hours_only"] = bool(base.get("trading_hours_only", True))
+    base["paper_exit_enabled"] = bool(base.get("paper_exit_enabled", True))
+    base["update_ledger_enabled"] = bool(base.get("update_ledger_enabled", True))
+    return base
+
+
+def _save_exit_monitor_state(state: dict[str, Any]) -> None:
+    payload = dict(state)
+    if "last_result" in payload:
+        payload["last_result"] = _compact_monitor_last_result(payload.get("last_result"))
+    _write_json(EXIT_MONITOR_STATE_PATH, payload)
 
 
 def _default_observation_scheduler_state() -> dict[str, Any]:
@@ -1338,12 +1747,13 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     tickets = _enrich_trade_strategy_records(_read_csv_records(tickets_path, limit=limit))
     broker_snapshot = _broker_snapshot()
     broker_trades = broker_snapshot.get("broker_trades") if isinstance(broker_snapshot.get("broker_trades"), list) else []
-    ledger = _attach_exit_advice(
+    ledger_audit = _attach_exit_advice(
         _enrich_trade_strategy_records(_read_shadow_ledger_records(ledger_path, limit=limit)),
         source="shadow_ledger",
         updated_at=summary.get("generated_at") if isinstance(summary, dict) else None,
         broker_trades=broker_trades,
     )
+    ledger = _filter_open_shadow_ledger_records(ledger_audit)
     diagnostics = _read_csv_records(diagnostics_path, limit=50)
     return {
         "summary": summary,
@@ -1398,6 +1808,7 @@ def _build_workflow_status() -> dict[str, Any]:
     pipeline_checks.extend(business_checks)
     blockers = [item for item in pipeline_checks if not item.get("ok") and item.get("blocking", True)]
     monitor = configure_shadow_monitor_scheduler()
+    exit_monitor = configure_shadow_exit_monitor_scheduler()
     observation_scheduler = configure_observation_scheduler()
     paper_execution_path_ok = True
     status = {
@@ -1409,6 +1820,7 @@ def _build_workflow_status() -> dict[str, Any]:
         "diagnosis_code": summary.get("diagnosis_code"),
         "selected_route": summary.get("selected_route"),
         "monitor": monitor,
+        "exit_monitor": exit_monitor,
         "observation_scheduler": observation_scheduler,
         "pipeline": runtime.get("pipeline") or [],
         "readiness_checks": runtime.get("readiness_checks") or [],
@@ -1425,6 +1837,7 @@ def _build_workflow_status() -> dict[str, Any]:
             "verification": True,
             "email_alert": bool(notification_check.get("ok")),
             "scheduler_wired": bool(monitor.get("scheduler_wired")),
+            "exit_scheduler_wired": bool(exit_monitor.get("scheduler_wired")),
             "observation_scheduler_wired": bool(observation_scheduler.get("scheduler_wired")),
             "paper_execution_path": paper_execution_path_ok,
             "formal_order_path": False,
@@ -1770,6 +2183,8 @@ def _save_paper_watch_review(payload: dict[str, Any]) -> dict[str, Any]:
         "name": str(payload.get("name") or payload.get("stock_name") or "").strip(),
         "entry_date": str(payload.get("entry_date") or "").strip(),
         "route": str(payload.get("route") or "").strip(),
+        "source": str(payload.get("source") or "g3_state_alpha_risk_page").strip(),
+        "review_context": str(payload.get("review_context") or "paper_watch").strip(),
         "watch_result": result,
         "watch_result_label": _paper_watch_result_label(result),
         "issue_area": str(payload.get("issue_area") or _paper_watch_issue_area(result)).strip(),
@@ -1780,11 +2195,496 @@ def _save_paper_watch_review(payload: dict[str, Any]) -> dict[str, Any]:
         "naturalness_score": _as_float(payload.get("naturalness_score"), None),
         "hidden_risk": str(payload.get("hidden_risk") or "").strip(),
         "optimization_suggestion": str(payload.get("optimization_suggestion") or "").strip(),
+        "selection_state": str(payload.get("selection_state") or "").strip(),
+        "strategy_switch_assessment": str(payload.get("strategy_switch_assessment") or "").strip(),
+        "candidate_block_reason": str(payload.get("candidate_block_reason") or "").strip(),
+        "action_recommendation": str(payload.get("action_recommendation") or "").strip(),
         "review_note": str(payload.get("review_note") or payload.get("note") or "").strip(),
         "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
     }
     rows[key] = item
     _write_json(PAPER_WATCH_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
+
+
+def _load_candidate_omission_reviews() -> dict[str, Any]:
+    data = _read_json(CANDIDATE_OMISSION_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _candidate_omission_result_label(result: str) -> str:
+    return {
+        "as_expected": "挡得合理",
+        "missed_opportunity": "可能误杀",
+        "invalid_signal": "信号失效",
+        "selection_issue": "选股隐患",
+        "model_switch_issue": "策略切换隐患",
+        "continue_watch": "继续观察",
+    }.get(result, result)
+
+
+def _candidate_omission_review_status(result: str) -> str:
+    if result in {"as_expected", "invalid_signal"}:
+        return "validated"
+    if result in {"missed_opportunity", "selection_issue", "model_switch_issue"}:
+        return "issue_found"
+    if result == "continue_watch":
+        return "continue_watch"
+    return "pending_observation"
+
+
+def _save_candidate_omission_review(payload: dict[str, Any]) -> dict[str, Any]:
+    has_review_identity = any(
+        _clean_review_text(payload.get(key))
+        for key in ("ticket_key", "candidate_key", "trade_key", "code", "code_raw", "entry_date", "route")
+    )
+    if not has_review_identity:
+        return {"ok": False, "error": "missing candidate omission review key"}
+    key = _verification_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing candidate omission review key"}
+    result = _clean_review_text(payload.get("review_result") or payload.get("watch_result") or payload.get("result"))
+    allowed_results = {"", "as_expected", "missed_opportunity", "invalid_signal", "selection_issue", "model_switch_issue", "continue_watch"}
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported review_result: {result}", "allowed_results": sorted(allowed_results)}
+    rows = _load_candidate_omission_reviews()
+    if not result:
+        rows.pop(key, None)
+        _write_json(CANDIDATE_OMISSION_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    item = {
+        "key": key,
+        "ticket_key": _clean_review_text(payload.get("ticket_key") or payload.get("candidate_key") or payload.get("trade_key") or key),
+        "code": _clean_review_text(payload.get("code") or payload.get("code_raw")),
+        "name": _clean_review_text(payload.get("name") or payload.get("stock_name")),
+        "entry_date": _clean_review_text(payload.get("entry_date")),
+        "route": _clean_review_text(payload.get("route")),
+        "source": _clean_review_text(payload.get("source"), "candidate_omission_checklist"),
+        "review_context": "candidate_omission",
+        "watch_result": result,
+        "watch_result_label": _candidate_omission_result_label(result),
+        "review_result": result,
+        "review_result_label": _candidate_omission_result_label(result),
+        "review_status": _candidate_omission_review_status(result),
+        "issue_area": _clean_review_text(payload.get("issue_area") or _paper_watch_issue_area(result)),
+        "hidden_risk": _clean_review_text(payload.get("hidden_risk")),
+        "optimization_suggestion": _clean_review_text(payload.get("optimization_suggestion")),
+        "selection_state": _clean_review_text(payload.get("selection_state")),
+        "strategy_switch_assessment": _clean_review_text(payload.get("strategy_switch_assessment")),
+        "candidate_block_reason": _clean_review_text(payload.get("candidate_block_reason")),
+        "action_recommendation": _clean_review_text(payload.get("action_recommendation")),
+        "review_note": _clean_review_text(payload.get("review_note") or payload.get("note")),
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(CANDIDATE_OMISSION_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
+
+
+def _load_no_trade_day_reviews() -> dict[str, Any]:
+    data = _read_json(NO_TRADE_DAY_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _no_trade_day_review_key(payload: dict[str, Any]) -> str:
+    for key in ("review_key", "key"):
+        value = _clean_review_text(payload.get(key))
+        if value:
+            return value
+    parts = [
+        _clean_review_text(payload.get("entry_date")),
+        _clean_review_text(payload.get("review_type")),
+        _clean_review_text(payload.get("source")),
+    ]
+    if not any(parts):
+        return ""
+    return "|".join(parts)
+
+
+def _no_trade_day_result_label(result: str) -> str:
+    return {
+        "natural_no_trade": "空仓合理",
+        "missed_opportunity": "可能误杀",
+        "data_gap": "数据/确认缺口",
+        "process_gap": "流程缺口",
+        "continue_watch": "继续观察",
+    }.get(result, result)
+
+
+def _no_trade_day_review_status(result: str) -> str:
+    if result == "natural_no_trade":
+        return "validated"
+    if result in {"missed_opportunity", "data_gap", "process_gap"}:
+        return "issue_found"
+    if result == "continue_watch":
+        return "continue_watch"
+    return "pending_review"
+
+
+def _save_no_trade_day_review(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _no_trade_day_review_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing no trade day review key"}
+    result = _clean_review_text(payload.get("review_result") or payload.get("result"))
+    allowed_results = {"", "natural_no_trade", "missed_opportunity", "data_gap", "process_gap", "continue_watch"}
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported review_result: {result}", "allowed_results": sorted(allowed_results)}
+    rows = _load_no_trade_day_reviews()
+    if not result:
+        rows.pop(key, None)
+        _write_json(NO_TRADE_DAY_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    item = {
+        "key": key,
+        "entry_date": _clean_review_text(payload.get("entry_date")),
+        "review_type": _clean_review_text(payload.get("review_type")),
+        "posture": _clean_review_text(payload.get("posture")),
+        "source": _clean_review_text(payload.get("source"), "no_trade_day_review"),
+        "review_result": result,
+        "review_result_label": _no_trade_day_result_label(result),
+        "review_status": _no_trade_day_review_status(result),
+        "issue_area": _clean_review_text(payload.get("issue_area"), "selection_or_switch" if result == "missed_opportunity" else "observation"),
+        "evidence": _clean_review_text(payload.get("evidence")),
+        "hidden_risk": _clean_review_text(payload.get("hidden_risk")),
+        "natural_decision": _clean_review_text(payload.get("natural_decision")),
+        "optimization_suggestion": _clean_review_text(payload.get("optimization_suggestion")),
+        "review_note": _clean_review_text(payload.get("review_note") or payload.get("note")),
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(NO_TRADE_DAY_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
+
+
+def _load_formal_action_reviews() -> dict[str, Any]:
+    data = _read_json(FORMAL_ACTION_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _formal_action_review_key(payload: dict[str, Any]) -> str:
+    for key in ("review_key", "key"):
+        value = _clean_review_text(payload.get(key))
+        if value:
+            return value
+    parts = [
+        _clean_review_text(payload.get("source")),
+        _clean_review_text(payload.get("object") or payload.get("action_object")),
+        _clean_review_text(payload.get("action") or payload.get("required_action")),
+    ]
+    if not any(parts):
+        return ""
+    return "|".join(parts)
+
+
+def _formal_action_result_label(result: str) -> str:
+    return {
+        "manual_done": "人工已处理",
+        "system_triggered": "系统动作已触发",
+        "blocked": "处理卡住",
+        "continue_watch": "继续观察",
+    }.get(result, result)
+
+
+def _formal_action_review_status(result: str) -> str:
+    if result in {"manual_done", "system_triggered"}:
+        return "validated"
+    if result == "blocked":
+        return "issue_found"
+    if result == "continue_watch":
+        return "continue_watch"
+    return "pending"
+
+
+def _save_formal_action_review(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _formal_action_review_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing formal action review key"}
+    result = _clean_review_text(payload.get("review_result") or payload.get("result"))
+    allowed_results = {"", "manual_done", "system_triggered", "blocked", "continue_watch"}
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported review_result: {result}", "allowed_results": sorted(allowed_results)}
+    rows = _load_formal_action_reviews()
+    if not result:
+        rows.pop(key, None)
+        _write_json(FORMAL_ACTION_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    item = {
+        "key": key,
+        "review_key": key,
+        "object": _clean_review_text(payload.get("object") or payload.get("action_object")),
+        "action": _clean_review_text(payload.get("action") or payload.get("required_action")),
+        "source": _clean_review_text(payload.get("source"), "formal_action"),
+        "review_result": result,
+        "review_result_label": _formal_action_result_label(result),
+        "review_status": _formal_action_review_status(result),
+        "issue_area": _clean_review_text(payload.get("issue_area"), "execution_process" if result == "blocked" else "operation_evidence"),
+        "evidence": _clean_review_text(payload.get("evidence")),
+        "natural_decision": _clean_review_text(payload.get("natural_decision")),
+        "optimization_suggestion": _clean_review_text(payload.get("optimization_suggestion")),
+        "review_note": _clean_review_text(payload.get("review_note") or payload.get("note")),
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(FORMAL_ACTION_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
+
+
+def _load_daily_review_checklist_reviews() -> dict[str, Any]:
+    data = _read_json(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _daily_review_checklist_review_key(payload: dict[str, Any]) -> str:
+    axis = _clean_review_text(payload.get("review_axis"))
+    for key in ("review_key", "key", "ticket_key"):
+        value = _clean_review_text(payload.get(key))
+        if value:
+            return f"{axis}|{value}" if axis and not value.startswith(f"{axis}|") else value
+    parts = [
+        axis,
+        _clean_review_text(payload.get("review_scope")),
+        _clean_review_text(payload.get("object") or payload.get("review_object")),
+        _clean_review_text(payload.get("code")),
+        _clean_review_text(payload.get("entry_date")),
+    ]
+    if not any(parts):
+        return ""
+    return "|".join(parts)
+
+
+def _daily_review_checklist_result_label(result: str) -> str:
+    return {
+        "validated": "符合预期",
+        "issue_found": "发现隐患",
+        "continue_watch": "继续观察",
+        "blocked": "卡住/阻断",
+        "data_gap": "数据缺口",
+        "process_gap": "流程缺口",
+    }.get(result, result)
+
+
+def _daily_review_checklist_review_status(result: str) -> str:
+    if result == "validated":
+        return "validated"
+    if result in {"issue_found", "blocked", "data_gap", "process_gap"}:
+        return "issue_found"
+    if result == "continue_watch":
+        return "continue_watch"
+    return "pending_review"
+
+
+def _save_daily_review_checklist_review(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _daily_review_checklist_review_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing daily review checklist key"}
+    result = _clean_review_text(payload.get("review_result") or payload.get("result"))
+    allowed_results = {"", "validated", "issue_found", "continue_watch", "blocked", "data_gap", "process_gap"}
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported review_result: {result}", "allowed_results": sorted(allowed_results)}
+    rows = _load_daily_review_checklist_reviews()
+    if not result:
+        rows.pop(key, None)
+        _write_json(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    item = {
+        "key": key,
+        "review_key": key,
+        "ticket_key": _clean_review_text(payload.get("ticket_key")),
+        "review_axis": _clean_review_text(payload.get("review_axis")),
+        "review_scope": _clean_review_text(payload.get("review_scope")),
+        "object": _clean_review_text(payload.get("object") or payload.get("review_object")),
+        "code": _clean_review_text(payload.get("code")),
+        "name": _clean_review_text(payload.get("name")),
+        "entry_date": _clean_review_text(payload.get("entry_date")),
+        "review_result": result,
+        "review_result_label": _daily_review_checklist_result_label(result),
+        "review_status": _daily_review_checklist_review_status(result),
+        "issue_area": _clean_review_text(payload.get("issue_area") or payload.get("review_axis")),
+        "evidence": _clean_review_text(payload.get("evidence")),
+        "review_note": _clean_review_text(payload.get("review_note") or payload.get("note")),
+        "natural_decision": _clean_review_text(payload.get("natural_decision")),
+        "optimization_suggestion": _clean_review_text(payload.get("optimization_suggestion")),
+        "source": _clean_review_text(payload.get("source"), "live_daily_review_execution_checklist"),
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
+
+
+def _load_launch_day_playbook_reviews() -> dict[str, Any]:
+    data = _read_json(LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _launch_day_playbook_review_key(payload: dict[str, Any]) -> str:
+    for key in ("review_key", "launch_playbook_key", "key"):
+        value = _clean_review_text(payload.get(key))
+        if value:
+            return value
+    parts = [
+        _clean_review_text(payload.get("window")),
+        _clean_review_text(payload.get("checkpoint_time")),
+        _clean_review_text(payload.get("review_axis")),
+        _clean_review_text(payload.get("object") or payload.get("review_object")),
+        _clean_review_text(payload.get("action_type")),
+    ]
+    if not any(parts):
+        return ""
+    return "|".join(parts).strip("|")
+
+
+def _launch_day_playbook_result_label(result: str) -> str:
+    return {
+        "validated": "符合预期",
+        "issue_found": "发现隐患",
+        "continue_watch": "继续观察",
+        "data_gap": "数据缺口",
+        "manual_done": "已处理",
+    }.get(result, result)
+
+
+def _launch_day_playbook_review_status(result: str) -> str:
+    if result in {"validated", "manual_done"}:
+        return "validated"
+    if result in {"issue_found", "data_gap"}:
+        return "issue_found"
+    if result == "continue_watch":
+        return "continue_watch"
+    return "pending_review"
+
+
+def _save_launch_day_playbook_review(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _launch_day_playbook_review_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing launch day playbook review key"}
+    result = _clean_review_text(payload.get("review_result") or payload.get("result"))
+    allowed_results = {"", "validated", "issue_found", "continue_watch", "data_gap", "manual_done"}
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported review_result: {result}", "allowed_results": sorted(allowed_results)}
+    rows = _load_launch_day_playbook_reviews()
+    if not result:
+        rows.pop(key, None)
+        _write_json(LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    item = {
+        "key": key,
+        "review_key": key,
+        "priority": _clean_review_text(payload.get("priority")),
+        "window": _clean_review_text(payload.get("window")),
+        "checkpoint_time": _clean_review_text(payload.get("checkpoint_time")),
+        "action_type": _clean_review_text(payload.get("action_type")),
+        "review_axis": _clean_review_text(payload.get("review_axis")),
+        "object": _clean_review_text(payload.get("object") or payload.get("review_object")),
+        "required_action": _clean_review_text(payload.get("required_action")),
+        "evidence_to_collect": _clean_review_text(payload.get("evidence_to_collect")),
+        "pass_condition": _clean_review_text(payload.get("pass_condition")),
+        "fail_condition": _clean_review_text(payload.get("fail_condition")),
+        "review_result": result,
+        "review_result_label": _launch_day_playbook_result_label(result),
+        "review_status": _launch_day_playbook_review_status(result),
+        "issue_area": _clean_review_text(payload.get("issue_area") or payload.get("review_axis")),
+        "evidence": _clean_review_text(payload.get("evidence") or payload.get("evidence_to_collect")),
+        "review_note": _clean_review_text(payload.get("review_note") or payload.get("note")),
+        "natural_decision": _clean_review_text(payload.get("natural_decision")),
+        "optimization_suggestion": _clean_review_text(payload.get("optimization_suggestion")),
+        "source": _clean_review_text(payload.get("source"), "launch_day_playbook"),
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH, {"reviews": rows})
+    return {"ok": True, "key": key, "review": item, "count": len(rows)}
+
+
+def _load_strategy_tuning_task_reviews() -> dict[str, Any]:
+    data = _read_json(STRATEGY_TUNING_TASK_REVIEWS_PATH)
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    return rows if isinstance(rows, dict) else {}
+
+
+def _strategy_tuning_task_review_key(payload: dict[str, Any]) -> str:
+    for key in ("task_key", "review_key", "key"):
+        value = _clean_review_text(payload.get(key))
+        if value:
+            return value
+    parts = [
+        _clean_review_text(payload.get("axis")),
+        _clean_review_text(payload.get("origin")),
+        _clean_review_text(payload.get("object")),
+        _clean_review_text(payload.get("problem_signal"))[:80],
+    ]
+    if not any(parts):
+        return ""
+    return "|".join(parts)
+
+
+def _strategy_tuning_task_result_label(result: str) -> str:
+    return {
+        "validated": "validated",
+        "issue_found": "issue_found",
+        "continue_watch": "continue_watch",
+        "data_gap": "data_gap",
+        "evidence_pending": "evidence_pending",
+        "defer_contract_review": "defer_contract_review",
+    }.get(result, result)
+
+
+def _strategy_tuning_task_review_status(result: str) -> str:
+    if result == "validated":
+        return "reviewed"
+    if result in {"issue_found", "data_gap", "evidence_pending", "defer_contract_review"}:
+        return "needs_followup"
+    if result == "continue_watch":
+        return "watch"
+    return "pending_review"
+
+
+def _save_strategy_tuning_task_review(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _strategy_tuning_task_review_key(payload)
+    if not key:
+        return {"ok": False, "error": "missing strategy tuning task review key"}
+    result = _clean_review_text(payload.get("review_result") or payload.get("result"))
+    allowed_results = {"", "validated", "issue_found", "continue_watch", "data_gap", "evidence_pending", "defer_contract_review"}
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported review_result: {result}", "allowed_results": sorted(allowed_results)}
+    rows = _load_strategy_tuning_task_reviews()
+    if not result:
+        rows.pop(key, None)
+        _write_json(STRATEGY_TUNING_TASK_REVIEWS_PATH, {"reviews": rows})
+        return {"ok": True, "removed": True, "key": key, "count": len(rows)}
+    axis = _clean_review_text(payload.get("axis"), "natural_trade_consistency")
+    item = {
+        "key": key,
+        "task_key": key,
+        "axis": axis,
+        "axis_label": _clean_review_text(payload.get("axis_label") or _g3_strategy_tuning_axis_meta(axis).get("axis_label")),
+        "origin": _clean_review_text(payload.get("origin")),
+        "object": _clean_review_text(payload.get("object")),
+        "problem_signal": _clean_review_text(payload.get("problem_signal")),
+        "source_status": _clean_review_text(payload.get("source_status")),
+        "review_result": result,
+        "review_result_label": _strategy_tuning_task_result_label(result),
+        "review_status": _strategy_tuning_task_review_status(result),
+        "evidence": _clean_review_text(payload.get("evidence") or payload.get("completion_evidence")),
+        "review_note": _clean_review_text(payload.get("review_note") or payload.get("note")),
+        "hidden_risk": _clean_review_text(payload.get("hidden_risk")),
+        "decision": _clean_review_text(payload.get("decision") or payload.get("natural_decision")),
+        "optimization_suggestion": _clean_review_text(payload.get("optimization_suggestion") or payload.get("suggested_learning")),
+        "next_action": _clean_review_text(payload.get("next_action")),
+        "completion_evidence": _clean_review_text(payload.get("completion_evidence")),
+        "optimization_boundary": _clean_review_text(payload.get("optimization_boundary")),
+        "can_execute_trade": False,
+        "can_change_strategy_contract": False,
+        "profit_only_optimization_allowed": False,
+        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    rows[key] = item
+    _write_json(STRATEGY_TUNING_TASK_REVIEWS_PATH, {"reviews": rows})
     return {"ok": True, "key": key, "review": item, "count": len(rows)}
 
 
@@ -1870,9 +2770,10 @@ def _submit_paper_order(payload: dict[str, Any]) -> dict[str, Any]:
     ticket_key = str(ticket.get("ticket_key") or ticket.get("candidate_key") or ticket.get("trade_key") or "")
     record = {
         "execution_id": f"g3paper_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}",
+        "batch_id": str(payload.get("batch_id") or "").strip(),
         "created_at": now_text,
         "status": "paper_submitted",
-        "source": "g3_state_alpha_current_page",
+        "source": str(payload.get("source") or "g3_state_alpha_current_page").strip(),
         "strategy_id": STRATEGY_ID,
         "contract": LATEST_G3_PROFILE,
         "shadow_only": True,
@@ -1914,361 +2815,467 @@ def _submit_paper_order(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "record": record, "execution_count": len(rows)}
 
 
-def _ptrade_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    return _truthy(value)
+def _paper_execution_side(row: dict[str, Any]) -> str:
+    side = str(row.get("side") or "").strip().upper()
+    if side:
+        return side
+    text = " ".join(str(row.get(key) or "").lower() for key in ["status", "source", "exit_reason"])
+    return "SELL" if "sell" in text or "exit" in text else "BUY"
 
 
-def _ptrade_payload_requests_live_submit(payload: dict[str, Any]) -> bool:
-    dry_run = _ptrade_bool(payload.get("dry_run"), True)
-    require_approval = _ptrade_bool(payload.get("require_approval"), True)
-    approved = _ptrade_bool(payload.get("approved"), False)
-    return (not dry_run) and (approved or not require_approval)
-
-
-def _ptrade_live_submit_readiness_guard(payload: dict[str, Any]) -> dict[str, Any] | None:
-    if not _ptrade_payload_requests_live_submit(payload):
-        return None
-    status = PTRADE_BRIDGE.status()
-    if status.get("ready_for_live_order"):
-        return None
-    return {
-        "ok": False,
-        "message": "PTrade bridge is not ready for live order; keep dry_run=true or verify terminal heartbeat/probe first.",
-        "bridge_status": status,
-    }
-
-
-def _active_g3_ptrade_order_exists(code: Any, signal_date: Any, side: str) -> bool:
-    code6 = _normalize_code6(code)
-    expected_side = str(side or "").strip().upper()
-    expected_date = str(signal_date or "").strip()
-    active_statuses = {"pending", "processing", "dry_run", "waiting_approval", "submitted"}
-    try:
-        rows = PTRADE_BRIDGE.list_orders(limit=500).get("rows") or []
-    except Exception:
-        return False
-    for item in rows:
-        if not isinstance(item, dict):
+def _paper_open_quantity(ticket_key: str, code: str, rows: list[dict[str, Any]]) -> int:
+    buy_qty = 0
+    sell_qty = 0
+    code = str(code or "").strip().upper()
+    ticket_key = str(ticket_key or "").strip()
+    for row in rows or []:
+        if not isinstance(row, dict):
             continue
-        item_status = str(item.get("status") or item.get("_bridge_status") or "").strip().lower()
-        if item_status not in active_statuses:
+        row_ticket = str(row.get("ticket_key") or "").strip()
+        row_code = str(row.get("code") or row.get("code_raw") or "").strip().upper()
+        if ticket_key and row_ticket and row_ticket != ticket_key:
             continue
-        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
-        item_code = _normalize_code6(item.get("code") or raw.get("code"))
-        item_side = str(item.get("side") or raw.get("side") or "").strip().upper()
-        item_date = str(raw.get("signal_date") or raw.get("entry_date") or item.get("signal_date") or "").strip()
-        if item_code == code6 and item_side == expected_side and (not expected_date or item_date == expected_date):
-            return True
+        if not ticket_key and code and row_code != code:
+            continue
+        qty = int(_as_float(row.get("quantity"), 0.0) or 0)
+        if qty <= 0:
+            continue
+        if _paper_execution_side(row) == "SELL":
+            sell_qty += qty
+        else:
+            buy_qty += qty
+    return max(0, buy_qty - sell_qty)
+
+
+def _paper_exit_exists(ticket_key: str, code: str, exit_reason: str, exit_date: str, rows: list[dict[str, Any]]) -> bool:
+    ticket_key = str(ticket_key or "").strip()
+    code = str(code or "").strip().upper()
+    exit_reason = str(exit_reason or "").strip()
+    exit_date = str(exit_date or "").strip()
+    for row in rows or []:
+        if not isinstance(row, dict) or _paper_execution_side(row) != "SELL":
+            continue
+        row_ticket = str(row.get("ticket_key") or "").strip()
+        row_code = str(row.get("code") or row.get("code_raw") or "").strip().upper()
+        row_reason = str(row.get("exit_reason") or row.get("reason") or "").strip()
+        row_date = _date_text(row.get("exit_date") or row.get("exit_datetime") or row.get("created_at"))
+        if ticket_key and row_ticket and row_ticket != ticket_key:
+            continue
+        if code and row_code != code:
+            continue
+        if exit_reason and row_reason != exit_reason:
+            continue
+        if exit_date and row_date != exit_date:
+            continue
+        return True
     return False
 
 
-def _ptrade_audit_record(order: dict[str, Any], ticket: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
-    ticket = ticket if isinstance(ticket, dict) else {}
-    price = _as_float(order.get("price"), None)
-    quantity = int(order.get("quantity") or 0)
-    side = str(order.get("side") or "").upper()
-    ticket_key = str(
-        ticket.get("ticket_key")
-        or ticket.get("candidate_key")
-        or ticket.get("trade_key")
-        or payload.get("ticket_key")
-        or ""
+def _latest_exit_market_prices(codes: list[str]) -> dict[str, dict[str, Any]]:
+    clean_codes = sorted({str(code or "").strip().upper() for code in codes if str(code or "").strip()})
+    clean_codes = [code for code in clean_codes if re.fullmatch(r"[0-9A-Z.]+", code)]
+    if not clean_codes:
+        return {}
+    quoted_codes = ", ".join(f"'{code}'" for code in clean_codes)
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        from utils.market_warehouse import clickhouse_query_df
+
+        minute = clickhouse_query_df(
+            f"""
+            SELECT k.code, k.datetime, k.close
+            FROM kline_minute_30 AS k
+            INNER JOIN (
+                SELECT code, max(datetime) AS max_datetime
+                FROM kline_minute_30
+                WHERE code IN ({quoted_codes})
+                GROUP BY code
+            ) AS latest
+                ON k.code = latest.code AND k.datetime = latest.max_datetime
+            """
+        )
+        for item in minute.to_dict(orient="records"):
+            code = str(item.get("code") or "").strip().upper()
+            close = _as_float(item.get("close"), None)
+            if not code or close is None or close <= 0:
+                continue
+            out[code] = {
+                "current_price": close,
+                "latest_price": close,
+                "last_price": close,
+                "close": close,
+                "latest_price_datetime": str(item.get("datetime") or ""),
+                "latest_price_date": _date_text(item.get("datetime")),
+                "latest_price_source": "clickhouse:kline_minute_30",
+            }
+    except Exception:
+        logger.exception("Failed to load latest 30m prices for G3 shadow exit monitor.")
+
+    missing = [code for code in clean_codes if code not in out]
+    if not missing:
+        return out
+    quoted_missing = ", ".join(f"'{code}'" for code in missing)
+    try:
+        from utils.market_warehouse import clickhouse_query_df
+
+        daily = clickhouse_query_df(
+            f"""
+            SELECT k.code, k.trade_date, k.close
+            FROM kline_daily AS k
+            INNER JOIN (
+                SELECT code, max(trade_date) AS max_date
+                FROM kline_daily
+                WHERE code IN ({quoted_missing})
+                GROUP BY code
+            ) AS latest
+                ON k.code = latest.code AND k.trade_date = latest.max_date
+            """
+        )
+        for item in daily.to_dict(orient="records"):
+            code = str(item.get("code") or "").strip().upper()
+            close = _as_float(item.get("close"), None)
+            if not code or close is None or close <= 0:
+                continue
+            out[code] = {
+                "current_price": close,
+                "latest_price": close,
+                "last_price": close,
+                "close": close,
+                "latest_price_datetime": str(item.get("trade_date") or ""),
+                "latest_price_date": _date_text(item.get("trade_date")),
+                "latest_price_source": "clickhouse:kline_daily",
+            }
+    except Exception:
+        logger.exception("Failed to load latest daily prices for G3 shadow exit monitor.")
+    return out
+
+
+def _apply_latest_exit_prices(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    codes = [str(row.get("code") or row.get("code_raw") or "").strip().upper() for row in rows if isinstance(row, dict)]
+    prices = _latest_exit_market_prices(codes)
+    if not prices:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        code = str(row.get("code") or row.get("code_raw") or "").strip().upper()
+        latest = prices.get(code)
+        if not latest:
+            out.append(row)
+            continue
+        item = dict(row)
+        item.update(latest)
+        out.append(item)
+    return out
+
+
+def _shadow_exit_reason_for_action(action: str, reason: str) -> str:
+    if action == "sell_half":
+        return "take_profit_partial_30m"
+    if reason == "hard_stop_triggered":
+        return "hard_stop_30m"
+    if reason == "structure_stop_triggered":
+        return "prev_low_break_30m"
+    return reason or action or "shadow_exit"
+
+
+def _ledger_match_mask(df: pd.DataFrame, row: dict[str, Any]) -> pd.Series:
+    mask = pd.Series([False] * len(df), index=df.index)
+    ticket_key = str(row.get("ticket_key") or "").strip()
+    if ticket_key and "ticket_key" in df.columns:
+        mask = df["ticket_key"].astype(str).str.strip().eq(ticket_key)
+        if bool(mask.any()):
+            return mask
+    code = str(row.get("code") or row.get("code_raw") or "").strip().upper()
+    entry_date = _date_text(row.get("entry_date"))
+    route = str(row.get("route") or "").strip()
+    if code and "code" in df.columns:
+        mask = df["code"].astype(str).str.strip().str.upper().eq(code)
+        if entry_date and "entry_date" in df.columns:
+            mask &= pd.to_datetime(df["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d").eq(entry_date)
+        if route and "route" in df.columns:
+            mask &= df["route"].astype(str).str.strip().eq(route)
+    return mask
+
+
+def _ensure_ledger_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    for col in columns:
+        if col not in df.columns:
+            df[col] = None
+    return df
+
+
+def _update_shadow_ledger_for_exit(df: pd.DataFrame, row: dict[str, Any], record: dict[str, Any], action: str, remaining_pct: float) -> pd.DataFrame:
+    df = _ensure_ledger_columns(
+        df,
+        [
+            "trade_status",
+            "position_status",
+            "last_state",
+            "exit_date",
+            "exit_datetime",
+            "exit_price",
+            "exit_reason",
+            "realized_ret",
+            "remaining_position_pct",
+            "half_take_profit_done",
+            "entry_position_pct",
+            "last_exit_date",
+            "last_exit_datetime",
+            "last_exit_price",
+            "last_exit_reason",
+            "repair_tag",
+            "repair_updated_at",
+        ],
     )
+    mask = _ledger_match_mask(df, row)
+    if not bool(mask.any()):
+        return df
+    idx = list(df.index[mask])[-1]
     now_text = datetime.now().isoformat(sep=" ", timespec="seconds")
+    entry_pct = _as_float(df.at[idx, "entry_position_pct"], None)
+    if entry_pct is None or entry_pct <= 0:
+        entry_pct = _as_float(row.get("entry_position_pct") or row.get("max_position_pct") or row.get("position_pct"), None)
+    if entry_pct is not None:
+        df.at[idx, "entry_position_pct"] = entry_pct
+    df.at[idx, "realized_ret"] = record.get("realized_ret")
+    df.at[idx, "remaining_position_pct"] = remaining_pct
+    df.at[idx, "repair_tag"] = "shadow_exit_monitor"
+    df.at[idx, "repair_updated_at"] = now_text
+    if action == "sell_half":
+        df.at[idx, "trade_status"] = "partial_taken"
+        df.at[idx, "position_status"] = "open_shadow"
+        df.at[idx, "last_state"] = "partial_taken"
+        df.at[idx, "half_take_profit_done"] = True
+        df.at[idx, "last_exit_date"] = record.get("exit_date")
+        df.at[idx, "last_exit_datetime"] = record.get("exit_datetime")
+        df.at[idx, "last_exit_price"] = record.get("execution_price")
+        df.at[idx, "last_exit_reason"] = record.get("exit_reason")
+    else:
+        df.at[idx, "trade_status"] = "closed"
+        df.at[idx, "position_status"] = "closed"
+        df.at[idx, "last_state"] = "closed"
+        df.at[idx, "exit_date"] = record.get("exit_date")
+        df.at[idx, "exit_datetime"] = record.get("exit_datetime")
+        df.at[idx, "exit_price"] = record.get("execution_price")
+        df.at[idx, "exit_reason"] = record.get("exit_reason")
+    return df
+
+
+def _run_shadow_exit_monitor_once(
+    *,
+    source: str = "manual",
+    paper_exit_enabled: bool = True,
+    update_ledger_enabled: bool = True,
+) -> dict[str, Any]:
+    started_at = datetime.now()
+    ledger_path = STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"
+    if not ledger_path.exists():
+        return {
+            "ok": True,
+            "status": "skipped",
+            "reason": "shadow_ledger_missing",
+            "checked_at": started_at.isoformat(sep=" ", timespec="seconds"),
+            "triggered_exit_count": 0,
+        }
+    try:
+        ledger_df = pd.read_csv(ledger_path, low_memory=False)
+    except pd.errors.EmptyDataError:
+        ledger_df = pd.DataFrame()
+    if ledger_df.empty:
+        return {
+            "ok": True,
+            "status": "skipped",
+            "reason": "shadow_ledger_empty",
+            "checked_at": started_at.isoformat(sep=" ", timespec="seconds"),
+            "triggered_exit_count": 0,
+        }
+
+    ledger_records = _read_shadow_ledger_records(ledger_path, limit=None)
+    open_rows = _filter_open_shadow_ledger_records(ledger_records)
+    priced_rows = _apply_latest_exit_prices(open_rows)
+    advised_rows = _attach_exit_advice(priced_rows, source="shadow_ledger", updated_at=started_at.isoformat(sep=" ", timespec="seconds"))
+    exit_rows = [
+        row for row in advised_rows
+        if isinstance(row, dict) and str(row.get("exit_action") or "") in {"sell_all", "sell_half"}
+    ]
+    paper_rows = _load_paper_executions()
+    saved: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    updated_df = ledger_df.copy()
+    for row in exit_rows:
+        code = str(row.get("code") or row.get("code_raw") or "").strip().upper()
+        ticket_key = str(row.get("ticket_key") or "").strip()
+        action = str(row.get("exit_action") or "").strip()
+        exit_reason = _shadow_exit_reason_for_action(action, str(row.get("exit_reason") or ""))
+        price = _as_float(row.get("trigger_price") or row.get("current_price_for_exit") or row.get("current_price"), None)
+        if price is None or price <= 0:
+            skipped.append({"code": code, "ticket_key": ticket_key, "reason": "invalid_exit_price"})
+            continue
+        exit_dt = str(row.get("latest_price_datetime") or started_at.isoformat(sep=" ", timespec="seconds"))
+        exit_date = _date_text(exit_dt or started_at)
+        if _paper_exit_exists(ticket_key, code, exit_reason, exit_date, paper_rows):
+            skipped.append({"code": code, "ticket_key": ticket_key, "reason": "paper_exit_already_exists", "exit_reason": exit_reason, "exit_date": exit_date})
+            continue
+        if not paper_exit_enabled:
+            skipped.append({"code": code, "ticket_key": ticket_key, "reason": "paper_exit_disabled", "exit_reason": exit_reason, "exit_date": exit_date})
+            continue
+        open_qty = _paper_open_quantity(ticket_key, code, paper_rows)
+        if open_qty <= 0:
+            open_qty = _default_paper_quantity(price, row.get("position_pct") or row.get("remaining_position_pct"), None)
+        sell_ratio = _as_float(row.get("suggested_sell_ratio"), 1.0 if action == "sell_all" else 0.5) or 0.0
+        quantity = open_qty if action == "sell_all" else int((open_qty * sell_ratio) // 100) * 100
+        if quantity <= 0 and action == "sell_half" and open_qty > 0:
+            quantity = min(open_qty, 100)
+        if quantity <= 0:
+            skipped.append({"code": code, "ticket_key": ticket_key, "reason": "invalid_exit_quantity", "open_quantity": open_qty})
+            continue
+        position_pct = _as_float(row.get("position_pct") or row.get("remaining_position_pct"), 0.0) or 0.0
+        sold_pct = position_pct if action == "sell_all" else max(0.0, position_pct * sell_ratio)
+        remaining_pct = 0.0 if action == "sell_all" else max(0.0, position_pct - sold_pct)
+        entry_price = _as_float(row.get("entry_price_for_exit") or row.get("entry_price") or row.get("reference_close"), None)
+        realized_ret = None
+        if entry_price is not None and entry_price > 0:
+            realized_ret = round(price / entry_price - 1.0, 8)
+        record = {
+            "execution_id": f"g3paper_exit_{started_at.strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}",
+            "created_at": started_at.isoformat(sep=" ", timespec="seconds"),
+            "status": "paper_exit_submitted",
+            "source": source,
+            "strategy_id": row.get("strategy_id") or STRATEGY_ID,
+            "contract": row.get("strategy_profile_name") or row.get("strategy_profile") or LATEST_G3_PROFILE,
+            "shadow_only": True,
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "ticket_key": ticket_key,
+            "entry_date": row.get("entry_date"),
+            "decision_date": row.get("decision_date"),
+            "exit_date": exit_date,
+            "exit_datetime": exit_dt,
+            "route": row.get("route"),
+            "route_label": row.get("route_label"),
+            "code": code,
+            "name": row.get("name") or row.get("stock_name"),
+            "side": "SELL",
+            "execution_price": price,
+            "quantity": quantity,
+            "notional": round(price * quantity, 2),
+            "position_pct": sold_pct,
+            "remaining_position_pct_after": remaining_pct,
+            "exit_reason": exit_reason,
+            "exit_action": action,
+            "realized_ret": realized_ret,
+            "price_source": row.get("latest_price_source"),
+            "notes": "G3 shadow exit monitor recorded paper sell only; no real order sent.",
+        }
+        saved.append(record)
+        paper_rows.append(record)
+        if update_ledger_enabled:
+            updated_df = _update_shadow_ledger_for_exit(updated_df, row, record, action, remaining_pct)
+
+    if saved:
+        _save_paper_executions(paper_rows)
+    if saved and update_ledger_enabled:
+        backup_path = ledger_path.with_name(f"{ledger_path.name}.bak_shadow_exit_monitor_{started_at.strftime('%Y%m%d')}")
+        if not backup_path.exists():
+            ledger_path.replace(backup_path)
+            updated_df.to_csv(ledger_path, index=False, encoding="utf-8-sig")
+        else:
+            updated_df.to_csv(ledger_path, index=False, encoding="utf-8-sig")
+    for record in saved:
+        _append_monitor_event(
+            {
+                "type": "shadow_exit",
+                "status": "paper_exit_submitted",
+                "source": source,
+                "ticket_key": record.get("ticket_key"),
+                "code": record.get("code"),
+                "exit_reason": record.get("exit_reason"),
+                "message": "G3 shadow exit monitor recorded a paper sell.",
+            }
+        )
+
+    finished_at = datetime.now()
     return {
-        "execution_id": f"g3ptrade_{side.lower()}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}",
-        "created_at": now_text,
-        "status": f"ptrade_{side.lower()}_queued",
-        "source": "g3_state_alpha_ptrade_bridge",
-        "strategy_id": STRATEGY_ID,
-        "contract": LATEST_G3_PROFILE,
-        "shadow_only": True,
-        "formal_buy_signal": False,
-        "auto_order_allowed": False,
-        "order_path_enabled": False,
-        "ticket_key": ticket_key,
-        "entry_date": ticket.get("entry_date") or payload.get("entry_date") or payload.get("signal_date"),
-        "decision_date": ticket.get("decision_date") or payload.get("decision_date"),
-        "route": ticket.get("route") or payload.get("route"),
-        "route_label": ticket.get("route_label") or payload.get("route_label"),
-        "code": order.get("code"),
-        "name": order.get("name") or ticket.get("name") or ticket.get("stock_name") or payload.get("name"),
-        "side": side,
+        "ok": True,
+        "status": "success",
+        "source": source,
+        "started_at": started_at.isoformat(sep=" ", timespec="seconds"),
+        "finished_at": finished_at.isoformat(sep=" ", timespec="seconds"),
+        "open_holding_count": len(open_rows),
+        "exit_candidate_count": len(exit_rows),
+        "triggered_exit_count": len(saved),
+        "skipped_count": len(skipped),
+        "saved_exits": saved,
+        "skipped": skipped,
+        "artifacts": {
+            "shadow_ledger": _path_status(ledger_path),
+            "paper_executions": _path_status(PAPER_EXECUTIONS_PATH),
+            "exit_monitor_state": _path_status(EXIT_MONITOR_STATE_PATH),
+        },
+    }
+
+
+def _day1_pack_by_code() -> dict[str, dict[str, Any]]:
+    rows = _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "day1_paper_review_pack.csv")
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        code = str(row.get("code") or "").strip().upper()
+        if code:
+            out[code] = row
+    return out
+
+
+def _day1_launch_posture_blocks_execution(pack_row: dict[str, Any] | None) -> bool:
+    if not pack_row:
+        return False
+    posture = str(pack_row.get("launch_posture") or "").strip()
+    if posture in {"contract_block_observation", "skip", "wait_refresh"}:
+        return True
+    reason = str(pack_row.get("contract_block_reason") or pack_row.get("paper_watch_action") or "")
+    return "index_mom60<=5" in reason or "只做观察" in reason
+
+
+def _day1_paper_execution_preview(ticket: dict[str, Any], pack_row: dict[str, Any] | None, base_capital: Any = None) -> dict[str, Any]:
+    price = _as_float(ticket.get("reference_close"), None)
+    position_pct = _as_float(ticket.get("position_pct"), None)
+    quantity = _default_paper_quantity(price, position_pct, base_capital)
+    return {
+        "ticket_key": ticket.get("ticket_key") or ticket.get("candidate_key") or ticket.get("trade_key"),
+        "code": ticket.get("code") or ticket.get("code_raw"),
+        "name": ticket.get("name") or ticket.get("stock_name"),
+        "entry_date": ticket.get("entry_date"),
+        "route": ticket.get("route"),
+        "launch_posture": (pack_row or {}).get("launch_posture"),
         "execution_price": price,
         "quantity": quantity,
         "notional": round((price or 0.0) * quantity, 2),
-        "position_pct": _as_float(ticket.get("position_pct") or payload.get("position_pct")),
-        "structure_stop": _as_float(ticket.get("structure_stop") or payload.get("structure_stop")),
-        "hard_stop": _as_float(ticket.get("hard_stop") or payload.get("hard_stop")),
-        "take_profit_1": _as_float(ticket.get("take_profit_1") or payload.get("take_profit_1")),
-        "exit_contract": ticket.get("exit_contract") or payload.get("exit_contract"),
-        "ptrade_order_id": order.get("order_id"),
-        "ptrade_bridge_status": order.get("status"),
-        "ptrade_symbol": order.get("ptrade_symbol"),
-        "dry_run": bool(order.get("dry_run")),
-        "require_approval": bool(order.get("require_approval")),
-        "approved": bool(order.get("approved")),
-        "notes": str(payload.get("notes") or "").strip(),
+        "position_pct": position_pct,
+        "paper_watch_action": (pack_row or {}).get("paper_watch_action"),
+        "hidden_risk_focus": (pack_row or {}).get("hidden_risk_focus"),
+        "after_close_required_note": (pack_row or {}).get("after_close_required_note"),
     }
 
 
-def _append_ptrade_audit(order: dict[str, Any], ticket: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
-    record = _ptrade_audit_record(order, ticket, payload)
-    rows = _load_paper_executions()
-    rows.append(record)
-    _save_paper_executions(rows)
-    _append_monitor_event(
-        {
-            "type": "ptrade_bridge_order",
-            "status": record.get("status"),
-            "ticket_key": record.get("ticket_key"),
-            "code": record.get("code"),
-            "ptrade_order_id": record.get("ptrade_order_id"),
-            "message": "G3 State Alpha PTrade bridge order queued.",
-        }
-    )
-    return record
-
-
-def _latest_g3_ptrade_orders(limit: int = 200) -> list[dict[str, Any]]:
-    try:
-        rows = PTRADE_BRIDGE.list_orders(limit=limit).get("rows") or []
-    except Exception:
-        return []
-    result: list[dict[str, Any]] = []
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
-        strategy = str(item.get("strategy") or raw.get("strategy") or "")
-        source = str(item.get("source") or raw.get("source") or "")
-        if strategy == LATEST_G3_PROFILE or source == "g3_state_alpha_page":
-            result.append(item)
-    return result
-
-
-def _latest_g3_ptrade_order(side: str) -> dict[str, Any] | None:
-    expected_side = str(side or "").strip().upper()
-    for item in _latest_g3_ptrade_orders(limit=300):
-        item_side = str(item.get("side") or item.get("raw", {}).get("side") or "").strip().upper()
-        if item_side == expected_side:
-            return item
-    return None
-
-
-def _g3_ptrade_status() -> dict[str, Any]:
-    bridge_status = PTRADE_BRIDGE.status()
-    readiness = bridge_status.get("readiness") if isinstance(bridge_status.get("readiness"), dict) else {}
-    latest_buy = _latest_g3_ptrade_order("BUY")
-    latest_sell = _latest_g3_ptrade_order("SELL")
-    e2e_acceptance = _read_json(PTRADE_E2E_ACCEPTANCE_PATH)
-    internal_acceptance = _read_json(PTRADE_INTERNAL_ACCEPTANCE_PATH)
-    e2e_checks = e2e_acceptance.get("checks") if isinstance(e2e_acceptance, dict) else []
-    internal_checks = internal_acceptance.get("checks") if isinstance(internal_acceptance, dict) else []
-    e2e_acceptance_ok = bool(
-        isinstance(e2e_acceptance, dict)
-        and e2e_acceptance.get("ok")
-        and isinstance(e2e_checks, list)
-        and all(bool(item.get("ok")) for item in e2e_checks if isinstance(item, dict) and item.get("required", True))
-    )
-    internal_acceptance_ok = bool(
-        isinstance(internal_acceptance, dict)
-        and internal_acceptance.get("ok")
-        and isinstance(internal_checks, list)
-        and all(bool(item.get("ok")) for item in internal_checks if isinstance(item, dict) and item.get("required", True))
-    )
-
-    def _proven(order: dict[str, Any] | None) -> bool:
-        if not isinstance(order, dict):
-            return False
-        status = str(order.get("status") or "").strip().lower()
-        bridge_status_text = str(order.get("_bridge_status") or "").strip().lower()
-        return status in {"dry_run", "waiting_approval", "submitted"} or bridge_status_text in {"ack", "fill"}
-
-    simulation_ready = bool(
-        readiness.get("local_submit_ready", True)
-        and readiness.get("ptrade_heartbeat_recent")
-        and readiness.get("no_stale_processing")
-    )
-    internal_strategy_running = bool(bridge_status.get("ptrade_internal_strategy_running"))
-    ptrade_python_runner_running = bool(bridge_status.get("ptrade_python_script_runner_running"))
-    local_runner_running = bool(bridge_status.get("local_api_runner_running"))
-    if internal_strategy_running:
-        implementation_stage = "ptrade_internal_strategy"
-        implementation_message = "PTrade internal strategy heartbeat is active."
-    elif ptrade_python_runner_running:
-        implementation_stage = "ptrade_python_script_runner"
-        implementation_message = "PTrade Python script runner is consuming dry-run orders; PTrade hosted strategy task is not proven yet."
-    elif local_runner_running:
-        implementation_stage = "local_api_runner"
-        implementation_message = "Local PTrade API runner is consuming dry-run orders; PTrade internal strategy heartbeat is not proven yet."
-    else:
-        implementation_stage = "no_consumer_heartbeat"
-        implementation_message = "No recent PTrade bridge consumer heartbeat is available."
+def _day1_paper_order_payload(ticket: dict[str, Any], pack_row: dict[str, Any] | None, base_capital: Any = None) -> dict[str, Any]:
+    preview = _day1_paper_execution_preview(ticket, pack_row, base_capital=base_capital)
+    notes = "Day1纸面执行：按复盘包记录，不触发真实下单。"
+    hidden_focus = str((pack_row or {}).get("hidden_risk_focus") or "").strip()
+    if hidden_focus:
+        notes = f"{notes} 隐患重点：{hidden_focus}"
     return {
-        "ok": True,
-        "mode": "g3_state_alpha_ptrade_status",
-        "simulation_ready": simulation_ready,
-        "simulation_message": (
-            "G3 PTrade dry-run submit and terminal consumption are available."
-            if simulation_ready
-            else "G3 PTrade dry-run submit is local-only until the PTrade heartbeat is recent and processing is clear."
-        ),
-        "implementation_stage": implementation_stage,
-        "implementation_message": implementation_message,
-        "ptrade_internal_strategy_running": internal_strategy_running,
-        "ptrade_python_script_runner_running": ptrade_python_runner_running,
-        "local_api_runner_running": local_runner_running,
-        "g3_dry_run_buy_proven": _proven(latest_buy),
-        "g3_dry_run_sell_proven": _proven(latest_sell),
-        "g3_e2e_acceptance_ok": e2e_acceptance_ok,
-        "g3_e2e_acceptance": e2e_acceptance if isinstance(e2e_acceptance, dict) else {},
-        "g3_e2e_acceptance_artifact": _path_status(PTRADE_E2E_ACCEPTANCE_PATH),
-        "g3_internal_strategy_acceptance_ok": internal_acceptance_ok,
-        "g3_internal_strategy_acceptance": internal_acceptance if isinstance(internal_acceptance, dict) else {},
-        "g3_internal_strategy_acceptance_artifact": _path_status(PTRADE_INTERNAL_ACCEPTANCE_PATH),
-        "latest_g3_buy_order": latest_buy,
-        "latest_g3_sell_order": latest_sell,
-        "bridge_status": bridge_status,
-        "readiness": readiness,
-        "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "ticket_key": preview.get("ticket_key"),
+        "code": preview.get("code"),
+        "execution_price": preview.get("execution_price"),
+        "quantity": preview.get("quantity"),
+        "position_pct": preview.get("position_pct"),
+        "base_capital": base_capital,
+        "source": "g3_day1_paper_review_pack",
+        "notes": notes,
     }
-
-
-def _submit_ptrade_buy_order(payload: dict[str, Any]) -> dict[str, Any]:
-    payload = payload if isinstance(payload, dict) else {}
-    ticket = _find_current_ticket(payload)
-    if not ticket:
-        return {"ok": False, "message": "No matching G3 State Alpha shadow ticket found."}
-    if not _truthy(ticket.get("qualified_shadow_buy")):
-        return {"ok": False, "message": "Ticket is not a qualified shadow buy.", "ticket": ticket}
-    if not _truthy(ticket.get("m30_confirmed")):
-        return {"ok": False, "message": "Ticket is missing 30m confirmation.", "ticket": ticket}
-
-    price = _as_float(payload.get("price") or payload.get("execution_price"), None)
-    if price is None:
-        price = _as_float(ticket.get("reference_close"), None)
-    position_pct = _as_float(payload.get("position_pct"), None)
-    if position_pct is None:
-        position_pct = _as_float(ticket.get("position_pct"), None)
-    quantity = int(float(payload.get("quantity") or payload.get("shares") or 0))
-    if quantity <= 0:
-        quantity = _default_paper_quantity(price, position_pct, payload.get("base_capital"))
-    if price is None or price <= 0 or quantity <= 0:
-        return {"ok": False, "message": "Invalid PTrade buy price or quantity.", "ticket": ticket}
-
-    code = ticket.get("code") or ticket.get("code_raw") or payload.get("code")
-    entry_date = ticket.get("entry_date") or payload.get("signal_date")
-    if _active_g3_ptrade_order_exists(code, entry_date, "BUY"):
-        return {"ok": False, "message": "Active G3 PTrade BUY order already exists for this ticket.", "ticket": ticket}
-
-    ticket_key = str(ticket.get("ticket_key") or ticket.get("candidate_key") or ticket.get("trade_key") or "")
-    order_payload = {
-        "source": "g3_state_alpha_page",
-        "strategy": LATEST_G3_PROFILE,
-        "signal_date": entry_date,
-        "entry_date": entry_date,
-        "ticket_key": ticket_key,
-        "route": ticket.get("route"),
-        "code": code,
-        "name": ticket.get("name") or ticket.get("stock_name"),
-        "side": "BUY",
-        "quantity": quantity,
-        "price": price,
-        "price_type": str(payload.get("price_type") or "limit"),
-        "dry_run": _ptrade_bool(payload.get("dry_run"), True),
-        "require_approval": _ptrade_bool(payload.get("require_approval"), True),
-        "approved": _ptrade_bool(payload.get("approved"), False),
-        "reason": str(payload.get("reason") or "G3 State Alpha real-account capacity buy"),
-        "risk": {
-            "route": ticket.get("route"),
-            "confirm_datetime": ticket.get("confirm_datetime"),
-            "position_pct": position_pct,
-            "contract_position_pct": _as_float(ticket.get("position_pct")),
-            "structure_stop": _as_float(ticket.get("structure_stop")),
-            "hard_stop": _as_float(ticket.get("hard_stop")),
-            "take_profit_1": _as_float(ticket.get("take_profit_1")),
-            "exit_contract": ticket.get("exit_contract"),
-        },
-    }
-    guard = _ptrade_live_submit_readiness_guard(order_payload)
-    if guard:
-        return guard
-    try:
-        order = PTRADE_BRIDGE.submit_order(order_payload)
-    except Exception as exc:
-        return {"ok": False, "message": f"PTrade bridge submit failed: {exc}", "ticket": ticket}
-    record = _append_ptrade_audit(order, ticket, payload)
-    return {"ok": True, "order": order, "record": record, "bridge_status": PTRADE_BRIDGE.status()}
-
-
-def _submit_ptrade_sell_order(payload: dict[str, Any]) -> dict[str, Any]:
-    payload = payload if isinstance(payload, dict) else {}
-    ticket = _find_current_ticket(payload) or {}
-    code = payload.get("code") or ticket.get("code") or ticket.get("code_raw")
-    code6 = _normalize_code6(code)
-    if not code6:
-        return {"ok": False, "message": "A 6 digit stock code is required for PTrade sell order."}
-    price = _as_float(
-        payload.get("price")
-        or payload.get("execution_price")
-        or payload.get("current_price")
-        or payload.get("reference_close")
-        or payload.get("entry_price")
-        or ticket.get("reference_close")
-        or ticket.get("entry_price"),
-        None,
-    )
-    quantity = int(float(payload.get("quantity") or payload.get("shares") or payload.get("available_shares") or 0))
-    if quantity <= 0:
-        quantity = _default_paper_quantity(price, ticket.get("position_pct") or payload.get("position_pct"), payload.get("base_capital"))
-    if quantity <= 0:
-        return {"ok": False, "message": "Positive sell quantity is required.", "ticket": ticket or None}
-    if price is not None and price <= 0:
-        price = None
-
-    entry_date = ticket.get("entry_date") or payload.get("entry_date") or payload.get("signal_date")
-    if _active_g3_ptrade_order_exists(code6, entry_date, "SELL"):
-        return {"ok": False, "message": "Active G3 PTrade SELL order already exists for this position.", "ticket": ticket or None}
-
-    order_payload = {
-        "source": "g3_state_alpha_page",
-        "strategy": LATEST_G3_PROFILE,
-        "signal_date": entry_date,
-        "entry_date": entry_date,
-        "ticket_key": ticket.get("ticket_key") or payload.get("ticket_key"),
-        "route": ticket.get("route") or payload.get("route"),
-        "code": code6,
-        "name": payload.get("name") or ticket.get("name") or ticket.get("stock_name"),
-        "side": "SELL",
-        "quantity": quantity,
-        "price": price,
-        "price_type": str(payload.get("price_type") or ("limit" if price else "market")),
-        "dry_run": _ptrade_bool(payload.get("dry_run"), True),
-        "require_approval": _ptrade_bool(payload.get("require_approval"), True),
-        "approved": _ptrade_bool(payload.get("approved"), False),
-        "reason": str(payload.get("reason") or payload.get("exit_reason") or "G3 State Alpha manual exit check"),
-        "risk": {
-            "route": ticket.get("route") or payload.get("route"),
-            "exit_reason": payload.get("exit_reason") or payload.get("management_action"),
-            "management_action": payload.get("management_action"),
-            "structure_stop": _as_float(ticket.get("structure_stop") or payload.get("structure_stop")),
-            "hard_stop": _as_float(ticket.get("hard_stop") or payload.get("hard_stop")),
-            "take_profit_1": _as_float(ticket.get("take_profit_1") or payload.get("take_profit_1")),
-            "exit_contract": ticket.get("exit_contract") or payload.get("exit_contract"),
-        },
-    }
-    guard = _ptrade_live_submit_readiness_guard(order_payload)
-    if guard:
-        return guard
-    try:
-        order = PTRADE_BRIDGE.submit_order(order_payload)
-    except Exception as exc:
-        return {"ok": False, "message": f"PTrade bridge submit failed: {exc}", "ticket": ticket or None}
-    record = _append_ptrade_audit(order, ticket or payload, payload)
-    return {"ok": True, "order": order, "record": record, "bridge_status": PTRADE_BRIDGE.status()}
 
 
 def _load_observation_snapshots() -> list[dict[str, Any]]:
@@ -2532,19 +3539,20 @@ def _run_minute30_repair_for_targets(targets: dict[str, list[str]]) -> list[dict
             continue
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "sync_intraday_minutes_fast.py"),
-            "--target-date",
+            str(PROJECT_ROOT / "scripts" / "qmt_xtquant_minute_backfill_validate.py"),
+            "--phase",
+            "all",
+            "--start-date",
+            target_date,
+            "--end-date",
             target_date,
             "--periods",
             "30m",
-            "--types",
-            "stock,index",
             "--codes",
             ",".join(codes),
             "--batch-size",
-            "100",
-            "--min-complete-codes",
-            str(max(1, len(set(codes)))),
+            "30",
+            "--reset-stage",
         ]
         started = datetime.now()
         try:
@@ -3077,6 +4085,15 @@ def _monitor_job_wrapper() -> None:
         }
         _save_monitor_state(state)
         return
+    if not state.get("run_current_refresh", True):
+        state["last_run_at"] = now.isoformat(sep=" ", timespec="seconds")
+        state["last_result"] = {
+            "skipped": True,
+            "reason": "run_current_refresh_disabled",
+            "checked_at": state["last_run_at"],
+        }
+        _save_monitor_state(state)
+        return
     if _running_refresh_task():
         return
     task_id = f"g3_state_alpha_refresh_{now.strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
@@ -3230,9 +4247,67 @@ def _broker_sync_job_wrapper() -> None:
         )
 
 
+def _exit_monitor_job_wrapper() -> None:
+    state = _load_exit_monitor_state()
+    if not state.get("enabled"):
+        return
+    now = datetime.now()
+    if state.get("trading_hours_only") and not _in_trading_window(now):
+        state["last_run_at"] = now.isoformat(sep=" ", timespec="seconds")
+        state["last_result"] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "not_trading_window",
+            "checked_at": state["last_run_at"],
+        }
+        _save_exit_monitor_state(state)
+        return
+    started_at = datetime.now()
+    state["last_run_at"] = started_at.isoformat(sep=" ", timespec="seconds")
+    _save_exit_monitor_state(state)
+    try:
+        result = _run_shadow_exit_monitor_once(
+            source="scheduler",
+            paper_exit_enabled=bool(state.get("paper_exit_enabled", True)),
+            update_ledger_enabled=bool(state.get("update_ledger_enabled", True)),
+        )
+        finished_at = datetime.now()
+        state = _load_exit_monitor_state()
+        state["last_run_at"] = started_at.isoformat(sep=" ", timespec="seconds")
+        state["last_result"] = result
+        state["last_error"] = None if result.get("ok") else str(result.get("error") or result.get("reason") or "")
+        if result.get("ok"):
+            state["last_success_at"] = finished_at.isoformat(sep=" ", timespec="seconds")
+        _save_exit_monitor_state(state)
+    except Exception as exc:
+        logger.exception("G3 shadow exit monitor scheduler failed.")
+        state = _load_exit_monitor_state()
+        state["last_run_at"] = started_at.isoformat(sep=" ", timespec="seconds")
+        state["last_error"] = str(exc)
+        state["last_result"] = {"ok": False, "error": str(exc)}
+        _save_exit_monitor_state(state)
+        _append_monitor_event(
+            {
+                "type": "shadow_exit",
+                "status": "error",
+                "source": "scheduler",
+                "message": "G3 shadow exit monitor scheduler failed",
+                "error": str(exc),
+            }
+        )
+
+
 def configure_shadow_monitor_scheduler() -> dict[str, Any]:
-    scheduler = _ensure_monitor_scheduler()
     state = _load_monitor_state()
+    if not _startup_schedulers_enabled():
+        if _monitor_scheduler is not None:
+            try:
+                if _monitor_scheduler.get_job(_monitor_job_id):
+                    _monitor_scheduler.remove_job(_monitor_job_id)
+            except Exception:
+                logger.exception("Failed to remove existing G3 monitor job")
+        return _scheduler_disabled_result(state, _monitor_job_id)
+    scheduler = _ensure_monitor_scheduler()
     try:
         if scheduler.get_job(_monitor_job_id):
             scheduler.remove_job(_monitor_job_id)
@@ -3258,9 +4333,53 @@ def configure_shadow_monitor_scheduler() -> dict[str, Any]:
     }
 
 
-def configure_observation_scheduler() -> dict[str, Any]:
+def configure_shadow_exit_monitor_scheduler() -> dict[str, Any]:
+    state = _load_exit_monitor_state()
+    if not _startup_schedulers_enabled():
+        if _monitor_scheduler is not None:
+            try:
+                if _monitor_scheduler.get_job(_exit_monitor_job_id):
+                    _monitor_scheduler.remove_job(_exit_monitor_job_id)
+            except Exception:
+                logger.exception("Failed to remove existing G3 shadow exit monitor job")
+        return _scheduler_disabled_result(state, _exit_monitor_job_id)
     scheduler = _ensure_monitor_scheduler()
+    try:
+        if scheduler.get_job(_exit_monitor_job_id):
+            scheduler.remove_job(_exit_monitor_job_id)
+    except Exception:
+        logger.exception("Failed to remove existing G3 shadow exit monitor job")
+    if state.get("enabled"):
+        scheduler.add_job(
+            _exit_monitor_job_wrapper,
+            "interval",
+            seconds=max(120, int(state.get("interval_seconds") or 120)),
+            id=_exit_monitor_job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+    job = scheduler.get_job(_exit_monitor_job_id)
+    return {
+        **state,
+        "scheduler_enabled": bool(job),
+        "scheduler_wired": True,
+        "job_id": _exit_monitor_job_id,
+        "next_run_time": job.next_run_time.isoformat() if job and job.next_run_time else None,
+    }
+
+
+def configure_observation_scheduler() -> dict[str, Any]:
     state = _load_observation_scheduler_state()
+    if not _startup_schedulers_enabled():
+        if _monitor_scheduler is not None:
+            try:
+                if _monitor_scheduler.get_job(_observation_job_id):
+                    _monitor_scheduler.remove_job(_observation_job_id)
+            except Exception:
+                logger.exception("Failed to remove existing G3 observation job")
+        return _scheduler_disabled_result(state, _observation_job_id)
+    scheduler = _ensure_monitor_scheduler()
     try:
         if scheduler.get_job(_observation_job_id):
             scheduler.remove_job(_observation_job_id)
@@ -3289,8 +4408,16 @@ def configure_observation_scheduler() -> dict[str, Any]:
 
 
 def configure_broker_sync_scheduler() -> dict[str, Any]:
-    scheduler = _ensure_monitor_scheduler()
     state = _load_broker_sync_state()
+    if not _startup_schedulers_enabled():
+        if _monitor_scheduler is not None:
+            try:
+                if _monitor_scheduler.get_job(_broker_sync_job_id):
+                    _monitor_scheduler.remove_job(_broker_sync_job_id)
+            except Exception:
+                logger.exception("Failed to remove existing G3 broker sync job")
+        return _scheduler_disabled_result(state, _broker_sync_job_id)
+    scheduler = _ensure_monitor_scheduler()
     try:
         if scheduler.get_job(_broker_sync_job_id):
             scheduler.remove_job(_broker_sync_job_id)
@@ -3321,6 +4448,7 @@ def configure_broker_sync_scheduler() -> dict[str, Any]:
 def init_gen3_state_alpha_monitor_scheduler_from_config() -> dict[str, Any]:
     return {
         "shadow_monitor": configure_shadow_monitor_scheduler(),
+        "shadow_exit_monitor": configure_shadow_exit_monitor_scheduler(),
         "observation_scheduler": configure_observation_scheduler(),
         "broker_sync": configure_broker_sync_scheduler(),
     }
@@ -3466,6 +4594,7 @@ ROUTE_STRATEGY_TO_FAMILY = {
     "institutional_score120_core": "mainwave_breakout_offense",
     "institutional_institutional_mainwave": "mainwave_breakout_offense",
     "old_g3_strong_main": "mainwave_breakout_offense",
+    "g2_g2_gap_supplement": "volume_runup_supplement",
     "g2_volume5_keep80_runup_sector_bonus": "volume_runup_supplement",
     "g2_volume5_keep80_runup": "volume_runup_supplement",
 }
@@ -3488,6 +4617,7 @@ ROUTE_STRATEGY_TO_TRADE_STRATEGY = {
     "institutional_score120_core": "institutional_score120_mainwave",
     "institutional_institutional_mainwave": "institutional_score120_mainwave",
     "old_g3_strong_main": "old_g3_strong_breakout",
+    "g2_g2_gap_supplement": "volume_runup_supplement",
     "g2_volume5_keep80_runup_sector_bonus": "volume_runup_supplement",
     "g2_volume5_keep80_runup": "volume_runup_supplement",
 }
@@ -3744,6 +4874,21 @@ def _normalize_latest_g3_closed_trades(df: pd.DataFrame) -> pd.DataFrame:
             "policy_exit_date",
         ]
     )
+    for col in ["exit_datetime", "sell_datetime", "policy_exit_datetime"]:
+        if col not in out.columns:
+            out[col] = out["exit_ts"]
+        else:
+            out[col] = out[col].fillna("").astype(str)
+            out.loc[out[col].str.strip().eq(""), col] = out.loc[out[col].str.strip().eq(""), "exit_ts"]
+    if "exit_date" not in out.columns:
+        out["exit_date"] = pd.to_datetime(out["exit_ts"], errors="coerce").dt.strftime("%Y-%m-%d")
+    else:
+        out["exit_date"] = out["exit_date"].fillna("").astype(str)
+        missing_exit_date = out["exit_date"].str.strip().eq("")
+        out.loc[missing_exit_date, "exit_date"] = pd.to_datetime(
+            out.loc[missing_exit_date, "exit_ts"],
+            errors="coerce",
+        ).dt.strftime("%Y-%m-%d")
     out["source_type"] = "historical_closed_trade"
     out["position_slots"] = 2
     if "slot_pct" not in out.columns:
@@ -4342,9 +5487,12 @@ def _read_historical_trades(
         if not shadow_df.empty:
             shadow_df = shadow_df[_historical_window_mask(shadow_df, window)]
             shadow_df = _with_route_strategy_fields(shadow_df)
+        replay_candidates = _historical_candidate_replay_rows(shadow_df, limit, route, window)
         page_df = shadow_df.head(limit).astype(object).where(pd.notna(shadow_df.head(limit)), None)
         return {
             "rows": json.loads(page_df.to_json(orient="records", force_ascii=False)) if not page_df.empty else [],
+            "historical_replay_candidates": replay_candidates["rows"],
+            "historical_replay_summary": replay_candidates["summary"],
             "metrics": _trade_metrics(shadow_df),
             "route_metrics": _group_metrics(shadow_df, "trade_strategy"),
             "market_style_metrics": _group_metrics(shadow_df, "market_style")[:20],
@@ -4366,6 +5514,7 @@ def _read_historical_trades(
                 "mtm_equity_curve": _path_status(MTM_EQUITY_CURVE_PATH),
                 "summary": _path_status(PROMOTION_SUMMARY_PATH),
                 "gates": _path_status(PROMOTION_GATES_PATH),
+                **replay_candidates["artifacts"],
             },
             "natural_policy_shadow": natural_policy_shadow,
         }
@@ -4411,13 +5560,18 @@ def _read_historical_trades(
     equity_curve = _equity_curve_records(curve_df)
     exposure_metrics = _exposure_metrics(df, curve_df)
     future_leak_audit = _future_leak_audit(df)
+    replay_candidates = _historical_candidate_replay_rows(df, limit, route, window)
     slim_columns = [
         "entry_date",
         "policy_exit_date",
         "decision_date",
         "confirm_datetime",
         "entry_ts",
+        "exit_date",
         "exit_ts",
+        "exit_datetime",
+        "sell_datetime",
+        "policy_exit_datetime",
         "code",
         "name",
         "route",
@@ -4487,6 +5641,8 @@ def _read_historical_trades(
     page_df = page_df.astype(object).where(pd.notna(page_df), None)
     return {
         "rows": json.loads(page_df.to_json(orient="records", force_ascii=False)),
+        "historical_replay_candidates": replay_candidates["rows"],
+        "historical_replay_summary": replay_candidates["summary"],
         "metrics": metrics,
         "route_metrics": route_metrics,
         "market_style_metrics": market_style_metrics,
@@ -4513,8 +5669,791 @@ def _read_historical_trades(
             "natural_policy_shadow_contract": _path_status(NATURAL_POLICY_SHADOW_DIR / "natural_policy_contract.json"),
             "natural_candidate_shadow_labels": _path_status(NATURAL_POLICY_SHADOW_DIR / "candidate_shadow_labels.csv"),
             "natural_closed_trade_shadow_actions": _path_status(NATURAL_POLICY_SHADOW_DIR / "closed_trade_shadow_actions.csv"),
+            **replay_candidates["artifacts"],
         },
         "natural_policy_shadow": natural_policy_shadow,
+    }
+
+
+def _historical_replay_axis_for_trade(row: pd.Series) -> tuple[str, str, str]:
+    net_ret = _to_float_or_none(row.get("net_ret"))
+    account_ret = _to_float_or_none(row.get("account_ret"))
+    exit_reason = _clean_review_text(row.get("exit_reason"))
+    route = _clean_review_text(row.get("route") or row.get("mode"))
+    market_style = _clean_review_text(row.get("market_style"))
+    confirm_rule = _clean_review_text(row.get("confirm_rule"))
+    if "hard_stop" in exit_reason or (net_ret is not None and net_ret <= -0.10):
+        return (
+            "sell_point",
+            "loss_or_hard_stop_exit",
+            "Replay whether the exit contract cut risk naturally, or whether entry quality/route switch made the stop inevitable.",
+        )
+    if net_ret is not None and net_ret < 0:
+        return (
+            "buy_point",
+            "negative_closed_trade",
+            "Replay the buy point: confirmation timing, market state, score source, and whether the entry was naturally executable.",
+        )
+    if "panic" in route and market_style not in {"standard_range", "weak_rebound", ""}:
+        return (
+            "model_switch",
+            "panic_route_in_non_panic_context",
+            "Replay whether the panic repair route was still the natural model for this market state.",
+        )
+    if "policy_exit_remaining" in exit_reason and net_ret is not None and net_ret > 0.08:
+        return (
+            "sell_point",
+            "profitable_policy_exit",
+            "Replay whether the staged sell logic preserved trend participation without turning into hindsight profit chasing.",
+        )
+    if route in {"institutional_mainwave", "score120_core", "strong_main"} and "30m" not in confirm_rule.lower():
+        return (
+            "buy_point",
+            "mainwave_confirmation_trace",
+            "Replay the mainwave confirmation evidence and score scale consistency before trusting this buy sample.",
+        )
+    if account_ret is not None and abs(account_ret) >= 0.04:
+        return (
+            "selection",
+            "large_account_impact",
+            "Replay whether selected stock, sector exposure, and slot usage were the natural representatives of the route.",
+        )
+    return (
+        "natural_trade_consistency",
+        "ordinary_closed_trade_sample",
+        "Replay this sample only as supporting evidence; do not optimize rules from one ordinary trade.",
+    )
+
+
+def _build_g3_historical_decision_replay_tasks(
+    limit: int = 80,
+    route: str | None = "all",
+    window: str | None = "all",
+) -> dict[str, Any]:
+    artifacts = {
+        "closed_trades": _path_status(HISTORICAL_TRADES_PATH),
+        "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+    }
+    if not HISTORICAL_TRADES_PATH.exists():
+        return {
+            "ok": False,
+            "mode": "g3_historical_decision_replay_tasks",
+            "error": "missing_historical_closed_trades",
+            "tasks": [],
+            "summary": {
+                "task_count": 0,
+                "trade_count": 0,
+                "can_execute_trade": False,
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            },
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": artifacts,
+        }
+    try:
+        df = pd.read_csv(HISTORICAL_TRADES_PATH, low_memory=False)
+    except pd.errors.EmptyDataError:
+        df = pd.DataFrame()
+    except Exception:
+        logger.exception("Failed to build historical decision replay tasks: %s", HISTORICAL_TRADES_PATH)
+        df = pd.DataFrame()
+    df = _normalize_latest_g3_closed_trades(df)
+    if not df.empty:
+        df = _with_route_strategy_fields(df)
+        if route and route != "all" and "route" in df.columns:
+            df = df[df["route"].astype(str).eq(route)]
+        df = df[_historical_window_mask(df, window)]
+    if df.empty:
+        return {
+            "ok": True,
+            "mode": "g3_historical_decision_replay_tasks",
+            "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "tasks": [],
+            "summary": {
+                "task_count": 0,
+                "trade_count": 0,
+                "can_execute_trade": False,
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            },
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": artifacts,
+        }
+
+    review_map = _load_strategy_tuning_task_reviews()
+    net_ret = pd.to_numeric(df.get("net_ret"), errors="coerce")
+    account_ret = pd.to_numeric(df.get("account_ret"), errors="coerce")
+    df["_abs_account_ret"] = account_ret.abs().fillna(0)
+    df["_loss_rank"] = net_ret.fillna(0).mul(-1)
+    df["_priority_score"] = df["_loss_rank"] + df["_abs_account_ret"]
+    if "exit_reason" in df.columns:
+        df["_priority_score"] += df["exit_reason"].astype(str).str.contains("hard_stop|prev_low_break", case=False, na=False).astype(float) * 0.12
+    df = df.sort_values(["_priority_score", "entry_date"], ascending=[False, False], kind="mergesort")
+
+    candidate_items = list(df.iterrows())
+    available_axis_counts: dict[str, int] = {}
+    for _, row in candidate_items:
+        axis, _, _ = _historical_replay_axis_for_trade(row)
+        available_axis_counts[axis] = available_axis_counts.get(axis, 0) + 1
+
+    selected_items: list[tuple[Any, pd.Series]] = []
+    selected_indices: set[Any] = set()
+    for target_axis in ("sell_point", "buy_point", "selection", "model_switch", "natural_trade_consistency"):
+        for index, row in candidate_items:
+            if index in selected_indices:
+                continue
+            axis, _, _ = _historical_replay_axis_for_trade(row)
+            if axis != target_axis:
+                continue
+            selected_items.append((index, row))
+            selected_indices.add(index)
+            break
+
+    max_candidates = max(limit * 3, limit)
+    for index, row in candidate_items:
+        if len(selected_items) >= max_candidates:
+            break
+        if index in selected_indices:
+            continue
+        selected_items.append((index, row))
+        selected_indices.add(index)
+
+    rows: list[dict[str, Any]] = []
+    axis_counts: dict[str, int] = {}
+    for _, row in selected_items:
+        axis, problem_type, replay_focus = _historical_replay_axis_for_trade(row)
+        if axis == "natural_trade_consistency" and len(rows) >= max(10, limit // 4):
+            continue
+        code = _clean_review_text(row.get("code"))
+        name = _clean_review_text(row.get("name"))
+        entry_date = _date_text(row.get("entry_date"))
+        route_text = _clean_review_text(row.get("route") or row.get("mode"))
+        task_key = f"historical_decision|{axis}|{entry_date}|{code}|{problem_type}"
+        review = review_map.get(task_key) if task_key else None
+        review = review if isinstance(review, dict) else {}
+        trade_ret = _to_float_or_none(row.get("net_ret"))
+        acct_ret = _to_float_or_none(row.get("account_ret"))
+        severity = "watch"
+        if trade_ret is not None and trade_ret <= -0.10:
+            severity = "high"
+        elif trade_ret is not None and trade_ret < 0:
+            severity = "medium"
+        elif acct_ret is not None and abs(acct_ret) >= 0.05:
+            severity = "medium"
+        axis_counts[axis] = axis_counts.get(axis, 0) + 1
+        rows.append(
+            {
+                "priority": len(rows) + 1,
+                "task_key": task_key,
+                "axis": axis,
+                "axis_label": _g3_strategy_tuning_axis_meta(axis).get("axis_label"),
+                "task_status": "reviewed" if review.get("review_status") == "reviewed" else ("followup" if review.get("review_status") == "needs_followup" else ("watch" if review.get("review_status") == "watch" else "todo")),
+                "severity": severity,
+                "problem_type": problem_type,
+                "origin": "historical_closed_trades",
+                "object": f"{code} {name}".strip(),
+                "entry_date": entry_date,
+                "exit_date": _date_text(row.get("exit_date") or row.get("policy_exit_date")),
+                "route": route_text,
+                "market_style": _clean_review_text(row.get("market_style")),
+                "exit_reason": _clean_review_text(row.get("exit_reason")),
+                "net_ret": trade_ret,
+                "account_ret": acct_ret,
+                "score": _to_float_or_none(row.get("score")),
+                "raw_score": _to_float_or_none(row.get("raw_score")),
+                "score_source": _clean_review_text(row.get("score_source")),
+                "confirm_rule": _clean_review_text(row.get("confirm_rule")),
+                "problem_signal": f"{problem_type}; net_ret={trade_ret if trade_ret is not None else '--'}; exit={_clean_review_text(row.get('exit_reason')) or '--'}",
+                "replay_focus": replay_focus,
+                "review_method": _g3_tuning_task_review_method(axis),
+                "evidence": f"entry={entry_date}, exit={_date_text(row.get('exit_date') or row.get('policy_exit_date'))}, route={route_text}, market={_clean_review_text(row.get('market_style'))}, confirm={_clean_review_text(row.get('confirm_rule'))}",
+                "completion_evidence": _g3_tuning_task_completion_evidence(axis),
+                "next_action": "Write a historical replay note before changing any strategy contract.",
+                "optimization_boundary": _g3_strategy_tuning_axis_meta(axis).get("optimization_boundary"),
+                "natural_trade_boundary": "Historical replay is evidence only; do not tune for return if the behavior becomes unnatural or hard to execute.",
+                "review_result": _clean_review_text(review.get("review_result")),
+                "review_status": _clean_review_text(review.get("review_status")),
+                "review_note": _clean_review_text(review.get("review_note")),
+                "can_execute_trade": False,
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            }
+        )
+        if len(rows) >= limit:
+            break
+
+    return {
+        "ok": True,
+        "mode": "g3_historical_decision_replay_tasks",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "task_count": len(rows),
+            "trade_count": int(len(df)),
+            "axis_counts": axis_counts,
+            "available_axis_counts": available_axis_counts,
+            "selection_policy": "axis_coverage_first_then_risk_priority",
+            "loss_trade_count": int((net_ret < 0).sum()) if len(net_ret) else 0,
+            "hard_stop_count": int(df.get("exit_reason", pd.Series("", index=df.index)).astype(str).str.contains("hard_stop", case=False, na=False).sum()) if not df.empty else 0,
+            "route": route or "all",
+            "window": window or "all",
+            "can_execute_trade": False,
+            "can_change_strategy_contract": False,
+            "profit_only_optimization_allowed": False,
+            "natural_trade_boundary": "Replay historical decisions from evidence first; do not optimize only for historical return.",
+        },
+        "tasks": rows,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": artifacts,
+    }
+
+
+def _build_g3_historical_decision_replay_audit(
+    route: str | None = "all",
+    window: str | None = "all",
+) -> dict[str, Any]:
+    replay = _build_g3_historical_decision_replay_tasks(limit=500, route=route, window=window)
+    summary = replay.get("summary") if isinstance(replay.get("summary"), dict) else {}
+    tasks = replay.get("tasks") if isinstance(replay.get("tasks"), list) else []
+    review_map = _load_strategy_tuning_task_reviews()
+
+    required_axes = [
+        axis
+        for axis in ("buy_point", "sell_point", "selection", "model_switch", "natural_trade_consistency")
+        if _to_int_or_zero((summary.get("available_axis_counts") or {}).get(axis)) > 0
+    ]
+    if not required_axes:
+        required_axes = ["buy_point", "sell_point", "selection", "model_switch"]
+
+    axis_rows: list[dict[str, Any]] = []
+    for axis in required_axes:
+        axis_tasks = [row for row in tasks if isinstance(row, dict) and row.get("axis") == axis]
+        reviewed_count = 0
+        followup_count = 0
+        watch_count = 0
+        todo_count = 0
+        issue_count = 0
+        for row in axis_tasks:
+            key = _clean_review_text(row.get("task_key"))
+            review = review_map.get(key) if key else None
+            review = review if isinstance(review, dict) else {}
+            status = _clean_review_text(review.get("review_status") or row.get("review_status"))
+            result = _clean_review_text(review.get("review_result") or row.get("review_result"))
+            if status == "reviewed":
+                reviewed_count += 1
+            elif status == "needs_followup":
+                followup_count += 1
+            elif status == "watch":
+                watch_count += 1
+            else:
+                todo_count += 1
+            if result in {"issue_found", "data_gap", "evidence_pending", "defer_contract_review"}:
+                issue_count += 1
+        sample = axis_tasks[0] if axis_tasks else {}
+        if not axis_tasks:
+            axis_status = "missing_axis_sample"
+        elif todo_count or followup_count:
+            axis_status = "blocked"
+        elif watch_count and not reviewed_count:
+            axis_status = "watch_only"
+        else:
+            axis_status = "reviewed_or_watch"
+        axis_rows.append(
+            {
+                "axis": axis,
+                "axis_label": _g3_strategy_tuning_axis_meta(axis).get("axis_label"),
+                "axis_status": axis_status,
+                "task_count": len(axis_tasks),
+                "todo_count": todo_count,
+                "followup_count": followup_count,
+                "watch_count": watch_count,
+                "reviewed_count": reviewed_count,
+                "issue_count": issue_count,
+                "available_count": _to_int_or_zero((summary.get("available_axis_counts") or {}).get(axis)),
+                "next_review_object": sample.get("object") if isinstance(sample, dict) else "",
+                "next_review_focus": sample.get("replay_focus") if isinstance(sample, dict) else _g3_strategy_tuning_axis_meta(axis).get("recommended_review"),
+                "completion_evidence": _g3_tuning_task_completion_evidence(axis),
+                "optimization_boundary": _g3_strategy_tuning_axis_meta(axis).get("optimization_boundary"),
+            }
+        )
+
+    hard_gaps: list[dict[str, Any]] = []
+    missing_axes = [row for row in axis_rows if row.get("axis_status") == "missing_axis_sample"]
+    unreviewed_axes = [row for row in axis_rows if _to_int_or_zero(row.get("todo_count")) > 0]
+    followup_axes = [row for row in axis_rows if _to_int_or_zero(row.get("followup_count")) > 0]
+    if missing_axes:
+        hard_gaps.append(
+            {
+                "gap": "historical_axis_sample_missing",
+                "count": len(missing_axes),
+                "next_action": "rebuild or inspect historical replay samples before using history as launch evidence",
+                "trade_impact": "hold_manual_live_review",
+            }
+        )
+    if unreviewed_axes:
+        hard_gaps.append(
+            {
+                "gap": "historical_replay_unreviewed_axes",
+                "count": sum(_to_int_or_zero(row.get("todo_count")) for row in unreviewed_axes),
+                "next_action": "review historical buy/sell/selection/model-switch tasks axis by axis",
+                "trade_impact": "hold_strategy_learning_claim",
+            }
+        )
+    if followup_axes:
+        hard_gaps.append(
+            {
+                "gap": "historical_replay_followup_axes",
+                "count": sum(_to_int_or_zero(row.get("followup_count")) for row in followup_axes),
+                "next_action": "resolve issue_found/data_gap/evidence_pending historical replay notes",
+                "trade_impact": "hold_contract_change_and_live_review",
+            }
+        )
+
+    watch_gaps: list[dict[str, Any]] = []
+    watch_only_axes = [row for row in axis_rows if row.get("axis_status") == "watch_only"]
+    if watch_only_axes:
+        watch_gaps.append(
+            {
+                "gap": "historical_replay_watch_only_axes",
+                "count": len(watch_only_axes),
+                "next_action": "keep these axes under paper/live observation until evidence becomes decisive",
+                "trade_impact": "observe_only",
+            }
+        )
+
+    if hard_gaps:
+        audit_status = "blocked"
+        audit_label = "historical_replay_not_complete"
+    elif watch_gaps:
+        audit_status = "observe_only"
+        audit_label = "historical_replay_watch_only"
+    else:
+        audit_status = "ready_for_manual_review"
+        audit_label = "historical_replay_closed_for_now"
+
+    reviewed_total = sum(_to_int_or_zero(row.get("reviewed_count")) for row in axis_rows)
+    followup_total = sum(_to_int_or_zero(row.get("followup_count")) for row in axis_rows)
+    watch_total = sum(_to_int_or_zero(row.get("watch_count")) for row in axis_rows)
+    todo_total = sum(_to_int_or_zero(row.get("todo_count")) for row in axis_rows)
+
+    return {
+        "ok": bool(replay.get("ok")),
+        "mode": "g3_historical_decision_replay_audit",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "audit": {
+            "audit_status": audit_status,
+            "audit_label": audit_label,
+            "can_enter_live_manual_review": False,
+            "can_buy": False,
+            "primary_gap": hard_gaps[0].get("gap") if hard_gaps else (watch_gaps[0].get("gap") if watch_gaps else ""),
+            "next_action": hard_gaps[0].get("next_action") if hard_gaps else (watch_gaps[0].get("next_action") if watch_gaps else "keep historical replay evidence under observation"),
+            "natural_trade_boundary": "Historical replay can support learning only after axis evidence is reviewed; it never creates buy signals or profit-only contract changes.",
+        },
+        "hard_gaps": hard_gaps,
+        "watch_gaps": watch_gaps,
+        "axis_audit_rows": axis_rows,
+        "top_open_tasks": [row for row in tasks if isinstance(row, dict) and row.get("task_status") in {"todo", "followup"}][:12],
+        "summary": {
+            "task_count": summary.get("task_count"),
+            "trade_count": summary.get("trade_count"),
+            "required_axis_count": len(required_axes),
+            "blocked_axis_count": len([row for row in axis_rows if row.get("axis_status") == "blocked"]),
+            "watch_only_axis_count": len(watch_only_axes),
+            "todo_count": todo_total,
+            "followup_count": followup_total,
+            "watch_count": watch_total,
+            "reviewed_count": reviewed_total,
+            "hard_gap_count": len(hard_gaps),
+            "watch_gap_count": len(watch_gaps),
+            "axis_counts": summary.get("axis_counts"),
+            "available_axis_counts": summary.get("available_axis_counts"),
+            "selection_policy": summary.get("selection_policy"),
+            "profit_only_optimization_allowed": False,
+            "can_change_strategy_contract": False,
+            "can_execute_trade": False,
+        },
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": replay.get("artifacts") if isinstance(replay.get("artifacts"), dict) else {},
+    }
+
+
+def _archived_router_candidate_replay_rows(limit: int, route: str | None, window: str | None) -> dict[str, Any]:
+    frames: list[pd.DataFrame] = []
+    selected_frames: list[pd.DataFrame] = []
+    archive_sources: list[tuple[str, Path]] = []
+    archive_dirs = (
+        sorted(
+            [path for path in STATE_ROUTER_DAILY_ARCHIVE_DIR.iterdir() if path.is_dir()],
+            key=lambda path: path.name,
+            reverse=True,
+        )
+        if STATE_ROUTER_DAILY_ARCHIVE_DIR.exists()
+        else []
+    )
+    archive_sources.extend((path.name, path) for path in archive_dirs)
+    latest_summary = _read_json(STATE_ROUTER_REPORT_DIR / "summary.json")
+    latest_entry_date = _date_text((latest_summary or {}).get("entry_date"))
+    latest_all_path = STATE_ROUTER_REPORT_DIR / "g3_state_router_all_source_candidates.csv"
+    archived_dates = {date for date, _ in archive_sources}
+    if latest_entry_date and latest_entry_date not in archived_dates and latest_all_path.exists():
+        archive_sources.insert(0, (latest_entry_date, STATE_ROUTER_REPORT_DIR))
+
+    for archive_date, archive_dir in archive_sources:
+        all_path = archive_dir / "g3_state_router_all_source_candidates.csv"
+        selected_path = archive_dir / "g3_state_router_selected_candidates.csv"
+        all_df = _read_csv_df(all_path)
+        if not all_df.empty:
+            all_df = all_df.copy()
+            all_df["archive_entry_date"] = archive_date
+            all_df["archive_source_dir"] = str(archive_dir)
+            frames.append(all_df)
+        selected_df = _read_csv_df(selected_path)
+        if not selected_df.empty:
+            selected_df = selected_df.copy()
+            selected_df["archive_entry_date"] = archive_date
+            selected_df["archive_source_dir"] = str(archive_dir)
+            selected_frames.append(selected_df)
+
+    if not frames:
+        return {
+            "rows": [],
+            "summary": {
+                "source": "state_router_daily_archive",
+                "candidate_count": 0,
+                "bought_count": 0,
+                "blocked_count": 0,
+                "note": "逐日归档或当前报告目录存在，但尚无全源候选 CSV。",
+            },
+            "artifacts": {
+                "state_router_daily_archive": _path_status(STATE_ROUTER_DAILY_ARCHIVE_DIR),
+                "state_router_latest_report": _path_status(STATE_ROUTER_REPORT_DIR),
+            },
+        }
+
+    candidates = pd.concat(frames, ignore_index=True, sort=False)
+    if "entry_date" in candidates.columns:
+        candidates["entry_date"] = pd.to_datetime(candidates["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    else:
+        candidates["entry_date"] = candidates.get("archive_entry_date", "")
+    if "decision_date" in candidates.columns:
+        candidates["decision_date"] = pd.to_datetime(candidates["decision_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "code" in candidates.columns:
+        candidates["code"] = candidates["code"].astype(str)
+    candidates = _enrich_trade_strategy_records(
+        json.loads(candidates.astype(object).where(pd.notna(candidates), None).to_json(orient="records", force_ascii=False))
+    )
+    candidates = pd.DataFrame(candidates)
+    candidates = _with_route_strategy_fields(candidates)
+    excluded_by_current_contract = 0
+    latest_full_g3_only = str((latest_summary or {}).get("strategy_system_mode") or "").strip() == "full_g3_only"
+    if latest_full_g3_only and "route" in candidates.columns:
+        disabled_mask = candidates["route"].astype(str).isin(FULL_G3_DISABLED_REPLAY_ROUTES)
+        excluded_by_current_contract = int(disabled_mask.sum())
+        candidates = candidates[~disabled_mask].copy()
+
+    selected_keys: set[tuple[str, str, str]] = set()
+    selected_count_by_date: dict[str, int] = {}
+    if selected_frames:
+        selected = pd.concat(selected_frames, ignore_index=True, sort=False)
+        if "entry_date" in selected.columns:
+            selected["entry_date"] = pd.to_datetime(selected["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        else:
+            selected["entry_date"] = selected.get("archive_entry_date", "")
+        selected["code"] = selected.get("code", pd.Series("", index=selected.index)).astype(str)
+        selected["route"] = selected.get("route", pd.Series("", index=selected.index)).astype(str)
+        if latest_full_g3_only:
+            selected = selected[~selected["route"].isin(FULL_G3_DISABLED_REPLAY_ROUTES)].copy()
+        selected_keys = set(zip(selected["entry_date"], selected["code"], selected["route"]))
+        selected_count_by_date = selected.groupby("entry_date")["code"].count().to_dict()
+
+    def is_bought(row: pd.Series) -> bool:
+        return (
+            str(row.get("entry_date") or ""),
+            str(row.get("code") or ""),
+            str(row.get("route") or ""),
+        ) in selected_keys
+
+    def archive_block_reason(row: pd.Series) -> str:
+        existing = str(row.get("block_reason") or row.get("block_detail") or "").strip()
+        if existing:
+            return _candidate_block_reason_with_zh(existing)
+        if bool(row.get("bought_in_replay")):
+            return "已进入当日正式路由候选/影子买入样本。"
+        entry_date = str(row.get("entry_date") or "")
+        reasons: list[str] = []
+        if not _truthy(row.get("router_eligible")):
+            reasons.append("路由准入未通过")
+        if row.get("route") == "g2_gap_supplement" and not _truthy(row.get("source_fresh")) and str(row.get("source_quality") or "").startswith("ledger_fallback"):
+            reasons.append("G2补位源非当日新鲜重建")
+        selected_count = int(selected_count_by_date.get(entry_date, 0) or 0)
+        if selected_count >= 2:
+            reasons.append("当日2槽已占满")
+        elif selected_count == 1:
+            reasons.append("当日已有更高优先级票入选")
+        return _candidate_block_reason_with_zh("；".join(reasons)) or "未进入当日正式买入样本，需复核路由排序、容量或风控状态。"
+
+    candidates["bought_in_replay"] = candidates.apply(is_bought, axis=1)
+    if "qualified_shadow_buy" not in candidates.columns:
+        candidates["qualified_shadow_buy"] = candidates["bought_in_replay"]
+    candidates["replay_decision"] = candidates["bought_in_replay"].map(lambda value: "bought" if value else "not_bought")
+    candidates["block_reason"] = candidates.apply(archive_block_reason, axis=1)
+    if "source_type" not in candidates.columns:
+        candidates["source_type"] = "state_router_daily_archive"
+    else:
+        candidates["source_type"] = candidates["source_type"].fillna("state_router_daily_archive")
+
+    if route and route != "all" and "route" in candidates.columns:
+        candidates = candidates[candidates["route"].astype(str).eq(route)]
+    if not candidates.empty:
+        candidates = candidates[_historical_window_mask(candidates, window)]
+        score_col = "score" if "score" in candidates.columns else None
+        sort_cols = ["entry_date"] + ([score_col] if score_col else [])
+        candidates = candidates.sort_values(sort_cols, ascending=[False] * len(sort_cols), kind="mergesort")
+
+    slim_columns = [
+        "entry_date",
+        "decision_date",
+        "code",
+        "name",
+        "route",
+        "route_label",
+        "trade_strategy",
+        "trade_strategy_label",
+        "score",
+        "wave_style_score",
+        "sector_diffusion_score",
+        "index_mom60",
+        "m30_confirmed",
+        "m30_status",
+        "m30_close_above_ma20",
+        "confirm_datetime",
+        "confirm_rule",
+        "reference_close",
+        "entry_price",
+        "candidate_key",
+        "source_type",
+        "router_eligible",
+        "qualified_shadow_buy",
+        "replay_decision",
+        "bought_in_replay",
+        "shadow_status",
+        "block_reason",
+        "archive_entry_date",
+    ]
+    available = [col for col in slim_columns if col in candidates.columns]
+    page_df = candidates.head(limit)[available].astype(object).where(pd.notna(candidates.head(limit)[available]), None)
+    rows = json.loads(page_df.to_json(orient="records", force_ascii=False)) if not page_df.empty else []
+    bought_count = int(candidates["bought_in_replay"].sum()) if "bought_in_replay" in candidates.columns else 0
+    return {
+        "rows": rows,
+        "summary": {
+            "source": "state_router_daily_archive",
+            "archive_day_count": len(archive_sources),
+            "candidate_count": int(len(candidates)),
+            "bought_count": bought_count,
+            "blocked_count": int(len(candidates) - bought_count),
+            "excluded_by_current_contract": excluded_by_current_contract,
+            "current_contract_filter": "full_g3_only" if latest_full_g3_only else "",
+            "note": "优先使用 state-router 每日全源候选归档；若当天尚未迁入 daily_archive，则读取最新报告快照。未买原因来自当日路由输出或按槽位/准入状态补充。",
+        },
+        "artifacts": {
+            "state_router_daily_archive": _path_status(STATE_ROUTER_DAILY_ARCHIVE_DIR),
+            "state_router_latest_report": _path_status(STATE_ROUTER_REPORT_DIR),
+        },
+    }
+
+
+def _candidate_block_reason_with_zh(reason: Any) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+    labels = {
+        "panic_wait_intraday_confirm_or_no_intraday_data": "恐慌修复等待盘中确认或缺少分钟确认数据",
+        "no_router_eligible_source_candidates": "没有通过路由准入的来源候选",
+        "mainwave_index_mom60_over_5pct": "机构主升指数60日动量超过5%，按当前合同阻断",
+        "institutional_mainwave_cooldown_active": "机构主升连续亏损动态冷却中",
+        "m30_not_confirmed": "30m确认未通过",
+        "same_sector_guard": "板块暴露规则阻断",
+        "duplicate_code_guard": "同一股票重复候选阻断",
+        "g2_gap_supplement_source_not_fresh": "G2补位来源不是当日新鲜数据",
+        "source_not_fresh": "来源数据不新鲜",
+        "route_not_selected": "当日未被路由选中",
+        "account_risk_pause_new_buy": "账户风控暂停新买入",
+    }
+    if "（" in text:
+        return text
+    if text in labels:
+        return f"{text}（{labels[text]}）"
+    for key, label in labels.items():
+        if key in text:
+            return text.replace(key, f"{key}（{label}）")
+    return text
+
+
+def _historical_candidate_replay_rows(
+    historical_df: pd.DataFrame,
+    limit: int,
+    route: str | None,
+    window: str | None,
+) -> dict[str, Any]:
+    archived = _archived_router_candidate_replay_rows(limit, route, window)
+    if archived.get("rows"):
+        return archived
+
+    source = _read_csv_df(SCORE120_ENTRY_SOURCE_SIGNALS_PATH)
+    if source.empty:
+        return {
+            "rows": [],
+            "summary": {
+                "source": "score120_entry_timing_source_signals",
+                "candidate_count": 0,
+                "bought_count": 0,
+                "blocked_count": 0,
+                "note": "未找到 Score120 源信号候选归档。",
+            },
+            "artifacts": {
+                "score120_source_signals": _path_status(SCORE120_ENTRY_SOURCE_SIGNALS_PATH),
+            },
+        }
+
+    candidates = source.copy()
+    if "entry_date" in candidates.columns:
+        candidates["entry_date"] = pd.to_datetime(candidates["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "trade_date" in candidates.columns and "decision_date" not in candidates.columns:
+        candidates["decision_date"] = pd.to_datetime(candidates["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "code" in candidates.columns:
+        candidates["code"] = candidates["code"].astype(str)
+    if "stock_name" in candidates.columns and "name" not in candidates.columns:
+        candidates["name"] = candidates["stock_name"]
+
+    candidates["route"] = "institutional_mainwave"
+    candidates["route_label"] = "机构主升浪"
+    candidates["trade_strategy"] = "institutional_score120_mainwave"
+    candidates["trade_strategy_label"] = "机构主升Score120"
+    candidates["source_type"] = "historical_score120_source_signal"
+    candidates["confirm_rule"] = "score>=120 + sector_diffusion>=65 + 30m MA20 + index_mom60<=5%"
+    candidates["score"] = pd.to_numeric(candidates.get("wave_style_score"), errors="coerce")
+    candidates["score_source"] = "wave_style_score"
+    candidates["score_scale"] = "mainwave_0_140"
+    candidates["m30_confirmed"] = candidates.get("m30_ok", False)
+    candidates["m30_status"] = candidates.get("m30_ok", False).map(lambda value: "ok" if _truthy(value) else "blocked") if "m30_ok" in candidates.columns else "unknown"
+    candidates["reference_close"] = pd.to_numeric(candidates.get("signal_close"), errors="coerce")
+    candidates["candidate_key"] = candidates.apply(
+        lambda row: f"score120_source|{row.get('entry_date') or ''}|{row.get('code') or ''}",
+        axis=1,
+    )
+
+    selected_keys: set[tuple[str, str]] = set()
+    selected_count_by_date: dict[str, int] = {}
+    selected_frames: list[pd.DataFrame] = []
+    if not historical_df.empty and {"entry_date", "code"}.issubset(historical_df.columns):
+        selected_frames.append(historical_df)
+    score120_selected = _read_csv_df(SCORE120_CORE_TRADES_PATH)
+    if not score120_selected.empty and {"entry_date", "code"}.issubset(score120_selected.columns):
+        selected_frames.append(score120_selected)
+    if selected_frames:
+        selected = pd.concat(selected_frames, ignore_index=True, sort=False)
+        selected["entry_date"] = pd.to_datetime(selected["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        selected["code"] = selected["code"].astype(str)
+        selected_keys = set(zip(selected["entry_date"], selected["code"]))
+        selected_count_by_date = selected.groupby("entry_date")["code"].count().to_dict()
+
+    def gate_block_reason(row: pd.Series) -> str:
+        entry_date = str(row.get("entry_date") or "")
+        code = str(row.get("code") or "")
+        if (entry_date, code) in selected_keys:
+            return "已进入正式路由成交样本。"
+        diffusion = _to_float_or_none(row.get("sector_diffusion_score"))
+        index_mom60 = _to_float_or_none(row.get("index_mom60"))
+        m30_ok = _truthy(row.get("m30_ok"))
+        m30_ma20 = _to_float_or_none(row.get("m30_close_above_ma20"))
+        reasons: list[str] = []
+        if diffusion is not None and diffusion < 65:
+            reasons.append(f"板块扩散 {diffusion:.1f} < 65")
+        if index_mom60 is not None and index_mom60 > 0.05:
+            reasons.append(f"指数60日动量 {index_mom60 * 100:.1f}% > 5%")
+        if not m30_ok or (m30_ma20 is not None and m30_ma20 < 0):
+            reasons.append("30m 未确认站上 MA20")
+        if reasons:
+            return "；".join(reasons)
+        selected_count = int(selected_count_by_date.get(entry_date, 0) or 0)
+        if selected_count >= 2:
+            return "当日 2 槽已占满，源信号未进入正式路由成交。"
+        if selected_count == 1:
+            return "当日已有更高优先级票入选，源信号未进入正式路由成交。"
+        return "源信号通过基础门槛，但未进入正式路由成交样本；需复核动态冷却、持仓容量或历史路由口径。"
+
+    candidates["bought_in_replay"] = candidates.apply(
+        lambda row: (str(row.get("entry_date") or ""), str(row.get("code") or "")) in selected_keys,
+        axis=1,
+    )
+    candidates["router_eligible"] = candidates["bought_in_replay"]
+    candidates["qualified_shadow_buy"] = candidates["bought_in_replay"]
+    candidates["replay_decision"] = candidates["bought_in_replay"].map(lambda value: "bought" if value else "not_bought")
+    candidates["block_reason"] = candidates.apply(lambda row: _candidate_block_reason_with_zh(gate_block_reason(row)), axis=1)
+    candidates["shadow_status"] = candidates["replay_decision"].map(
+        {"bought": "historical_replay_bought", "not_bought": "historical_replay_not_bought"}
+    )
+
+    if route and route != "all":
+        candidates = candidates[candidates["route"].astype(str).eq(route)]
+    if not candidates.empty:
+        candidates = candidates[_historical_window_mask(candidates, window)]
+        candidates = candidates.sort_values(["entry_date", "score"], ascending=[False, False], kind="mergesort")
+
+    slim_columns = [
+        "entry_date",
+        "decision_date",
+        "code",
+        "name",
+        "route",
+        "route_label",
+        "trade_strategy",
+        "trade_strategy_label",
+        "score",
+        "wave_style_score",
+        "sector_diffusion_score",
+        "index_mom60",
+        "m30_confirmed",
+        "m30_status",
+        "m30_close_above_ma20",
+        "confirm_rule",
+        "reference_close",
+        "candidate_key",
+        "source_type",
+        "router_eligible",
+        "qualified_shadow_buy",
+        "replay_decision",
+        "bought_in_replay",
+        "shadow_status",
+        "block_reason",
+        "net_ret",
+        "policy_exit_date",
+        "hold_days",
+    ]
+    available = [col for col in slim_columns if col in candidates.columns]
+    page_df = candidates.head(limit)[available].astype(object).where(pd.notna(candidates.head(limit)[available]), None)
+    rows = json.loads(page_df.to_json(orient="records", force_ascii=False)) if not page_df.empty else []
+    bought_count = int(candidates["bought_in_replay"].sum()) if "bought_in_replay" in candidates.columns else 0
+    return {
+        "rows": rows,
+        "summary": {
+            "source": "score120_entry_timing_source_signals",
+            "candidate_count": int(len(candidates)),
+            "bought_count": bought_count,
+            "blocked_count": int(len(candidates) - bought_count),
+            "note": "当前历史候选复盘先覆盖 Score120 买点审计源信号；该样本与正式路由成交底稿并非完全同源，未进入成交样本的原因按可确认硬门槛与口径差异保守标注。",
+        },
+        "artifacts": {
+            "score120_source_signals": _path_status(SCORE120_ENTRY_SOURCE_SIGNALS_PATH),
+        },
     }
 
 
@@ -4609,11 +6548,11 @@ def _fill_natural_policy_shadow_fallback(df: pd.DataFrame) -> pd.DataFrame:
         route = str(row.get("route") or "")
         context_tag = _natural_context_tag_for_row(row)
         if strategy == "volume_runup_supplement" or route == "g2_gap_supplement":
-            out.at[idx, "natural_action"] = "allow_reduced"
-            out.at[idx, "natural_action_label"] = "允许但降仓"
-            out.at[idx, "natural_position_pct"] = 0.25
+            out.at[idx, "natural_action"] = "skip"
+            out.at[idx, "natural_action_label"] = "跳过"
+            out.at[idx, "natural_position_pct"] = 0.0
             out.at[idx, "natural_rule_hits"] = "N3"
-            out.at[idx, "natural_reason"] = "运行时兜底：G2 空档补位按补位角色半槽观察"
+            out.at[idx, "natural_reason"] = "G2 空档补位已因历史回放负贡献退出实盘交易；仅保留观察和历史归因"
         else:
             out.at[idx, "natural_action"] = "allow"
             out.at[idx, "natural_action_label"] = "允许"
@@ -4736,7 +6675,34 @@ def _read_realtime_readiness_review() -> dict[str, Any]:
         "formal_launch_action_queue": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "formal_launch_action_queue.csv"),
         "pretrade_review_evidence": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "pretrade_review_evidence.csv"),
         "paper_watch_followup": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "paper_watch_followup.csv"),
+        "candidate_omission_review_ledger": list(_load_candidate_omission_reviews().values()),
         "premarket_execution_playbook": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "premarket_execution_playbook.csv"),
+        "first_live_decision_card": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "first_live_decision_card.csv"),
+        "live_review_task_queue": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_review_task_queue.csv"),
+        "review_coverage_dashboard": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "review_coverage_dashboard.csv"),
+        "live_review_evidence_rubric": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_review_evidence_rubric.csv"),
+        "live_premarket_command_sheet": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_premarket_command_sheet.csv"),
+        "live_admission_snapshot": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_admission_snapshot.csv"),
+        "live_blocker_resolution_plan": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_blocker_resolution_plan.csv"),
+        "live_blocker_evidence_ledger": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_blocker_evidence_ledger.csv"),
+        "live_premarket_action_sequence": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_premarket_action_sequence.csv"),
+        "live_premarket_execution_recheck": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_premarket_execution_recheck.csv"),
+        "live_premarket_action_attempts": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_premarket_action_attempts.csv"),
+        "premarket_action_attempt_ledger": _load_premarket_action_attempts(),
+        "live_manual_launch_acceptance": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_manual_launch_acceptance.csv"),
+        "live_day1_review_journal": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_day1_review_journal.csv"),
+        "daily_live_review_board": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "daily_live_review_board.csv"),
+        "strategy_learning_backlog": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "strategy_learning_backlog.csv"),
+        "live_hidden_risk_watchlist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_hidden_risk_watchlist.csv"),
+        "live_daily_review_execution_checklist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_daily_review_execution_checklist.csv"),
+        "live_daily_review_action_layers": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "live_daily_review_action_layers.csv"),
+        "daily_review_checklist_reviews": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "daily_review_checklist_reviews.csv"),
+        "daily_review_checklist_review_ledger": list(_load_daily_review_checklist_reviews().values()),
+        "formal_action_reviews": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "formal_action_reviews.csv"),
+        "formal_action_review_ledger": list(_load_formal_action_reviews().values()),
+        "no_trade_day_review": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "no_trade_day_review.csv"),
+        "day1_paper_review_pack": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "day1_paper_review_pack.csv"),
+        "day1_after_close_review_queue": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "day1_after_close_review_queue.csv"),
         "next_trade_ticket_review": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "next_trade_ticket_review.csv"),
         "ticket_review_checklist": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "ticket_review_checklist.csv"),
         "holding_exit_review": _read_csv_records(REALTIME_READINESS_REVIEW_DIR / "holding_exit_review.csv"),
@@ -4761,7 +6727,54 @@ def _read_realtime_readiness_review() -> dict[str, Any]:
             "formal_launch_action_queue": _path_status(REALTIME_READINESS_REVIEW_DIR / "formal_launch_action_queue.csv"),
             "pretrade_review_evidence": _path_status(REALTIME_READINESS_REVIEW_DIR / "pretrade_review_evidence.csv"),
             "paper_watch_followup": _path_status(REALTIME_READINESS_REVIEW_DIR / "paper_watch_followup.csv"),
+            "candidate_omission_reviews": _path_status(CANDIDATE_OMISSION_REVIEWS_PATH),
             "premarket_execution_playbook": _path_status(REALTIME_READINESS_REVIEW_DIR / "premarket_execution_playbook.csv"),
+            "first_live_decision_card": _path_status(REALTIME_READINESS_REVIEW_DIR / "first_live_decision_card.csv"),
+            "first_live_decision_card_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "FIRST_LIVE_DECISION_CARD_CN.md"),
+            "live_review_task_queue": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_review_task_queue.csv"),
+            "live_review_task_queue_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_REVIEW_TASK_QUEUE_CN.md"),
+            "review_coverage_dashboard": _path_status(REALTIME_READINESS_REVIEW_DIR / "review_coverage_dashboard.csv"),
+            "review_coverage_dashboard_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "REVIEW_COVERAGE_DASHBOARD_CN.md"),
+            "live_review_evidence_rubric": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_review_evidence_rubric.csv"),
+            "live_review_evidence_rubric_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_REVIEW_EVIDENCE_RUBRIC_CN.md"),
+            "live_premarket_command_sheet": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_premarket_command_sheet.csv"),
+            "live_premarket_command_sheet_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_PREMARKET_COMMAND_SHEET_CN.md"),
+            "live_admission_snapshot": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_admission_snapshot.csv"),
+            "live_admission_snapshot_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_ADMISSION_SNAPSHOT_CN.md"),
+            "live_blocker_resolution_plan": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_blocker_resolution_plan.csv"),
+            "live_blocker_resolution_plan_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_BLOCKER_RESOLUTION_PLAN_CN.md"),
+            "live_blocker_evidence_ledger": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_blocker_evidence_ledger.csv"),
+            "live_blocker_evidence_ledger_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_BLOCKER_EVIDENCE_LEDGER_CN.md"),
+            "live_premarket_action_sequence": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_premarket_action_sequence.csv"),
+            "live_premarket_action_sequence_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_PREMARKET_ACTION_SEQUENCE_CN.md"),
+            "live_premarket_execution_recheck": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_premarket_execution_recheck.csv"),
+            "live_premarket_execution_recheck_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_PREMARKET_EXECUTION_RECHECK_CN.md"),
+            "live_premarket_action_attempts": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_premarket_action_attempts.csv"),
+            "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+            "live_manual_launch_acceptance": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_manual_launch_acceptance.csv"),
+            "live_manual_launch_acceptance_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_MANUAL_LAUNCH_ACCEPTANCE_CN.md"),
+            "live_day1_review_journal": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_day1_review_journal.csv"),
+            "live_day1_review_journal_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_DAY1_REVIEW_JOURNAL_CN.md"),
+            "daily_live_review_board": _path_status(REALTIME_READINESS_REVIEW_DIR / "daily_live_review_board.csv"),
+            "daily_live_review_board_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "DAILY_LIVE_REVIEW_BOARD_CN.md"),
+            "strategy_learning_backlog": _path_status(REALTIME_READINESS_REVIEW_DIR / "strategy_learning_backlog.csv"),
+            "strategy_learning_backlog_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "STRATEGY_LEARNING_BACKLOG_CN.md"),
+            "live_hidden_risk_watchlist": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_hidden_risk_watchlist.csv"),
+            "live_hidden_risk_watchlist_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_HIDDEN_RISK_WATCHLIST_CN.md"),
+            "live_daily_review_execution_checklist": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_daily_review_execution_checklist.csv"),
+            "live_daily_review_execution_checklist_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "LIVE_DAILY_REVIEW_EXECUTION_CHECKLIST_CN.md"),
+            "live_daily_review_action_layers": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_daily_review_action_layers.csv"),
+            "daily_review_checklist_reviews_report": _path_status(REALTIME_READINESS_REVIEW_DIR / "daily_review_checklist_reviews.csv"),
+            "daily_review_checklist_reviews": _path_status(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH),
+            "formal_action_reviews_report": _path_status(REALTIME_READINESS_REVIEW_DIR / "formal_action_reviews.csv"),
+            "formal_action_reviews": _path_status(FORMAL_ACTION_REVIEWS_PATH),
+            "no_trade_day_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "no_trade_day_review.csv"),
+            "no_trade_day_review_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "NO_TRADE_DAY_REVIEW_CN.md"),
+            "no_trade_day_reviews": _path_status(NO_TRADE_DAY_REVIEWS_PATH),
+            "day1_paper_review_pack": _path_status(REALTIME_READINESS_REVIEW_DIR / "day1_paper_review_pack.csv"),
+            "day1_paper_review_pack_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "DAY1_PAPER_REVIEW_PACK_CN.md"),
+            "day1_after_close_review_queue": _path_status(REALTIME_READINESS_REVIEW_DIR / "day1_after_close_review_queue.csv"),
+            "day1_after_close_review_queue_brief": _path_status(REALTIME_READINESS_REVIEW_DIR / "DAY1_AFTER_CLOSE_REVIEW_QUEUE_CN.md"),
             "next_trade_ticket_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "next_trade_ticket_review.csv"),
             "ticket_review_checklist": _path_status(REALTIME_READINESS_REVIEW_DIR / "ticket_review_checklist.csv"),
             "holding_exit_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "holding_exit_review.csv"),
@@ -5605,8 +7618,9 @@ def _default_contract() -> dict[str, Any]:
             "position_framework": "2_slots_compound_default",
             "slots": 2,
             "slot_pct": 0.50,
-            "trade_strategy_framework": "5_consolidated_trade_strategies",
-            "trade_strategy_count": 5,
+            "trade_strategy_framework": "4_live_strategies_plus_g2_observation",
+            "trade_strategy_count": 4,
+            "observation_strategy_count": 1,
             "institutional_mainwave_position_pct": 0.50,
             "panic_repair_position_pct": 0.50,
             "old_g3_route_position_pct": 0.50,
@@ -5614,8 +7628,10 @@ def _default_contract() -> dict[str, Any]:
             "final_profile": FINAL_G3_PROFILE,
             "final_profile_name": FINAL_G3_PROFILE_NAME,
             "legacy_base_profile": FINAL_G3_LEGACY_BASE_PROFILE,
-            "g2_gap_supplement_position_pct": 0.50,
-            "g2_gap_supplement_role": "fill unused G3 slots only; does not replace panic_repair or institutional_mainwave primary routes",
+            "g2_gap_supplement_position_pct": 0.0,
+            "g2_gap_supplement_role": "retired from live trading; observation and historical attribution only",
+            "g2_gap_supplement_live_enabled": False,
+            "g2_gap_supplement_retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON,
             "same_sector_policy": "allow same sector only when both selected candidates are institutional_mainwave; otherwise skip duplicated sector exposure",
         },
         "trade_strategy_policy": [
@@ -5626,7 +7642,7 @@ def _default_contract() -> dict[str, Any]:
                 "source_strategies": ["机构主升浪Score120核心"],
                 "trading_assumption": "机构主线扩散和 Score120 强确认后的主升延续。",
                 "default_position_pct": 0.50,
-                "risk_note": "允许主线/板块共振；index_mom60 5%-10% 仅作热度观察，>10% 才禁止新开。",
+                "risk_note": "允许主线/板块共振；institutional_mainwave 必须满足 index_mom60<=5%，>5% 只观察不进入影子盘/买入候选。",
             },
             {
                 "trade_strategy": "old_g3_strong_breakout",
@@ -5642,9 +7658,11 @@ def _default_contract() -> dict[str, Any]:
                 "label_cn": "量能续强补位",
                 "source_routes": ["g2_gap_supplement"],
                 "source_strategies": ["G2量能续强+板块加分", "G2量能续强"],
-                "trading_assumption": "量能延续候选只补空槽，不替代 G3 主路由。",
-                "default_position_pct": 0.50,
-                "risk_note": "保留补位身份；无板块加分样本需谨慎观察。",
+                "trading_assumption": "已退出实盘交易；仅保留源新鲜度、候选质量和历史归因观察。",
+                "default_position_pct": 0.0,
+                "live_enabled": False,
+                "retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON,
+                "risk_note": "历史回放显示负贡献且未改善组合回撤；不再进入影子票据、纸面交易或正式买入候选。",
             },
             {
                 "trade_strategy": "range_weak_repair",
@@ -5689,9 +7707,11 @@ def _default_contract() -> dict[str, Any]:
                 "action": "sell_remaining",
             },
             "cooldown": {
-                "trigger": "hard_stop_30m_count>=2",
-                "lookback_trading_days": 20,
-                "cooldown_trading_days": 3,
+                "policy": "institutional_mainwave_consecutive_loss_dynamic_recovery",
+                "trigger": "consecutive_closed_institutional_mainwave_loss_count>=2",
+                "min_cooldown_trading_days": 3,
+                "release_condition": "index_mom60<=5% and (index_close>=index_ma20 or index_mom20>=0) and a current institutional_mainwave candidate still passes sector diffusion plus 30m confirmation",
+                "max_recheck_trading_days": 15,
                 "scope": "institutional_mainwave_new_buys",
             },
             "risk_limits": {
@@ -5700,7 +7720,7 @@ def _default_contract() -> dict[str, Any]:
                 "max_consecutive_realized_loss_pct": 0.20,
                 "mtm_drawdown_reduce_risk_pct": 0.15,
                 "mtm_drawdown_pause_new_buy_pct": 0.18,
-                "hard_stop_cooldown_trigger": "last_20_closed_shadow_trades_hard_stop_count>=2",
+                "institutional_mainwave_cooldown_trigger": "consecutive_closed_institutional_mainwave_loss_count>=2",
             },
         },
         "contract_modes": [
@@ -5722,7 +7742,7 @@ def _default_contract() -> dict[str, Any]:
                 "mode": "institutional_mainwave",
                 "label_cn": "机构主升",
                 "status": "shadow_current",
-                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m_confirmed; index_mom60 5%-10% is observation only, >10% blocks new open",
+                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m_confirmed && index_mom60<=5% && mainwave_dynamic_cooldown_active=false; >5% observation only, no shadow/buy ticket",
                 "route_health_observation": "最近 240 天已退出 institutional_mainwave 样本健康度只记录观察，不阻断买入",
             },
             {
@@ -5800,7 +7820,9 @@ def _split_table_row(line: str) -> list[str]:
 
 
 def _parse_broker_number(value: Any) -> float | None:
-    text = str(value or "").replace(",", "").strip()
+    if value is None:
+        return None
+    text = str(value).replace(",", "").strip()
     if not text:
         return None
     match = re.search(r"-?\d+(?:\.\d+)?", text)
@@ -6185,6 +8207,81 @@ def _exit_advice_for_position(
     }
 
 
+def _attach_latest_market_prices(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+    codes = sorted({
+        str(row.get("code") or row.get("code_raw") or "").strip().upper()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("code") or row.get("code_raw") or "").strip()
+    })
+    codes = [code for code in codes if re.fullmatch(r"[0-9A-Z.]+", code)]
+    if not codes:
+        return rows
+    quoted_codes = ", ".join(f"'{code}'" for code in codes)
+    try:
+        from utils.market_warehouse import clickhouse_query_df
+
+        prices = clickhouse_query_df(
+            f"""
+            SELECT k.code, k.trade_date, k.close
+            FROM kline_daily AS k
+            INNER JOIN (
+                SELECT code, max(trade_date) AS max_date
+                FROM kline_daily
+                WHERE code IN ({quoted_codes})
+                GROUP BY code
+            ) AS latest
+                ON k.code = latest.code AND k.trade_date = latest.max_date
+            """
+        )
+    except Exception:
+        logger.exception("Failed to attach latest market prices for shadow ledger rows.")
+        return rows
+    if prices.empty:
+        return rows
+    price_by_code: dict[str, dict[str, Any]] = {}
+    for item in prices.to_dict(orient="records"):
+        code = str(item.get("code") or "").strip().upper()
+        close = _as_float(item.get("close"), None)
+        if not code or close is None or close <= 0:
+            continue
+        price_by_code[code] = {
+            "latest_price": close,
+            "latest_price_date": _date_text(item.get("trade_date")),
+            "latest_price_source": "clickhouse:kline_daily",
+        }
+    if not price_by_code:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        code = str(row.get("code") or row.get("code_raw") or "").strip().upper()
+        latest = price_by_code.get(code)
+        if not latest:
+            out.append(row)
+            continue
+        item = dict(row)
+        current_price = _as_float(item.get("current_price"), None)
+        latest_price = _as_float(item.get("latest_price"), None)
+        last_price = _as_float(item.get("last_price"), None)
+        close = _as_float(item.get("close"), None)
+        if current_price is None or current_price <= 0:
+            item["current_price"] = latest["latest_price"]
+        if latest_price is None or latest_price <= 0:
+            item["latest_price"] = latest["latest_price"]
+        if last_price is None or last_price <= 0:
+            item["last_price"] = latest["latest_price"]
+        if close is None or close <= 0:
+            item["close"] = latest["latest_price"]
+        item["latest_price_date"] = latest["latest_price_date"]
+        item["latest_price_source"] = latest["latest_price_source"]
+        out.append(item)
+    return out
+
+
 def _attach_exit_advice(
     rows: list[dict[str, Any]],
     *,
@@ -6192,6 +8289,8 @@ def _attach_exit_advice(
     updated_at: Any = None,
     broker_trades: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    if source == "shadow_ledger":
+        rows = _attach_latest_market_prices(rows)
     out: list[dict[str, Any]] = []
     for row in rows or []:
         if not isinstance(row, dict):
@@ -6242,6 +8341,783 @@ def _broker_snapshot() -> dict[str, Any]:
     }
 
 
+def _broker_holdings_sync_preflight() -> dict[str, Any]:
+    gateway_url = str(os.environ.get("AISTOCK_TDX_GATEWAY_URL") or "").strip().rstrip("/")
+    sync_state = _load_broker_sync_state()
+    broker = _broker_snapshot()
+    updated_at = broker.get("updated_at")
+    staleness = _staleness_minutes(updated_at)
+    holdings = broker.get("holdings") if isinstance(broker.get("holdings"), list) else []
+    capital = broker.get("capital") if isinstance(broker.get("capital"), dict) else {}
+    review = _read_or_run_realtime_readiness_review(refresh=False)
+    command = _current_premarket_action_card(review)
+    current_action_group = _clean_review_text(command.get("action_group"))
+    is_current_action = current_action_group == "sync_broker_holding_price"
+    needs_confirmation = bool(command.get("requires_confirmation") or current_action_group == "sync_broker_holding_price")
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not gateway_url:
+        blockers.append("missing_gateway_url")
+    if current_action_group and not is_current_action:
+        blockers.append("current_action_not_broker_sync")
+    if not current_action_group:
+        warnings.append("no_current_premarket_action")
+    if staleness is None:
+        warnings.append("no_cached_broker_holding_snapshot")
+    elif staleness > 30:
+        warnings.append("cached_broker_holding_snapshot_stale")
+    if bool(capital.get("holdings_stale")):
+        warnings.append("capital_holdings_value_mismatch")
+
+    can_prompt_manual_sync = bool(gateway_url) and (is_current_action or not current_action_group)
+    return {
+        "ok": True,
+        "mode": "g3_state_alpha_broker_holdings_sync_preflight",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "preflight_status": "ready_for_manual_confirmation" if can_prompt_manual_sync and not blockers else "blocked_or_watch",
+        "can_prompt_manual_sync": can_prompt_manual_sync,
+        "requires_confirmation": needs_confirmation,
+        "gateway_configured": bool(gateway_url),
+        "gateway_url_hint": gateway_url[:24] + "..." if len(gateway_url) > 24 else gateway_url,
+        "current_action_group": current_action_group,
+        "current_action_label": command.get("action_label") or command.get("next_action"),
+        "current_action_matches_sync": is_current_action,
+        "holdings_count": len(holdings),
+        "broker_updated_at": updated_at,
+        "broker_staleness_minutes": round(staleness, 2) if staleness is not None else None,
+        "capital": {
+            "total_capital": capital.get("total_capital"),
+            "available_cash": capital.get("available_cash"),
+            "market_value": capital.get("market_value"),
+            "holdings_stale": bool(capital.get("holdings_stale")),
+        },
+        "sync_config": {
+            "enabled": bool(sync_state.get("enabled")),
+            "sync_holdings": bool(sync_state.get("sync_holdings")),
+            "sync_trades": bool(sync_state.get("sync_trades")),
+            "scheduled_time": f"{int(sync_state.get('hour') or 17):02d}:{int(sync_state.get('minute') or 30):02d}",
+            "last_success_at": sync_state.get("last_success_at"),
+            "last_holdings_success_at": sync_state.get("last_holdings_success_at"),
+            "last_error": sync_state.get("last_error"),
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_manual_action": (
+            "确认后执行同步真实持仓/价格并复审；同步失败则保持禁止真实买入并记录卡点。"
+            if can_prompt_manual_sync
+            else "先处理当前盘前动作或补齐网关配置，再进入真实持仓同步。"
+        ),
+        "execution_boundary": "预检只读取本地配置、缓存和当前盘前动作；不读取同花顺、不写 attempts、不写快照、不打开下单。",
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "broker_state": _path_status(BROKER_STATE_PATH),
+            "broker_sync_state": _path_status(BROKER_SYNC_STATE_PATH),
+        },
+    }
+
+
+def _broker_holdings_sync_confirmation_packet() -> dict[str, Any]:
+    preflight = _broker_holdings_sync_preflight()
+    review = _read_or_run_realtime_readiness_review(refresh=False)
+    command = _current_premarket_action_card(review)
+    current_action = command.get("current_action") if isinstance(command.get("current_action"), dict) else {}
+    action_group = _clean_review_text(command.get("action_group"))
+    action_label = _clean_review_text(command.get("action_label") or command.get("next_action"))
+    blockers = preflight.get("blockers") if isinstance(preflight.get("blockers"), list) else []
+    warnings = preflight.get("warnings") if isinstance(preflight.get("warnings"), list) else []
+    safe_to_prompt = bool(preflight.get("can_prompt_manual_sync")) and not blockers and action_group == "sync_broker_holding_price"
+    action_fingerprint = {
+        "entry_date": _clean_review_text(command.get("entry_date")),
+        "action_group": action_group,
+        "action_label": action_label,
+        "primary_blocking_key": _clean_review_text(current_action.get("primary_blocking_key")),
+        "object": _clean_review_text(current_action.get("object")),
+        "completion_check": _clean_review_text(current_action.get("completion_check")),
+    }
+    confirmation_items = [
+        "current action is sync_broker_holding_price",
+        "gateway URL is configured",
+        "broker holding cache is stale or needs refresh",
+        "sync failure keeps live buy locked",
+        "after sync, rerun readiness review before any manual live review",
+    ]
+    return {
+        "ok": True,
+        "mode": "g3_broker_holdings_sync_confirmation_packet",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "packet_status": "ready_for_manual_confirmation" if safe_to_prompt else "not_ready_for_confirmation",
+        "safe_to_prompt": safe_to_prompt,
+        "requires_confirmation": True,
+        "action_fingerprint": action_fingerprint,
+        "confirmation_items": confirmation_items,
+        "expected_request": {
+            "endpoint": "POST /api/gen3-state-alpha/premarket-control/execute-next",
+            "body": {
+                "action_group": action_group,
+                "confirm": True,
+                "source": "g3_manual_broker_sync_confirmation",
+            },
+        },
+        "direct_sync_request": {
+            "endpoint": "POST /api/gen3-state-alpha/broker/holdings/sync-ths-and-review",
+            "body": {
+                "confirm": True,
+                "source": "g3_manual_broker_sync_confirmation",
+            },
+        },
+        "preflight": preflight,
+        "blockers": blockers,
+        "warnings": warnings,
+        "expected_effect": _clean_review_text(
+            current_action.get("expected_effect"),
+            "broker holdings and prices refreshed, then readiness review rerun",
+        ),
+        "completion_check": _clean_review_text(
+            current_action.get("completion_check"),
+            "related holding/price blockers disappear after readiness review",
+        ),
+        "stop_if_fail": _clean_review_text(
+            current_action.get("stop_if_fail"),
+            "keep live buy locked and record the sync failure evidence",
+        ),
+        "natural_trade_boundary": _clean_review_text(
+            current_action.get("natural_trade_boundary"),
+            "clear execution evidence first; do not change strategy rules from stale account data",
+        ),
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "broker_state": _path_status(BROKER_STATE_PATH),
+            "broker_sync_state": _path_status(BROKER_SYNC_STATE_PATH),
+            "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+        },
+    }
+
+
+def _broker_holdings_sync_outcome_verifier() -> dict[str, Any]:
+    attempts = _load_premarket_action_attempts()
+    broker = _broker_snapshot()
+    preflight = _broker_holdings_sync_preflight()
+    blocker_board = _build_live_blocker_evidence_board(refresh=False)
+    readiness_audit = _build_live_launch_readiness_audit(refresh=False)
+    sync_attempts = [
+        row
+        for row in attempts
+        if isinstance(row, dict) and _clean_review_text(row.get("action_group")) == "sync_broker_holding_price"
+    ]
+    latest_attempt = sync_attempts[-1] if sync_attempts else {}
+    latest_attempt = latest_attempt if isinstance(latest_attempt, dict) else {}
+    board_summary = blocker_board.get("summary") if isinstance(blocker_board.get("summary"), dict) else {}
+    audit_summary = readiness_audit.get("summary") if isinstance(readiness_audit.get("summary"), dict) else {}
+    audit_payload = readiness_audit.get("audit") if isinstance(readiness_audit.get("audit"), dict) else {}
+    staleness = _staleness_minutes(broker.get("updated_at"))
+    broker_fresh = staleness is not None and staleness <= 30
+    blocking_count = _to_int_or_zero(audit_summary.get("blocking_command_count"))
+    pending_evidence_count = _to_int_or_zero(audit_summary.get("pending_evidence_count"))
+
+    if not latest_attempt:
+        outcome_status = "pending_manual_sync"
+        outcome_label = "waiting_for_first_sync_attempt"
+        next_action = "confirm and run broker holding/price sync, then rerun readiness review"
+    elif not bool(latest_attempt.get("ok")):
+        outcome_status = "sync_attempt_failed"
+        outcome_label = "sync_or_review_failed_keep_blocked"
+        next_action = latest_attempt.get("sync_message") or "fix sync failure, then retry manual sync"
+    elif blocking_count > 0 or pending_evidence_count > 0 or not broker_fresh:
+        outcome_status = "synced_but_still_blocked"
+        outcome_label = "sync_completed_but_evidence_not_clear"
+        next_action = board_summary.get("next_action") or audit_payload.get("next_action") or "continue blocker evidence review"
+    else:
+        outcome_status = "ready_for_manual_review"
+        outcome_label = "sync_cleared_hard_gaps_manual_review_only"
+        next_action = "enter manual live review; auto order remains locked"
+
+    return {
+        "ok": True,
+        "mode": "g3_broker_holdings_sync_outcome_verifier",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "outcome": {
+            "outcome_status": outcome_status,
+            "outcome_label": outcome_label,
+            "can_enter_live_manual_review": outcome_status == "ready_for_manual_review",
+            "can_buy": False,
+            "next_action": next_action,
+            "natural_trade_boundary": "verify account facts before changing buy point, sell point, selection, or model switch rules",
+        },
+        "latest_sync_attempt": latest_attempt,
+        "sync_attempt_count": len(sync_attempts),
+        "broker": {
+            "updated_at": broker.get("updated_at"),
+            "staleness_minutes": round(staleness, 2) if staleness is not None else None,
+            "is_fresh": broker_fresh,
+            "holdings_count": len(broker.get("holdings") if isinstance(broker.get("holdings"), list) else []),
+        },
+        "preflight": {
+            "preflight_status": preflight.get("preflight_status"),
+            "warnings": preflight.get("warnings"),
+            "blockers": preflight.get("blockers"),
+        },
+        "blocker_summary": board_summary,
+        "audit_summary": audit_summary,
+        "remaining_blockers": blocker_board.get("rows") if isinstance(blocker_board.get("rows"), list) else [],
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "broker_state": _path_status(BROKER_STATE_PATH),
+            "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+            "live_blocker_evidence_ledger": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_blocker_evidence_ledger.csv"),
+        },
+    }
+
+
+def _build_broker_post_sync_acceptance_packet(refresh: bool = False) -> dict[str, Any]:
+    if refresh:
+        _read_or_run_realtime_readiness_review(refresh=True)
+    outcome = _broker_holdings_sync_outcome_verifier()
+    outcome_payload = outcome.get("outcome") if isinstance(outcome.get("outcome"), dict) else {}
+    broker = outcome.get("broker") if isinstance(outcome.get("broker"), dict) else {}
+    latest_attempt = outcome.get("latest_sync_attempt") if isinstance(outcome.get("latest_sync_attempt"), dict) else {}
+    completion = _build_g3_strategy_tuning_current_step_completion_packet(refresh=False)
+    completion_packet = completion.get("packet") if isinstance(completion.get("packet"), dict) else {}
+    current_step = completion_packet.get("current_step") if isinstance(completion_packet.get("current_step"), dict) else {}
+    completion_gaps = completion_packet.get("gaps") if isinstance(completion_packet.get("gaps"), list) else []
+    readiness_audit = _build_live_launch_readiness_audit(refresh=False)
+    readiness_payload = readiness_audit.get("audit") if isinstance(readiness_audit.get("audit"), dict) else {}
+    readiness_summary = readiness_audit.get("summary") if isinstance(readiness_audit.get("summary"), dict) else {}
+
+    broker_fresh = bool(broker.get("is_fresh"))
+    sync_attempt_count = _to_int_or_zero(outcome.get("sync_attempt_count"))
+    latest_attempt_ok = bool(latest_attempt.get("ok")) if latest_attempt else False
+    readiness_blocked = _clean_review_text(readiness_payload.get("audit_status")) == "blocked"
+
+    acceptance_gaps: list[dict[str, Any]] = []
+    if sync_attempt_count <= 0:
+        acceptance_gaps.append(
+            {
+                "gap": "no_confirmed_sync_attempt",
+                "next_action": "run the manual broker holding/price sync confirmation first",
+                "trade_impact": "hold_manual_live_review",
+            }
+        )
+    elif not latest_attempt_ok:
+        acceptance_gaps.append(
+            {
+                "gap": "latest_sync_attempt_failed",
+                "next_action": latest_attempt.get("sync_message") or latest_attempt.get("error") or "fix sync failure and retry",
+                "trade_impact": "hold_manual_live_review",
+            }
+        )
+    if not broker_fresh:
+        acceptance_gaps.append(
+            {
+                "gap": "broker_snapshot_still_stale",
+                "next_action": "refresh real holdings/prices until broker staleness is within 30 minutes",
+                "trade_impact": "hold_manual_live_review",
+            }
+        )
+    if readiness_blocked:
+        acceptance_gaps.append(
+            {
+                "gap": "readiness_audit_still_blocked",
+                "next_action": readiness_payload.get("next_action") or "rerun readiness audit and clear hard blockers",
+                "trade_impact": "hold_manual_live_review",
+            }
+        )
+    for gap in completion_gaps:
+        if isinstance(gap, dict):
+            acceptance_gaps.append(
+                {
+                    "gap": _clean_review_text(gap.get("gap"), "current_step_gap"),
+                    "next_action": gap.get("next_action") or "complete current replay step evidence",
+                    "trade_impact": gap.get("trade_impact") or "hold_replay_progress",
+                }
+            )
+
+    can_record_execution_evidence = (
+        bool(completion_packet.get("can_mark_step_done"))
+        and sync_attempt_count > 0
+        and latest_attempt_ok
+        and broker_fresh
+        and not readiness_blocked
+    )
+    if can_record_execution_evidence:
+        acceptance_status = "ready_to_record_execution_evidence"
+        next_action = "record current execution evidence as validated, then rerun tuning completion audit"
+    elif sync_attempt_count <= 0:
+        acceptance_status = "pending_manual_sync"
+        next_action = "confirm and run manual broker holding/price sync"
+    elif not latest_attempt_ok:
+        acceptance_status = "sync_failed"
+        next_action = latest_attempt.get("sync_message") or "fix latest sync failure and retry"
+    else:
+        acceptance_status = "post_sync_still_blocked"
+        next_action = acceptance_gaps[0].get("next_action") if acceptance_gaps else "continue readiness review"
+
+    suggested_review_payload = {}
+    if can_record_execution_evidence and current_step:
+        suggested_review_payload = {
+            "task_key": current_step.get("task_key"),
+            "axis": current_step.get("axis"),
+            "axis_label": current_step.get("axis_label"),
+            "origin": current_step.get("origin"),
+            "object": current_step.get("object"),
+            "problem_signal": current_step.get("problem_signal"),
+            "source_status": current_step.get("source_status"),
+            "review_result": "validated",
+            "evidence": current_step.get("evidence"),
+            "completion_evidence": current_step.get("evidence_required"),
+            "review_note": "post-sync acceptance: broker snapshot fresh, confirmed sync attempt exists, readiness blockers cleared",
+            "optimization_suggestion": current_step.get("suggested_learning"),
+            "next_action": "rerun tuning completion audit after recording this evidence",
+            "optimization_boundary": "execution evidence only; no buy signal, no auto order, no strategy contract change",
+            "can_execute_trade": False,
+            "can_change_strategy_contract": False,
+            "profit_only_optimization_allowed": False,
+        }
+
+    return {
+        "ok": True,
+        "mode": "g3_broker_post_sync_acceptance_packet",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "acceptance": {
+            "acceptance_status": acceptance_status,
+            "can_record_execution_evidence": can_record_execution_evidence,
+            "manual_live_review_allowed": False,
+            "can_buy": False,
+            "next_action": next_action,
+            "natural_trade_boundary": "Post-sync acceptance only validates execution facts; it does not optimize for profit, change the contract, or unlock order paths.",
+        },
+        "gaps": acceptance_gaps,
+        "suggested_review_payload": suggested_review_payload,
+        "outcome": outcome_payload,
+        "broker": broker,
+        "latest_sync_attempt": latest_attempt,
+        "sync_attempt_count": sync_attempt_count,
+        "current_step_completion": completion_packet,
+        "readiness_audit": {
+            "audit_status": readiness_payload.get("audit_status"),
+            "primary_blocker": readiness_payload.get("primary_blocker"),
+            "next_action": readiness_payload.get("next_action"),
+        },
+        "readiness_summary": readiness_summary,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "broker_state": _path_status(BROKER_STATE_PATH),
+            "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+            "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+        },
+    }
+
+
+def _record_broker_post_sync_execution_evidence(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = payload if isinstance(payload, dict) else {}
+    refresh = _truthy(payload.get("refresh"))
+    acceptance_packet = _build_broker_post_sync_acceptance_packet(refresh=refresh)
+    acceptance = acceptance_packet.get("acceptance") if isinstance(acceptance_packet.get("acceptance"), dict) else {}
+    suggested = acceptance_packet.get("suggested_review_payload") if isinstance(acceptance_packet.get("suggested_review_payload"), dict) else {}
+    gaps = acceptance_packet.get("gaps") if isinstance(acceptance_packet.get("gaps"), list) else []
+    if not bool(acceptance.get("can_record_execution_evidence")) or not suggested.get("task_key"):
+        return {
+            "ok": False,
+            "mode": "g3_broker_post_sync_execution_evidence_record",
+            "error": "post_sync_acceptance_not_ready",
+            "acceptance": acceptance,
+            "gaps": gaps,
+            "review": None,
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+        }
+
+    review_payload = {
+        **suggested,
+        "review_result": "validated",
+        "review_note": _clean_review_text(
+            payload.get("review_note") or suggested.get("review_note"),
+            "post-sync acceptance: execution evidence validated",
+        ),
+        "source": _clean_review_text(payload.get("source"), "g3_post_sync_acceptance"),
+        "can_execute_trade": False,
+        "can_change_strategy_contract": False,
+        "profit_only_optimization_allowed": False,
+    }
+    result = _save_strategy_tuning_task_review(review_payload)
+    queue = _build_g3_strategy_tuning_review_queue(refresh=False) if result.get("ok") else {}
+    completion_audit = _build_g3_strategy_tuning_completion_audit(refresh=False) if result.get("ok") else {}
+    return {
+        "ok": bool(result.get("ok")),
+        "mode": "g3_broker_post_sync_execution_evidence_record",
+        "error": result.get("error"),
+        "acceptance": acceptance,
+        "gaps": gaps,
+        "review": result.get("review"),
+        "key": result.get("key"),
+        "queue_summary": queue.get("summary") if isinstance(queue.get("summary"), dict) else {},
+        "completion_summary": completion_audit.get("summary") if isinstance(completion_audit.get("summary"), dict) else {},
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+        },
+    }
+
+
+def _build_g3_live_action_console(refresh: bool = False) -> dict[str, Any]:
+    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    command = _current_premarket_action_card(review)
+    preflight = _broker_holdings_sync_preflight()
+    confirmation = _broker_holdings_sync_confirmation_packet()
+    outcome = _broker_holdings_sync_outcome_verifier()
+    outcome_payload = outcome.get("outcome") if isinstance(outcome.get("outcome"), dict) else {}
+    acceptance_packet = _build_broker_post_sync_acceptance_packet(refresh=False)
+    acceptance = acceptance_packet.get("acceptance") if isinstance(acceptance_packet.get("acceptance"), dict) else {}
+    completion = _build_g3_strategy_tuning_current_step_completion_packet(refresh=False)
+    completion_packet = completion.get("packet") if isinstance(completion.get("packet"), dict) else {}
+    tuning_audit = _build_g3_strategy_tuning_completion_audit(refresh=False)
+    tuning_audit_payload = tuning_audit.get("audit") if isinstance(tuning_audit.get("audit"), dict) else {}
+    readiness_audit = _build_live_launch_readiness_audit(refresh=False)
+    readiness_payload = readiness_audit.get("audit") if isinstance(readiness_audit.get("audit"), dict) else {}
+
+    def _step_status(ready: bool, done: bool, blocked: bool = False) -> str:
+        if done:
+            return "done"
+        if blocked:
+            return "blocked"
+        if ready:
+            return "ready"
+        return "locked"
+
+    sync_done = _clean_review_text(outcome_payload.get("outcome_status")) == "ready_for_manual_review"
+    sync_ready = bool(confirmation.get("safe_to_prompt"))
+    acceptance_ready = bool(acceptance.get("can_record_execution_evidence"))
+    completion_done = bool(completion_packet.get("can_mark_step_done"))
+    tuning_ready = _clean_review_text(tuning_audit_payload.get("audit_status")) == "ready_for_manual_review"
+    live_ready = _clean_review_text(readiness_payload.get("audit_status")) == "manual_review_ready"
+
+    steps = [
+        {
+            "step": 1,
+            "action_key": "sync_broker_holding_price",
+            "action_label": "sync broker holding/price",
+            "status": _step_status(sync_ready, sync_done, blocked=not sync_ready and bool(preflight.get("blockers"))),
+            "ui_action": "click sync and review",
+            "api_action": "POST /api/gen3-state-alpha/premarket-control/execute-next",
+            "required_before": "safe_to_prompt=true and action_group=sync_broker_holding_price",
+            "done_when": "sync outcome becomes ready_for_manual_review",
+            "current_evidence": f"preflight={preflight.get('preflight_status')}, outcome={outcome_payload.get('outcome_status')}",
+            "next_action": preflight.get("next_manual_action") or outcome_payload.get("next_action"),
+            "can_execute_now": sync_ready and not sync_done,
+            "trade_impact": "real buy locked until this clears",
+        },
+        {
+            "step": 2,
+            "action_key": "post_sync_acceptance",
+            "action_label": "verify post-sync acceptance",
+            "status": _step_status(acceptance_ready, acceptance_ready, blocked=not acceptance_ready),
+            "ui_action": "refresh post-sync acceptance",
+            "api_action": "GET /api/gen3-state-alpha/broker/holdings/post-sync-acceptance",
+            "required_before": "confirmed sync attempt and fresh broker snapshot",
+            "done_when": "can_record_execution_evidence=true",
+            "current_evidence": f"acceptance={acceptance.get('acceptance_status')}, gaps={len(acceptance_packet.get('gaps') if isinstance(acceptance_packet.get('gaps'), list) else [])}",
+            "next_action": acceptance.get("next_action"),
+            "can_execute_now": False,
+            "trade_impact": "observation only; no order path",
+        },
+        {
+            "step": 3,
+            "action_key": "record_execution_evidence",
+            "action_label": "record execution evidence",
+            "status": _step_status(acceptance_ready, completion_done, blocked=not acceptance_ready),
+            "ui_action": "record execution evidence",
+            "api_action": "POST /api/gen3-state-alpha/broker/holdings/post-sync-acceptance/record-execution-evidence",
+            "required_before": "post-sync acceptance ready",
+            "done_when": "current step completion can_mark_step_done=true or replay session advances",
+            "current_evidence": f"completion={completion_packet.get('completion_status')}",
+            "next_action": completion_packet.get("after_done_check"),
+            "can_execute_now": acceptance_ready and not completion_done,
+            "trade_impact": "writes review evidence only; no strategy contract change",
+        },
+        {
+            "step": 4,
+            "action_key": "rerun_tuning_completion",
+            "action_label": "rerun tuning completion audit",
+            "status": _step_status(completion_done, tuning_ready, blocked=not completion_done),
+            "ui_action": "refresh tuning audit",
+            "api_action": "GET /api/gen3-state-alpha/strategy-tuning-completion-audit?refresh=true",
+            "required_before": "execution evidence recorded",
+            "done_when": "tuning completion audit is ready_for_manual_review",
+            "current_evidence": f"tuning_audit={tuning_audit_payload.get('audit_status')}",
+            "next_action": tuning_audit_payload.get("next_action"),
+            "can_execute_now": completion_done and not tuning_ready,
+            "trade_impact": "review gate only",
+        },
+        {
+            "step": 5,
+            "action_key": "manual_live_review_gate",
+            "action_label": "enter manual live review gate",
+            "status": _step_status(tuning_ready, live_ready, blocked=not tuning_ready),
+            "ui_action": "rerun live readiness audit",
+            "api_action": "GET /api/gen3-state-alpha/live-launch-readiness-audit?refresh=true",
+            "required_before": "all tuning and readiness hard blockers cleared",
+            "done_when": "live readiness audit becomes manual_review_ready",
+            "current_evidence": f"readiness={readiness_payload.get('audit_status')}",
+            "next_action": readiness_payload.get("next_action"),
+            "can_execute_now": tuning_ready and not live_ready,
+            "trade_impact": "manual review only; auto order remains locked",
+        },
+    ]
+    current_step = next((row for row in steps if row.get("status") in {"ready", "blocked", "locked"}), steps[-1])
+    blocking_steps = [row for row in steps if row.get("status") in {"blocked", "locked"}]
+    ready_steps = [row for row in steps if row.get("status") == "ready"]
+    done_steps = [row for row in steps if row.get("status") == "done"]
+    return {
+        "ok": True,
+        "mode": "g3_live_action_console",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "console_status": "manual_review_ready" if live_ready else "blocked_or_in_progress",
+            "current_action_key": current_step.get("action_key"),
+            "current_action_label": current_step.get("action_label"),
+            "current_action_status": current_step.get("status"),
+            "ready_step_count": len(ready_steps),
+            "done_step_count": len(done_steps),
+            "blocking_step_count": len(blocking_steps),
+            "live_buy_allowed": False,
+            "manual_live_review_allowed": live_ready,
+            "auto_order_allowed": False,
+            "natural_trade_boundary": "Follow factual execution evidence first; do not tune buy/sell/selection/model switching from stale account data.",
+        },
+        "steps": steps,
+        "current_step": current_step,
+        "premarket_command": command,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+            "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+        },
+    }
+
+
+def _save_g3_live_action_console_step_review(payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload if isinstance(payload, dict) else {}
+    action_key = _clean_review_text(source.get("action_key"))
+    if not action_key:
+        return {"ok": False, "error": "missing action_key"}
+    result = _clean_review_text(source.get("review_result") or source.get("result"), "issue_found")
+    allowed_results = {"issue_found", "continue_watch", "data_gap", "evidence_pending", "defer_contract_review"}
+    if result not in allowed_results:
+        return {"ok": False, "error": f"unsupported review_result: {result}", "allowed_results": sorted(allowed_results)}
+
+    console = _build_g3_live_action_console(refresh=False)
+    steps = console.get("steps") if isinstance(console.get("steps"), list) else []
+    step = next((row for row in steps if isinstance(row, dict) and _clean_review_text(row.get("action_key")) == action_key), None)
+    if not step:
+        return {"ok": False, "error": f"unknown action_key: {action_key}", "allowed_action_keys": [row.get("action_key") for row in steps if isinstance(row, dict)]}
+
+    current_evidence = _clean_review_text(step.get("current_evidence"))
+    status = _clean_review_text(step.get("status"))
+    review_payload = {
+        "task_key": f"live_action_console|{action_key}",
+        "axis": "execution_evidence",
+        "axis_label": "execution evidence",
+        "origin": "live_action_console",
+        "object": _clean_review_text(step.get("action_label")) or action_key,
+        "problem_signal": _clean_review_text(source.get("problem_signal")) or f"{action_key} status={status}",
+        "source_status": status,
+        "review_result": result,
+        "evidence": current_evidence,
+        "completion_evidence": f"{current_evidence}; done_when={_clean_review_text(step.get('done_when'))}",
+        "review_note": _clean_review_text(source.get("review_note") or source.get("note")) or "recorded from live action console",
+        "hidden_risk": _clean_review_text(source.get("hidden_risk")) or _clean_review_text(step.get("trade_impact")),
+        "decision": _clean_review_text(source.get("decision")) or "keep live trading locked until factual evidence clears this step",
+        "optimization_suggestion": _clean_review_text(source.get("optimization_suggestion")) or "use this blocker as buy/sell/selection/model-switch replay evidence; do not optimize only for return",
+        "next_action": _clean_review_text(source.get("next_action")) or _clean_review_text(step.get("next_action")),
+        "optimization_boundary": "This review is evidence-only: no buy unlock, no auto order, no strategy contract change, no profit-only optimization.",
+    }
+    saved = _save_strategy_tuning_task_review(review_payload)
+    queue = _build_g3_strategy_tuning_review_queue(refresh=False) if saved.get("ok") else {}
+    completion = _build_g3_strategy_tuning_completion_audit(refresh=False) if saved.get("ok") else {}
+    return {
+        **saved,
+        "mode": "g3_live_action_console_step_review",
+        "action_key": action_key,
+        "step": step,
+        "console_summary": console.get("summary") if isinstance(console.get("summary"), dict) else {},
+        "queue_summary": queue.get("summary") if isinstance(queue.get("summary"), dict) else {},
+        "completion_summary": completion.get("summary") if isinstance(completion.get("summary"), dict) else {},
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+        },
+    }
+
+
+def _build_g3_live_replay_cockpit(refresh: bool = False) -> dict[str, Any]:
+    console = _build_g3_live_action_console(refresh=refresh)
+    queue = _build_g3_strategy_tuning_review_queue(refresh=False)
+    session = _build_g3_strategy_tuning_replay_session(refresh=False, limit=12)
+    completion = _build_g3_strategy_tuning_current_step_completion_packet(refresh=False)
+    acceptance = _build_broker_post_sync_acceptance_packet(refresh=False)
+
+    console_summary = console.get("summary") if isinstance(console.get("summary"), dict) else {}
+    queue_summary = queue.get("summary") if isinstance(queue.get("summary"), dict) else {}
+    session_payload = session.get("session") if isinstance(session.get("session"), dict) else {}
+    session_summary = session.get("summary") if isinstance(session.get("summary"), dict) else {}
+    completion_packet = completion.get("packet") if isinstance(completion.get("packet"), dict) else {}
+    acceptance_payload = acceptance.get("acceptance") if isinstance(acceptance.get("acceptance"), dict) else {}
+    current_action = console.get("current_step") if isinstance(console.get("current_step"), dict) else {}
+    current_review = session_payload.get("current_step") if isinstance(session_payload.get("current_step"), dict) else {}
+    task_rows = queue.get("task_rows") if isinstance(queue.get("task_rows"), list) else []
+    axis_rows = queue.get("axis_task_summary") if isinstance(queue.get("axis_task_summary"), list) else []
+
+    todo_tasks = [row for row in task_rows if isinstance(row, dict) and row.get("task_status") in {"todo", "followup"}]
+    watch_tasks = [row for row in task_rows if isinstance(row, dict) and row.get("task_status") == "watch"]
+    next_task = todo_tasks[0] if todo_tasks else (watch_tasks[0] if watch_tasks else {})
+    next_task = next_task if isinstance(next_task, dict) else {}
+
+    action_items: list[dict[str, Any]] = []
+    if current_action:
+        action_items.append(
+            {
+                "priority": 1,
+                "kind": "live_action",
+                "axis": "execution_evidence",
+                "object": current_action.get("action_label") or current_action.get("action_key"),
+                "status": current_action.get("status"),
+                "next_action": current_action.get("next_action") or current_action.get("ui_action"),
+                "evidence": current_action.get("current_evidence"),
+                "done_when": current_action.get("done_when"),
+                "trade_impact": current_action.get("trade_impact"),
+                "can_execute_now": bool(current_action.get("can_execute_now")),
+                "review_boundary": "Do not evaluate buy/sell/selection/model switching from stale broker evidence.",
+            }
+        )
+    if next_task:
+        action_items.append(
+            {
+                "priority": 2,
+                "kind": "strategy_replay_task",
+                "axis": next_task.get("axis"),
+                "object": next_task.get("object"),
+                "status": next_task.get("task_status"),
+                "next_action": next_task.get("next_action"),
+                "evidence": next_task.get("completion_evidence"),
+                "done_when": "Record a replay review result, then rerun completion audit.",
+                "trade_impact": "review only; no order path",
+                "can_execute_now": False,
+                "review_boundary": next_task.get("optimization_boundary"),
+                "task_key": next_task.get("task_key"),
+            }
+        )
+
+    action_items.append(
+        {
+            "priority": 3,
+            "kind": "completion_gate",
+            "axis": "natural_trade_consistency",
+            "object": "manual live review gate",
+            "status": completion_packet.get("completion_status"),
+            "next_action": completion_packet.get("after_done_check"),
+            "evidence": f"todo={queue_summary.get('todo_count')}, followup={queue_summary.get('followup_count')}, broker_acceptance={acceptance_payload.get('acceptance_status')}",
+            "done_when": "No hard tuning gap remains and post-sync acceptance is ready.",
+            "trade_impact": "manual live review only",
+            "can_execute_now": False,
+            "review_boundary": "Manual live review is allowed only after factual evidence and replay tasks are coherent.",
+        }
+    )
+
+    axis_progress: list[dict[str, Any]] = []
+    for row in axis_rows:
+        if not isinstance(row, dict):
+            continue
+        task_count = _to_int_or_zero(row.get("task_count"))
+        reviewed_count = _to_int_or_zero(row.get("reviewed_count"))
+        watch_count = _to_int_or_zero(row.get("watch_count"))
+        done_like = reviewed_count + watch_count
+        progress_pct = round((done_like / task_count) * 100, 1) if task_count else 100.0
+        axis_progress.append(
+            {
+                **row,
+                "progress_pct": progress_pct,
+                "next_review_object": next((task.get("object") for task in todo_tasks if isinstance(task, dict) and task.get("axis") == row.get("axis")), ""),
+                "review_boundary": row.get("optimization_boundary"),
+            }
+        )
+
+    natural_trade_checks = [
+        {
+            "check": "broker_evidence_first",
+            "status": "blocked" if not bool(acceptance_payload.get("can_record_execution_evidence")) else "ready",
+            "evidence": acceptance_payload.get("acceptance_status"),
+            "required_behavior": "Fresh real holding/price evidence must come before strategy tuning.",
+        },
+        {
+            "check": "profit_only_disabled",
+            "status": "pass" if queue_summary.get("profit_only_optimization_allowed") is False else "issue",
+            "evidence": queue_summary.get("profit_only_optimization_allowed"),
+            "required_behavior": "Do not tune only for historical return.",
+        },
+        {
+            "check": "contract_change_locked",
+            "status": "pass" if queue_summary.get("can_change_strategy_contract") is False else "issue",
+            "evidence": queue_summary.get("can_change_strategy_contract"),
+            "required_behavior": "Replay can produce evidence, not immediate contract changes.",
+        },
+        {
+            "check": "order_path_locked",
+            "status": "pass",
+            "evidence": False,
+            "required_behavior": "No auto order path while live launch review is incomplete.",
+        },
+    ]
+
+    return {
+        "ok": True,
+        "mode": "g3_live_replay_cockpit",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "cockpit_status": "manual_review_ready" if bool(console_summary.get("manual_live_review_allowed")) else "blocked_or_replay_in_progress",
+            "current_action_key": console_summary.get("current_action_key"),
+            "current_action_status": console_summary.get("current_action_status"),
+            "next_review_axis": next_task.get("axis"),
+            "next_review_object": next_task.get("object"),
+            "todo_count": queue_summary.get("todo_count"),
+            "followup_count": queue_summary.get("followup_count"),
+            "watch_count": queue_summary.get("watch_count"),
+            "progress_pct": session_summary.get("progress_pct"),
+            "broker_acceptance_status": acceptance_payload.get("acceptance_status"),
+            "can_execute_trade": False,
+            "can_change_strategy_contract": False,
+            "profit_only_optimization_allowed": False,
+            "natural_trade_boundary": "Evidence -> replay -> manual review. No buy unlock, no order path, no profit-only tuning.",
+        },
+        "action_items": action_items,
+        "axis_progress": axis_progress,
+        "natural_trade_checks": natural_trade_checks,
+        "current_action": current_action,
+        "current_review_task": current_review,
+        "completion_packet": completion_packet,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+            "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+        },
+    }
+
+
 @router.get("/contract")
 async def get_gen3_state_alpha_contract() -> dict[str, Any]:
     contract = _contract()
@@ -6270,8 +9146,7 @@ async def get_gen3_state_alpha_realtime_readiness_review() -> dict[str, Any]:
     )
 
 
-@router.post("/realtime-readiness-review/run")
-async def run_gen3_state_alpha_realtime_readiness_review() -> dict[str, Any]:
+def _run_realtime_readiness_review_once() -> dict[str, Any]:
     started = datetime.now()
     proc = subprocess.run(
         [sys.executable, str(REALTIME_READINESS_REVIEW_SCRIPT)],
@@ -6281,17 +9156,2135 @@ async def run_gen3_state_alpha_realtime_readiness_review() -> dict[str, Any]:
         timeout=180,
     )
     review = _read_realtime_readiness_review()
+    return {
+        "ok": proc.returncode == 0 and bool(review.get("summary")),
+        "mode": "g3_realtime_readiness_review_v1",
+        "run": {
+            "returncode": proc.returncode,
+            "duration_seconds": round((datetime.now() - started).total_seconds(), 1),
+            "stdout_tail": proc.stdout[-2000:],
+            "stderr_tail": proc.stderr[-2000:],
+        },
+        **review,
+    }
+
+
+def _read_live_launch_packet() -> dict[str, Any]:
+    return {
+        "packet": _read_json(LIVE_LAUNCH_PACKET_PATH),
+        "premarket_step_cards": _read_csv_records(LIVE_LAUNCH_PACKET_DIR / "premarket_step_cards.csv"),
+        "review_axis_matrix": _read_csv_records(LIVE_LAUNCH_PACKET_DIR / "review_axis_matrix.csv"),
+        "launch_day_playbook": _read_csv_records(LIVE_LAUNCH_PACKET_DIR / "launch_day_playbook.csv"),
+        "launch_day_learning_queue": _read_csv_records(LIVE_LAUNCH_PACKET_DIR / "launch_day_learning_queue.csv"),
+        "launch_day_playbook_reviews": list(_load_launch_day_playbook_reviews().values()),
+        "artifacts": {
+            "launch_packet": _path_status(LIVE_LAUNCH_PACKET_PATH),
+            "launch_packet_cn": _path_status(LIVE_LAUNCH_PACKET_DIR / "LAUNCH_PACKET_CN.md"),
+            "premarket_step_cards": _path_status(LIVE_LAUNCH_PACKET_DIR / "premarket_step_cards.csv"),
+            "review_axis_matrix": _path_status(LIVE_LAUNCH_PACKET_DIR / "review_axis_matrix.csv"),
+            "launch_day_playbook": _path_status(LIVE_LAUNCH_PACKET_DIR / "launch_day_playbook.csv"),
+            "launch_day_learning_queue": _path_status(LIVE_LAUNCH_PACKET_DIR / "launch_day_learning_queue.csv"),
+            "launch_day_playbook_reviews": _path_status(LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH),
+        },
+    }
+
+
+def _run_live_launch_packet_once() -> dict[str, Any]:
+    started = datetime.now()
+    proc = subprocess.run(
+        [sys.executable, str(LIVE_LAUNCH_PACKET_SCRIPT)],
+        cwd=str(PROJECT_ROOT),
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    packet = _read_live_launch_packet()
+    return {
+        "ok": proc.returncode == 0 and bool(packet.get("packet")),
+        "mode": "g3_live_launch_packet_v1",
+        "run": {
+            "returncode": proc.returncode,
+            "duration_seconds": round((datetime.now() - started).total_seconds(), 1),
+            "stdout_tail": proc.stdout[-2000:],
+            "stderr_tail": proc.stderr[-2000:],
+        },
+        **packet,
+    }
+
+
+def _learning_status_rank(status: str, risk_level: str = "") -> int:
+    status_text = _clean_review_text(status).lower()
+    risk_text = _clean_review_text(risk_level).lower()
+    if status_text in {"needs_review", "issue_found", "blocked"} or risk_text in {"high", "block", "danger"}:
+        return 0
+    if status_text in {"watch_more", "continue_watch", "pending_evidence"} or risk_text in {"medium", "watch", "warn"}:
+        return 1
+    if status_text in {"data_gap", "process_gap"}:
+        return 2
+    return 3
+
+
+def _normalize_live_learning_row(row: dict[str, Any], *, origin: str, priority: int) -> dict[str, Any]:
+    row = row if isinstance(row, dict) else {}
+    learning_status = _clean_review_text(
+        row.get("learning_status")
+        or row.get("watch_status")
+        or row.get("review_status")
+        or row.get("status"),
+        "pending_review",
+    )
+    risk_level = _clean_review_text(row.get("risk_level"))
+    if not risk_level:
+        risk_level = "high" if _learning_status_rank(learning_status) == 0 else "watch"
+    issue_area = _clean_review_text(row.get("issue_area") or row.get("review_axis"), "unknown")
+    evidence = _clean_review_text(row.get("evidence") or row.get("evidence_gap") or row.get("review_note"))
+    problem_signal = _clean_review_text(row.get("problem_signal") or row.get("risk_signal") or row.get("hidden_risk"))
+    suggested_learning = _clean_review_text(
+        row.get("suggested_learning")
+        or row.get("optimization_direction")
+        or row.get("next_review_action")
+        or row.get("required_action")
+    )
+    return {
+        "priority": priority,
+        "rank_key": _learning_status_rank(learning_status, risk_level),
+        "origin": origin,
+        "learning_status": learning_status,
+        "risk_level": risk_level,
+        "issue_area": issue_area,
+        "review_scope": _clean_review_text(row.get("review_scope") or row.get("action_type") or origin),
+        "object": _clean_review_text(row.get("object") or row.get("name") or row.get("code") or issue_area),
+        "code": _clean_review_text(row.get("code")),
+        "name": _clean_review_text(row.get("name")),
+        "entry_date": _clean_review_text(row.get("entry_date")),
+        "problem_signal": problem_signal,
+        "evidence": evidence,
+        "suggested_learning": suggested_learning,
+        "natural_trade_boundary": _clean_review_text(row.get("natural_trade_boundary")),
+        "source": _clean_review_text(row.get("source"), origin),
+        "review_key": _clean_review_text(row.get("review_key")),
+        "ticket_key": _clean_review_text(row.get("ticket_key")),
+        "updated_at": _clean_review_text(row.get("updated_at") or row.get("review_updated_at")),
+    }
+
+
+def _build_live_learning_ledger(refresh: bool = False) -> dict[str, Any]:
+    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    packet_result = _read_or_run_live_launch_packet(refresh=refresh)
+    rows: list[dict[str, Any]] = []
+    for origin, source_rows in (
+        ("launch_day_learning_queue", packet_result.get("launch_day_learning_queue")),
+        ("strategy_learning_backlog", review.get("strategy_learning_backlog")),
+        ("live_hidden_risk_watchlist", review.get("live_hidden_risk_watchlist")),
+    ):
+        if not isinstance(source_rows, list):
+            continue
+        for row in source_rows:
+            rows.append(_normalize_live_learning_row(row, origin=origin, priority=len(rows) + 1))
+
+    rows = sorted(rows, key=lambda item: (item.get("rank_key", 9), item.get("priority", 9999)))
+    for index, row in enumerate(rows, start=1):
+        row["priority"] = index
+        row.pop("rank_key", None)
+
+    counts_by_status = _count_status(rows, "learning_status")
+    counts_by_origin = _count_status(rows, "origin")
+    counts_by_issue_area = _count_status(rows, "issue_area")
+    return {
+        "ok": bool(review.get("summary")) or bool(packet_result.get("packet")),
+        "mode": "g3_live_learning_ledger",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "learning_item_count": len(rows),
+            "needs_review_count": sum(
+                1
+                for row in rows
+                if _learning_status_rank(row.get("learning_status"), row.get("risk_level")) == 0
+            ),
+            "watch_more_count": sum(
+                1
+                for row in rows
+                if _learning_status_rank(row.get("learning_status"), row.get("risk_level")) == 1
+            ),
+            "origin_counts": counts_by_origin,
+            "status_counts": counts_by_status,
+            "issue_area_counts": counts_by_issue_area,
+            "live_admission_status": (review.get("summary") or {}).get("live_admission_status") if isinstance(review.get("summary"), dict) else None,
+            "live_admission_buy_allowed": bool((review.get("summary") or {}).get("live_admission_buy_allowed")) if isinstance(review.get("summary"), dict) else False,
+        },
+        "learning_ledger": rows,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "strategy_learning_backlog": _path_status(REALTIME_READINESS_REVIEW_DIR / "strategy_learning_backlog.csv"),
+            "live_hidden_risk_watchlist": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_hidden_risk_watchlist.csv"),
+            "launch_day_learning_queue": _path_status(LIVE_LAUNCH_PACKET_DIR / "launch_day_learning_queue.csv"),
+        },
+    }
+
+
+def _build_live_launch_decision_card(refresh: bool = False) -> dict[str, Any]:
+    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    if refresh:
+        _read_or_run_live_launch_packet(refresh=True)
+    command = _current_premarket_action_card(review)
+    learning = _build_live_learning_ledger(refresh=False)
+    learning_rows = learning.get("learning_ledger") if isinstance(learning.get("learning_ledger"), list) else []
+    learning_summary = learning.get("summary") if isinstance(learning.get("summary"), dict) else {}
+    summary = review.get("summary") if isinstance(review.get("summary"), dict) else {}
+    blocking_count = _to_int_or_zero(summary.get("live_admission_blocking_command_count"))
+    pending_evidence_count = _to_int_or_zero(summary.get("live_blocker_pending_evidence_count"))
+    live_buy_allowed = bool(summary.get("live_admission_buy_allowed"))
+    formal_launch_ready = bool(summary.get("formal_launch_ready"))
+    manual_launch_ready = bool(summary.get("live_manual_launch_ready") or formal_launch_ready)
+    can_enter_manual_review = live_buy_allowed and blocking_count <= 0
+
+    if not live_buy_allowed or blocking_count > 0:
+        decision_status = "blocked"
+        decision_label = "不放行：先处理盘前阻断"
+        tone = "block"
+    elif not manual_launch_ready:
+        decision_status = "manual_review_ready"
+        decision_label = "仅可进入人工复核：等待启动验收闭环"
+        tone = "watch"
+    else:
+        decision_status = "ready_for_manual_live_review"
+        decision_label = "可进入人工实盘复核：仍不自动下单"
+        tone = "ready"
+
+    manual_acceptance_rows = review.get("live_manual_launch_acceptance")
+    if not isinstance(manual_acceptance_rows, list):
+        manual_acceptance_rows = []
+    required_actions = review.get("live_premarket_action_sequence")
+    if not isinstance(required_actions, list):
+        required_actions = []
+    top_learning_risks = [
+        row
+        for row in learning_rows
+        if _learning_status_rank(row.get("learning_status"), row.get("risk_level")) <= 1
+    ][:5]
+    current_action = command.get("current_action") if isinstance(command.get("current_action"), dict) else {}
+    primary_blocker = (
+        command.get("action_label")
+        or command.get("next_action")
+        or summary.get("live_premarket_next_action")
+        or current_action.get("action")
+        or ""
+    )
+
+    decision = {
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "decision_status": decision_status,
+        "decision_label": decision_label,
+        "risk_tone": tone,
+        "can_enter_live_manual_review": can_enter_manual_review,
+        "can_buy": False,
+        "live_admission_status": summary.get("live_admission_status"),
+        "live_admission_label": summary.get("live_admission_label"),
+        "live_admission_buy_allowed": live_buy_allowed,
+        "formal_launch_ready": formal_launch_ready,
+        "live_manual_launch_ready": manual_launch_ready,
+        "primary_blocker": primary_blocker,
+        "next_action": summary.get("live_premarket_next_action") or command.get("next_action"),
+        "blocking_command_count": blocking_count,
+        "pending_evidence_count": pending_evidence_count,
+        "live_learning_ledger_count": len(learning_rows),
+        "live_learning_needs_review_count": learning_summary.get("needs_review_count"),
+        "live_learning_watch_more_count": learning_summary.get("watch_more_count"),
+        "natural_trade_boundary": "先清执行证据，再判断交易逻辑；无票日不补票，不按单日收益倒推放宽规则。",
+        "execution_boundary": "决策卡只放行人工复核，不生成正式买点，不开启自动下单或订单路由。",
+    }
+    return {
+        "ok": bool(summary),
+        "mode": "g3_live_launch_decision_card",
+        "generated_at": decision["generated_at"],
+        "decision": decision,
+        "premarket_command": command,
+        "manual_acceptance_rows": manual_acceptance_rows[:8],
+        "required_actions": required_actions[:8],
+        "top_learning_risks": top_learning_risks,
+        "summary": {
+            "decision_status_counts": _count_status([decision], "decision_status"),
+            "learning_item_count": len(learning_rows),
+            "needs_review_count": learning_summary.get("needs_review_count"),
+            "watch_more_count": learning_summary.get("watch_more_count"),
+            "blocking_command_count": blocking_count,
+            "pending_evidence_count": pending_evidence_count,
+            "live_admission_status": summary.get("live_admission_status"),
+            "live_admission_buy_allowed": live_buy_allowed,
+        },
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "realtime_readiness_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "summary.json"),
+            "live_launch_packet": _path_status(LIVE_LAUNCH_PACKET_DIR / "launch_packet.json"),
+        },
+    }
+
+
+def _live_blocker_axis(resolution_type: str, review_scope: str) -> str:
+    resolution_type = _clean_review_text(resolution_type)
+    review_scope = _clean_review_text(review_scope)
+    if resolution_type in {"broker_holding_price_refresh", "rerun_readiness_audit", "manual_formal_action_review"}:
+        return "execution_evidence"
+    if resolution_type == "no_trade_context_review":
+        return "selection/model_switch"
+    if review_scope == "no_trade_day":
+        return "natural_trade_consistency"
+    return "execution_evidence"
+
+
+def _live_blocker_trade_impact(resolution_type: str, review_scope: str) -> str:
+    axis = _live_blocker_axis(resolution_type, review_scope)
+    if axis == "execution_evidence":
+        return "先补执行证据，不改买点、卖点、选股或策略切换参数。"
+    if axis == "selection/model_switch":
+        return "先区分自然空仓、误杀、数据缺口和流程缺口，再决定是否进入策略学习。"
+    return "只记录自然交易边界，不因无票日或单日收益压力放宽准入。"
+
+
+def _build_live_blocker_evidence_board(refresh: bool = False) -> dict[str, Any]:
+    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    summary = review.get("summary") if isinstance(review.get("summary"), dict) else {}
+    resolution_rows = review.get("live_blocker_resolution_plan")
+    evidence_rows = review.get("live_blocker_evidence_ledger")
+    sequence_rows = review.get("live_premarket_action_sequence")
+    command_rows = review.get("live_premarket_command_sheet")
+    attempts = review.get("premarket_action_attempt_ledger")
+    resolution_rows = resolution_rows if isinstance(resolution_rows, list) else []
+    evidence_rows = evidence_rows if isinstance(evidence_rows, list) else []
+    sequence_rows = sequence_rows if isinstance(sequence_rows, list) else []
+    command_rows = command_rows if isinstance(command_rows, list) else []
+    attempts = attempts if isinstance(attempts, list) else []
+
+    evidence_by_key: dict[str, dict[str, Any]] = {}
+    for row in evidence_rows:
+        if not isinstance(row, dict):
+            continue
+        for key_field in ("review_key", "blocking_key"):
+            key = _clean_review_text(row.get(key_field))
+            if key:
+                evidence_by_key[key] = row
+
+    command_by_key: dict[str, dict[str, Any]] = {}
+    for row in command_rows:
+        if not isinstance(row, dict):
+            continue
+        for key_field in ("ledger_key", "review_key"):
+            key = _clean_review_text(row.get(key_field))
+            if key:
+                command_by_key[key] = row
+
+    ready_sequence = next(
+        (row for row in sequence_rows if isinstance(row, dict) and _truthy(row.get("can_execute_now"))),
+        sequence_rows[0] if sequence_rows else {},
+    )
+    ready_sequence = ready_sequence if isinstance(ready_sequence, dict) else {}
+    ready_resolution_types = {
+        _clean_review_text(part)
+        for part in _clean_review_text(ready_sequence.get("resolution_types")).split("/")
+        if _clean_review_text(part)
+    }
+    if not ready_resolution_types and ready_sequence.get("resolution_types"):
+        ready_resolution_types = {_clean_review_text(ready_sequence.get("resolution_types"))}
+
+    board_rows: list[dict[str, Any]] = []
+    for index, row in enumerate(resolution_rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        blocking_key = _clean_review_text(row.get("blocking_key") or row.get("review_key"))
+        evidence = evidence_by_key.get(blocking_key, {})
+        command = command_by_key.get(blocking_key, {})
+        resolution_type = _clean_review_text(row.get("resolution_type") or evidence.get("resolution_type"))
+        review_scope = _clean_review_text(row.get("review_scope") or evidence.get("review_scope") or command.get("review_scope"))
+        evidence_status = _clean_review_text(evidence.get("evidence_status"), "pending_evidence")
+        can_execute_now = bool(
+            ready_sequence
+            and _truthy(ready_sequence.get("can_execute_now"))
+            and (
+                resolution_type in ready_resolution_types
+                or resolution_type == _clean_review_text(ready_sequence.get("resolution_types"))
+            )
+        )
+        axis = _live_blocker_axis(resolution_type, review_scope)
+        board_rows.append(
+            {
+                "priority": _to_int_or_zero(row.get("priority")) or index,
+                "blocking_key": blocking_key,
+                "review_key": _clean_review_text(evidence.get("review_key") or blocking_key),
+                "review_scope": review_scope,
+                "object": _clean_review_text(row.get("object") or evidence.get("object") or command.get("object")),
+                "entry_date": _clean_review_text(row.get("entry_date") or evidence.get("entry_date") or command.get("entry_date")),
+                "resolution_type": resolution_type,
+                "action": _clean_review_text(row.get("action") or evidence.get("action") or command.get("action")),
+                "evidence_status": evidence_status,
+                "review_result_label": _clean_review_text(evidence.get("review_result_label")),
+                "review_note": _clean_review_text(evidence.get("review_note")),
+                "can_execute_now": can_execute_now,
+                "requires_manual_confirmation": bool(_truthy(row.get("requires_manual_confirmation"))),
+                "recommended_ui_action": _clean_review_text(row.get("recommended_ui_action") or evidence.get("recommended_ui_action")),
+                "recommended_api_action": _clean_review_text(row.get("recommended_api_action")),
+                "evidence_required": _clean_review_text(row.get("evidence_required") or evidence.get("evidence_required") or command.get("evidence_required")),
+                "completion_check": _clean_review_text(row.get("completion_check") or evidence.get("completion_check") or command.get("post_action_check")),
+                "fallback": _clean_review_text(row.get("fallback") or command.get("fallback")),
+                "natural_trade_boundary": _clean_review_text(row.get("natural_trade_boundary") or evidence.get("natural_trade_boundary")),
+                "learning_axis": axis,
+                "trade_impact": _live_blocker_trade_impact(resolution_type, review_scope),
+                "current_action_group": _clean_review_text(ready_sequence.get("action_group")),
+                "current_action_label": _clean_review_text(ready_sequence.get("action_label")),
+            }
+        )
+
+    board_rows = sorted(board_rows, key=lambda item: item.get("priority", 9999))
+    pending_rows = [row for row in board_rows if row.get("evidence_status") == "pending_evidence"]
+    executable_rows = [row for row in board_rows if _truthy(row.get("can_execute_now"))]
+    last_attempt = attempts[-1] if attempts and isinstance(attempts[-1], dict) else {}
+    next_row = executable_rows[0] if executable_rows else (pending_rows[0] if pending_rows else (board_rows[0] if board_rows else {}))
+    return {
+        "ok": bool(summary) or bool(board_rows),
+        "mode": "g3_live_blocker_evidence_board",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "blocker_count": len(board_rows),
+            "pending_evidence_count": len(pending_rows),
+            "executable_count": len(executable_rows),
+            "validated_count": sum(1 for row in board_rows if row.get("evidence_status") == "validated"),
+            "issue_found_count": sum(1 for row in board_rows if row.get("evidence_status") == "issue_found"),
+            "next_action": next_row.get("recommended_ui_action") or next_row.get("action") if isinstance(next_row, dict) else "",
+            "next_resolution_type": next_row.get("resolution_type") if isinstance(next_row, dict) else "",
+            "live_admission_status": summary.get("live_admission_status"),
+            "live_admission_buy_allowed": bool(summary.get("live_admission_buy_allowed")),
+            "last_attempt_at": last_attempt.get("attempted_at"),
+            "last_attempt_ok": last_attempt.get("ok"),
+        },
+        "rows": board_rows,
+        "next_blocker": next_row,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "live_blocker_resolution_plan": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_blocker_resolution_plan.csv"),
+            "live_blocker_evidence_ledger": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_blocker_evidence_ledger.csv"),
+            "live_premarket_action_sequence": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_premarket_action_sequence.csv"),
+        },
+    }
+
+
+G3_STRATEGY_TUNING_AXES = [
+    {
+        "axis": "buy_point",
+        "axis_label": "Buy point",
+        "recommended_review": "Review signal freshness, confirmation chain, and whether the entry follows the original setup instead of chasing a single-day result.",
+        "optimization_boundary": "Do not loosen buy gates only because missed trades later rose.",
+    },
+    {
+        "axis": "sell_point",
+        "axis_label": "Sell point",
+        "recommended_review": "Review stop, partial profit, previous-low protection, and whether exits match holding evidence.",
+        "optimization_boundary": "Do not move exits only to improve historical profit if risk behavior becomes inconsistent.",
+    },
+    {
+        "axis": "selection",
+        "axis_label": "Selection",
+        "recommended_review": "Review candidate omission, same-theme exposure, route role, and whether the selected stock is the natural representative.",
+        "optimization_boundary": "Do not add factors only because they fit one historical window.",
+    },
+    {
+        "axis": "model_switch",
+        "axis_label": "Model switch",
+        "recommended_review": "Review route switching, no-trade days, G2 gap supplement role, and whether strategy transitions are smooth.",
+        "optimization_boundary": "Do not switch models just to chase the best hindsight route.",
+    },
+    {
+        "axis": "execution_evidence",
+        "axis_label": "Execution evidence",
+        "recommended_review": "Refresh real holdings, prices, blocker evidence, and premarket command state before changing trading logic.",
+        "optimization_boundary": "Execution evidence must be cleared before any strategy rule adjustment.",
+    },
+    {
+        "axis": "natural_trade_consistency",
+        "axis_label": "Natural trade consistency",
+        "recommended_review": "Review whether no-trade, paper-watch, buy, sell, and hold decisions feel coherent and reproducible.",
+        "optimization_boundary": "Do not optimize for profit if the resulting behavior is unnatural, hard to execute, or hard to explain.",
+    },
+]
+
+
+def _g3_strategy_tuning_axis(*parts: Any) -> str:
+    text = " ".join(_clean_review_text(part) for part in parts if part is not None).lower()
+    keyword_groups = [
+        ("buy_point", ["buy", "entry", "pretrade", "\u4e70\u70b9", "\u4e70\u5165", "\u5165\u573a", "\u9010\u7968"]),
+        ("sell_point", ["sell", "exit", "stop", "holding_exit", "risk_exit", "\u5356\u70b9", "\u9000\u51fa", "\u6b62\u635f", "\u6b62\u76c8", "\u6301\u4ed3"]),
+        ("selection", ["selection", "candidate", "omission", "stock", "theme", "sector", "\u9009\u80a1", "\u5019\u9009", "\u9057\u6f0f", "\u4e3b\u7ebf", "\u677f\u5757"]),
+        ("model_switch", ["model_switch", "switch", "route", "g2", "gap", "no_trade", "\u7b56\u7565\u5207\u6362", "\u8def\u7ebf", "\u8865\u4f4d", "\u65e0\u7968"]),
+        ("execution_evidence", ["execution", "broker", "holding", "price", "evidence", "sync", "preflight", "\u6267\u884c", "\u8bc1\u636e", "\u6301\u4ed3", "\u4ef7\u683c", "\u540c\u82b1\u987a"]),
+        ("natural_trade_consistency", ["natural", "consistency", "paper_watch", "manual", "\u81ea\u7136", "\u4e00\u81f4", "\u7eb8\u9762", "\u4eba\u5de5"]),
+    ]
+    for axis, keywords in keyword_groups:
+        if any(keyword in text for keyword in keywords):
+            return axis
+    return "execution_evidence"
+
+
+def _g3_strategy_tuning_axis_meta(axis: str) -> dict[str, Any]:
+    return next((item for item in G3_STRATEGY_TUNING_AXES if item["axis"] == axis), G3_STRATEGY_TUNING_AXES[-1])
+
+
+def _build_g3_strategy_tuning_axis_board(refresh: bool = False) -> dict[str, Any]:
+    learning = _build_live_learning_ledger(refresh=refresh)
+    blocker_board = _build_live_blocker_evidence_board(refresh=False)
+    decision_result = _build_live_launch_decision_card(refresh=False)
+    learning_rows = learning.get("learning_ledger") if isinstance(learning.get("learning_ledger"), list) else []
+    blocker_rows = blocker_board.get("rows") if isinstance(blocker_board.get("rows"), list) else []
+    learning_summary = learning.get("summary") if isinstance(learning.get("summary"), dict) else {}
+    decision = decision_result.get("decision") if isinstance(decision_result.get("decision"), dict) else {}
+
+    risk_rows: list[dict[str, Any]] = []
+    for row in learning_rows:
+        if not isinstance(row, dict):
+            continue
+        axis = _g3_strategy_tuning_axis(
+            row.get("issue_area"),
+            row.get("origin"),
+            row.get("object"),
+            row.get("problem_signal"),
+            row.get("suggested_learning"),
+            row.get("natural_trade_boundary"),
+        )
+        risk_rows.append(
+            {
+                "priority": _to_int_or_zero(row.get("priority")) or len(risk_rows) + 1,
+                "axis": axis,
+                "axis_label": _g3_strategy_tuning_axis_meta(axis).get("axis_label"),
+                "origin": _clean_review_text(row.get("origin")),
+                "learning_status": _clean_review_text(row.get("learning_status") or row.get("risk_level"), "watch_more"),
+                "issue_area": _clean_review_text(row.get("issue_area")),
+                "object": _clean_review_text(row.get("object")),
+                "problem_signal": _clean_review_text(row.get("problem_signal") or row.get("review_note")),
+                "evidence": _clean_review_text(row.get("evidence") or row.get("review_evidence") or row.get("evidence_required")),
+                "suggested_learning": _clean_review_text(row.get("suggested_learning") or row.get("learning_direction")),
+                "natural_trade_boundary": _clean_review_text(row.get("natural_trade_boundary")),
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            }
+        )
+
+    for row in blocker_rows:
+        if not isinstance(row, dict):
+            continue
+        axis = _g3_strategy_tuning_axis(
+            row.get("learning_axis"),
+            row.get("resolution_type"),
+            row.get("review_scope"),
+            row.get("object"),
+            row.get("action"),
+            row.get("trade_impact"),
+        )
+        risk_rows.append(
+            {
+                "priority": len(risk_rows) + 1,
+                "axis": axis,
+                "axis_label": _g3_strategy_tuning_axis_meta(axis).get("axis_label"),
+                "origin": "live_blocker_evidence_board",
+                "learning_status": _clean_review_text(row.get("evidence_status"), "pending_evidence"),
+                "issue_area": _clean_review_text(row.get("resolution_type") or row.get("learning_axis")),
+                "object": _clean_review_text(row.get("object") or row.get("blocking_key")),
+                "problem_signal": _clean_review_text(row.get("action") or row.get("review_note")),
+                "evidence": _clean_review_text(row.get("evidence_required") or row.get("completion_check")),
+                "suggested_learning": _clean_review_text(row.get("trade_impact")),
+                "natural_trade_boundary": _clean_review_text(row.get("natural_trade_boundary") or row.get("fallback")),
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            }
+        )
+
+    axis_rows: list[dict[str, Any]] = []
+    for meta in G3_STRATEGY_TUNING_AXES:
+        axis = meta["axis"]
+        rows = [row for row in risk_rows if row.get("axis") == axis]
+        needs_review_rows = [
+            row
+            for row in rows
+            if _learning_status_rank(row.get("learning_status"), row.get("learning_status")) == 0
+            or row.get("learning_status") in {"pending_evidence", "issue_found"}
+        ]
+        watch_rows = [
+            row
+            for row in rows
+            if row not in needs_review_rows and row.get("learning_status") in {"watch_more", "continue_watch", "pending_observation"}
+        ]
+        top_objects = []
+        for row in rows:
+            obj = _clean_review_text(row.get("object"))
+            if obj and obj not in top_objects:
+                top_objects.append(obj)
+            if len(top_objects) >= 3:
+                break
+        axis_rows.append(
+            {
+                "axis": axis,
+                "axis_label": meta["axis_label"],
+                "risk_count": len(rows),
+                "needs_review_count": len(needs_review_rows),
+                "watch_count": len(watch_rows),
+                "top_objects": " / ".join(top_objects),
+                "first_problem_signal": rows[0].get("problem_signal") if rows else "",
+                "recommended_review": meta["recommended_review"],
+                "optimization_boundary": meta["optimization_boundary"],
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            }
+        )
+
+    axis_counts = {row["axis"]: row["risk_count"] for row in axis_rows}
+    needs_review_count = sum(row.get("needs_review_count", 0) for row in axis_rows)
+    return {
+        "ok": bool(learning.get("ok")) or bool(blocker_board.get("ok")),
+        "mode": "g3_strategy_tuning_axis_board",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "risk_item_count": len(risk_rows),
+            "axis_counts": axis_counts,
+            "needs_review_count": needs_review_count,
+            "watch_count": sum(row.get("watch_count", 0) for row in axis_rows),
+            "profit_only_optimization_allowed": False,
+            "can_change_strategy_contract": False,
+            "live_admission_status": learning_summary.get("live_admission_status") or decision.get("live_admission_status"),
+            "live_admission_buy_allowed": False,
+            "primary_blocker": decision.get("primary_blocker"),
+            "next_action": decision.get("next_action"),
+        },
+        "axis_rows": axis_rows,
+        "risk_rows": risk_rows[:200],
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "live_learning_ledger": learning.get("artifacts", {}),
+            "live_blocker_evidence_board": blocker_board.get("artifacts", {}),
+        },
+    }
+
+
+def _g3_tuning_task_review_method(axis: str) -> str:
+    methods = {
+        "buy_point": "Replay the entry setup from signal date, 30m confirmation, market state, route role, and missed-trade evidence before changing any buy gate.",
+        "sell_point": "Replay current holding price freshness, stop/profit contract, previous-low protection, and whether exit evidence is newer than the last decision.",
+        "selection": "Replay candidate pool, omitted candidates, sector/theme exposure, and whether selected stocks are natural representatives of the route.",
+        "model_switch": "Replay route decision, no-trade reason, G2 gap supplement role, and whether switching logic is smooth rather than hindsight-driven.",
+        "execution_evidence": "Refresh factual evidence first: real holding, price, blocker ledger, and premarket command state. Do not touch strategy rules before evidence is current.",
+        "natural_trade_consistency": "Compare buy, sell, hold, no-trade, and paper-watch behavior for coherence, explainability, and repeatability.",
+    }
+    return methods.get(axis, methods["natural_trade_consistency"])
+
+
+def _g3_tuning_task_completion_evidence(axis: str) -> str:
+    evidence = {
+        "buy_point": "A replay note states whether the buy point was valid, late, missing confirmation, or intentionally blocked, with evidence timestamp.",
+        "sell_point": "A holding/exit note states whether sell logic stayed consistent after fresh price and position evidence.",
+        "selection": "A candidate omission note explains selected/omitted stocks and confirms whether selection logic needs a future contract review.",
+        "model_switch": "A route-switch note separates natural no-trade, data gap, execution blocker, and true model-switch weakness.",
+        "execution_evidence": "Broker/preflight/readiness evidence is fresh and the related blocker is validated or explicitly marked issue_found.",
+        "natural_trade_consistency": "A natural-trade note explains why the decision is coherent without optimizing only for historical profit.",
+    }
+    return evidence.get(axis, evidence["natural_trade_consistency"])
+
+
+def _g3_tuning_task_next_action(axis: str, status: str) -> str:
+    if axis == "execution_evidence":
+        return "Clear factual evidence first, then rerun readiness review."
+    if status in {"pending_evidence", "issue_found", "needs_review"}:
+        return "Open the source ledger row and write a replay note before changing any strategy contract."
+    return "Keep watching until a new live/paper sample updates the evidence."
+
+
+def _g3_tuning_task_replay_suggestion(row: dict[str, Any]) -> dict[str, Any]:
+    axis = _clean_review_text(row.get("axis"), "natural_trade_consistency")
+    status = _clean_review_text(row.get("source_status"), "watch_more")
+    origin = _clean_review_text(row.get("origin"))
+    problem = _clean_review_text(row.get("problem_signal"))
+    natural_boundary = _clean_review_text(row.get("natural_trade_boundary"))
+
+    if status in {"pending_evidence", "needs_review", "must_review"}:
+        suggested_result = "evidence_pending"
+    elif status == "issue_found":
+        suggested_result = "issue_found"
+    elif status in {"watch_more", "continue_watch", "pending_observation"}:
+        suggested_result = "continue_watch"
+    else:
+        suggested_result = "data_gap"
+
+    if axis == "execution_evidence":
+        suggested_result = "evidence_pending"
+        replay_focus = "先更新真实持仓、价格、阻断证据和盘前动作状态，再评价买卖点或选股逻辑。"
+        hidden_risk = "如果用过期账户/价格证据复盘，系统可能把执行缺口误判成策略缺口。"
+    elif axis == "sell_point":
+        replay_focus = "复核当前持仓、止损/止盈、前低保护和最新价格证据是否同一时间口径。"
+        hidden_risk = "卖点证据不新鲜时，继续优化买点会掩盖真实退出风险。"
+    elif axis == "buy_point":
+        replay_focus = "从信号日、30m确认、市场状态、路线角色和被拦截原因倒推买点是否自然。"
+        hidden_risk = "不能因为后验上涨就放宽买点；只记录是否存在可复现的漏买证据。"
+    elif axis == "selection":
+        replay_focus = "复核候选池、遗漏候选、板块/主线暴露和入选股票是否是路线的自然代表。"
+        hidden_risk = "选股优化如果只追历史强票，会破坏二槽暴露和补位角色一致性。"
+    elif axis == "model_switch":
+        replay_focus = "区分自然空仓、数据缺口、执行阻断和真实策略切换迟滞。"
+        hidden_risk = "不能把无票日或执行阻断误改成策略切换规则。"
+    else:
+        replay_focus = "检查买、卖、持有、空仓和观察动作是否在同一交易逻辑下自洽。"
+        hidden_risk = "如果解释只服务于收益曲线，就不应进入合同变更。"
+
+    evidence_required = _clean_review_text(row.get("completion_evidence"))
+    review_note = " / ".join(
+        part
+        for part in [
+            replay_focus,
+            f"source={origin}" if origin else "",
+            f"problem={problem}" if problem else "",
+        ]
+        if part
+    )
+    return {
+        "task_key": row.get("task_key"),
+        "axis": axis,
+        "axis_label": row.get("axis_label"),
+        "object": row.get("object"),
+        "problem_signal": problem,
+        "source_status": status,
+        "task_status": row.get("task_status"),
+        "suggested_review_result": suggested_result,
+        "suggested_review_result_label": _strategy_tuning_task_result_label(suggested_result),
+        "suggested_review_note": review_note,
+        "suggested_hidden_risk": hidden_risk,
+        "suggested_decision": "先完成证据复盘；当前建议不改变策略合同，不生成买点，不进入订单路径。",
+        "suggested_optimization": row.get("suggested_learning") or "Only consider a future contract review after repeated, timestamped replay evidence.",
+        "replay_focus": replay_focus,
+        "evidence_required": evidence_required,
+        "next_action": row.get("next_action"),
+        "optimization_boundary": row.get("optimization_boundary"),
+        "natural_trade_boundary": natural_boundary
+        or "不按单日收益倒推放宽规则；只在事实证据闭环后讨论策略合同。",
+        "can_apply_as_review": suggested_result in {"continue_watch", "evidence_pending", "data_gap", "issue_found"},
+        "can_execute_trade": False,
+        "can_change_strategy_contract": False,
+        "profit_only_optimization_allowed": False,
+    }
+
+
+def _build_g3_strategy_tuning_replay_suggestions(refresh: bool = False, limit: int = 50) -> dict[str, Any]:
+    queue = _build_g3_strategy_tuning_review_queue(refresh=refresh)
+    task_rows = queue.get("task_rows") if isinstance(queue.get("task_rows"), list) else []
+    summary = queue.get("summary") if isinstance(queue.get("summary"), dict) else {}
+
+    open_rows = [
+        row
+        for row in task_rows
+        if isinstance(row, dict) and row.get("task_status") in {"todo", "followup", "watch"}
+    ]
+    suggestions = [_g3_tuning_task_replay_suggestion(row) for row in open_rows[: max(1, min(limit, 200))]]
+    result_counts: dict[str, int] = {}
+    axis_counts: dict[str, int] = {}
+    for row in suggestions:
+        result = _clean_review_text(row.get("suggested_review_result"), "unknown")
+        axis = _clean_review_text(row.get("axis"), "unknown")
+        result_counts[result] = result_counts.get(result, 0) + 1
+        axis_counts[axis] = axis_counts.get(axis, 0) + 1
+
+    return {
+        "ok": bool(queue.get("ok")),
+        "mode": "g3_strategy_tuning_replay_suggestions",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "suggestion_count": len(suggestions),
+            "open_task_count": len(open_rows),
+            "queue_task_count": summary.get("task_count"),
+            "todo_count": summary.get("todo_count"),
+            "followup_count": summary.get("followup_count"),
+            "watch_count": summary.get("watch_count"),
+            "result_counts": result_counts,
+            "axis_counts": axis_counts,
+            "profit_only_optimization_allowed": False,
+            "can_change_strategy_contract": False,
+            "can_execute_trade": False,
+            "live_admission_status": summary.get("live_admission_status"),
+            "live_admission_buy_allowed": False,
+        },
+        "suggestions": suggestions,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": queue.get("artifacts") if isinstance(queue.get("artifacts"), dict) else {},
+    }
+
+
+def _g3_strategy_tuning_session_stage(axis: str) -> str:
+    stages = {
+        "execution_evidence": "01_fact_evidence",
+        "sell_point": "02_sell_point",
+        "buy_point": "03_buy_point",
+        "selection": "04_selection",
+        "model_switch": "05_model_switch",
+        "natural_trade_consistency": "06_natural_consistency",
+    }
+    return stages.get(axis, "06_natural_consistency")
+
+
+def _build_g3_strategy_tuning_replay_session(refresh: bool = False, limit: int = 12) -> dict[str, Any]:
+    completion = _build_g3_strategy_tuning_completion_audit(refresh=refresh)
+    suggestions_payload = _build_g3_strategy_tuning_replay_suggestions(refresh=False, limit=max(limit, 50))
+    completion_summary = completion.get("summary") if isinstance(completion.get("summary"), dict) else {}
+    completion_audit = completion.get("audit") if isinstance(completion.get("audit"), dict) else {}
+    suggestions = suggestions_payload.get("suggestions") if isinstance(suggestions_payload.get("suggestions"), list) else []
+
+    ordered_steps: list[dict[str, Any]] = []
+    for index, row in enumerate(suggestions[: max(1, min(limit, 50))], start=1):
+        if not isinstance(row, dict):
+            continue
+        axis = _clean_review_text(row.get("axis"), "natural_trade_consistency")
+        ordered_steps.append(
+            {
+                "step": index,
+                "session_stage": _g3_strategy_tuning_session_stage(axis),
+                "task_key": row.get("task_key"),
+                "axis": axis,
+                "axis_label": row.get("axis_label"),
+                "task_status": row.get("task_status"),
+                "suggested_review_result": row.get("suggested_review_result"),
+                "object": row.get("object"),
+                "problem_signal": row.get("problem_signal"),
+                "replay_focus": row.get("replay_focus"),
+                "hidden_risk": row.get("suggested_hidden_risk"),
+                "evidence_required": row.get("evidence_required"),
+                "next_action": row.get("next_action"),
+                "natural_trade_boundary": row.get("natural_trade_boundary"),
+                "can_execute_trade": False,
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            }
+        )
+
+    current_step = ordered_steps[0] if ordered_steps else {}
+    total_count = _to_int_or_zero(completion_summary.get("task_count"))
+    todo_count = _to_int_or_zero(completion_summary.get("todo_count"))
+    followup_count = _to_int_or_zero(completion_summary.get("followup_count"))
+    watch_count = _to_int_or_zero(completion_summary.get("watch_count"))
+    reviewed_count = _to_int_or_zero(completion_summary.get("reviewed_count"))
+    remaining_count = todo_count + followup_count
+    progress_pct = round((reviewed_count / total_count) * 100, 2) if total_count else 0.0
+
+    session_blockers: list[dict[str, Any]] = []
+    if todo_count:
+        session_blockers.append(
+            {
+                "blocker": "todo_replay_tasks",
+                "count": todo_count,
+                "next_action": "process replay session steps from top to bottom",
+            }
+        )
+    if followup_count:
+        session_blockers.append(
+            {
+                "blocker": "followup_replay_tasks",
+                "count": followup_count,
+                "next_action": "resolve issue/data-gap/evidence-pending reviews before manual live review",
+            }
+        )
+    if watch_count:
+        session_blockers.append(
+            {
+                "blocker": "watch_replay_tasks",
+                "count": watch_count,
+                "next_action": "keep observing; do not convert watch-only tasks into contract changes",
+            }
+        )
+
+    session_status = "blocked"
+    if not remaining_count and watch_count:
+        session_status = "observe_only"
+    elif not remaining_count:
+        session_status = "ready_for_manual_readiness_review"
+
+    return {
+        "ok": bool(completion.get("ok")) and bool(suggestions_payload.get("ok")),
+        "mode": "g3_strategy_tuning_replay_session",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "session": {
+            "session_status": session_status,
+            "audit_status": completion_audit.get("audit_status"),
+            "audit_label": completion_audit.get("audit_label"),
+            "current_step": current_step,
+            "current_step_label": current_step.get("replay_focus") if current_step else "",
+            "progress_pct": progress_pct,
+            "remaining_count": remaining_count,
+            "next_action": current_step.get("next_action") if current_step else completion_audit.get("next_action"),
+            "manual_live_review_allowed": False,
+            "natural_trade_boundary": "Replay session organizes evidence only; it never creates buy signals, order routes, or profit-only contract changes.",
+        },
+        "summary": {
+            "task_count": total_count,
+            "todo_count": todo_count,
+            "followup_count": followup_count,
+            "watch_count": watch_count,
+            "reviewed_count": reviewed_count,
+            "remaining_count": remaining_count,
+            "progress_pct": progress_pct,
+            "session_step_count": len(ordered_steps),
+            "profit_only_optimization_allowed": False,
+            "can_change_strategy_contract": False,
+            "can_execute_trade": False,
+            "live_admission_buy_allowed": False,
+        },
+        "session_steps": ordered_steps,
+        "session_blockers": session_blockers,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": suggestions_payload.get("artifacts") if isinstance(suggestions_payload.get("artifacts"), dict) else {},
+    }
+
+
+def _build_g3_strategy_tuning_current_step_completion_packet(refresh: bool = False) -> dict[str, Any]:
+    session_result = _build_g3_strategy_tuning_replay_session(refresh=refresh, limit=12)
+    session = session_result.get("session") if isinstance(session_result.get("session"), dict) else {}
+    current_step = session.get("current_step") if isinstance(session.get("current_step"), dict) else {}
+    axis = _clean_review_text(current_step.get("axis"), "natural_trade_consistency")
+
+    required_evidence = [
+        _clean_review_text(current_step.get("evidence_required")),
+        "Record a replay review result in strategy_tuning_task_reviews.",
+        "Rerun completion audit after evidence changes.",
+    ]
+    current_evidence: dict[str, Any] = {
+        "task_key": current_step.get("task_key"),
+        "task_status": current_step.get("task_status"),
+        "suggested_review_result": current_step.get("suggested_review_result"),
+        "replay_focus": current_step.get("replay_focus"),
+        "hidden_risk": current_step.get("hidden_risk"),
+    }
+    gaps: list[dict[str, Any]] = []
+    after_done_check = "Rerun /api/gen3-state-alpha/strategy-tuning-replay-session and confirm current_step advances."
+
+    broker_packet: dict[str, Any] = {}
+    if axis == "execution_evidence":
+        preflight = _broker_holdings_sync_preflight()
+        confirmation = _broker_holdings_sync_confirmation_packet()
+        outcome = _broker_holdings_sync_outcome_verifier()
+        outcome_payload = outcome.get("outcome") if isinstance(outcome.get("outcome"), dict) else {}
+        broker_state = outcome.get("broker") if isinstance(outcome.get("broker"), dict) else {}
+        broker_packet = {
+            "preflight_status": preflight.get("preflight_status"),
+            "can_prompt_manual_sync": preflight.get("can_prompt_manual_sync"),
+            "requires_confirmation": preflight.get("requires_confirmation"),
+            "packet_status": confirmation.get("packet_status"),
+            "safe_to_prompt": confirmation.get("safe_to_prompt"),
+            "expected_request": confirmation.get("expected_request"),
+            "action_fingerprint": confirmation.get("action_fingerprint"),
+            "outcome_status": outcome_payload.get("outcome_status"),
+            "outcome_label": outcome_payload.get("outcome_label"),
+            "sync_attempt_count": outcome.get("sync_attempt_count"),
+            "broker": broker_state,
+            "warnings": preflight.get("warnings"),
+            "blockers": preflight.get("blockers"),
+        }
+        current_evidence["broker_sync"] = broker_packet
+        required_evidence.extend(
+            [
+                "Broker holding/price cache is fresh after manual confirmation.",
+                "Broker sync outcome is ready_for_manual_review or remaining blocker is explicitly recorded.",
+                "Readiness audit is rerun after sync.",
+            ]
+        )
+        if not bool(broker_state.get("is_fresh")):
+            gaps.append(
+                {
+                    "gap": "broker_snapshot_not_fresh",
+                    "next_action": "manual broker holding/price sync with confirmation, then rerun readiness review",
+                    "trade_impact": "keep_live_buy_locked",
+                }
+            )
+        if not bool(confirmation.get("safe_to_prompt")):
+            gaps.append(
+                {
+                    "gap": "broker_sync_confirmation_not_ready",
+                    "next_action": "resolve preflight blockers before prompting manual sync",
+                    "trade_impact": "keep_live_buy_locked",
+                }
+            )
+        if _to_int_or_zero(outcome.get("sync_attempt_count")) <= 0:
+            gaps.append(
+                {
+                    "gap": "no_sync_attempt_recorded",
+                    "next_action": "do not mark execution evidence reviewed until a confirmed sync attempt or explicit failure evidence exists",
+                    "trade_impact": "hold_replay_progress",
+                }
+            )
+        after_done_check = "After manual sync, rerun readiness audit and confirm broker staleness <= 30 minutes and related holding/price blockers clear or are recorded as issue_found."
+    elif current_step:
+        gaps.append(
+            {
+                "gap": "manual_replay_note_required",
+                "next_action": current_step.get("next_action") or "write replay evidence before changing any strategy contract",
+                "trade_impact": "hold_contract_change",
+            }
+        )
+
+    completion_status = "blocked" if gaps else "ready_to_record_review"
+    return {
+        "ok": bool(session_result.get("ok")),
+        "mode": "g3_strategy_tuning_current_step_completion_packet",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "packet": {
+            "completion_status": completion_status,
+            "current_step": current_step,
+            "required_evidence": [item for item in required_evidence if item],
+            "current_evidence": current_evidence,
+            "gaps": gaps,
+            "after_done_check": after_done_check,
+            "can_mark_step_done": completion_status == "ready_to_record_review",
+            "manual_live_review_allowed": False,
+            "natural_trade_boundary": "Completion packet verifies evidence only; it never creates buy signals, order routes, or profit-only contract changes.",
+        },
+        "session_summary": session_result.get("summary") if isinstance(session_result.get("summary"), dict) else {},
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": session_result.get("artifacts") if isinstance(session_result.get("artifacts"), dict) else {},
+    }
+
+
+def _build_g3_strategy_tuning_review_queue(refresh: bool = False) -> dict[str, Any]:
+    board = _build_g3_strategy_tuning_axis_board(refresh=refresh)
+    axis_rows = board.get("axis_rows") if isinstance(board.get("axis_rows"), list) else []
+    risk_rows = board.get("risk_rows") if isinstance(board.get("risk_rows"), list) else []
+    summary = board.get("summary") if isinstance(board.get("summary"), dict) else {}
+    review_map = _load_strategy_tuning_task_reviews()
+
+    axis_priority = {
+        "execution_evidence": 0,
+        "sell_point": 1,
+        "buy_point": 2,
+        "selection": 3,
+        "model_switch": 4,
+        "natural_trade_consistency": 5,
+    }
+    status_priority = {
+        "pending_evidence": 0,
+        "issue_found": 0,
+        "needs_review": 1,
+        "must_review": 1,
+        "watch_more": 2,
+        "continue_watch": 3,
+        "pending_observation": 3,
+    }
+
+    task_rows: list[dict[str, Any]] = []
+    for row in risk_rows:
+        if not isinstance(row, dict):
+            continue
+        axis = _clean_review_text(row.get("axis"), "natural_trade_consistency")
+        status = _clean_review_text(row.get("learning_status"), "watch_more")
+        task_key = "|".join(
+            [
+                axis,
+                _clean_review_text(row.get("origin"), "unknown_origin"),
+                _clean_review_text(row.get("object"), "unknown_object"),
+                _clean_review_text(row.get("problem_signal"), "unknown_problem")[:80],
+            ]
+        )
+        review = review_map.get(task_key) if task_key else None
+        review = review if isinstance(review, dict) else {}
+        base_task_status = "todo" if status_priority.get(status, 4) <= 1 else "watch"
+        if review.get("review_status") == "reviewed":
+            task_status = "reviewed"
+        elif review.get("review_status") == "needs_followup":
+            task_status = "followup"
+        elif review.get("review_status") == "watch":
+            task_status = "watch"
+        else:
+            task_status = base_task_status
+        task_rows.append(
+            {
+                "priority": 0,
+                "task_key": task_key,
+                "axis": axis,
+                "axis_label": _g3_strategy_tuning_axis_meta(axis).get("axis_label"),
+                "task_status": task_status,
+                "source_status": status,
+                "review_result": _clean_review_text(review.get("review_result")),
+                "review_status": _clean_review_text(review.get("review_status")),
+                "review_note": _clean_review_text(review.get("review_note")),
+                "review_updated_at": _clean_review_text(review.get("updated_at")),
+                "origin": _clean_review_text(row.get("origin")),
+                "object": _clean_review_text(row.get("object")),
+                "problem_signal": _clean_review_text(row.get("problem_signal")),
+                "review_method": _g3_tuning_task_review_method(axis),
+                "completion_evidence": _g3_tuning_task_completion_evidence(axis),
+                "next_action": _g3_tuning_task_next_action(axis, status),
+                "optimization_boundary": _g3_strategy_tuning_axis_meta(axis).get("optimization_boundary"),
+                "suggested_learning": _clean_review_text(row.get("suggested_learning")),
+                "natural_trade_boundary": _clean_review_text(row.get("natural_trade_boundary")),
+                "can_execute_trade": False,
+                "can_change_strategy_contract": False,
+                "profit_only_optimization_allowed": False,
+            }
+        )
+
+    task_rows = sorted(
+        task_rows,
+        key=lambda item: (
+            status_priority.get(item.get("source_status"), 4),
+            axis_priority.get(item.get("axis"), 9),
+            item.get("origin") or "",
+            item.get("object") or "",
+        ),
+    )
+    for index, row in enumerate(task_rows, start=1):
+        row["priority"] = index
+
+    axis_task_summary: list[dict[str, Any]] = []
+    for axis_row in axis_rows:
+        if not isinstance(axis_row, dict):
+            continue
+        axis = _clean_review_text(axis_row.get("axis"))
+        rows = [row for row in task_rows if row.get("axis") == axis]
+        axis_task_summary.append(
+            {
+                "axis": axis,
+                "axis_label": axis_row.get("axis_label"),
+                "task_count": len(rows),
+                "todo_count": sum(1 for row in rows if row.get("task_status") == "todo"),
+                "reviewed_count": sum(1 for row in rows if row.get("task_status") == "reviewed"),
+                "followup_count": sum(1 for row in rows if row.get("task_status") == "followup"),
+                "watch_count": sum(1 for row in rows if row.get("task_status") == "watch"),
+                "first_next_action": rows[0].get("next_action") if rows else "",
+                "completion_evidence": _g3_tuning_task_completion_evidence(axis),
+                "optimization_boundary": axis_row.get("optimization_boundary"),
+            }
+        )
+
+    return {
+        "ok": bool(board.get("ok")),
+        "mode": "g3_strategy_tuning_review_queue",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "task_count": len(task_rows),
+            "todo_count": sum(1 for row in task_rows if row.get("task_status") == "todo"),
+            "reviewed_count": sum(1 for row in task_rows if row.get("task_status") == "reviewed"),
+            "followup_count": sum(1 for row in task_rows if row.get("task_status") == "followup"),
+            "watch_count": sum(1 for row in task_rows if row.get("task_status") == "watch"),
+            "axis_count": len(axis_task_summary),
+            "review_count": len(review_map),
+            "profit_only_optimization_allowed": False,
+            "can_change_strategy_contract": False,
+            "can_execute_trade": False,
+            "live_admission_status": summary.get("live_admission_status"),
+            "live_admission_buy_allowed": False,
+            "primary_blocker": summary.get("primary_blocker"),
+            "next_action": summary.get("next_action"),
+        },
+        "axis_task_summary": axis_task_summary,
+        "task_rows": task_rows[:200],
+        "review_map": review_map,
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            **(board.get("artifacts") if isinstance(board.get("artifacts"), dict) else {}),
+            "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+        },
+    }
+
+
+def _build_g3_strategy_tuning_completion_audit(refresh: bool = False) -> dict[str, Any]:
+    queue = _build_g3_strategy_tuning_review_queue(refresh=refresh)
+    summary = queue.get("summary") if isinstance(queue.get("summary"), dict) else {}
+    task_rows = queue.get("task_rows") if isinstance(queue.get("task_rows"), list) else []
+    axis_rows = queue.get("axis_task_summary") if isinstance(queue.get("axis_task_summary"), list) else []
+
+    todo_rows = [row for row in task_rows if isinstance(row, dict) and row.get("task_status") == "todo"]
+    followup_rows = [row for row in task_rows if isinstance(row, dict) and row.get("task_status") == "followup"]
+    watch_rows = [row for row in task_rows if isinstance(row, dict) and row.get("task_status") == "watch"]
+    reviewed_rows = [row for row in task_rows if isinstance(row, dict) and row.get("task_status") == "reviewed"]
+
+    hard_gaps: list[dict[str, Any]] = []
+    if todo_rows:
+        hard_gaps.append(
+            {
+                "gap": "tuning_tasks_unreviewed",
+                "count": len(todo_rows),
+                "next_action": "review every todo tuning task before manual live review",
+                "trade_impact": "hold_manual_live_review",
+            }
+        )
+    if followup_rows:
+        hard_gaps.append(
+            {
+                "gap": "tuning_tasks_need_followup",
+                "count": len(followup_rows),
+                "next_action": "resolve issue_found/data_gap/evidence_pending tuning reviews",
+                "trade_impact": "hold_contract_change_and_live_review",
+            }
+        )
+
+    watch_gaps: list[dict[str, Any]] = []
+    if watch_rows:
+        watch_gaps.append(
+            {
+                "gap": "tuning_tasks_watch",
+                "count": len(watch_rows),
+                "next_action": "keep paper/live observation until evidence changes",
+                "trade_impact": "observe_only",
+            }
+        )
+
+    axis_completion_rows: list[dict[str, Any]] = []
+    for row in axis_rows:
+        if not isinstance(row, dict):
+            continue
+        todo_count = _to_int_or_zero(row.get("todo_count"))
+        followup_count = _to_int_or_zero(row.get("followup_count"))
+        reviewed_count = _to_int_or_zero(row.get("reviewed_count"))
+        watch_count = _to_int_or_zero(row.get("watch_count"))
+        task_count = _to_int_or_zero(row.get("task_count"))
+        if todo_count or followup_count:
+            axis_status = "blocked"
+        elif watch_count and not reviewed_count:
+            axis_status = "watch_only"
+        elif task_count:
+            axis_status = "reviewed_or_watch"
+        else:
+            axis_status = "no_current_task"
+        axis_completion_rows.append(
+            {
+                "axis": row.get("axis"),
+                "axis_label": row.get("axis_label"),
+                "axis_status": axis_status,
+                "task_count": task_count,
+                "todo_count": todo_count,
+                "followup_count": followup_count,
+                "reviewed_count": reviewed_count,
+                "watch_count": watch_count,
+                "completion_evidence": row.get("completion_evidence"),
+                "optimization_boundary": row.get("optimization_boundary"),
+            }
+        )
+
+    if hard_gaps:
+        audit_status = "blocked"
+        audit_label = "tuning_review_not_complete"
+        can_enter_live_manual_review = False
+    elif watch_gaps:
+        audit_status = "observe_only"
+        audit_label = "tuning_review_watch_only"
+        can_enter_live_manual_review = False
+    else:
+        audit_status = "ready_for_manual_review"
+        audit_label = "tuning_review_closed_for_now"
+        can_enter_live_manual_review = False
+
+    return {
+        "ok": bool(queue.get("ok")),
+        "mode": "g3_strategy_tuning_completion_audit",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "audit": {
+            "audit_status": audit_status,
+            "audit_label": audit_label,
+            "can_enter_live_manual_review": can_enter_live_manual_review,
+            "can_buy": False,
+            "primary_gap": hard_gaps[0].get("gap") if hard_gaps else (watch_gaps[0].get("gap") if watch_gaps else ""),
+            "next_action": hard_gaps[0].get("next_action") if hard_gaps else (watch_gaps[0].get("next_action") if watch_gaps else "keep the tuning ledger under observation"),
+            "natural_trade_boundary": "Tuning completion can only support manual review; it never creates buy signals, order routes, or profit-only contract changes.",
+        },
+        "hard_gaps": hard_gaps,
+        "watch_gaps": watch_gaps,
+        "axis_completion_rows": axis_completion_rows,
+        "top_open_tasks": [*todo_rows[:8], *followup_rows[:8]][:8],
+        "summary": {
+            "task_count": summary.get("task_count"),
+            "todo_count": len(todo_rows),
+            "followup_count": len(followup_rows),
+            "watch_count": len(watch_rows),
+            "reviewed_count": len(reviewed_rows),
+            "hard_gap_count": len(hard_gaps),
+            "watch_gap_count": len(watch_gaps),
+            "review_count": summary.get("review_count"),
+            "profit_only_optimization_allowed": False,
+            "can_change_strategy_contract": False,
+            "can_execute_trade": False,
+            "live_admission_status": summary.get("live_admission_status"),
+            "live_admission_buy_allowed": False,
+        },
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": queue.get("artifacts") if isinstance(queue.get("artifacts"), dict) else {},
+    }
+
+
+def _build_live_launch_readiness_audit(refresh: bool = False) -> dict[str, Any]:
+    decision_result = _build_live_launch_decision_card(refresh=refresh)
+    blocker_board = _build_live_blocker_evidence_board(refresh=False)
+    learning = _build_live_learning_ledger(refresh=False)
+    broker_preflight = _broker_holdings_sync_preflight()
+
+    decision = decision_result.get("decision") if isinstance(decision_result.get("decision"), dict) else {}
+    blocker_summary = blocker_board.get("summary") if isinstance(blocker_board.get("summary"), dict) else {}
+    learning_summary = learning.get("summary") if isinstance(learning.get("summary"), dict) else {}
+    blockers = blocker_board.get("rows") if isinstance(blocker_board.get("rows"), list) else []
+    learning_rows = learning.get("learning_ledger") if isinstance(learning.get("learning_ledger"), list) else []
+
+    blocking_count = _to_int_or_zero(decision.get("blocking_command_count"))
+    pending_evidence_count = _to_int_or_zero(decision.get("pending_evidence_count"))
+    learning_needs_review = _to_int_or_zero(learning_summary.get("needs_review_count"))
+    broker_blockers = broker_preflight.get("blockers") if isinstance(broker_preflight.get("blockers"), list) else []
+    broker_warnings = broker_preflight.get("warnings") if isinstance(broker_preflight.get("warnings"), list) else []
+    broker_stale = "cached_broker_holding_snapshot_stale" in broker_warnings or "no_cached_broker_holding_snapshot" in broker_warnings
+
+    hard_gaps: list[dict[str, Any]] = []
+    if blocking_count > 0:
+        hard_gaps.append(
+            {
+                "gap": "premarket_blockers_pending",
+                "count": blocking_count,
+                "next_action": decision.get("next_action") or decision.get("primary_blocker"),
+                "trade_impact": "hold_live_launch",
+            }
+        )
+    if pending_evidence_count > 0:
+        hard_gaps.append(
+            {
+                "gap": "evidence_pending",
+                "count": pending_evidence_count,
+                "next_action": blocker_summary.get("next_action"),
+                "trade_impact": "review_before_live",
+            }
+        )
+    if broker_blockers or broker_stale:
+        hard_gaps.append(
+            {
+                "gap": "broker_holding_price_not_fresh",
+                "count": len(broker_blockers) or 1,
+                "next_action": broker_preflight.get("next_manual_action"),
+                "trade_impact": "sync_real_position_before_decision",
+            }
+        )
+
+    watch_gaps: list[dict[str, Any]] = []
+    if learning_needs_review > 0:
+        watch_gaps.append(
+            {
+                "gap": "learning_items_need_review",
+                "count": learning_needs_review,
+                "next_action": "review top learning risks before changing rules",
+                "trade_impact": "do_not_optimize_by_profit_only",
+            }
+        )
+
+    audit_status = "blocked"
+    audit_label = "blocked_before_live_launch"
+    if not hard_gaps and decision.get("decision_status") == "ready_for_manual_live_review":
+        audit_status = "manual_review_ready"
+        audit_label = "manual_live_review_ready"
+    elif not hard_gaps:
+        audit_status = "watch"
+        audit_label = "manual_review_watch"
+
+    top_blockers = [
+        row
+        for row in blockers
+        if isinstance(row, dict)
+        and (
+            _clean_review_text(row.get("evidence_status")) == "pending_evidence"
+            or _truthy(row.get("can_execute_now"))
+        )
+    ][:5]
+    top_learning = [
+        row
+        for row in learning_rows
+        if _learning_status_rank(row.get("learning_status"), row.get("risk_level")) <= 1
+    ][:5]
+
+    return {
+        "ok": True,
+        "mode": "g3_live_launch_readiness_audit",
+        "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "audit": {
+            "audit_status": audit_status,
+            "audit_label": audit_label,
+            "can_enter_live_manual_review": audit_status == "manual_review_ready",
+            "can_buy": False,
+            "primary_blocker": decision.get("primary_blocker") or (hard_gaps[0].get("next_action") if hard_gaps else ""),
+            "next_action": (hard_gaps[0].get("next_action") if hard_gaps else decision.get("next_action")),
+            "natural_trade_conclusion": (
+                "clear_execution_evidence_first"
+                if hard_gaps
+                else "manual_review_only_no_auto_order"
+            ),
+            "optimization_boundary": "review buy point, sell point, selection, and model switch only after evidence is fresh; never tune only for return.",
+        },
+        "hard_gaps": hard_gaps,
+        "watch_gaps": watch_gaps,
+        "top_blockers": top_blockers,
+        "top_learning_risks": top_learning,
+        "broker_sync_preflight": broker_preflight,
+        "summary": {
+            "hard_gap_count": len(hard_gaps),
+            "watch_gap_count": len(watch_gaps),
+            "blocking_command_count": blocking_count,
+            "pending_evidence_count": pending_evidence_count,
+            "learning_needs_review_count": learning_needs_review,
+            "broker_preflight_status": broker_preflight.get("preflight_status"),
+            "broker_staleness_minutes": broker_preflight.get("broker_staleness_minutes"),
+            "decision_status": decision.get("decision_status"),
+            "live_admission_status": decision.get("live_admission_status"),
+        },
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+        "artifacts": {
+            "realtime_readiness_review": _path_status(REALTIME_READINESS_REVIEW_DIR / "summary.json"),
+            "live_launch_packet": _path_status(LIVE_LAUNCH_PACKET_DIR / "launch_packet.json"),
+            "live_blocker_evidence_ledger": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_blocker_evidence_ledger.csv"),
+            "live_hidden_risk_watchlist": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_hidden_risk_watchlist.csv"),
+        },
+    }
+
+
+def _load_live_launch_review_snapshots() -> list[dict[str, Any]]:
+    data = _read_json(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH)
+    rows = data.get("snapshots") if isinstance(data, dict) else []
+    return rows if isinstance(rows, list) else []
+
+
+def _load_live_launch_review_snapshot_detail(snapshot_id: str) -> dict[str, Any]:
+    snapshot_id = _clean_review_text(snapshot_id)
+    if not snapshot_id or Path(snapshot_id).name != snapshot_id or not re.fullmatch(r"[0-9T_A-Za-z-]+", snapshot_id):
+        return {"ok": False, "error": "invalid snapshot_id"}
+    detail_path = LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / f"{snapshot_id}.json"
+    detail = _read_json(detail_path)
+    if detail:
+        return {
+            "ok": True,
+            "snapshot_id": snapshot_id,
+            "detail": detail,
+            "artifacts": {
+                "detail_json": _path_status(detail_path),
+                "timeline_csv": _path_status(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / "timeline.csv"),
+                "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+            },
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+        }
+    rows = _load_live_launch_review_snapshots()
+    snapshot = next((row for row in rows if isinstance(row, dict) and _clean_review_text(row.get("snapshot_id")) == snapshot_id), None)
+    if snapshot:
+        return {
+            "ok": True,
+            "snapshot_id": snapshot_id,
+            "detail": snapshot,
+            "detail_missing": True,
+            "artifacts": {
+                "detail_json": _path_status(detail_path),
+                "timeline_csv": _path_status(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / "timeline.csv"),
+                "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+            },
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+        }
+    return {"ok": False, "error": "snapshot_not_found", "snapshot_id": snapshot_id}
+
+
+def _save_live_launch_review_snapshots(rows: list[dict[str, Any]]) -> None:
+    rows = rows[-500:]
+    _write_json(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH, {"snapshots": rows})
+    LIVE_LAUNCH_REVIEW_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / "timeline.csv", index=False, encoding="utf-8-sig")
+
+
+def _count_status(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = _clean_review_text(row.get(field), "blank")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _build_live_launch_review_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = payload if isinstance(payload, dict) else {}
+    refresh = bool(payload.get("refresh"))
+    phase = _clean_review_text(payload.get("phase"), "manual_checkpoint")
+    note = _clean_review_text(payload.get("note") or payload.get("review_note"))
+    source = _clean_review_text(payload.get("source"), "g3_live_launch_review_snapshot")
+    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    packet_result = _read_or_run_live_launch_packet(refresh=refresh)
+    packet = packet_result.get("packet") if isinstance(packet_result.get("packet"), dict) else {}
+    readiness_summary = review.get("summary") if isinstance(review.get("summary"), dict) else {}
+    launch_summary = packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
+    command = _current_premarket_action_card(review)
+    playbook_rows = packet_result.get("launch_day_playbook") if isinstance(packet_result.get("launch_day_playbook"), list) else []
+    if not playbook_rows and isinstance(packet.get("launch_day_playbook"), list):
+        playbook_rows = packet.get("launch_day_playbook")
+    learning_rows = packet_result.get("launch_day_learning_queue") if isinstance(packet_result.get("launch_day_learning_queue"), list) else []
+    if not learning_rows and isinstance(packet.get("launch_day_learning_queue"), list):
+        learning_rows = packet.get("launch_day_learning_queue")
+    live_learning = _build_live_learning_ledger(refresh=False)
+    live_learning_rows = live_learning.get("learning_ledger") if isinstance(live_learning.get("learning_ledger"), list) else []
+    live_learning_summary = live_learning.get("summary") if isinstance(live_learning.get("summary"), dict) else {}
+
+    generated_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+    snapshot_id = f"{generated_at.replace('-', '').replace(':', '').replace(' ', 'T')}_{uuid4().hex[:8]}"
+    record = {
+        "snapshot_id": snapshot_id,
+        "generated_at": generated_at,
+        "phase": phase,
+        "source": source,
+        "note": note,
+        "entry_date": readiness_summary.get("next_trade_entry_date") or launch_summary.get("next_trade_entry_date"),
+        "live_admission_status": readiness_summary.get("live_admission_status") or launch_summary.get("live_admission_status"),
+        "live_admission_buy_allowed": bool(readiness_summary.get("live_admission_buy_allowed") or launch_summary.get("live_admission_buy_allowed")),
+        "blocking_command_count": readiness_summary.get("live_admission_blocking_command_count") or launch_summary.get("live_admission_blocking_command_count"),
+        "next_action": readiness_summary.get("live_premarket_next_action") or launch_summary.get("live_premarket_next_action"),
+        "first_live_decision_status": readiness_summary.get("first_live_decision_status"),
+        "formal_launch_ready": bool(readiness_summary.get("formal_launch_ready") or launch_summary.get("formal_launch_ready")),
+        "launch_packet_status": packet.get("status"),
+        "launch_day_playbook_count": len(playbook_rows),
+        "launch_day_learning_queue_count": len(learning_rows),
+        "live_learning_ledger_count": len(live_learning_rows),
+        "live_learning_needs_review_count": live_learning_summary.get("needs_review_count"),
+        "live_learning_watch_more_count": live_learning_summary.get("watch_more_count"),
+        "playbook_review_status_counts": _count_status(playbook_rows, "review_status"),
+        "learning_status_counts": _count_status(learning_rows, "learning_status"),
+        "live_learning_status_counts": live_learning_summary.get("status_counts") or {},
+        "current_action_group": command.get("action_group"),
+        "current_action_label": command.get("action_label"),
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+    }
+    detail_path = LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / f"{snapshot_id}.json"
+    detail = {
+        **record,
+        "readiness_summary": readiness_summary,
+        "launch_summary": launch_summary,
+        "premarket_command": command,
+        "launch_day_playbook": playbook_rows,
+        "launch_day_learning_queue": learning_rows,
+        "live_learning_ledger": live_learning_rows,
+        "live_learning_summary": live_learning_summary,
+        "artifacts": {
+            "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+            "timeline_csv": _path_status(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / "timeline.csv"),
+            "detail_json": _path_status(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / f"{snapshot_id}.json"),
+        },
+    }
+    LIVE_LAUNCH_REVIEW_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    detail_path.write_text(
+        json.dumps(detail, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    rows = _load_live_launch_review_snapshots()
+    rows.append(record)
+    _save_live_launch_review_snapshots(rows)
+    detail["artifacts"] = {
+        "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+        "timeline_csv": _path_status(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / "timeline.csv"),
+        "detail_json": _path_status(detail_path),
+    }
+    detail_path.write_text(
+        json.dumps(detail, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    return {"ok": True, "snapshot": record, "detail": detail}
+
+
+def _try_record_live_launch_action_snapshot(
+    *,
+    source: str,
+    phase: str,
+    note: str,
+    refresh_packet: bool = True,
+) -> dict[str, Any]:
+    try:
+        if refresh_packet:
+            _run_live_launch_packet_once()
+        return _build_live_launch_review_snapshot(
+            {
+                "source": source,
+                "phase": phase,
+                "note": note,
+                "refresh": False,
+            }
+        )
+    except Exception as exc:
+        logger.exception("Failed to record G3 live launch action snapshot.")
+        return {"ok": False, "error": str(exc)}
+
+
+def _read_or_run_live_launch_packet(refresh: bool = False) -> dict[str, Any]:
+    if refresh:
+        return _run_live_launch_packet_once()
+    packet = _read_live_launch_packet()
+    if packet.get("packet"):
+        return {
+            "ok": True,
+            "mode": "g3_live_launch_packet_v1",
+            **packet,
+        }
+    return _run_live_launch_packet_once()
+
+
+def _readiness_review_admission_summary(review: dict[str, Any]) -> dict[str, Any]:
+    summary = review.get("summary") if isinstance(review.get("summary"), dict) else {}
+    return {
+        "live_admission_status": summary.get("live_admission_status"),
+        "live_admission_label": summary.get("live_admission_label"),
+        "live_admission_buy_allowed": bool(summary.get("live_admission_buy_allowed")),
+        "live_admission_blocking_command_count": summary.get("live_admission_blocking_command_count"),
+        "live_premarket_next_action": summary.get("live_premarket_next_action"),
+        "live_blocker_pending_evidence_count": summary.get("live_blocker_pending_evidence_count"),
+        "first_live_decision_status": summary.get("first_live_decision_status"),
+        "formal_launch_ready": bool(summary.get("formal_launch_ready")),
+    }
+
+
+def _current_premarket_action_card(review: dict[str, Any]) -> dict[str, Any]:
+    summary = review.get("summary") if isinstance(review.get("summary"), dict) else {}
+    sequence_rows = review.get("live_premarket_action_sequence")
+    if not isinstance(sequence_rows, list):
+        sequence_rows = []
+    recheck_rows = review.get("live_premarket_execution_recheck")
+    if not isinstance(recheck_rows, list):
+        recheck_rows = []
+    admission_rows = review.get("live_admission_snapshot")
+    if not isinstance(admission_rows, list):
+        admission_rows = []
+
+    ready_rows = [row for row in sequence_rows if isinstance(row, dict) and _truthy(row.get("can_execute_now"))]
+    current = ready_rows[0] if ready_rows else (sequence_rows[0] if sequence_rows else {})
+    current = current if isinstance(current, dict) else {}
+    action_group = _clean_review_text(current.get("action_group"))
+    recommended_api_action = _clean_review_text(current.get("recommended_api_action"))
+    safe_api_groups = {"sync_broker_holding_price", "rerun_readiness_audit"}
+    requires_confirmation = action_group == "sync_broker_holding_price" or _truthy(current.get("requires_manual_confirmation"))
+    manual_only = bool(action_group and action_group not in safe_api_groups)
+    can_execute_now = bool(current) and _truthy(current.get("can_execute_now"))
+    can_execute_by_api = can_execute_now and action_group in safe_api_groups
+
+    return {
+        "generated_at": summary.get("generated_at"),
+        "entry_date": summary.get("next_trade_entry_date"),
+        "status": summary.get("live_admission_status"),
+        "status_label": summary.get("live_admission_label"),
+        "live_buy_allowed": bool(summary.get("live_admission_buy_allowed")),
+        "blocking_command_count": summary.get("live_admission_blocking_command_count"),
+        "pending_evidence_count": summary.get("live_blocker_pending_evidence_count"),
+        "next_action": summary.get("live_premarket_next_action"),
+        "current_action": current,
+        "current_recheck": recheck_rows[0] if recheck_rows else {},
+        "admission": admission_rows[0] if admission_rows else {},
+        "action_group": action_group,
+        "action_label": current.get("action_label") or summary.get("live_premarket_next_action"),
+        "recommended_api_action": recommended_api_action,
+        "recommended_ui_action": current.get("recommended_ui_action"),
+        "can_execute_now": can_execute_now,
+        "can_execute_by_api": can_execute_by_api,
+        "requires_confirmation": requires_confirmation,
+        "manual_only": manual_only,
+        "confirmation_hint": (
+            "confirm=true is required because this action may touch the broker/THS refresh path."
+            if requires_confirmation
+            else ""
+        ),
+        "execution_boundary": "This endpoint never enables auto order routing or formal buy signals.",
+    }
+
+
+def _read_or_run_realtime_readiness_review(refresh: bool = False) -> dict[str, Any]:
+    if refresh:
+        return _run_realtime_readiness_review_once()
+    review = _read_realtime_readiness_review()
+    if review.get("summary"):
+        return {
+            "ok": True,
+            "mode": "g3_realtime_readiness_review_v1",
+            **review,
+        }
+    return _run_realtime_readiness_review_once()
+
+
+def _append_review_action_attempt(
+    *,
+    attempted_at: str,
+    action_group: str,
+    action_label: str,
+    source: str,
+    ok: bool,
+    review_result: dict[str, Any],
+    admission: dict[str, Any],
+    response: dict[str, Any],
+    extra: dict[str, Any] | None = None,
+) -> None:
+    run = review_result.get("run") if isinstance(review_result.get("run"), dict) else {}
+    attempt = {
+        "attempted_at": attempted_at,
+        "action_group": action_group,
+        "action_label": action_label,
+        "source": source,
+        "ok": ok,
+        "review_ok": bool(review_result.get("ok")),
+        "review_returncode": run.get("returncode"),
+        "live_admission_status": admission.get("live_admission_status"),
+        "live_admission_buy_allowed": admission.get("live_admission_buy_allowed"),
+        "live_admission_blocking_command_count": admission.get("live_admission_blocking_command_count"),
+        "live_premarket_next_action": admission.get("live_premarket_next_action"),
+        "formal_buy_signal": response.get("formal_buy_signal"),
+        "auto_order_allowed": response.get("auto_order_allowed"),
+        "order_path_enabled": response.get("order_path_enabled"),
+    }
+    if extra:
+        attempt.update(extra)
+    _append_premarket_action_attempt(attempt)
+
+
+@router.post("/realtime-readiness-review/run")
+async def run_gen3_state_alpha_realtime_readiness_review() -> dict[str, Any]:
+    return _wrap_guardrails(_run_realtime_readiness_review_once())
+
+
+@router.get("/live-launch-packet")
+async def get_gen3_state_alpha_live_launch_packet(
+    refresh: bool = Query(default=False, description="Rebuild the G3 live launch packet before reading it."),
+) -> dict[str, Any]:
+    packet = _read_or_run_live_launch_packet(refresh=refresh)
+    return _wrap_guardrails(packet)
+
+
+@router.post("/live-launch-packet/run")
+async def run_gen3_state_alpha_live_launch_packet() -> dict[str, Any]:
+    return _wrap_guardrails(_run_live_launch_packet_once())
+
+
+@router.get("/live-learning-ledger")
+async def get_gen3_state_alpha_live_learning_ledger(
+    refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before building the learning ledger."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_live_learning_ledger(refresh=refresh))
+
+
+@router.get("/live-launch-decision")
+async def get_gen3_state_alpha_live_launch_decision(
+    refresh: bool = Query(default=False, description="Refresh readiness review before building the live launch decision card."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_live_launch_decision_card(refresh=refresh))
+
+
+@router.get("/live-blocker-evidence-board")
+async def get_gen3_state_alpha_live_blocker_evidence_board(
+    refresh: bool = Query(default=False, description="Refresh readiness review before building the live blocker evidence board."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_live_blocker_evidence_board(refresh=refresh))
+
+
+@router.get("/live-launch-readiness-audit")
+async def get_gen3_state_alpha_live_launch_readiness_audit(
+    refresh: bool = Query(default=False, description="Refresh readiness review before building the live launch readiness audit."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_live_launch_readiness_audit(refresh=refresh))
+
+
+@router.get("/strategy-tuning-axis-board")
+async def get_gen3_state_alpha_strategy_tuning_axis_board(
+    refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before building the read-only G3 tuning axis board."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_strategy_tuning_axis_board(refresh=refresh))
+
+
+@router.get("/strategy-tuning-review-queue")
+async def get_gen3_state_alpha_strategy_tuning_review_queue(
+    refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before building the read-only G3 tuning review queue."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_strategy_tuning_review_queue(refresh=refresh))
+
+
+@router.get("/strategy-tuning-completion-audit")
+async def get_gen3_state_alpha_strategy_tuning_completion_audit(
+    refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before auditing G3 tuning review completion."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_strategy_tuning_completion_audit(refresh=refresh))
+
+
+@router.get("/strategy-tuning-replay-suggestions")
+async def get_gen3_state_alpha_strategy_tuning_replay_suggestions(
+    refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before generating G3 tuning replay suggestions."),
+    limit: int = Query(default=50, ge=1, le=200, description="Maximum replay suggestions returned."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_strategy_tuning_replay_suggestions(refresh=refresh, limit=limit))
+
+
+@router.get("/strategy-tuning-replay-session")
+async def get_gen3_state_alpha_strategy_tuning_replay_session(
+    refresh: bool = Query(default=False, description="Refresh readiness review before building the ordered G3 tuning replay session."),
+    limit: int = Query(default=12, ge=1, le=50, description="Maximum replay session steps returned."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_strategy_tuning_replay_session(refresh=refresh, limit=limit))
+
+
+@router.get("/strategy-tuning-current-step-completion-packet")
+async def get_gen3_state_alpha_strategy_tuning_current_step_completion_packet(
+    refresh: bool = Query(default=False, description="Refresh readiness review before building the current replay step completion packet."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_strategy_tuning_current_step_completion_packet(refresh=refresh))
+
+
+@router.get("/broker/holdings/post-sync-acceptance")
+async def get_gen3_state_alpha_broker_post_sync_acceptance(
+    refresh: bool = Query(default=False, description="Refresh readiness review before checking post-sync acceptance."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_broker_post_sync_acceptance_packet(refresh=refresh))
+
+
+@router.post("/broker/holdings/post-sync-acceptance/record-execution-evidence")
+async def record_gen3_state_alpha_broker_post_sync_execution_evidence(
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_record_broker_post_sync_execution_evidence(payload))
+
+
+@router.get("/live-action-console")
+async def get_gen3_state_alpha_live_action_console(
+    refresh: bool = Query(default=False, description="Refresh readiness review before building the live action console."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_live_action_console(refresh=refresh))
+
+
+@router.post("/live-action-console/step-review")
+async def save_gen3_state_alpha_live_action_console_step_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    return _wrap_guardrails(_save_g3_live_action_console_step_review(payload if isinstance(payload, dict) else {}))
+
+
+@router.get("/live-replay-cockpit")
+async def get_gen3_state_alpha_live_replay_cockpit(
+    refresh: bool = Query(default=False, description="Refresh readiness review before building the live replay cockpit."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_build_g3_live_replay_cockpit(refresh=refresh))
+
+
+@router.get("/strategy-tuning-task-reviews")
+async def get_gen3_state_alpha_strategy_tuning_task_reviews() -> dict[str, Any]:
+    reviews = _load_strategy_tuning_task_reviews()
     return _wrap_guardrails(
         {
-            "ok": proc.returncode == 0 and bool(review.get("summary")),
-            "mode": "g3_realtime_readiness_review_v1",
-            "run": {
-                "returncode": proc.returncode,
-                "duration_seconds": round((datetime.now() - started).total_seconds(), 1),
-                "stdout_tail": proc.stdout[-2000:],
-                "stderr_tail": proc.stderr[-2000:],
+            "ok": True,
+            "mode": "g3_strategy_tuning_task_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
             },
-            **review,
+        }
+    )
+
+
+@router.post("/strategy-tuning-task-review")
+async def save_gen3_state_alpha_strategy_tuning_task_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _save_strategy_tuning_task_review(payload if isinstance(payload, dict) else {})
+    queue = _build_g3_strategy_tuning_review_queue(refresh=False) if result.get("ok") else {}
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_strategy_tuning_task_review",
+            "queue_summary": queue.get("summary") if isinstance(queue.get("summary"), dict) else {},
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "strategy_tuning_task_reviews": _path_status(STRATEGY_TUNING_TASK_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.get("/live-launch-review-snapshots")
+async def get_gen3_state_alpha_live_launch_review_snapshots(
+    limit: int = Query(default=100, ge=1, le=500, description="Maximum G3 live launch review snapshots returned."),
+) -> dict[str, Any]:
+    rows = _load_live_launch_review_snapshots()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_live_launch_review_snapshots",
+            "snapshots": rows[-limit:][::-1],
+            "count": len(rows),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+                "timeline_csv": _path_status(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / "timeline.csv"),
+            },
+        }
+    )
+
+
+@router.get("/live-launch-review-snapshot/{snapshot_id}")
+async def get_gen3_state_alpha_live_launch_review_snapshot_detail(snapshot_id: str) -> dict[str, Any]:
+    result = _load_live_launch_review_snapshot_detail(snapshot_id)
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_live_launch_review_snapshot_detail",
+        }
+    )
+
+
+@router.post("/live-launch-review-snapshot")
+async def record_gen3_state_alpha_live_launch_review_snapshot(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _build_live_launch_review_snapshot(payload if isinstance(payload, dict) else {})
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_live_launch_review_snapshot",
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+                "timeline_csv": _path_status(LIVE_LAUNCH_REVIEW_ARCHIVE_DIR / "timeline.csv"),
+            },
+        }
+    )
+
+
+@router.get("/launch-day-playbook-reviews")
+async def get_gen3_state_alpha_launch_day_playbook_reviews() -> dict[str, Any]:
+    reviews = _load_launch_day_playbook_reviews()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_launch_day_playbook_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "launch_day_playbook_reviews": _path_status(LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/launch-day-playbook-review-and-run")
+async def save_gen3_state_alpha_launch_day_playbook_review_and_run(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    request_payload = payload if isinstance(payload, dict) else {}
+    save_result = _save_launch_day_playbook_review(request_payload)
+    if not save_result.get("ok"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_launch_day_playbook_review_and_packet",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "launch_day_playbook_reviews": _path_status(LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH),
+                },
+            }
+        )
+    packet = _run_live_launch_packet_once()
+    saved_review = save_result.get("review") if isinstance(save_result.get("review"), dict) else {}
+    review_label = saved_review.get("review_result_label") or saved_review.get("review_result") or "review_saved"
+    snapshot = _try_record_live_launch_action_snapshot(
+        source=_clean_review_text(request_payload.get("source"), "launch_day_playbook"),
+        phase="launch_day_playbook_review",
+        note=(
+            f"launch day playbook review saved: "
+            f"{saved_review.get('review_axis') or request_payload.get('review_axis') or 'unknown_axis'} / "
+            f"{saved_review.get('action_type') or request_payload.get('action_type') or 'unknown_action'} / "
+            f"{review_label}. "
+            f"{saved_review.get('review_note') or request_payload.get('review_note') or ''}"
+        ),
+        refresh_packet=False,
+    )
+    return _wrap_guardrails(
+        {
+            "ok": bool(save_result.get("ok")) and bool(packet.get("ok")),
+            "mode": "g3_state_alpha_launch_day_playbook_review_and_packet",
+            "save": save_result,
+            "packet": packet,
+            "live_launch_review_snapshot": snapshot.get("snapshot") if snapshot.get("ok") else None,
+            "live_launch_review_snapshot_error": snapshot.get("error") if not snapshot.get("ok") else None,
+            "message": "launch day playbook review saved and packet rebuilt",
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                **(packet.get("artifacts") if isinstance(packet.get("artifacts"), dict) else {}),
+                "launch_day_playbook_reviews": _path_status(LAUNCH_DAY_PLAYBOOK_REVIEWS_PATH),
+                "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+            },
+        }
+    )
+
+
+@router.get("/premarket-control")
+async def get_gen3_state_alpha_premarket_control(
+    refresh: bool = Query(default=False, description="Run the realtime readiness review before reading the command card."),
+) -> dict[str, Any]:
+    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    return _wrap_guardrails(
+        {
+            "ok": bool(review.get("summary")),
+            "mode": "g3_state_alpha_premarket_control",
+            "review_ok": bool(review.get("ok")),
+            "command": _current_premarket_action_card(review),
+            "summary": review.get("summary") if isinstance(review.get("summary"), dict) else {},
+            "artifacts": {
+                "summary": _path_status(REALTIME_READINESS_REVIEW_DIR / "summary.json"),
+                "live_premarket_action_sequence": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_premarket_action_sequence.csv"),
+                "live_premarket_execution_recheck": _path_status(REALTIME_READINESS_REVIEW_DIR / "live_premarket_execution_recheck.csv"),
+                "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/premarket-control/execute-next")
+async def execute_gen3_state_alpha_premarket_next_action(
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> dict[str, Any]:
+    payload = payload if isinstance(payload, dict) else {}
+    confirm = bool(payload.get("confirm"))
+    source = _clean_review_text(payload.get("source"), "premarket_control")
+    refresh_first = bool(payload.get("refresh_first"))
+    expected_action_group = _clean_review_text(payload.get("action_group"))
+    review = _read_or_run_realtime_readiness_review(refresh=refresh_first)
+    command = _current_premarket_action_card(review)
+    action_group = _clean_review_text(command.get("action_group"))
+
+    if expected_action_group and action_group and expected_action_group != action_group:
+        return _wrap_guardrails(
+            {
+                "ok": False,
+                "mode": "g3_state_alpha_premarket_control_execute_next",
+                "error": "action_group_changed",
+                "expected_action_group": expected_action_group,
+                "actual_action_group": action_group,
+                "command": command,
+            }
+        )
+
+    if not action_group:
+        return _wrap_guardrails(
+            {
+                "ok": True,
+                "mode": "g3_state_alpha_premarket_control_execute_next",
+                "executed": False,
+                "message": "no premarket action is currently required",
+                "command": command,
+            }
+        )
+
+    if not command.get("can_execute_now"):
+        return _wrap_guardrails(
+            {
+                "ok": False,
+                "mode": "g3_state_alpha_premarket_control_execute_next",
+                "executed": False,
+                "error": "current_action_not_executable_yet",
+                "command": command,
+            }
+        )
+
+    if action_group == "sync_broker_holding_price":
+        if not confirm:
+            return _wrap_guardrails(
+                {
+                    "ok": False,
+                    "mode": "g3_state_alpha_premarket_control_execute_next",
+                    "executed": False,
+                    "error": "confirmation_required",
+                    "command": command,
+                }
+            )
+        response = await sync_gen3_state_alpha_broker_holdings_from_ths_and_review(
+            {
+                "source": source,
+                "action_group": action_group,
+                "premarket_control": True,
+            }
+        )
+        return response
+
+    if action_group == "rerun_readiness_audit":
+        started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+        review_result = _run_realtime_readiness_review_once()
+        admission = _readiness_review_admission_summary(review_result)
+        response = _wrap_guardrails(
+            {
+                "ok": bool(review_result.get("ok")),
+                "mode": "g3_state_alpha_premarket_control_execute_next",
+                "executed": True,
+                "action_group": action_group,
+                "action_label": command.get("action_label") or "rerun readiness audit",
+                "review": review_result,
+                "admission": admission,
+                "command": _current_premarket_action_card(review_result),
+            }
+        )
+        _append_review_action_attempt(
+            attempted_at=started_at,
+            action_group=action_group,
+            action_label=str(command.get("action_label") or "rerun readiness audit"),
+            source=source,
+            ok=bool(review_result.get("ok")),
+            review_result=review_result,
+            admission=admission,
+            response=response,
+            extra={
+                "sync_ok": None,
+                "sync_mode": "not_applicable",
+                "sync_message": "",
+            },
+        )
+        snapshot = _try_record_live_launch_action_snapshot(
+            source=source,
+            phase="premarket_action_executed",
+            note=(
+                f"盘前动作已执行：{command.get('action_label') or action_group}；"
+                f"ok={bool(review_result.get('ok'))}；"
+                f"阻断数={admission.get('live_admission_blocking_command_count')}；"
+                f"下一步={admission.get('live_premarket_next_action') or '--'}"
+            ),
+        )
+        response["live_launch_review_snapshot"] = snapshot.get("snapshot") if snapshot.get("ok") else None
+        if not snapshot.get("ok"):
+            response["live_launch_review_snapshot_error"] = snapshot.get("error")
+        response["artifacts"] = {
+            **(response.get("artifacts") if isinstance(response.get("artifacts"), dict) else {}),
+            "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+            "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+        }
+        return response
+
+    return _wrap_guardrails(
+        {
+            "ok": False,
+            "mode": "g3_state_alpha_premarket_control_execute_next",
+            "executed": False,
+            "error": "manual_review_required",
+            "command": command,
         }
     )
 
@@ -6335,29 +11328,44 @@ async def get_gen3_state_alpha_current(
         summary = dict(summary)
         summary["g2_gap_supplement_status"] = _extract_g2_gap_supplement_status(summary)
     natural_policy_shadow = _read_natural_policy_shadow()
-    tickets = _attach_natural_policy_shadow_to_records(
-        _enrich_trade_strategy_records(_read_csv_records(tickets_path, limit=limit))
+    tickets = _retire_g2_gap_supplement_records(
+        _attach_natural_policy_shadow_to_records(
+            _enrich_trade_strategy_records(_read_csv_records(tickets_path, limit=limit))
+        )
     )
-    afterhours_tickets = _attach_natural_policy_shadow_to_records(
-        _enrich_trade_strategy_records(_read_csv_records(afterhours_tickets_path, limit=limit))
+    afterhours_tickets = _retire_g2_gap_supplement_records(
+        _attach_natural_policy_shadow_to_records(
+            _enrich_trade_strategy_records(_read_csv_records(afterhours_tickets_path, limit=limit))
+        )
     )
     broker_snapshot = _broker_snapshot()
     broker_trades = broker_snapshot.get("broker_trades") if isinstance(broker_snapshot.get("broker_trades"), list) else []
-    ledger = _attach_exit_advice(
+    ledger_audit = _attach_exit_advice(
         _enrich_trade_strategy_records(_read_shadow_ledger_records(ledger_path, limit=limit)),
         source="shadow_ledger",
         updated_at=summary.get("generated_at") if isinstance(summary, dict) else None,
         broker_trades=broker_trades,
     )
-    selected_candidates = _attach_natural_policy_shadow_to_records(
-        _enrich_trade_strategy_records(_read_csv_records(selected_path, limit=limit))
+    ledger = _filter_open_shadow_ledger_records(ledger_audit)
+    selected_candidates = _retire_g2_gap_supplement_records(
+        _attach_natural_policy_shadow_to_records(
+            _enrich_trade_strategy_records(_read_csv_records(selected_path, limit=limit))
+        )
     )
-    all_source_candidates = _attach_natural_policy_shadow_to_records(
-        _enrich_trade_strategy_records(_read_csv_records(all_path, limit=limit))
+    all_source_candidates = _retire_g2_gap_supplement_records(
+        _attach_natural_policy_shadow_to_records(
+            _enrich_trade_strategy_records(_read_csv_records(all_path, limit=limit))
+        )
     )
-    route_diagnostics = _read_csv_records(diagnostics_path, limit=50)
+    route_diagnostics = _retire_g2_gap_supplement_diagnostics(_read_csv_records(diagnostics_path, limit=50))
     real_exit_rows = broker_snapshot.get("holdings") if isinstance(broker_snapshot.get("holdings"), list) else []
     qualified_tickets = [item for item in tickets if _truthy(item.get("qualified_shadow_buy"))]
+    if isinstance(summary, dict):
+        summary["shadow_ticket_rows"] = len(tickets)
+        summary["qualified_shadow_buy_rows"] = len(qualified_tickets)
+        summary["g2_gap_supplement_enabled"] = bool(G2_GAP_SUPPLEMENT_LIVE_ENABLED)
+        summary["g2_gap_supplement_live_enabled"] = bool(G2_GAP_SUPPLEMENT_LIVE_ENABLED)
+        summary["g2_gap_supplement_retire_reason"] = G2_GAP_SUPPLEMENT_RETIRE_REASON
     open_code_entries = _open_position_code_entries([*real_exit_rows, *ledger])
     afterhours_tickets = _apply_natural_same_stock_open_guard(afterhours_tickets, open_code_entries)
     selected_candidates = _apply_natural_same_stock_open_guard(selected_candidates, open_code_entries)
@@ -6395,11 +11403,13 @@ async def get_gen3_state_alpha_current(
             "next_trade_buy_summary": afterhours_summary or {},
             "next_trade_buy_tickets": next_trade_buy_tickets,
             "date_display_analysis": date_display_analysis,
-            "selected_ticket": _first_record(qualified_tickets) or _first_record(tickets),
+            "selected_ticket": _first_record(qualified_tickets),
             "shadow_ledger": ledger,
+            "shadow_ledger_audit": ledger_audit,
             "exit_management": {
                 "real_holdings": real_exit_rows,
                 "shadow_holdings": ledger,
+                "shadow_ledger_audit_rows": len(ledger_audit),
                 "summary": _exit_advice_summary(exit_rows),
                 "contract": "realtime_exit_advice_v1",
                 "formal_order_status": "dry_run_or_manual_only",
@@ -6447,14 +11457,17 @@ async def get_gen3_state_alpha_mainwave_opportunities(
     if not ticket_rows:
         ticket_rows = _read_csv_records(STATE_ALPHA_RUNTIME_DIR / "latest_shadow_tickets.csv", limit=limit)
     candidates = _build_mainwave_candidates(source_meta, ticket_rows, limit=limit)
-    sectors = _build_mainwave_sector_opportunities(candidates)
+    watch_candidates = _build_mainwave_watch_candidates(limit=max(limit * 3, 120))
+    sectors = _build_mainwave_sector_opportunities_v2(candidates, watch_candidates)
     recommended = [item for item in candidates if item.get("is_recommended")]
+    sector_watch_candidates = [item for item in watch_candidates if _to_float_or_none(item.get("sector_diffusion_score")) is not None and (_to_float_or_none(item.get("sector_diffusion_score")) or 0) >= 65]
     m30_ok_count = len([item for item in candidates if item.get("m30_confirmed") or str(item.get("m30_status") or "") == "ok"])
     entry_date = _date_text(summary.get("entry_date") or source_meta.get("entry_date") or (recommended[0].get("entry_date") if recommended else None))
     if recommended:
         entry_date = _date_text(recommended[0].get("entry_date") or entry_date)
     decision_date = _date_text(summary.get("decision_date") or source_meta.get("decision_date") or (recommended[0].get("decision_date") if recommended else None))
     index_mom60 = _to_float_or_none(source_meta.get("index_mom60") or (source_meta.get("index") or {}).get("index_mom60"))
+    mainwave_dynamic_cooldown = source_meta.get("mainwave_dynamic_cooldown") if isinstance(source_meta.get("mainwave_dynamic_cooldown"), dict) else {}
     scan = source_meta.get("scan") if isinstance(source_meta.get("scan"), dict) else {}
     strongest_sector = sectors[0] if sectors else {}
 
@@ -6478,6 +11491,8 @@ async def get_gen3_state_alpha_mainwave_opportunities(
                 "source_label": source_label,
                 "source_path": str(source_path) if source_path else "",
                 "candidate_count": len(candidates),
+                "watch_candidate_count": len(watch_candidates),
+                "sector_watch_candidate_count": len(sector_watch_candidates),
                 "sector_count": len(sectors),
                 "recommended_count": len(recommended),
                 "m30_ok_count": m30_ok_count,
@@ -6486,10 +11501,14 @@ async def get_gen3_state_alpha_mainwave_opportunities(
                 "strongest_sector": strongest_sector.get("sector_name") or "",
                 "strongest_sector_state": strongest_sector.get("state_label") or "",
                 "index_mom60": index_mom60,
-                "index_heat_label": "高热度观察" if index_mom60 is not None and index_mom60 > 0.05 else "正常热度",
+                "mainwave_dynamic_cooldown": mainwave_dynamic_cooldown,
+                "mainwave_dynamic_cooldown_active": bool(mainwave_dynamic_cooldown.get("cooldown_active", False)),
+                "mainwave_dynamic_cooldown_reason": mainwave_dynamic_cooldown.get("cooldown_reason") or "",
+                "mainwave_recovery_signal_ok": bool(mainwave_dynamic_cooldown.get("recovery_signal_ok", False)),
+                "index_heat_label": "超过主升门槛，仅观察" if index_mom60 is not None and index_mom60 > 0.05 else "正常热度",
                 "min_score": _to_float_or_none(source_meta.get("min_score")) or 120.0,
                 "min_sector_diffusion": _to_float_or_none(source_meta.get("min_sector_diffusion")) or 65.0,
-                "max_index_mom60": _to_float_or_none(source_meta.get("max_index_mom60")) or 0.1,
+                "max_index_mom60": _to_float_or_none(source_meta.get("max_index_mom60")) or 0.05,
                 "scan_target_date": scan.get("target_date") or "",
                 "scan_source_mode": scan.get("source_mode") or "",
                 "template_pool_rows": _to_int_or_zero(source_meta.get("template_pool_rows")),
@@ -6497,6 +11516,8 @@ async def get_gen3_state_alpha_mainwave_opportunities(
             },
             "sector_opportunities": sectors,
             "candidates": candidates,
+            "watch_candidates": watch_candidates,
+            "sector_watch_candidates": sector_watch_candidates,
             "recommended_tickets": recommended,
             "diagnostics": {
                 "source_status": source_meta.get("status") or ("missing" if not source_meta else "unknown"),
@@ -6520,6 +11541,9 @@ async def get_gen3_state_alpha_mainwave_opportunities(
                 "mainwave_runtime_candidates": _path_status(MAINWAVE_RUNTIME_DIR / "latest_candidates.csv"),
                 "mainwave_runtime_blocked_candidates": _path_status(MAINWAVE_RUNTIME_DIR / "latest_blocked_candidates.csv"),
                 "mainwave_report_dir": _path_status(MAINWAVE_REPORT_DIR),
+                "mainwave_watch_pool": _path_status(MAINWAVE_REPORT_DIR / "current_wave_pool_top500.csv"),
+                "current_wave_top_candidates": _path_status(CURRENT_WAVE_SCAN_DIR / "top_candidates.csv"),
+                "current_wave_template_pass": _path_status(CURRENT_WAVE_SCAN_DIR / "template_pass_candidates.csv"),
             },
         }
     )
@@ -6547,6 +11571,8 @@ async def get_gen3_state_alpha_historical_trades(
             "ok": True,
             "mode": "g3_state_alpha_historical_closed_trades",
             "historical_trades": historical["rows"],
+            "historical_replay_candidates": historical.get("historical_replay_candidates") or [],
+            "historical_replay_summary": historical.get("historical_replay_summary") or {},
             "metrics": historical["metrics"],
             "route_metrics": historical["route_metrics"],
             "market_style_metrics": historical["market_style_metrics"],
@@ -6563,9 +11589,52 @@ async def get_gen3_state_alpha_historical_trades(
     )
 
 
+@router.get("/historical-decision-replay-tasks")
+async def get_gen3_state_alpha_historical_decision_replay_tasks(
+    limit: int = Query(default=80, ge=1, le=500, description="Maximum historical replay tasks returned."),
+    route: str | None = Query(default="all", description="Route filter."),
+    window: str | None = Query(default="all", description="Window filter."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(
+        _build_g3_historical_decision_replay_tasks(
+            limit=limit,
+            route=route.strip() if isinstance(route, str) and route.strip() else "all",
+            window=window.strip() if isinstance(window, str) and window.strip() else "all",
+        )
+    )
+
+
+@router.get("/historical-decision-replay-audit")
+async def get_gen3_state_alpha_historical_decision_replay_audit(
+    route: str | None = Query(default="all", description="Route filter."),
+    window: str | None = Query(default="all", description="Window filter."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(
+        _build_g3_historical_decision_replay_audit(
+            route=route.strip() if isinstance(route, str) and route.strip() else "all",
+            window=window.strip() if isinstance(window, str) and window.strip() else "all",
+        )
+    )
+
+
 @router.get("/broker/holdings")
 async def get_gen3_state_alpha_broker_holdings() -> dict[str, Any]:
     return _wrap_guardrails(_broker_snapshot())
+
+
+@router.get("/broker/holdings/sync-ths-preflight")
+async def get_gen3_state_alpha_broker_holdings_sync_preflight() -> dict[str, Any]:
+    return _wrap_guardrails(_broker_holdings_sync_preflight())
+
+
+@router.get("/broker/holdings/sync-ths-confirmation-packet")
+async def get_gen3_state_alpha_broker_holdings_sync_confirmation_packet() -> dict[str, Any]:
+    return _wrap_guardrails(_broker_holdings_sync_confirmation_packet())
+
+
+@router.get("/broker/holdings/sync-ths-outcome")
+async def get_gen3_state_alpha_broker_holdings_sync_outcome() -> dict[str, Any]:
+    return _wrap_guardrails(_broker_holdings_sync_outcome_verifier())
 
 
 def _read_ths_capital_holdings_via_gateway() -> dict[str, Any]:
@@ -6594,15 +11663,137 @@ def _read_ths_trades_via_gateway() -> dict[str, Any]:
     return body
 
 
-def _sync_broker_holdings_from_ths() -> dict[str, Any]:
+def _qmtmini_position_to_broker_holding(row: dict[str, Any]) -> dict[str, Any]:
+    code = str(row.get("stock_code") or row.get("code") or "").strip().upper()
+    code6 = _normalize_code6(code)
+    shares = int(_parse_broker_number(row.get("volume")) or 0)
+    available_shares = int(_parse_broker_number(row.get("can_use_volume")) or 0)
+    cost_price = (
+        _parse_broker_number(row.get("avg_price"))
+        or _parse_broker_number(row.get("cost_price"))
+        or _parse_broker_number(row.get("open_price"))
+    )
+    current_price = _parse_broker_number(row.get("last_price"))
+    market_value = _parse_broker_number(row.get("market_value"))
+    if current_price is None and market_value is not None and shares > 0:
+        current_price = market_value / shares
+    return {
+        "code": code6,
+        "code_raw": code,
+        "name": row.get("stock_name") or code6,
+        "shares": shares,
+        "available_shares": available_shares,
+        "cost_price": cost_price,
+        "current_price": current_price,
+        "market_value": market_value,
+        "position_cost": _parse_broker_number(row.get("position_cost")),
+        "route": "broker_real_position",
+        "route_label": "QMT Mini real position",
+        "trade_status": "broker_open",
+        "management_action": "check_exit_contract",
+        "exit_contract": "QMT Mini read-only position snapshot; managed by G3 12% hard stop, 12% half take-profit, and remaining-position protection.",
+        "source": "qmtmini_readonly_snapshot",
+    }
+
+
+def _read_qmtmini_capital_holdings() -> dict[str, Any]:
     try:
-        result = _read_ths_capital_holdings_via_gateway()
-    except Exception as gateway_exc:
-        result = {
+        from data_fetcher.sources.qmtmini_client import QmtMiniTradingClient
+    except Exception as exc:
+        return {
             "ok": False,
-            "source": "tdx_gateway_ths_bridge",
-            "message": f"Failed to read THS capital/holdings via TDX Gateway: {gateway_exc}",
+            "source": "qmtmini_readonly_snapshot",
+            "message": f"QMT Mini client unavailable: {exc}",
         }
+    client = QmtMiniTradingClient()
+    try:
+        connect_status = client.connect()
+        if not connect_status.get("ok"):
+            return {
+                "ok": False,
+                "source": "qmtmini_readonly_snapshot",
+                "message": f"QMT Mini trading connect failed: {connect_status}",
+                "connect": connect_status,
+            }
+        snapshot = client.account_snapshot(include_sensitive=True)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "source": "qmtmini_readonly_snapshot",
+            "message": f"Failed to read QMT Mini account snapshot: {exc}",
+        }
+    finally:
+        client.close()
+
+    asset = snapshot.get("asset") if isinstance(snapshot.get("asset"), dict) else {}
+    raw_positions = [
+        item
+        for item in (snapshot.get("positions") or [])
+        if isinstance(item, dict) and _normalize_code6(item.get("stock_code") or item.get("code"))
+    ]
+    holdings = [
+        item
+        for item in (_qmtmini_position_to_broker_holding(row) for row in raw_positions)
+        if item.get("code") and int(item.get("shares") or 0) > 0
+    ]
+    capital = {
+        "fund_balance": _parse_broker_number(asset.get("total_asset")),
+        "available_cash": _parse_broker_number(asset.get("cash")),
+        "withdrawable_cash": _parse_broker_number(asset.get("cash")),
+        "frozen_cash": _parse_broker_number(asset.get("frozen_cash")),
+        "market_value": _parse_broker_number(asset.get("market_value")),
+        "total_capital": _parse_broker_number(asset.get("total_asset")),
+        "holding_market_value": _parse_broker_number(asset.get("market_value")),
+    }
+    return {
+        "ok": bool(snapshot.get("ok")),
+        "source": "qmtmini_readonly_snapshot",
+        "message": "QMT Mini read-only account snapshot synced.",
+        "account_id": snapshot.get("account_id"),
+        "positions_count": snapshot.get("positions_count"),
+        "orders_count": snapshot.get("orders_count"),
+        "trades_count": snapshot.get("trades_count"),
+        "holdings": holdings,
+        "capital": capital,
+        "qmtmini_snapshot": {
+            "asset_available": snapshot.get("asset_available"),
+            "positions_count": snapshot.get("positions_count"),
+            "orders_count": snapshot.get("orders_count"),
+            "trades_count": snapshot.get("trades_count"),
+        },
+    }
+
+
+def _preferred_broker_sync_source() -> str:
+    return str(os.environ.get("AISTOCK_BROKER_SYNC_SOURCE") or "qmtmini").strip().lower()
+
+
+def _sync_broker_holdings_from_ths() -> dict[str, Any]:
+    source_preference = _preferred_broker_sync_source()
+    result: dict[str, Any]
+    fallback_result: dict[str, Any] | None = None
+    if source_preference in {"qmtmini", "qmt", "qmtmini_first"}:
+        result = _read_qmtmini_capital_holdings()
+        if not result.get("ok"):
+            fallback_result = result
+            try:
+                result = _read_ths_capital_holdings_via_gateway()
+            except Exception as gateway_exc:
+                result = {
+                    "ok": False,
+                    "source": "tdx_gateway_ths_bridge",
+                    "message": f"Failed to read THS capital/holdings via TDX Gateway: {gateway_exc}",
+                    "fallback_from": fallback_result,
+                }
+    else:
+        try:
+            result = _read_ths_capital_holdings_via_gateway()
+        except Exception as gateway_exc:
+            result = {
+                "ok": False,
+                "source": "tdx_gateway_ths_bridge",
+                "message": f"Failed to read THS capital/holdings via TDX Gateway: {gateway_exc}",
+            }
     if not result.get("ok"):
         return {"ok": False, "mode": "g3_state_alpha_broker_holdings_sync", **result}
     raw_holdings = [
@@ -6619,6 +11810,8 @@ def _sync_broker_holdings_from_ths() -> dict[str, Any]:
                 "capital": capital,
                 "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
                 "holding_source": result.get("source") or "ths_capital_holdings",
+                "broker_account_id": result.get("account_id"),
+                "qmtmini_snapshot": result.get("qmtmini_snapshot"),
                 "fallback_cache": bool(result.get("fallback_cache")),
                 "sync_message": result.get("message"),
                 "capital_only": True,
@@ -6649,8 +11842,11 @@ def _sync_broker_holdings_from_ths() -> dict[str, Any]:
             "capital": capital,
             "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
             "holding_source": result.get("source") or "ths_capital_holdings",
+            "broker_account_id": result.get("account_id"),
+            "qmtmini_snapshot": result.get("qmtmini_snapshot"),
             "fallback_cache": bool(result.get("fallback_cache")),
             "sync_message": result.get("message"),
+            "capital_only": False,
         }
     )
     _save_broker_state(state)
@@ -6762,51 +11958,78 @@ def _run_broker_sync_once(source: str = "manual") -> dict[str, Any]:
 @router.post("/broker/holdings/sync-ths")
 async def sync_gen3_state_alpha_broker_holdings_from_ths() -> dict[str, Any]:
     return _wrap_guardrails(_sync_broker_holdings_from_ths())
+
+
+@router.post("/broker/holdings/sync-ths-and-review")
+async def sync_gen3_state_alpha_broker_holdings_from_ths_and_review(
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> dict[str, Any]:
+    source = _clean_review_text((payload or {}).get("source"), "manual")
+    started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+    sync_result = _sync_broker_holdings_from_ths()
     try:
-        result = _read_ths_capital_holdings_via_gateway()
-    except Exception as gateway_exc:
-        result = {
+        review_result = _run_realtime_readiness_review_once()
+    except Exception as exc:
+        logger.exception("Failed to run readiness review after broker holdings sync.")
+        review_result = {
             "ok": False,
-            "source": "tdx_gateway_ths_bridge",
-            "message": f"通过 TDX Gateway 读取同花顺资金持仓失败: {gateway_exc}",
+            "mode": "g3_realtime_readiness_review_v1",
+            "error": str(exc),
+            "summary": {},
         }
-    if not result.get("ok"):
-        return _wrap_guardrails({"ok": False, "mode": "g3_state_alpha_broker_holdings_sync", **result})
-    raw_holdings = [
-        item
-        for item in (result.get("holdings") or [])
-        if isinstance(item, dict) and _normalize_code6(item.get("code"))
-    ]
-    capital = _normalize_broker_capital(result.get("capital") or {}, raw_holdings)
-    holdings = [
-        _normalize_broker_holding(item, capital)
-        for item in raw_holdings
-    ]
-    capital = _normalize_broker_capital(capital, holdings)
-    state = _load_broker_state()
-    state.update(
+    admission = _readiness_review_admission_summary(review_result)
+    ok = bool(sync_result.get("ok")) and bool(review_result.get("ok"))
+    response = _wrap_guardrails(
         {
-            "holdings": holdings,
-            "capital": capital,
-            "updated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
-            "holding_source": result.get("source") or "ths_capital_holdings",
-            "fallback_cache": bool(result.get("fallback_cache")),
-            "sync_message": result.get("message"),
+            "ok": ok,
+            "mode": "g3_state_alpha_broker_holdings_sync_and_readiness_review",
+            "source": source,
+            "sync": sync_result,
+            "review": review_result,
+            "admission": admission,
+            "message": (
+                "真实持仓/价格已同步并完成实战前复审"
+                if ok
+                else "真实持仓/价格同步或实战前复审未完成；保持禁止真实买入"
+            ),
         }
     )
-    _save_broker_state(state)
-    return _wrap_guardrails(
-        {
-            "ok": True,
-            "mode": "g3_state_alpha_broker_holdings_sync",
-            "holdings": holdings,
-            "capital": capital,
-            "updated_at": state.get("updated_at"),
-            "fallback_cache": bool(result.get("fallback_cache")),
-            "message": result.get("message"),
-            "artifacts": {"broker_state": _path_status(BROKER_STATE_PATH)},
-        }
+    _append_review_action_attempt(
+        attempted_at=started_at,
+        action_group="sync_broker_holding_price",
+        action_label="同步真实持仓/价格并复审",
+        source=source,
+        ok=ok,
+        review_result=review_result,
+        admission=admission,
+        response=response,
+        extra={
+            "sync_ok": bool(sync_result.get("ok")),
+            "sync_mode": sync_result.get("mode"),
+            "sync_message": sync_result.get("message") or sync_result.get("error"),
+            "holdings_count": len(sync_result.get("holdings") or []),
+        },
     )
+    snapshot = _try_record_live_launch_action_snapshot(
+        source=source,
+        phase="premarket_action_executed",
+        note=(
+            f"盘前动作已执行：同步真实持仓/价格并复审；"
+            f"sync_ok={bool(sync_result.get('ok'))}；"
+            f"review_ok={bool(review_result.get('ok'))}；"
+            f"阻断数={admission.get('live_admission_blocking_command_count')}；"
+            f"下一步={admission.get('live_premarket_next_action') or '--'}"
+        ),
+    )
+    response["live_launch_review_snapshot"] = snapshot.get("snapshot") if snapshot.get("ok") else None
+    if not snapshot.get("ok"):
+        response["live_launch_review_snapshot_error"] = snapshot.get("error")
+    response["artifacts"] = {
+        **(response.get("artifacts") if isinstance(response.get("artifacts"), dict) else {}),
+        "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+        "live_launch_review_snapshots": _path_status(LIVE_LAUNCH_REVIEW_SNAPSHOTS_PATH),
+    }
+    return response
 
 
 @router.post("/broker/refresh")
@@ -7017,23 +12240,29 @@ async def get_gen3_state_alpha_refresh_task(task_id: str) -> dict[str, Any]:
 
 
 @router.get("/shadow-monitor/status")
-async def get_gen3_state_alpha_shadow_monitor_status() -> dict[str, Any]:
+async def get_gen3_state_alpha_shadow_monitor_status(
+    include_workflow: bool = Query(default=False),
+) -> dict[str, Any]:
     state = configure_shadow_monitor_scheduler()
-    workflow = _build_workflow_status()
-    return _wrap_guardrails(
-        {
-            "ok": True,
-            "mode": "g3_state_alpha_shadow_monitor",
-            "monitor": state,
-            "workflow": workflow,
-            "scheduler": {
-                "enabled": bool(state.get("scheduler_enabled")),
-                "wired": bool(state.get("scheduler_wired")),
-                "next_run_time": state.get("next_run_time"),
-                "message": "G3 monitor scheduler wired.",
-            },
-        }
-    )
+    payload = {
+        "ok": True,
+        "mode": "g3_state_alpha_shadow_monitor",
+        "monitor": state,
+        "workflow_included": bool(include_workflow),
+        "scheduler": {
+            "enabled": bool(state.get("scheduler_enabled")),
+            "wired": bool(state.get("scheduler_wired")),
+            "next_run_time": state.get("next_run_time"),
+            "message": (
+                "G3 monitor scheduler disabled by runtime configuration."
+                if state.get("scheduler_disabled_reason")
+                else "G3 monitor scheduler wired."
+            ),
+        },
+    }
+    if include_workflow:
+        payload["workflow"] = _build_workflow_status()
+    return _wrap_guardrails(payload)
 
 
 @router.post("/shadow-monitor/config")
@@ -7072,6 +12301,89 @@ async def run_gen3_state_alpha_shadow_monitor_once(payload: dict[str, Any] = Bod
     data = dict(payload) if isinstance(payload, dict) else {}
     data["force_send"] = True
     return await run_gen3_state_alpha_refresh_once(data)
+
+
+@router.get("/shadow-exit-monitor/status")
+async def get_gen3_state_alpha_shadow_exit_monitor_status() -> dict[str, Any]:
+    state = configure_shadow_exit_monitor_scheduler()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_shadow_exit_monitor",
+            "monitor": state,
+            "scheduler": {
+                "enabled": bool(state.get("scheduler_enabled")),
+                "wired": bool(state.get("scheduler_wired")),
+                "next_run_time": state.get("next_run_time"),
+                "message": (
+                    "G3 shadow exit monitor scheduler disabled by runtime configuration."
+                    if state.get("scheduler_disabled_reason")
+                    else "G3 shadow exit monitor scheduler wired."
+                ),
+            },
+            "artifacts": {
+                "exit_monitor_state": _path_status(EXIT_MONITOR_STATE_PATH),
+                "shadow_ledger": _path_status(STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"),
+                "paper_executions": _path_status(PAPER_EXECUTIONS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/shadow-exit-monitor/config")
+async def set_gen3_state_alpha_shadow_exit_monitor_config(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    state = _load_exit_monitor_state()
+    if isinstance(payload, dict):
+        if "enabled" in payload:
+            state["enabled"] = bool(payload.get("enabled"))
+        if "interval_seconds" in payload:
+            state["interval_seconds"] = max(120, int(payload.get("interval_seconds") or 120))
+        if "trading_hours_only" in payload:
+            state["trading_hours_only"] = bool(payload.get("trading_hours_only"))
+        if "paper_exit_enabled" in payload:
+            state["paper_exit_enabled"] = bool(payload.get("paper_exit_enabled"))
+        if "update_ledger_enabled" in payload:
+            state["update_ledger_enabled"] = bool(payload.get("update_ledger_enabled"))
+    _save_exit_monitor_state(state)
+    state = configure_shadow_exit_monitor_scheduler()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_shadow_exit_monitor_config",
+            "monitor": state,
+        }
+    )
+
+
+@router.post("/shadow-exit-monitor/run-once")
+async def run_gen3_state_alpha_shadow_exit_monitor_once(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    data = dict(payload) if isinstance(payload, dict) else {}
+    state = _load_exit_monitor_state()
+    source = str(data.get("source") or "manual").strip() or "manual"
+    paper_enabled_value = data.get("paper_exit_enabled", state.get("paper_exit_enabled", True))
+    ledger_enabled_value = data.get("update_ledger_enabled", state.get("update_ledger_enabled", True))
+    paper_exit_enabled = paper_enabled_value if isinstance(paper_enabled_value, bool) else _truthy(paper_enabled_value)
+    update_ledger_enabled = ledger_enabled_value if isinstance(ledger_enabled_value, bool) else _truthy(ledger_enabled_value)
+    result = _run_shadow_exit_monitor_once(
+        source=source,
+        paper_exit_enabled=bool(paper_exit_enabled),
+        update_ledger_enabled=bool(update_ledger_enabled),
+    )
+    now_text = datetime.now().isoformat(sep=" ", timespec="seconds")
+    state["last_run_at"] = result.get("started_at") or now_text
+    state["last_result"] = result
+    state["last_error"] = None if result.get("ok") else str(result.get("error") or result.get("reason") or "")
+    if result.get("ok"):
+        state["last_success_at"] = result.get("finished_at") or now_text
+    _save_exit_monitor_state(state)
+    return _wrap_guardrails(
+        {
+            "ok": bool(result.get("ok")),
+            "mode": "g3_state_alpha_shadow_exit_monitor_run_once",
+            "result": result,
+            "monitor": configure_shadow_exit_monitor_scheduler(),
+        }
+    )
 
 
 @router.post("/shadow-verification")
@@ -7121,8 +12433,11 @@ async def save_gen3_state_alpha_pretrade_ticket_review(payload: dict[str, Any] =
 async def start_gen3_state_alpha_pretrade_paper_watch_batch(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     include_existing = _truthy(data.get("include_existing"))
+    dry_run = _truthy(data.get("dry_run"))
     run_review = data.get("run_readiness_review")
     run_review = True if run_review is None else _truthy(run_review)
+    if dry_run:
+        run_review = False
     reason = str(data.get("reason") or "").strip()
     batch_id = f"g3paperwatch_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
 
@@ -7130,6 +12445,7 @@ async def start_gen3_state_alpha_pretrade_paper_watch_batch(payload: dict[str, A
     tickets = current.get("next_trade_buy_tickets") if isinstance(current, dict) else []
     tickets = tickets if isinstance(tickets, list) else []
     saved: list[dict[str, Any]] = []
+    preview: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for ticket in tickets:
         if not isinstance(ticket, dict):
@@ -7145,7 +12461,22 @@ async def start_gen3_state_alpha_pretrade_paper_watch_batch(payload: dict[str, A
                 }
             )
             continue
-        result = _save_pretrade_ticket_review(_pretrade_paper_watch_payload_from_ticket(ticket, batch_id=batch_id, reason=reason))
+        review_payload = _pretrade_paper_watch_payload_from_ticket(ticket, batch_id=batch_id, reason=reason)
+        if dry_run:
+            preview.append(
+                {
+                    "ticket_key": review_payload.get("ticket_key"),
+                    "code": review_payload.get("code"),
+                    "name": review_payload.get("name"),
+                    "entry_date": review_payload.get("entry_date"),
+                    "route": review_payload.get("route"),
+                    "review_action": review_payload.get("review_action"),
+                    "review_decision_reason": review_payload.get("review_decision_reason"),
+                    "next_review_trigger": review_payload.get("next_review_trigger"),
+                }
+            )
+            continue
+        result = _save_pretrade_ticket_review(review_payload)
         if result.get("ok"):
             saved.append(result.get("review") or {})
         else:
@@ -7180,12 +12511,15 @@ async def start_gen3_state_alpha_pretrade_paper_watch_batch(payload: dict[str, A
 
     return _wrap_guardrails(
         {
-            "ok": bool(saved) and (not run_review or run.get("returncode") == 0),
+            "ok": (bool(preview) if dry_run else (bool(saved) and (not run_review or run.get("returncode") == 0))),
             "mode": "g3_state_alpha_pretrade_paper_watch_batch",
+            "dry_run": dry_run,
             "batch_id": batch_id,
             "saved_count": len(saved),
+            "would_save_count": len(preview),
             "skipped_count": len(skipped),
             "ticket_count": len(tickets),
+            "preview_reviews": preview,
             "saved_reviews": saved,
             "skipped": skipped,
             "formal_buy_signal": False,
@@ -7233,6 +12567,523 @@ async def save_gen3_state_alpha_paper_watch_review(payload: dict[str, Any] = Bod
     )
 
 
+@router.get("/candidate-omission-reviews")
+async def get_gen3_state_alpha_candidate_omission_reviews() -> dict[str, Any]:
+    reviews = _load_candidate_omission_reviews()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_candidate_omission_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "candidate_omission_reviews": _path_status(CANDIDATE_OMISSION_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/candidate-omission-review")
+async def save_gen3_state_alpha_candidate_omission_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _save_candidate_omission_review(payload if isinstance(payload, dict) else {})
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_state_alpha_candidate_omission_review",
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "candidate_omission_reviews": _path_status(CANDIDATE_OMISSION_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/candidate-omission-review-and-run")
+async def save_gen3_state_alpha_candidate_omission_review_and_run(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    request_payload = payload if isinstance(payload, dict) else {}
+    source = _clean_review_text(request_payload.get("source"), "candidate_omission_checklist")
+    started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+    save_result = _save_candidate_omission_review(request_payload)
+    if not save_result.get("ok"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_candidate_omission_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "candidate_omission_reviews": _path_status(CANDIDATE_OMISSION_REVIEWS_PATH),
+                },
+            }
+        )
+    if save_result.get("removed"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_candidate_omission_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "candidate_omission_reviews": _path_status(CANDIDATE_OMISSION_REVIEWS_PATH),
+                },
+            }
+        )
+    try:
+        review_result = _run_realtime_readiness_review_once()
+    except Exception as exc:
+        logger.exception("Failed to run readiness review after candidate omission review.")
+        review_result = {
+            "ok": False,
+            "mode": "g3_realtime_readiness_review_v1",
+            "error": str(exc),
+            "summary": {},
+        }
+    admission = _readiness_review_admission_summary(review_result)
+    ok = bool(save_result.get("ok")) and bool(review_result.get("ok"))
+    review_item = save_result.get("review") if isinstance(save_result.get("review"), dict) else {}
+    result_code = _clean_review_text(request_payload.get("review_result") or request_payload.get("watch_result") or request_payload.get("result"))
+    action_label = f"候选遗漏复盘：{_candidate_omission_result_label(result_code)}" if result_code else "候选遗漏复盘并复审"
+    response = _wrap_guardrails(
+        {
+            "ok": ok,
+            "mode": "g3_state_alpha_candidate_omission_review_and_readiness_review",
+            "source": source,
+            "save": save_result,
+            "review": review_result,
+            "admission": admission,
+            "message": (
+                "候选遗漏复盘已保存并完成实战前复审"
+                if ok
+                else "候选遗漏复盘已保存，但实战前复审未完成；保持禁止真实买入"
+            ),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+        }
+    )
+    _append_review_action_attempt(
+        attempted_at=started_at,
+        action_group="candidate_omission_review",
+        action_label=action_label,
+        source=source,
+        ok=ok,
+        review_result=review_result,
+        admission=admission,
+        response=response,
+        extra={
+            "sync_ok": None,
+            "sync_mode": "not_applicable",
+            "sync_message": review_item.get("review_note") or save_result.get("key"),
+            "holdings_count": None,
+            "review_key": save_result.get("key"),
+            "review_result": result_code,
+            "review_status": review_item.get("review_status"),
+        },
+    )
+    response["artifacts"] = {
+        **(response.get("artifacts") if isinstance(response.get("artifacts"), dict) else {}),
+        "candidate_omission_reviews": _path_status(CANDIDATE_OMISSION_REVIEWS_PATH),
+        "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+    }
+    return response
+
+
+@router.get("/no-trade-day-reviews")
+async def get_gen3_state_alpha_no_trade_day_reviews() -> dict[str, Any]:
+    reviews = _load_no_trade_day_reviews()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_no_trade_day_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "artifacts": {
+                "no_trade_day_reviews": _path_status(NO_TRADE_DAY_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/no-trade-day-review")
+async def save_gen3_state_alpha_no_trade_day_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _save_no_trade_day_review(payload if isinstance(payload, dict) else {})
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_state_alpha_no_trade_day_review",
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "no_trade_day_reviews": _path_status(NO_TRADE_DAY_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/no-trade-day-review-and-run")
+async def save_gen3_state_alpha_no_trade_day_review_and_run(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    request_payload = payload if isinstance(payload, dict) else {}
+    source = _clean_review_text(request_payload.get("source"), "no_trade_day_review")
+    started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+    save_result = _save_no_trade_day_review(request_payload)
+    if not save_result.get("ok"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_no_trade_day_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "no_trade_day_reviews": _path_status(NO_TRADE_DAY_REVIEWS_PATH),
+                },
+            }
+        )
+    if save_result.get("removed"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_no_trade_day_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "no_trade_day_reviews": _path_status(NO_TRADE_DAY_REVIEWS_PATH),
+                },
+            }
+        )
+    try:
+        review_result = _run_realtime_readiness_review_once()
+    except Exception as exc:
+        logger.exception("Failed to run readiness review after no-trade-day review.")
+        review_result = {
+            "ok": False,
+            "mode": "g3_realtime_readiness_review_v1",
+            "error": str(exc),
+            "summary": {},
+        }
+    admission = _readiness_review_admission_summary(review_result)
+    ok = bool(save_result.get("ok")) and bool(review_result.get("ok"))
+    review_item = save_result.get("review") if isinstance(save_result.get("review"), dict) else {}
+    result_code = _clean_review_text(request_payload.get("review_result") or request_payload.get("result"))
+    action_label = f"无票日复盘：{_no_trade_day_result_label(result_code)}" if result_code else "无票日复盘并复审"
+    response = _wrap_guardrails(
+        {
+            "ok": ok,
+            "mode": "g3_state_alpha_no_trade_day_review_and_readiness_review",
+            "source": source,
+            "save": save_result,
+            "review": review_result,
+            "admission": admission,
+            "message": (
+                "无票日复盘已保存并完成实战前复审"
+                if ok
+                else "无票日复盘已保存，但实战前复审未完成；保持禁止真实买入"
+            ),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+        }
+    )
+    _append_review_action_attempt(
+        attempted_at=started_at,
+        action_group="no_trade_day_review",
+        action_label=action_label,
+        source=source,
+        ok=ok,
+        review_result=review_result,
+        admission=admission,
+        response=response,
+        extra={
+            "sync_ok": None,
+            "sync_mode": "not_applicable",
+            "sync_message": review_item.get("review_note") or save_result.get("key"),
+            "holdings_count": None,
+            "review_key": save_result.get("key"),
+            "review_result": result_code,
+            "review_status": review_item.get("review_status"),
+        },
+    )
+    response["artifacts"] = {
+        **(response.get("artifacts") if isinstance(response.get("artifacts"), dict) else {}),
+        "no_trade_day_reviews": _path_status(NO_TRADE_DAY_REVIEWS_PATH),
+        "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+    }
+    return response
+
+
+@router.get("/formal-action-reviews")
+async def get_gen3_state_alpha_formal_action_reviews() -> dict[str, Any]:
+    reviews = _load_formal_action_reviews()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_formal_action_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "formal_action_reviews": _path_status(FORMAL_ACTION_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/formal-action-review")
+async def save_gen3_state_alpha_formal_action_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _save_formal_action_review(payload if isinstance(payload, dict) else {})
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_state_alpha_formal_action_review",
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "formal_action_reviews": _path_status(FORMAL_ACTION_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/formal-action-review-and-run")
+async def save_gen3_state_alpha_formal_action_review_and_run(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    request_payload = payload if isinstance(payload, dict) else {}
+    source = _clean_review_text(request_payload.get("source"), "formal_action")
+    started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+    save_result = _save_formal_action_review(request_payload)
+    if not save_result.get("ok"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_formal_action_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "formal_action_reviews": _path_status(FORMAL_ACTION_REVIEWS_PATH),
+                },
+            }
+        )
+    if save_result.get("removed"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_formal_action_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "formal_action_reviews": _path_status(FORMAL_ACTION_REVIEWS_PATH),
+                },
+            }
+        )
+    try:
+        review_result = _run_realtime_readiness_review_once()
+    except Exception as exc:
+        logger.exception("Failed to run readiness review after formal action review.")
+        review_result = {
+            "ok": False,
+            "mode": "g3_realtime_readiness_review_v1",
+            "error": str(exc),
+            "summary": {},
+        }
+    admission = _readiness_review_admission_summary(review_result)
+    ok = bool(save_result.get("ok")) and bool(review_result.get("ok"))
+    review_item = save_result.get("review") if isinstance(save_result.get("review"), dict) else {}
+    result_code = _clean_review_text(request_payload.get("review_result") or request_payload.get("result"))
+    action_label = f"正式动作复核：{_formal_action_result_label(result_code)}" if result_code else "正式动作复核并复审"
+    response = _wrap_guardrails(
+        {
+            "ok": ok,
+            "mode": "g3_state_alpha_formal_action_review_and_readiness_review",
+            "source": source,
+            "save": save_result,
+            "review": review_result,
+            "admission": admission,
+            "message": (
+                "正式动作复核已保存并完成实战前复审"
+                if ok
+                else "正式动作复核已保存，但实战前复审未完成；保持禁止真实买入"
+            ),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+        }
+    )
+    _append_review_action_attempt(
+        attempted_at=started_at,
+        action_group="formal_action_review",
+        action_label=action_label,
+        source=source,
+        ok=ok,
+        review_result=review_result,
+        admission=admission,
+        response=response,
+        extra={
+            "sync_ok": None,
+            "sync_mode": "not_applicable",
+            "sync_message": review_item.get("review_note") or save_result.get("key"),
+            "holdings_count": None,
+            "review_key": save_result.get("key"),
+            "review_result": result_code,
+            "review_status": review_item.get("review_status"),
+        },
+    )
+    response["artifacts"] = {
+        **(response.get("artifacts") if isinstance(response.get("artifacts"), dict) else {}),
+        "formal_action_reviews": _path_status(FORMAL_ACTION_REVIEWS_PATH),
+        "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+    }
+    return response
+
+
+@router.get("/daily-review-checklist-reviews")
+async def get_gen3_state_alpha_daily_review_checklist_reviews() -> dict[str, Any]:
+    reviews = _load_daily_review_checklist_reviews()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_state_alpha_daily_review_checklist_reviews",
+            "reviews": list(reviews.values()),
+            "review_map": reviews,
+            "count": len(reviews),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "daily_review_checklist_reviews": _path_status(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/daily-review-checklist-review")
+async def save_gen3_state_alpha_daily_review_checklist_review(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    result = _save_daily_review_checklist_review(payload if isinstance(payload, dict) else {})
+    return _wrap_guardrails(
+        {
+            **result,
+            "mode": "g3_state_alpha_daily_review_checklist_review",
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "artifacts": {
+                "daily_review_checklist_reviews": _path_status(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH),
+            },
+        }
+    )
+
+
+@router.post("/daily-review-checklist-review-and-run")
+async def save_gen3_state_alpha_daily_review_checklist_review_and_run(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    request_payload = payload if isinstance(payload, dict) else {}
+    source = _clean_review_text(request_payload.get("source"), "live_daily_review_execution_checklist")
+    started_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+    save_result = _save_daily_review_checklist_review(request_payload)
+    if not save_result.get("ok"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_daily_review_checklist_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "daily_review_checklist_reviews": _path_status(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH),
+                },
+            }
+        )
+    if save_result.get("removed"):
+        return _wrap_guardrails(
+            {
+                **save_result,
+                "mode": "g3_state_alpha_daily_review_checklist_review_and_readiness_review",
+                "formal_buy_signal": False,
+                "auto_order_allowed": False,
+                "order_path_enabled": False,
+                "artifacts": {
+                    "daily_review_checklist_reviews": _path_status(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH),
+                },
+            }
+        )
+    try:
+        review_result = _run_realtime_readiness_review_once()
+    except Exception as exc:
+        logger.exception("Failed to run readiness review after daily checklist review.")
+        review_result = {
+            "ok": False,
+            "mode": "g3_realtime_readiness_review_v1",
+            "error": str(exc),
+            "summary": {},
+        }
+    admission = _readiness_review_admission_summary(review_result)
+    ok = bool(save_result.get("ok")) and bool(review_result.get("ok"))
+    review_item = save_result.get("review") if isinstance(save_result.get("review"), dict) else {}
+    result_code = _clean_review_text(request_payload.get("review_result") or request_payload.get("result"))
+    axis = _clean_review_text(request_payload.get("review_axis"), "daily_review")
+    action_label = f"逐项复盘：{axis}/{_daily_review_checklist_result_label(result_code)}" if result_code else "逐项复盘并复审"
+    response = _wrap_guardrails(
+        {
+            "ok": ok,
+            "mode": "g3_state_alpha_daily_review_checklist_review_and_readiness_review",
+            "source": source,
+            "save": save_result,
+            "review": review_result,
+            "admission": admission,
+            "message": (
+                "逐项复盘已保存并完成实战前复审"
+                if ok
+                else "逐项复盘已保存，但实战前复审未完成；保持禁止真实买入"
+            ),
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+        }
+    )
+    _append_review_action_attempt(
+        attempted_at=started_at,
+        action_group="daily_review_checklist_review",
+        action_label=action_label,
+        source=source,
+        ok=ok,
+        review_result=review_result,
+        admission=admission,
+        response=response,
+        extra={
+            "sync_ok": None,
+            "sync_mode": "not_applicable",
+            "sync_message": review_item.get("review_note") or save_result.get("key"),
+            "holdings_count": None,
+            "review_key": save_result.get("key"),
+            "review_result": result_code,
+            "review_status": review_item.get("review_status"),
+            "review_axis": review_item.get("review_axis"),
+            "review_scope": review_item.get("review_scope"),
+            "issue_area": review_item.get("issue_area"),
+        },
+    )
+    response["artifacts"] = {
+        **(response.get("artifacts") if isinstance(response.get("artifacts"), dict) else {}),
+        "daily_review_checklist_reviews": _path_status(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH),
+        "premarket_action_attempts": _path_status(PREMARKET_ACTION_ATTEMPTS_PATH),
+    }
+    return response
+
+
 @router.get("/paper-executions")
 async def get_gen3_state_alpha_paper_executions(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum paper execution rows returned."),
@@ -7263,96 +13114,131 @@ async def submit_gen3_state_alpha_paper_order(payload: dict[str, Any] = Body(def
     )
 
 
-@router.post("/ptrade/buy-order")
-async def submit_gen3_state_alpha_ptrade_buy_order(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    result = _submit_ptrade_buy_order(payload if isinstance(payload, dict) else {})
-    return _wrap_guardrails(
-        {
-            "ok": bool(result.get("ok")),
-            "mode": "g3_state_alpha_ptrade_buy_order",
-            **result,
-        }
-    )
-
-
-@router.get("/ptrade/status")
-async def get_gen3_state_alpha_ptrade_status() -> dict[str, Any]:
-    return _wrap_guardrails(_g3_ptrade_status())
-
-
-@router.post("/ptrade/e2e-acceptance")
-async def run_gen3_state_alpha_ptrade_e2e_acceptance(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+@router.post("/day1-paper-execution-batch")
+async def start_gen3_state_alpha_day1_paper_execution_batch(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
-    try:
-        from scripts.gen3_ptrade_e2e_acceptance import run_acceptance as run_ptrade_e2e_acceptance
+    dry_run = _truthy(data.get("dry_run"))
+    include_existing = _truthy(data.get("include_existing"))
+    run_review = data.get("run_readiness_review")
+    run_review = True if run_review is None else _truthy(run_review)
+    if dry_run:
+        run_review = False
+    base_capital = data.get("base_capital")
+    batch_id = f"g3day1paper_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
 
-        result = run_ptrade_e2e_acceptance(
-            bridge_dir=PTRADE_BRIDGE.paths.root,
-            code=str(data.get("code") or "600001"),
-            timeout_seconds=float(data.get("timeout_seconds") or 30.0),
-            poll_seconds=float(data.get("poll_seconds") or 1.0),
-            max_heartbeat_age_seconds=float(data.get("max_heartbeat_age_seconds") or 15.0),
+    current = await get_gen3_state_alpha_current(limit=100, refresh=False, entry_date=None)
+    tickets = current.get("next_trade_buy_tickets") if isinstance(current, dict) else []
+    tickets = [item for item in tickets if isinstance(item, dict)]
+    pack_by_code = _day1_pack_by_code()
+    paper_rows = _load_paper_executions()
+    preview: list[dict[str, Any]] = []
+    saved: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for ticket in tickets:
+        code = str(ticket.get("code") or ticket.get("code_raw") or "").strip().upper()
+        pack_row = pack_by_code.get(code) if pack_by_code else None
+        if pack_by_code and pack_row is None:
+            skipped.append({"code": ticket.get("code"), "name": ticket.get("name"), "reason": "not_in_day1_review_pack"})
+            continue
+        if _day1_launch_posture_blocks_execution(pack_row):
+            skipped.append(
+                {
+                    "code": ticket.get("code"),
+                    "name": ticket.get("name"),
+                    "entry_date": ticket.get("entry_date"),
+                    "reason": "day1_contract_block_observation",
+                    "launch_posture": (pack_row or {}).get("launch_posture"),
+                    "contract_block_reason": (pack_row or {}).get("contract_block_reason"),
+                }
+            )
+            continue
+        if not _truthy(ticket.get("qualified_shadow_buy")):
+            skipped.append({"code": ticket.get("code"), "name": ticket.get("name"), "reason": "not_qualified_shadow_buy"})
+            continue
+        if not _truthy(ticket.get("m30_confirmed")):
+            skipped.append({"code": ticket.get("code"), "name": ticket.get("name"), "reason": "missing_m30_confirmation"})
+            continue
+        existing = next((row for row in paper_rows if _paper_execution_matches_ticket(ticket, row)), None)
+        if existing and not include_existing:
+            skipped.append(
+                {
+                    "code": ticket.get("code"),
+                    "name": ticket.get("name"),
+                    "entry_date": ticket.get("entry_date"),
+                    "reason": "paper_execution_exists",
+                    "execution_id": existing.get("execution_id"),
+                }
+            )
+            continue
+
+        order_payload = _day1_paper_order_payload(ticket, pack_row, base_capital=base_capital)
+        order_payload["batch_id"] = batch_id
+        item = _day1_paper_execution_preview(ticket, pack_row, base_capital=base_capital)
+        item["batch_id"] = batch_id
+        if dry_run:
+            preview.append(item)
+            continue
+        result = _submit_paper_order(order_payload)
+        if result.get("ok"):
+            record = result.get("record") or {}
+            record["batch_id"] = batch_id
+            saved.append(record)
+            paper_rows.append(record)
+        else:
+            skipped.append(
+                {
+                    "code": ticket.get("code"),
+                    "name": ticket.get("name"),
+                    "entry_date": ticket.get("entry_date"),
+                    "reason": result.get("message") or result.get("error") or "paper_order_failed",
+                }
+            )
+
+    review: dict[str, Any] = {}
+    run: dict[str, Any] = {"ran": False}
+    if run_review:
+        started = datetime.now()
+        proc = subprocess.run(
+            [sys.executable, str(REALTIME_READINESS_REVIEW_SCRIPT)],
+            cwd=str(PROJECT_ROOT),
+            text=True,
+            capture_output=True,
+            timeout=180,
         )
-        _write_json(PTRADE_E2E_ACCEPTANCE_PATH, result)
-    except Exception as exc:
-        logger.exception(f"G3 PTrade e2e acceptance failed: {exc}")
-        result = {
-            "ok": False,
-            "message": str(exc),
-            "completed_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        run = {
+            "ran": True,
+            "returncode": proc.returncode,
+            "duration_seconds": round((datetime.now() - started).total_seconds(), 1),
+            "stdout_tail": proc.stdout[-2000:],
+            "stderr_tail": proc.stderr[-2000:],
         }
+        review = _read_realtime_readiness_review()
+
+    ok = bool(preview) if dry_run else bool(saved) and (not run_review or run.get("returncode") == 0)
     return _wrap_guardrails(
         {
-            "ok": bool(result.get("ok")),
-            "mode": "g3_state_alpha_ptrade_e2e_acceptance",
-            "acceptance": result,
-            "ptrade_status": _g3_ptrade_status(),
-        }
-    )
-
-
-@router.post("/ptrade/internal-strategy-acceptance")
-async def run_gen3_state_alpha_ptrade_internal_strategy_acceptance(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    data = payload if isinstance(payload, dict) else {}
-    try:
-        from scripts.gen3_ptrade_internal_strategy_acceptance import run_internal_strategy_acceptance
-
-        result = run_internal_strategy_acceptance(
-            bridge_dir=PTRADE_BRIDGE.paths.root,
-            code=str(data.get("code") or "600001"),
-            wait_seconds=float(data.get("wait_seconds") or 0.0),
-            timeout_seconds=float(data.get("timeout_seconds") or 30.0),
-            poll_seconds=float(data.get("poll_seconds") or 1.0),
-            max_heartbeat_age_seconds=float(data.get("max_heartbeat_age_seconds") or 15.0),
-        )
-        _write_json(PTRADE_INTERNAL_ACCEPTANCE_PATH, result)
-    except Exception as exc:
-        logger.exception(f"G3 PTrade internal strategy acceptance failed: {exc}")
-        result = {
-            "ok": False,
-            "message": str(exc),
-            "checks": [],
-            "completed_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
-        }
-        _write_json(PTRADE_INTERNAL_ACCEPTANCE_PATH, result)
-    return _wrap_guardrails(
-        {
-            "ok": bool(result.get("ok")),
-            "mode": "g3_state_alpha_ptrade_internal_strategy_acceptance",
-            "acceptance": result,
-            "ptrade_status": _g3_ptrade_status(),
-        }
-    )
-
-
-@router.post("/ptrade/sell-order")
-async def submit_gen3_state_alpha_ptrade_sell_order(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    result = _submit_ptrade_sell_order(payload if isinstance(payload, dict) else {})
-    return _wrap_guardrails(
-        {
-            "ok": bool(result.get("ok")),
-            "mode": "g3_state_alpha_ptrade_sell_order",
-            **result,
+            "ok": ok,
+            "mode": "g3_state_alpha_day1_paper_execution_batch",
+            "dry_run": dry_run,
+            "batch_id": batch_id,
+            "ticket_count": len(tickets),
+            "would_save_count": len(preview),
+            "saved_count": len(saved),
+            "skipped_count": len(skipped),
+            "preview_executions": preview,
+            "saved_executions": saved,
+            "skipped": skipped,
+            "formal_buy_signal": False,
+            "auto_order_allowed": False,
+            "order_path_enabled": False,
+            "next_action": "收盘后逐票填写纸面观察后评估，并将问题归因到买点、选股、策略切换或卖点合同。",
+            "run": run,
+            "review_summary": review.get("summary") if isinstance(review, dict) else {},
+            "artifacts": {
+                "paper_executions": _path_status(PAPER_EXECUTIONS_PATH),
+                "day1_paper_review_pack": _path_status(REALTIME_READINESS_REVIEW_DIR / "day1_paper_review_pack.csv"),
+            },
         }
     )
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -38,6 +39,8 @@ PERIOD_MINUTES = {
     "30m": 30,
 }
 COLUMNS = ["code", "datetime", "open", "high", "low", "close", "volume", "amount", "created_at", "id"]
+DEFAULT_GATEWAY_BATCH_SIZE = int(os.environ.get("AISTOCK_INTRADAY_MINUTE_GATEWAY_BATCH_SIZE", "60"))
+MAX_GATEWAY_COUNT_ALL_BATCH_SIZE = int(os.environ.get("AISTOCK_TDX_GATEWAY_MAX_COUNT_ALL_STOCKS", "80"))
 
 
 def _log(message: str) -> None:
@@ -229,7 +232,7 @@ def _aggregate_5m_to_period(base: pd.DataFrame, target_period: str) -> pd.DataFr
 def _fetch_period(batch_codes: list[str], target_date: str, period: str, fill_data: bool) -> tuple[pd.DataFrame, dict[str, int]]:
     ymd = target_date.replace("-", "")
     data = tdxquant_pool.get_market_data(
-        field_list=[],
+        field_list=["Open", "High", "Low", "Close", "Volume", "Amount"],
         stock_list=batch_codes,
         period=period,
         start_time=ymd,
@@ -293,7 +296,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--types", default="stock,index", help="Comma separated stock types")
     parser.add_argument("--codes", default="", help="Optional comma separated full codes")
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--batch-size", type=int, default=500)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_GATEWAY_BATCH_SIZE)
     parser.add_argument("--sleep", type=float, default=0.0)
     parser.add_argument("--min-complete-codes", type=int, default=3000)
     parser.add_argument("--fallback-from-5m", action="store_true", default=True)
@@ -315,7 +318,14 @@ def main() -> int:
     codes = _load_codes(args.types, args.codes, args.limit)
     if not codes:
         raise SystemExit("No target codes loaded")
-    _log(f"start target_date={target_date} codes={len(codes)} periods={periods} batch_size={args.batch_size}")
+    requested_batch_size = max(1, int(args.batch_size or DEFAULT_GATEWAY_BATCH_SIZE))
+    safe_batch_size = min(requested_batch_size, max(1, MAX_GATEWAY_COUNT_ALL_BATCH_SIZE))
+    if safe_batch_size != requested_batch_size:
+        _log(
+            "cap batch_size for TDX Gateway count=-1 request: "
+            f"requested={requested_batch_size} safe={safe_batch_size}"
+        )
+    _log(f"start target_date={target_date} codes={len(codes)} periods={periods} batch_size={safe_batch_size}")
 
     summary: dict[str, Any] = {
         "ok": True,
@@ -332,7 +342,7 @@ def main() -> int:
         period_rows = 0
         empty_codes: set[str] = set()
         batches = 0
-        for batch in _chunked(codes, args.batch_size):
+        for batch in _chunked(codes, safe_batch_size):
             batches += 1
             batch_started = time.perf_counter()
             try:

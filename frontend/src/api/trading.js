@@ -7,7 +7,6 @@ export function getGen2Live(params) {
     params
   })
 }
-
 export function getGen3ShadowLive(params) {
   return request({
     url: '/gen3-shadow/live',
@@ -53,6 +52,203 @@ export function runGen3StateAlphaRealtimeReadinessReview(data) {
   })
 }
 
+export function getGen3StateAlphaLiveLaunchPacket(params) {
+  return request({
+    url: '/gen3-state-alpha/live-launch-packet',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function runGen3StateAlphaLiveLaunchPacket(data) {
+  return request({
+    url: '/gen3-state-alpha/live-launch-packet/run',
+    method: 'post',
+    data,
+    timeout: 240000
+  })
+}
+
+export function getGen3StateAlphaLiveLearningLedger(params) {
+  return request({
+    url: '/gen3-state-alpha/live-learning-ledger',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaLiveLaunchDecision(params) {
+  return request({
+    url: '/gen3-state-alpha/live-launch-decision',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaLiveBlockerEvidenceBoard(params) {
+  return request({
+    url: '/gen3-state-alpha/live-blocker-evidence-board',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaLiveLaunchReadinessAudit(params) {
+  return request({
+    url: '/gen3-state-alpha/live-launch-readiness-audit',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaStrategyTuningAxisBoard(params) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-axis-board',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaStrategyTuningReviewQueue(params) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-review-queue',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaStrategyTuningCompletionAudit(params) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-completion-audit',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaStrategyTuningReplaySuggestions(params) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-replay-suggestions',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaStrategyTuningReplaySession(params) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-replay-session',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaStrategyTuningCurrentStepCompletionPacket(params) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-current-step-completion-packet',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaLiveReplayCockpit(params) {
+  return request({
+    url: '/gen3-state-alpha/live-replay-cockpit',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaStrategyTuningTaskReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-task-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaStrategyTuningTaskReview(data) {
+  return request({
+    url: '/gen3-state-alpha/strategy-tuning-task-review',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaLiveLaunchReviewSnapshots(params) {
+  return request({
+    url: '/gen3-state-alpha/live-launch-review-snapshots',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaLiveLaunchReviewSnapshotDetail(snapshotId) {
+  return request({
+    url: `/gen3-state-alpha/live-launch-review-snapshot/${encodeURIComponent(snapshotId)}`,
+    method: 'get',
+    timeout: 120000
+  })
+}
+
+export function recordGen3StateAlphaLiveLaunchReviewSnapshot(data) {
+  return request({
+    url: '/gen3-state-alpha/live-launch-review-snapshot',
+    method: 'post',
+    data,
+    timeout: 240000
+  })
+}
+
+export function getGen3StateAlphaLaunchDayPlaybookReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/launch-day-playbook-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaLaunchDayPlaybookReviewAndRun(data) {
+  return request({
+    url: '/gen3-state-alpha/launch-day-playbook-review-and-run',
+    method: 'post',
+    data,
+    timeout: 240000
+  })
+}
+
+export function getGen3StateAlphaPremarketControl(params) {
+  return request({
+    url: '/gen3-state-alpha/premarket-control',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function executeGen3StateAlphaPremarketNextAction(data) {
+  return request({
+    url: '/gen3-state-alpha/premarket-control/execute-next',
+    method: 'post',
+    data,
+    timeout: 240000
+  })
+}
+
 export function getGen3StateAlphaMainwaveOpportunities(params) {
   return request({
     url: '/gen3-state-alpha/mainwave-opportunities',
@@ -71,11 +267,92 @@ export function getGen3StateAlphaHistoricalTrades(params) {
   })
 }
 
+export function getGen3StateAlphaHistoricalDecisionReplayTasks(params) {
+  return request({
+    url: '/gen3-state-alpha/historical-decision-replay-tasks',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
+export function getGen3StateAlphaHistoricalDecisionReplayAudit(params) {
+  return request({
+    url: '/gen3-state-alpha/historical-decision-replay-audit',
+    method: 'get',
+    params,
+    timeout: 180000
+  })
+}
+
 export function getGen3StateAlphaBrokerHoldings(params) {
   return request({
     url: '/gen3-state-alpha/broker/holdings',
     method: 'get',
     params,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaBrokerHoldingsSyncPreflight(params) {
+  return request({
+    url: '/gen3-state-alpha/broker/holdings/sync-ths-preflight',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaBrokerHoldingsSyncConfirmationPacket(params) {
+  return request({
+    url: '/gen3-state-alpha/broker/holdings/sync-ths-confirmation-packet',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaBrokerHoldingsSyncOutcome(params) {
+  return request({
+    url: '/gen3-state-alpha/broker/holdings/sync-ths-outcome',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaBrokerPostSyncAcceptance(params) {
+  return request({
+    url: '/gen3-state-alpha/broker/holdings/post-sync-acceptance',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function recordGen3StateAlphaBrokerPostSyncExecutionEvidence(data) {
+  return request({
+    url: '/gen3-state-alpha/broker/holdings/post-sync-acceptance/record-execution-evidence',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaLiveActionConsole(params) {
+  return request({
+    url: '/gen3-state-alpha/live-action-console',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaLiveActionConsoleStepReview(data) {
+  return request({
+    url: '/gen3-state-alpha/live-action-console/step-review',
+    method: 'post',
+    data,
     timeout: 120000
   })
 }
@@ -86,6 +363,15 @@ export function syncGen3StateAlphaBrokerHoldingsFromThs(data) {
     method: 'post',
     data,
     timeout: 120000
+  })
+}
+
+export function syncGen3StateAlphaBrokerHoldingsFromThsAndReview(data) {
+  return request({
+    url: '/gen3-state-alpha/broker/holdings/sync-ths-and-review',
+    method: 'post',
+    data,
+    timeout: 240000
   })
 }
 
@@ -222,6 +508,105 @@ export function saveGen3StateAlphaPaperWatchReview(data) {
   })
 }
 
+export function getGen3StateAlphaCandidateOmissionReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/candidate-omission-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaCandidateOmissionReviewAndRun(data) {
+  return request({
+    url: '/gen3-state-alpha/candidate-omission-review-and-run',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaNoTradeDayReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/no-trade-day-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaNoTradeDayReview(data) {
+  return request({
+    url: '/gen3-state-alpha/no-trade-day-review',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaNoTradeDayReviewAndRun(data) {
+  return request({
+    url: '/gen3-state-alpha/no-trade-day-review-and-run',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaFormalActionReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/formal-action-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaFormalActionReview(data) {
+  return request({
+    url: '/gen3-state-alpha/formal-action-review',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaFormalActionReviewAndRun(data) {
+  return request({
+    url: '/gen3-state-alpha/formal-action-review-and-run',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getGen3StateAlphaDailyReviewChecklistReviews(params) {
+  return request({
+    url: '/gen3-state-alpha/daily-review-checklist-reviews',
+    method: 'get',
+    params,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaDailyReviewChecklistReview(data) {
+  return request({
+    url: '/gen3-state-alpha/daily-review-checklist-review',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function saveGen3StateAlphaDailyReviewChecklistReviewAndRun(data) {
+  return request({
+    url: '/gen3-state-alpha/daily-review-checklist-review-and-run',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
 export function getGen3StateAlphaPaperExecutions(params) {
   return request({
     url: '/gen3-state-alpha/paper-executions',
@@ -240,48 +625,12 @@ export function submitGen3StateAlphaPaperOrder(data) {
   })
 }
 
-export function submitGen3StateAlphaPtradeBuyOrder(data) {
+export function startGen3StateAlphaDay1PaperExecutionBatch(data) {
   return request({
-    url: '/gen3-state-alpha/ptrade/buy-order',
+    url: '/gen3-state-alpha/day1-paper-execution-batch',
     method: 'post',
     data,
-    timeout: 120000
-  })
-}
-
-export function submitGen3StateAlphaPtradeSellOrder(data) {
-  return request({
-    url: '/gen3-state-alpha/ptrade/sell-order',
-    method: 'post',
-    data,
-    timeout: 120000
-  })
-}
-
-export function getGen3StateAlphaPtradeStatus(params) {
-  return request({
-    url: '/gen3-state-alpha/ptrade/status',
-    method: 'get',
-    params,
-    timeout: 120000
-  })
-}
-
-export function runGen3StateAlphaPtradeE2eAcceptance(data) {
-  return request({
-    url: '/gen3-state-alpha/ptrade/e2e-acceptance',
-    method: 'post',
-    data,
-    timeout: 120000
-  })
-}
-
-export function runGen3StateAlphaPtradeInternalStrategyAcceptance(data) {
-  return request({
-    url: '/gen3-state-alpha/ptrade/internal-strategy-acceptance',
-    method: 'post',
-    data,
-    timeout: 120000
+    timeout: 180000
   })
 }
 
@@ -704,146 +1053,5 @@ export function readV4ManualHoldingThsCapitalHoldings() {
     url: '/trading/v4/manual-holdings/ths-capital-holdings',
     method: 'post',
     timeout: 120000
-  })
-}
-
-export function getPtradeBridgeStatus() {
-  return request({
-    url: '/trading/ptrade/bridge/status',
-    method: 'get'
-  })
-}
-
-export function getPtradeBridgeReadinessAudit(params) {
-  return request({
-    url: '/trading/ptrade/bridge/readiness-audit',
-    method: 'get',
-    params
-  })
-}
-
-export function getPtradeBridgeEvidenceReport() {
-  return request({
-    url: '/trading/ptrade/bridge/evidence-report',
-    method: 'get'
-  })
-}
-
-export function savePtradeBridgeConfig(data) {
-  return request({
-    url: '/trading/ptrade/bridge/config',
-    method: 'post',
-    data
-  })
-}
-
-export function runPtradeBridgeLiveProbe(data) {
-  return request({
-    url: '/trading/ptrade/bridge/live-probe',
-    method: 'post',
-    data,
-    timeout: 70000
-  })
-}
-
-export function runPtradeBridgeAcceptance(data) {
-  return request({
-    url: '/trading/ptrade/bridge/acceptance',
-    method: 'post',
-    data,
-    timeout: 200000
-  })
-}
-
-export function startPtradeBridgeAcceptance(data) {
-  return request({
-    url: '/trading/ptrade/bridge/acceptance/start',
-    method: 'post',
-    data
-  })
-}
-
-export function getPtradeBridgeAcceptanceTask(taskId) {
-  return request({
-    url: `/trading/ptrade/bridge/acceptance-task/${taskId}`,
-    method: 'get'
-  })
-}
-
-export function startPtradeBridgeWatchAcceptance(data) {
-  return request({
-    url: '/trading/ptrade/bridge/watch-acceptance/start',
-    method: 'post',
-    data
-  })
-}
-
-export function getPtradeBridgeWatchAcceptanceTask(taskId) {
-  return request({
-    url: `/trading/ptrade/bridge/watch-acceptance-task/${taskId}`,
-    method: 'get'
-  })
-}
-
-export function startPtradeBridgeLiveSubmitTest(data) {
-  return request({
-    url: '/trading/ptrade/bridge/live-submit-test/start',
-    method: 'post',
-    data
-  })
-}
-
-export function getPtradeBridgeLiveSubmitTestTask(taskId) {
-  return request({
-    url: `/trading/ptrade/bridge/live-submit-test-task/${taskId}`,
-    method: 'get'
-  })
-}
-
-export function recoverStalePtradeBridgeProcessing(data) {
-  return request({
-    url: '/trading/ptrade/bridge/processing/recover-stale',
-    method: 'post',
-    data
-  })
-}
-
-export function listPtradeBridgeOrders(params) {
-  return request({
-    url: '/trading/ptrade/bridge/orders',
-    method: 'get',
-    params
-  })
-}
-
-export function listPtradeBridgeFills(params) {
-  return request({
-    url: '/trading/ptrade/bridge/fills',
-    method: 'get',
-    params
-  })
-}
-
-export function getPtradeBridgePositions(params) {
-  return request({
-    url: '/trading/ptrade/bridge/positions',
-    method: 'get',
-    params
-  })
-}
-
-export function submitPtradeBridgeOrder(data) {
-  return request({
-    url: '/trading/ptrade/bridge/orders',
-    method: 'post',
-    data
-  })
-}
-
-export function cancelPtradeBridgeOrder(orderId, data) {
-  return request({
-    url: `/trading/ptrade/bridge/orders/${orderId}/cancel`,
-    method: 'post',
-    data
   })
 }

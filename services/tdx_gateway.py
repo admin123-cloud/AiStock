@@ -11,6 +11,8 @@ from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 import re
+import ctypes
+from ctypes import wintypes
 from typing import Any, Optional
 
 import pandas as pd
@@ -25,6 +27,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_MARKET_DATA_RESPONSE_FIELDS = ("Open", "High", "Low", "Close", "Volume", "Amount")
 GATEWAY_TASK_NAME = "AiStock TDX Gateway"
+MAX_COUNT_ALL_STOCKS = int(os.environ.get("AISTOCK_TDX_GATEWAY_MAX_COUNT_ALL_STOCKS", "80"))
+MAX_SNAPSHOT_STOCKS = int(os.environ.get("AISTOCK_TDX_GATEWAY_MAX_SNAPSHOT_STOCKS", "240"))
 
 
 class MarketDataRequest(BaseModel):
@@ -103,6 +107,43 @@ def _jsonable(value: Any) -> Any:
 
 def _ok(data: Any) -> dict[str, Any]:
     return {"ok": True, "data": _jsonable(data)}
+
+
+def _process_private_mb() -> Optional[float]:
+    if os.name != "nt":
+        return None
+    try:
+        class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+                ("PrivateUsage", ctypes.c_size_t),
+            ]
+
+        counters = PROCESS_MEMORY_COUNTERS_EX()
+        counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+        handle = ctypes.windll.kernel32.GetCurrentProcess()
+        get_memory_info = ctypes.windll.kernel32.K32GetProcessMemoryInfo
+        get_memory_info.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
+            wintypes.DWORD,
+        ]
+        get_memory_info.restype = wintypes.BOOL
+        ok = get_memory_info(handle, ctypes.byref(counters), counters.cb)
+        if not ok:
+            return None
+        return round(float(counters.PrivateUsage) / 1024 / 1024, 2)
+    except Exception:
+        return None
 
 
 def _run_command(args: list[str], timeout: int = 10) -> dict[str, Any]:
@@ -187,6 +228,11 @@ def _limit_market_data_response(data: Any, field_list: list[str]) -> Any:
         if str(key).lower() in allowed_keys:
             out[str(key)] = value
     return out
+
+
+def _market_data_request_fields(field_list: list[str]) -> list[str]:
+    requested = [str(item).strip() for item in field_list if str(item).strip()]
+    return requested or list(DEFAULT_MARKET_DATA_RESPONSE_FIELDS)
 
 
 def _normalize_tdx_date(value: Optional[str], field_name: str) -> Optional[str]:
@@ -474,8 +520,34 @@ def realtime_quotes(request: QuotesRequest) -> dict[str, Any]:
 def market_data(request: MarketDataRequest) -> dict[str, Any]:
     start_time = _normalize_tdx_date(request.start_time, "start_time")
     end_time = _normalize_tdx_date(request.end_time, "end_time")
+    stock_count = len(request.stock_list or [])
+    requested_fields = _market_data_request_fields(request.field_list)
+    if request.count == -1 and stock_count > MAX_COUNT_ALL_STOCKS:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "market-data request is too large for count=-1: "
+                f"stocks={stock_count}, limit={MAX_COUNT_ALL_STOCKS}. Split into smaller batches."
+            ),
+        )
+    if request.count != -1 and stock_count > MAX_SNAPSHOT_STOCKS:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "market-data snapshot request is too large: "
+                f"stocks={stock_count}, limit={MAX_SNAPSHOT_STOCKS}. Split into smaller batches."
+            ),
+        )
+    before_mb = _process_private_mb()
+    print(
+        "TDX_GATEWAY_MARKET_DATA_START "
+        f"stocks={stock_count} period={request.period} count={request.count} "
+        f"fields={len(requested_fields)} start={start_time or '-'} end={end_time or '-'} "
+        f"private_mb={before_mb if before_mb is not None else '-'}",
+        flush=True,
+    )
     result = tdxquant_pool.get_market_data(
-        field_list=[],
+        field_list=requested_fields,
         stock_list=request.stock_list,
         period=request.period,
         start_time=start_time,
@@ -488,6 +560,15 @@ def market_data(request: MarketDataRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="TdxQuant market data is unavailable")
     result = _limit_market_data_response(result, request.field_list)
     gc.collect()
+    after_mb = _process_private_mb()
+    delta = None if before_mb is None or after_mb is None else round(after_mb - before_mb, 2)
+    print(
+        "TDX_GATEWAY_MARKET_DATA_DONE "
+        f"stocks={stock_count} period={request.period} count={request.count} "
+        f"fields={len(requested_fields)} private_mb={after_mb if after_mb is not None else '-'} "
+        f"delta_mb={delta if delta is not None else '-'}",
+        flush=True,
+    )
     return _ok(result)
 
 

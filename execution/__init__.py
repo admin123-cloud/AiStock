@@ -2,36 +2,34 @@
 Execution helpers.
 """
 
-__all__ = []
+__all__ = [
+    "Broker",
+    "OrderManager",
+    "PositionManager",
+    "QmtMiniOrderGateway",
+    "RiskController",
+]
 
-try:
-    from .broker import Broker
 
-    __all__.append("Broker")
-except Exception:
-    Broker = None
+def __getattr__(name):
+    if name == "Broker":
+        from .broker import Broker
 
-try:
-    from .order_manager import OrderManager
+        return Broker
+    if name == "OrderManager":
+        from .order_manager import OrderManager
 
-    __all__.append("OrderManager")
-except Exception:
-    OrderManager = None
+        return OrderManager
+    if name == "PositionManager":
+        from .position_manager import PositionManager
 
-try:
-    from .position_manager import PositionManager
+        return PositionManager
+    if name == "RiskController":
+        from .risk_controller import RiskController
 
-    __all__.append("PositionManager")
-except Exception:
-    PositionManager = None
+        return RiskController
+    if name == "QmtMiniOrderGateway":
+        from .qmtmini_gateway import QmtMiniOrderGateway
 
-try:
-    from .risk_controller import RiskController
-
-    __all__.append("RiskController")
-except Exception:
-    RiskController = None
-
-from .ptrade_bridge import PTradeFileBridge
-
-__all__.append("PTradeFileBridge")
+        return QmtMiniOrderGateway
+    raise AttributeError(name)

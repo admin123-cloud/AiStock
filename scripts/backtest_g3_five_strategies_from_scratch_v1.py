@@ -187,7 +187,7 @@ def _select_strategy_candidates(features: pd.DataFrame, ctx: pd.DataFrame, top_n
         inst = inst[
             (inst["strategy_score"] >= 120.0)
             & (pd.to_numeric(inst["sector_diffusion_score"], errors="coerce") >= 65.0)
-            & (pd.to_numeric(inst["index_mom60"], errors="coerce") <= 0.10)
+            & (pd.to_numeric(inst["index_mom60"], errors="coerce") <= 0.05)
         ].copy()
         frames.append(inst)
 
@@ -443,8 +443,8 @@ def _simulate_portfolio(trades: pd.DataFrame, calendar: list[pd.Timestamp], slot
                 if any(str(p.get("code")) == str(row.get("code")) for p in open_pos):
                     continue
                 equity_before = cash + sum(float(p["stake"]) for p in open_pos)
-                heat_scale = 0.5 if _safe_float(row.get("index_mom60")) > 0.05 else 1.0
-                stake = equity_before * slot_pct * heat_scale
+                heat_scale = 1.0
+                stake = equity_before * slot_pct
                 if cash < stake or stake <= 0:
                     continue
                 row["position_scale"] = heat_scale

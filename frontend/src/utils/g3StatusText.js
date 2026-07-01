@@ -33,8 +33,11 @@ const STATUS_LABELS = {
   current_rebuilt_route_candidate: '当日重建候选',
   daily_candidate_no_intraday_data: '日线候选，缺少盘中确认',
   panic_wait_intraday_confirm_or_no_intraday_data: '等待盘中确认或暂无盘中数据',
-  high_heat_reduce_position: '市场偏热，仅观察',
-  high_heat_observe: '市场偏热，仅观察',
+  high_heat_reduce_position: '超过主升热度门槛，仅观察',
+  high_heat_observe: '超过主升热度门槛，仅观察',
+  institutional_mom60_gt_5_block: '主升mom60超过5%，不出票',
+  institutional_index_mom60_gt_5pct_strategy_gate: '主升mom60超过5%，不出票',
+  institutional_mainwave_dynamic_cooldown_pause_new_buy: '机构主升连亏动态冷却，暂停新买',
   shadow_only_current_rebuilt_requires_live_observation: '仅影子重建，需实盘观察',
 }
 

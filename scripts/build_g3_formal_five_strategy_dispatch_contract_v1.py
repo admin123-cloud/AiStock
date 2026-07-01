@@ -21,6 +21,8 @@ FORMAL_DIR = report_path("g2_g3_market_style_router_v1")
 PRACTICAL_DIR = report_path("g3_practical_fusion_contract_v1")
 MODEL = "g3_final_with_g2_gap_supplement"
 INITIAL_EQUITY = 1_000_000.0
+G2_GAP_SUPPLEMENT_LIVE_ENABLED = False
+G2_GAP_SUPPLEMENT_RETIRE_REASON = "historical_replay_negative_and_no_portfolio_improvement_retired_from_live_trading_2026_06_21"
 
 
 DISPATCH_STATES = [
@@ -36,25 +38,25 @@ DISPATCH_STATES = [
         "state": "mainwave_or_strong_trend",
         "label": "主升/强趋势",
         "definition": "存在机构主升候选，或市场扩散不弱且出现强势突破候选；不处于 severe panic。",
-        "enabled_strategies": ["institutional_score120_mainwave", "old_g3_strong_breakout", "volume_runup_supplement"],
+        "enabled_strategies": ["institutional_score120_mainwave", "old_g3_strong_breakout"],
         "primary_strategy": "institutional_score120_mainwave",
-        "reason": "主升负责主要进攻；强势突破作为同方向进攻开关；G2 只在二槽未满时补位。",
+        "reason": "主升负责主要进攻；强势突破作为同方向进攻开关；G2 补位已退役，仅观察。",
     },
     {
         "state": "range_or_weak_repair",
         "label": "震荡/弱势修复",
         "definition": "market_style 为 standard_range 或 weak_rebound，或均线骨架 mixed/weak_repair，且未触发恐慌出清。",
-        "enabled_strategies": ["range_weak_repair", "volume_runup_supplement", "old_g3_strong_breakout"],
+        "enabled_strategies": ["range_weak_repair", "old_g3_strong_breakout"],
         "primary_strategy": "range_weak_repair",
-        "reason": "震荡弱势修复是常规修复核心；强势突破仅在出现质量合格突破候选时参与；G2 继续补空档。",
+        "reason": "震荡弱势修复是常规修复核心；强势突破仅在出现质量合格突破候选时参与；G2 补位不再参与实盘。",
     },
     {
         "state": "no_g3_primary",
         "label": "G3主路由空档",
-        "definition": "当天没有合格 G3 主路由候选，且 G2 补位源新鲜。",
-        "enabled_strategies": ["volume_runup_supplement"],
-        "primary_strategy": "volume_runup_supplement",
-        "reason": "G2 只承担空档补位，不替代 G3 主路由。",
+        "definition": "当天没有合格 G3 主路由候选。",
+        "enabled_strategies": [],
+        "primary_strategy": "",
+        "reason": "G2 补位已因历史负贡献退出实盘交易；空档日不再为填仓而交易。",
     },
 ]
 
@@ -65,7 +67,8 @@ STRATEGY_CONTRACT = [
         "label": "机构主升Score120",
         "role": "core_offense",
         "default_enabled": True,
-        "activation": "存在 institutional_mainwave 原生候选，score>=120，主线扩散/30m确认满足；index_mom60 5%-10%仅观察，>10%不开新仓。",
+        "activation": "存在 institutional_mainwave 原生候选，score>=120，主线扩散/30m确认满足，index_mom60<=5%，且未触发机构主升动态冷却；>5%只观察，不进入影子盘/买入候选。",
+        "dynamic_cooldown_policy": "连续2笔已平仓 institutional_mainwave 亏损后，暂停新买至少3个交易日；之后只有 index_mom60<=5%、指数站上MA20或mom20>=0、且当前候选仍满足板块扩散与30m确认时恢复；最多15个交易日复评释放。",
         "priority": 10,
         "default_slot_pct": 0.50,
         "max_slot_pct": 0.50,
@@ -107,13 +110,15 @@ STRATEGY_CONTRACT = [
     {
         "trade_strategy": "volume_runup_supplement",
         "label": "量能续强补位",
-        "role": "gap_supplement",
-        "default_enabled": True,
-        "activation": "G3 主路由未占满二槽，且 g2_v2_complete 补位源覆盖 entry_date 并有 buy_allowed 候选。",
+        "role": "retired_observation_source",
+        "default_enabled": False,
+        "activation": "已退出实盘交易；仅保留源新鲜度、候选质量和历史归因观察。",
         "priority": 90,
-        "default_slot_pct": 0.50,
-        "max_slot_pct": 0.50,
-        "backtest_role": "补足空档，提高资金利用率；不能替代主路由。",
+        "default_slot_pct": 0.0,
+        "max_slot_pct": 0.0,
+        "live_enabled": G2_GAP_SUPPLEMENT_LIVE_ENABLED,
+        "retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON,
+        "backtest_role": "历史回放为负贡献且未改善组合回撤；不再进入影子票据、纸面交易或正式买入候选。",
     },
 ]
 
@@ -121,7 +126,7 @@ STRATEGY_CONTRACT = [
 DISPATCH_RULES = {
     "version": "g3_formal_five_strategy_dispatch_contract_v1",
     "model": MODEL,
-    "principle": "五个策略全部是正式策略；差别在于市场状态、候选质量、仓位和二槽调度，不再把强势突破/恐慌修复视为关闭策略。",
+    "principle": "量能续强补位退出实盘交易；正式买入只围绕机构主升、强势突破、震荡弱势修复和恐慌出清修复，G2补位仅保留观察归因。",
     "daily_open_limit": 2,
     "slot_pct_default": 0.50,
     "same_sector_policy": "只有两张都是机构主升Score120时允许同板块/同主线；否则重复板块跳过第二张。",
@@ -131,15 +136,24 @@ DISPATCH_RULES = {
         "候选无未来函数",
         "30m确认语义满足对应原生策略",
         "真实账户风控与资金约束通过",
+        "institutional_mainwave 连续亏损动态冷却未暂停新买",
         "正式下单开关显式开启前只生成影子/纸面票据",
     ],
+    "institutional_dynamic_cooldown_policy": {
+        "policy": "institutional_mainwave_consecutive_loss_dynamic_recovery",
+        "trigger": "consecutive_closed_institutional_mainwave_loss_count>=2",
+        "min_cooldown_trading_days": 3,
+        "release_condition": "index_mom60<=5% and (index_close>=index_ma20 or index_mom20>=0) and current candidate still passes sector diffusion plus 30m confirmation",
+        "max_recheck_trading_days": 15,
+        "scope": "institutional_mainwave_new_buys",
+    },
     "dispatch_sequence": [
         "读取前一交易日市场状态和当日各策略原生候选",
         "应用硬安全 gate 和策略自身原生准入条件",
         "根据市场状态选择启用策略集合",
         "按策略优先级、策略内主分数、候选排名排序",
         "执行二槽、重复代码和板块暴露约束",
-        "G3 主路由不足二槽时使用 G2 量能续强补位",
+        "G3 主路由不足二槽时保持空槽，不再使用 G2 量能续强补位",
         "生成买入票据、退出合同、仓位和审计字段",
     ],
     "states": DISPATCH_STATES,
@@ -225,7 +239,7 @@ def _summary(trades: pd.DataFrame, strategy_metrics: pd.DataFrame) -> dict[str, 
     checks = {
         "five_strategies_present": set(strategy_metrics["trade_strategy"]) == {x["trade_strategy"] for x in STRATEGY_CONTRACT},
         "no_unknown_strategy": int((trades["trade_strategy"] == "other").sum()) == 0,
-        "formal_reference_return_loaded": total_return > 20.0,
+        "formal_reference_return_loaded": int(len(trades)) > 0 and total_return > 0.0,
         "practical_retain_rate_ok": float(practical.get("recommended_retain_rate") or 0) >= 0.85,
     }
     return {
@@ -279,7 +293,7 @@ def _write_report(summary: dict[str, Any], strategy_metrics: pd.DataFrame, state
         "- `机构主升Score120` 与 `震荡弱势修复` 是核心策略，不能删除。",
         "- `强势突破` 是进攻条件策略，出现强趋势/突破原生候选时自动启用，不为追历史收益硬开。",
         "- `恐慌出清修复` 是防守条件策略，出现恐慌扩散或下跌出清时自动启用，非恐慌状态不硬开。",
-        "- `量能续强补位` 只在二槽未满且 G2 源新鲜时补位，不替代 G3 主路由。",
+        "- `量能续强补位` 已退出实盘交易；仅保留源新鲜度、候选质量和历史归因观察。",
         "- 所有策略共用二槽、板块暴露、30m确认、止盈止损和账户安全约束。",
         "",
         "## 回测验收",

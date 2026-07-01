@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -46,7 +47,13 @@ def chunked(items: list[str], size: int) -> Iterable[list[str]]:
 
 
 def ch_client():
-    return get_client(host="127.0.0.1", port=8123, username="default", database="stock")
+    return get_client(
+        host=os.getenv("AISTOCK_CLICKHOUSE_HOST", "127.0.0.1"),
+        port=int(os.getenv("AISTOCK_CLICKHOUSE_PORT", "8123")),
+        username=os.getenv("AISTOCK_CLICKHOUSE_USER", "default"),
+        password=os.getenv("AISTOCK_CLICKHOUSE_PASSWORD", ""),
+        database=os.getenv("AISTOCK_CLICKHOUSE_DATABASE", "stock"),
+    )
 
 
 def ensure_tq():
@@ -207,7 +214,7 @@ def fetch_to_stage(args: argparse.Namespace) -> dict[str, Any]:
         batch_started = time.perf_counter()
         try:
             data = tq.get_market_data(
-                field_list=[],
+                field_list=["Open", "High", "Low", "Close", "Volume", "Amount"],
                 stock_list=batch_codes,
                 period="1d",
                 start_time=args.start_date.replace("-", ""),
@@ -248,6 +255,11 @@ def fetch_to_stage(args: argparse.Namespace) -> dict[str, Any]:
     Path(args.report).parent.mkdir(parents=True, exist_ok=True)
     Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     log(f"fetch summary {json.dumps(summary, ensure_ascii=False)} report={args.report}")
+    if failed or total_rows <= 0:
+        raise RuntimeError(
+            f"daily fetch failed: rows={total_rows}, failed_batches={len(failed)}, "
+            f"report={args.report}"
+        )
     return summary
 
 

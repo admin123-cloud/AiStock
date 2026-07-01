@@ -136,6 +136,9 @@ const ensureCurrentGroupExpanded = () => {
 
 const handleNavigate = (path) => {
   localStorage.setItem(LAST_VISITED_KEY, path)
+  if (route.path !== path) {
+    router.push(path)
+  }
   emit('navigate')
   if (props.isMobile) {
     emit('update:open', false)

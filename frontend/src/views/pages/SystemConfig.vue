@@ -72,12 +72,22 @@
         <button class="btn" :disabled="tdxGatewayLoading" @click="refreshTdxGatewayDiagnostics">
           {{ tdxGatewayLoading ? '诊断中...' : '刷新诊断' }}
         </button>
+        <button class="btn secondary" :disabled="tdxGatewayProbing || tdxGatewayLoading" @click="probeTdxGateway">
+          {{ tdxGatewayProbing ? '探针中...' : '真实取数探针' }}
+        </button>
         <button class="btn primary" :disabled="tdxGatewayInitializing || tdxGatewayRestarting" @click="initializeTdxGateway">
           {{ tdxGatewayInitializing ? '初始化中...' : '重新初始化' }}
+        </button>
+        <button class="btn primary" :disabled="tdxGatewayRecovering || tdxGatewayRestarting || tdxGatewayInitializing" @click="recoverTdxGateway">
+          {{ tdxGatewayRecovering ? '恢复中...' : '一键恢复' }}
         </button>
         <button class="btn danger soft" :disabled="tdxGatewayRestarting" @click="restartTdxGateway">
           {{ tdxGatewayRestarting ? '重启请求已发送...' : '重启 Gateway' }}
         </button>
+      </div>
+      <div class="gateway-verdict" :class="`level-${tdxGatewayVerdict.level || 'unknown'}`">
+        <strong>{{ tdxGatewayVerdict.summary || '等待诊断结果' }}</strong>
+        <span>排障顺序：{{ tdxGatewayRecoveryOrderText }}</span>
       </div>
       <div class="gateway-grid">
         <article class="gateway-card">
@@ -119,6 +129,28 @@
           <strong>{{ tdxGatewayDiagnostics.market_data_probe.error }}</strong>
         </div>
       </div>
+      <div class="gateway-check-grid">
+        <div
+          v-for="check in tdxGatewayChecks"
+          :key="check.key"
+          class="gateway-check"
+          :class="check.ok ? 'ok' : 'blocked'"
+        >
+          <span>{{ check.label }}</span>
+          <strong>{{ check.status || '-' }}</strong>
+        </div>
+      </div>
+      <div v-if="tdxGatewayBlockers.length" class="gateway-blockers">
+        <strong>当前阻塞</strong>
+        <span v-for="item in tdxGatewayBlockers" :key="item.key">{{ item.message }}</span>
+      </div>
+      <div v-if="tdxGatewayManualCommands.length" class="gateway-manual">
+        <strong>Gateway 完全不可达时的宿主机兜底</strong>
+        <div v-for="item in tdxGatewayManualCommands" :key="item.command" class="gateway-command">
+          <span>{{ item.label }}</span>
+          <code>{{ item.command }}</code>
+        </div>
+      </div>
     </section>
 
     <section class="section-card">
@@ -132,6 +164,95 @@
           <button class="btn subtle" @click="toggleTimelinePanel">
             {{ showTimelinePanel ? '收起时间线' : '查看时间线' }}
           </button>
+        </div>
+      </div>
+
+      <div v-if="false" class="data-source-panel">
+        <div class="data-source-toolbar">
+          <div>
+            <span class="eyebrow">Source Coverage</span>
+            <h3>按日期统计数据源数量</h3>
+          </div>
+          <div class="data-source-date-actions">
+            <input
+              v-model="dataSourceCountDate"
+              class="date-input"
+              type="date"
+              @change="refreshDataSourceCounts"
+            />
+            <button class="btn subtle" :disabled="dataSourceCountsLoading" @click="refreshDataSourceCounts">
+              {{ dataSourceCountsLoading ? '统计中...' : '刷新统计' }}
+            </button>
+          </div>
+        </div>
+        <div class="data-source-meta">
+          <span>统计日期：{{ dataSourceCounts.trade_date || dataSourceCountDate }}</span>
+          <span>最新可用：{{ dataSourceCounts.latest_available_date || '-' }}</span>
+          <span>缺口项：{{ dataSourceCounts.summary?.incomplete ?? dataSourceCounts.summary?.missing ?? '-' }}</span>
+          <span>检查时间：{{ formatDateTime(dataSourceCounts.checked_at) }}</span>
+        </div>
+        <div class="data-source-table-wrap">
+          <table class="data-source-table">
+            <thead>
+              <tr>
+                <th>数据源</th>
+                <th>覆盖状态</th>
+                <th>标的数量</th>
+                <th>数据行数</th>
+                <th>完整度</th>
+                <th>最新日期</th>
+                <th>分钟明细</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!dataSourceCountsLoading && !dataSourceCountRows.length">
+                <td colspan="7" class="table-empty">暂无统计数据</td>
+              </tr>
+              <tr
+                v-for="row in dataSourceCountRows"
+                :key="row.key"
+                :class="getDataSourceRowClass(row)"
+              >
+                <td>
+                  <strong>{{ row.label }}</strong>
+                  <small>{{ row.key }}</small>
+                </td>
+                <td>
+                  <span class="status-pill" :class="getDataSourceStatusClass(row)">
+                    {{ getDataSourceStatusText(row) }}
+                  </span>
+                </td>
+                <td>{{ formatInteger(row.code_count) }}</td>
+                <td>{{ formatInteger(row.row_count) }}</td>
+                <td>
+                  <strong>{{ formatCoverage(row.coverage_rate) }}</strong>
+                  <small v-if="row.expected_row_count">应有 {{ formatInteger(row.expected_row_count) }}</small>
+                  <small v-if="row.missing_rows || row.extra_rows">
+                    缺 {{ formatInteger(row.missing_rows) }} / 多 {{ formatInteger(row.extra_rows) }}
+                  </small>
+                </td>
+                <td>{{ row.latest_date || '-' }}</td>
+                <td>
+                  <div v-if="row.periods?.length" class="period-stack">
+                    <span
+                      v-for="period in row.periods"
+                      :key="`${row.key}-${period.period}`"
+                      class="period-chip"
+                      :class="period.complete ? 'complete' : 'incomplete'"
+                    >
+                      <strong>{{ period.period }}</strong>
+                      <span>{{ formatInteger(period.row_count) }}/{{ formatInteger(period.expected_row_count) }}</span>
+                      <em>{{ formatCoverage(period.coverage_rate) }}</em>
+                      <small v-if="period.missing_rows || period.extra_rows">
+                        缺{{ formatInteger(period.missing_rows) }} 多{{ formatInteger(period.extra_rows) }}
+                      </small>
+                    </span>
+                  </div>
+                  <span v-else>-</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -181,6 +302,98 @@
           <span class="timeline-duration">{{ formatDuration(item.duration_sec) }}</span>
           <span class="timeline-time">{{ formatDateTime(item.created_at) }}</span>
         </div>
+      </div>
+    </section>
+
+    <section class="section-card data-source-section">
+      <div class="data-source-toolbar">
+        <div>
+          <span class="eyebrow">Source Coverage</span>
+          <h2>按日期统计数据源数量</h2>
+        </div>
+        <div class="data-source-date-actions">
+          <input
+            v-model="dataSourceCountDate"
+            class="date-input"
+            type="date"
+            @change="refreshDataSourceCounts"
+          />
+          <button class="btn subtle" :disabled="dataSourceCountsLoading" @click="refreshDataSourceCounts">
+            {{ dataSourceCountsLoading ? '统计中...' : '刷新统计' }}
+          </button>
+          <button class="btn primary" :disabled="dataSourceRepairing || !dataSourceCountDate" @click="repairDataSourceDate">
+            {{ dataSourceRepairing ? '修复中...' : '修复当前日期' }}
+          </button>
+        </div>
+      </div>
+      <div class="data-source-meta">
+        <span>统计日期：{{ dataSourceCounts.trade_date || dataSourceCountDate }}</span>
+        <span>最新可用：{{ dataSourceCounts.latest_available_date || '-' }}</span>
+        <span>缺口项：{{ dataSourceCounts.summary?.incomplete ?? dataSourceCounts.summary?.missing ?? '-' }}</span>
+        <span>检查时间：{{ formatDateTime(dataSourceCounts.checked_at) }}</span>
+      </div>
+      <div class="data-source-table-wrap">
+        <table class="data-source-table">
+          <thead>
+            <tr>
+              <th>数据源</th>
+              <th>覆盖状态</th>
+              <th>标的数量</th>
+              <th>数据行数</th>
+              <th>完整度</th>
+              <th>最新日期</th>
+              <th>分钟明细</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!dataSourceCountsLoading && !dataSourceCountRows.length">
+              <td colspan="7" class="table-empty">暂无统计数据</td>
+            </tr>
+            <tr
+              v-for="row in dataSourceCountRows"
+              :key="row.key"
+              :class="getDataSourceRowClass(row)"
+            >
+              <td>
+                <strong>{{ row.label }}</strong>
+                <small>{{ row.key }}</small>
+              </td>
+              <td>
+                <span class="status-pill" :class="getDataSourceStatusClass(row)">
+                  {{ getDataSourceStatusText(row) }}
+                </span>
+              </td>
+              <td>{{ formatInteger(row.code_count) }}</td>
+              <td>{{ formatInteger(row.row_count) }}</td>
+              <td>
+                <strong>{{ formatCoverage(row.coverage_rate) }}</strong>
+                <small v-if="row.expected_row_count">应有 {{ formatInteger(row.expected_row_count) }}</small>
+                <small v-if="row.missing_rows || row.extra_rows">
+                  缺 {{ formatInteger(row.missing_rows) }} / 多 {{ formatInteger(row.extra_rows) }}
+                </small>
+              </td>
+              <td>{{ row.latest_date || '-' }}</td>
+              <td>
+                <div v-if="row.periods?.length" class="period-stack">
+                  <span
+                    v-for="period in row.periods"
+                    :key="`${row.key}-${period.period}`"
+                    class="period-chip"
+                    :class="period.complete ? 'complete' : 'incomplete'"
+                  >
+                    <strong>{{ period.period }}</strong>
+                    <span>{{ formatInteger(period.row_count) }}/{{ formatInteger(period.expected_row_count) }}</span>
+                    <em>{{ formatCoverage(period.coverage_rate) }}</em>
+                    <small v-if="period.missing_rows || period.extra_rows">
+                      缺 {{ formatInteger(period.missing_rows) }} 多 {{ formatInteger(period.extra_rows) }}
+                    </small>
+                  </span>
+                </div>
+                <span v-else>-</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -272,73 +485,6 @@
     <section class="section-card">
       <div class="section-title-row">
         <div>
-          <span class="eyebrow">Trading Account</span>
-          <h2>PTrade交易账号</h2>
-        </div>
-        <span class="status-pill" :class="ptradeAccountForm.enabled ? 'enabled' : 'paused'">
-          {{ ptradeAccountForm.enabled ? '已启用' : '已停用' }}
-        </span>
-      </div>
-      <p class="section-tip">
-        当前用于PTrade云仿真交易端联调；以后切换真实账号时，只替换账号类型、用户名和密码即可。密码保存到本地私有配置，不写入版本库。
-      </p>
-      <div class="account-config-grid">
-        <label>
-          <span>账号类型</span>
-          <select v-model="ptradeAccountForm.account_type">
-            <option value="simulation">模拟账号</option>
-            <option value="real">真实账号</option>
-          </select>
-        </label>
-        <label>
-          <span>券商/终端</span>
-          <input v-model="ptradeAccountForm.broker_name" placeholder="PTrade" />
-        </label>
-        <label>
-          <span>用户名</span>
-          <input v-model="ptradeAccountForm.username" autocomplete="username" placeholder="请输入PTrade账号" />
-        </label>
-        <label>
-          <span>密码</span>
-          <input
-            v-model="ptradeAccountForm.password"
-            type="password"
-            autocomplete="new-password"
-            :placeholder="ptradeAccountPasswordPlaceholder"
-          />
-        </label>
-        <label>
-          <span>交易端/环境</span>
-          <input v-model="ptradeAccountForm.trade_endpoint" placeholder="云仿真（交易端）" />
-        </label>
-        <label>
-          <span>启用</span>
-          <select v-model="ptradeAccountForm.enabled">
-            <option :value="true">启用</option>
-            <option :value="false">停用</option>
-          </select>
-        </label>
-      </div>
-      <label class="account-notes">
-        <span>备注</span>
-        <input v-model="ptradeAccountForm.notes" placeholder="例如：G3模拟交易联调用" />
-      </label>
-      <div class="maintenance-actions">
-        <button class="btn primary" :disabled="ptradeAccountSaving" @click="savePtradeAccountConfig">
-          {{ ptradeAccountSaving ? '保存中...' : '保存PTrade账号' }}
-        </button>
-        <button class="btn" :disabled="ptradeAccountLoading || ptradeAccountSaving" @click="loadPtradeAccountConfig">刷新配置</button>
-      </div>
-      <div class="config-note">
-        当前状态：用户名 {{ ptradeAccountPublic.username_masked || '未配置' }}；
-        密码 {{ ptradeAccountPublic.password_configured ? '已配置' : '未配置' }}；
-        保存位置 {{ ptradeAccountPublic.storage || 'config/settings.local.yaml' }}
-      </div>
-    </section>
-
-    <section class="section-card">
-      <div class="section-title-row">
-        <div>
           <span class="eyebrow">Fallback Tools</span>
           <h2>高级维护</h2>
         </div>
@@ -349,6 +495,77 @@
       <p class="section-tip">低频维护、重算、初始化任务放在这里。自动维护异常时再使用手工触发；“立即同步核心数据”已降级为参考数据入口，避免和今日全市场闭环重复。</p>
 
       <div v-show="advancedOpen" class="advanced-grid">
+        <article class="manual-card auto-repair-card">
+          <div class="auto-repair-head">
+            <div>
+              <span class="command-kicker">Auto Repair</span>
+              <h3>自动修复控制台</h3>
+              <p>按数据和策略两大类执行维护；数据修复可选择时间范围和 K 线周期，策略修复可选择日常或证据复核批次。</p>
+            </div>
+            <span class="status-pill" :class="autoRepairRunning ? 'enabled' : 'paused'">
+              {{ autoRepairRunning ? '执行中' : '待命' }}
+            </span>
+          </div>
+
+          <div class="auto-repair-layout">
+            <div class="segmented-control">
+              <button
+                v-for="item in autoRepairCategories"
+                :key="item.value"
+                type="button"
+                :class="{ active: autoRepairForm.category === item.value }"
+                @click="autoRepairForm.category = item.value"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+
+            <div v-if="autoRepairForm.category === 'data'" class="auto-repair-fields">
+              <label>
+                <span>修复对象</span>
+                <select v-model="autoRepairForm.dataScope">
+                  <option v-for="item in autoRepairDataScopes" :key="item.value" :value="item.value">
+                    {{ item.label }}
+                  </option>
+                </select>
+              </label>
+              <label>
+                <span>时间范围</span>
+                <select v-model.number="autoRepairForm.days">
+                  <option v-for="item in autoRepairDayOptions" :key="item.value" :value="item.value">
+                    {{ item.label }}
+                  </option>
+                </select>
+              </label>
+              <div class="period-box auto-period-box">
+                <span>修复周期</span>
+                <label v-for="period in autoRepairPeriodOptions" :key="`auto-${period.value}`">
+                  <input type="checkbox" v-model="autoRepairForm.periods" :value="period.value" />
+                  {{ period.label }}
+                </label>
+              </div>
+            </div>
+
+            <div v-else class="auto-repair-fields">
+              <label>
+                <span>策略批次</span>
+                <select v-model="autoRepairForm.strategyMode">
+                  <option value="daily">G3 日常维护</option>
+                  <option value="heavy">G3 证据复核</option>
+                  <option value="all">全部策略维护</option>
+                </select>
+              </label>
+              <div class="auto-repair-preview">
+                {{ autoRepairStrategyPreview }}
+              </div>
+            </div>
+
+            <button class="btn primary auto-repair-submit" :disabled="autoRepairRunning || !canRunAutoRepair" @click="runAutoRepair">
+              {{ autoRepairRunning ? '自动修复执行中...' : '执行自动修复' }}
+            </button>
+          </div>
+        </article>
+
         <article class="manual-card spotlight">
           <h3>基础参考数据</h3>
           <p>只同步交易日历、股票/指数/板块基础列表和当日日线。日常请优先使用顶部“一键修复今日市场数据”。</p>
@@ -485,6 +702,7 @@ const emotionAutoEnabled = ref(false)
 const runningCoreAssetsSyncNow = ref(false)
 const runningTodayFullMarketRefreshNow = ref(false)
 const runningMarketMinuteHistoryRepairNow = ref(false)
+const autoRepairRunning = ref(false)
 const strategyTaskStates = ref({})
 const strategyTaskSyncing = ref({})
 const strategyTaskPollTimers = ref({})
@@ -495,24 +713,24 @@ const advancedOpen = ref(false)
 const showTimelinePanel = ref(false)
 const lastStatusRefreshAt = ref(null)
 const coreMaintenanceRefreshTimer = ref(null)
+const dataSourceCountsLoading = ref(false)
+const dataSourceRepairing = ref(false)
+const dataSourceCountDate = ref('')
+const dataSourceCounts = ref({
+  trade_date: '',
+  latest_available_date: null,
+  checked_at: null,
+  summary: {},
+  rows: []
+})
 const startupReferenceSyncEnabled = ref(false)
 const startupReferenceSyncDefaultEnabled = ref(false)
 const startupReferenceSyncSaving = ref(false)
-const ptradeAccountLoading = ref(false)
-const ptradeAccountSaving = ref(false)
-const ptradeAccountPublic = ref({})
-const ptradeAccountForm = ref({
-  enabled: true,
-  account_type: 'simulation',
-  broker_name: 'PTrade',
-  username: '',
-  password: '',
-  trade_endpoint: '云仿真（交易端）',
-  notes: ''
-})
 const tdxGatewayLoading = ref(false)
 const tdxGatewayInitializing = ref(false)
 const tdxGatewayRestarting = ref(false)
+const tdxGatewayProbing = ref(false)
+const tdxGatewayRecovering = ref(false)
 const tdxGatewayDiagnostics = ref({})
 const maintenanceTaskSyncing = ref({})
 const syncHistoryDays = ref(30)
@@ -531,6 +749,41 @@ const klinePeriods = ref([
 const selectedPeriods = ref(['1d', '1w', '1mon'])
 const selectedUpdatePeriods = ref(['5m', '15m', '30m', '60m', '1d'])
 const selectedStockUpdatePeriods = ref(['5m', '15m', '30m', '60m', '1d'])
+const autoRepairForm = ref({
+  category: 'data',
+  dataScope: 'minute_history',
+  days: 30,
+  periods: ['5m', '15m', '30m', '60m'],
+  strategyMode: 'daily'
+})
+const autoRepairCategories = [
+  { value: 'data', label: '数据修复' },
+  { value: 'strategy', label: '策略修复' }
+]
+const autoRepairDataScopes = [
+  { value: 'minute_history', label: '股票/指数历史分钟线' },
+  { value: 'index_history', label: '指数历史K线' },
+  { value: 'daily_stock', label: '股票日线修复' },
+  { value: 'all_stock_history', label: '股票全历史K线' },
+  { value: 'emotion_cycle', label: '情绪周期重算' }
+]
+const autoRepairDayOptions = [
+  { value: 2, label: '近2个交易日' },
+  { value: 5, label: '近5个交易日' },
+  { value: 10, label: '近10个交易日' },
+  { value: 30, label: '近30个交易日' },
+  { value: 60, label: '近60个交易日' },
+  { value: 120, label: '近120个交易日' }
+]
+const autoRepairPeriodOptions = [
+  { value: '5m', label: '5分钟' },
+  { value: '15m', label: '15分钟' },
+  { value: '30m', label: '30分钟' },
+  { value: '60m', label: '60分钟' },
+  { value: '1d', label: '日线' },
+  { value: '1w', label: '周线' },
+  { value: '1mon', label: '月线' }
+]
 
 const maintenanceTasks = [
   { key: 'trade_calendar', label: '交易日历同步' },
@@ -547,10 +800,6 @@ const maintenanceTasks = [
 ]
 
 const taskByKey = Object.fromEntries(maintenanceTasks.map((task) => [task.key, task]))
-
-const ptradeAccountPasswordPlaceholder = computed(() => (
-  ptradeAccountPublic.value?.password_configured ? '留空则保持原密码' : '请输入密码'
-))
 
 const coreTaskGroups = [
   {
@@ -656,12 +905,33 @@ const coreMaintenance = ref({
   timeline: []
 })
 
+const dataSourceCountRows = computed(() => dataSourceCounts.value?.rows || [])
+
 const strategyMaintenanceRunning = computed(() => {
   const hasLocalTaskRunning = Object.values(strategyTaskSyncing.value || {}).some(Boolean)
   const hasBackendTaskRunning = Object.values(strategyTaskStates.value || {}).some((state) => {
     return normalizeStrategyStatus(state?.status) === 'running'
   })
   return runningAllStrategyMaintenanceNow.value || hasLocalTaskRunning || hasBackendTaskRunning
+})
+
+const autoRepairSelectedStrategyTasks = computed(() => {
+  const mode = autoRepairForm.value.strategyMode
+  if (mode === 'all') return strategyMaintenanceTasks
+  return strategyMaintenanceTasks.filter((task) => (task.mode || 'daily') === mode)
+})
+
+const autoRepairStrategyPreview = computed(() => {
+  const tasks = autoRepairSelectedStrategyTasks.value
+  if (!tasks.length) return '暂无可执行策略维护任务'
+  return tasks.map((task) => task.label).join(' / ')
+})
+
+const canRunAutoRepair = computed(() => {
+  if (autoRepairForm.value.category === 'strategy') return autoRepairSelectedStrategyTasks.value.length > 0
+  const scope = autoRepairForm.value.dataScope
+  if (scope === 'daily_stock' || scope === 'all_stock_history') return true
+  return (autoRepairForm.value.periods || []).length > 0
 })
 
 const normalizeCoreMaintenance = (payload = {}) => {
@@ -687,6 +957,35 @@ const formatDateTime = (value) => {
 }
 
 const formatRate = (value) => `${Number(value || 0).toFixed(2)}%`
+const formatInteger = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return n.toLocaleString('zh-CN')
+}
+
+const formatCoverage = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return `${(n * 100).toFixed(2)}%`
+}
+
+const getDataSourceStatusText = (row) => {
+  if (!row?.ok) return '缺失'
+  if (row.complete) return '完整'
+  return '有缺口'
+}
+
+const getDataSourceStatusClass = (row) => {
+  if (!row?.ok) return 'failed'
+  if (row.complete) return 'enabled'
+  return 'paused'
+}
+
+const getDataSourceRowClass = (row) => ({
+  'data-source-row-missing': !row?.ok,
+  'data-source-row-incomplete': row?.ok && !row?.complete
+})
+
 const formatDuration = (valueSec) => {
   const sec = Number(valueSec)
   if (!Number.isFinite(sec) || sec < 0) return '-'
@@ -706,19 +1005,31 @@ const tdxGatewayHealthPayload = computed(() => unwrapGatewayBody(tdxGatewayDiagn
 const tdxGatewayHostPayload = computed(() => unwrapGatewayBody(tdxGatewayDiagnostics.value.host_diagnostics))
 const tdxGatewayProcessPayload = computed(() => tdxGatewayHostPayload.value?.process?.data || tdxGatewayHostPayload.value?.process || {})
 const tdxGatewayProbePayload = computed(() => tdxGatewayDiagnostics.value.market_data_probe || tdxGatewayHostPayload.value?.market_data_probe || {})
+const tdxGatewayVerdict = computed(() => tdxGatewayDiagnostics.value?.verdict || {})
+const tdxGatewayChecks = computed(() => tdxGatewayVerdict.value?.checks || [])
+const tdxGatewayBlockers = computed(() => tdxGatewayVerdict.value?.blockers || [])
+const tdxGatewayManualCommands = computed(() => tdxGatewayVerdict.value?.manual_commands || [])
+const tdxGatewayRecoveryOrderText = computed(() => {
+  const order = tdxGatewayVerdict.value?.recovery_order || []
+  return order.length ? order.join(' / ') : '刷新诊断 / 真实取数探针 / 重新初始化 / 必要时重启 Gateway'
+})
 
 const tdxGatewayStatusClass = computed(() => {
-  if (tdxGatewayLoading.value || tdxGatewayInitializing.value || tdxGatewayRestarting.value) return 'running'
+  if (tdxGatewayLoading.value || tdxGatewayInitializing.value || tdxGatewayRestarting.value || tdxGatewayProbing.value || tdxGatewayRecovering.value) return 'running'
+  if (tdxGatewayVerdict.value?.ready) return 'enabled'
+  if (tdxGatewayVerdict.value?.level === 'error') return 'failed'
   if (tdxGatewayProbePayload.value?.probe_ok || tdxGatewayProbePayload.value?.ok) return 'enabled'
-  if (tdxGatewayHealthPayload.value?.ready || tdxGatewayHealthPayload.value?.status === 'available') return 'enabled'
   return 'paused'
 })
 
 const tdxGatewayStatusText = computed(() => {
+  if (tdxGatewayRecovering.value) return '恢复中'
+  if (tdxGatewayProbing.value) return '探针中'
   if (tdxGatewayRestarting.value) return '重启中'
   if (tdxGatewayInitializing.value) return '初始化中'
   if (tdxGatewayLoading.value) return '诊断中'
   if (tdxGatewayStatusClass.value === 'enabled') return '可用'
+  if (tdxGatewayStatusClass.value === 'failed') return '不可达'
   return '待排查'
 })
 
@@ -1061,6 +1372,55 @@ const refreshCoreMaintenanceStatus = async () => {
   }
 }
 
+const refreshDataSourceCounts = async () => {
+  dataSourceCountsLoading.value = true
+  try {
+    const date = dataSourceCountDate.value || ''
+    const query = date ? `?trade_date=${encodeURIComponent(date)}` : ''
+    const response = await axios.get(`${API_BASE}/system/data-source-counts${query}`)
+    dataSourceCounts.value = response.data?.data || {
+      trade_date: date,
+      latest_available_date: null,
+      checked_at: null,
+      summary: {},
+      rows: []
+    }
+    if (dataSourceCounts.value.trade_date) {
+      dataSourceCountDate.value = dataSourceCounts.value.trade_date
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || '数据源统计读取失败')
+  } finally {
+    dataSourceCountsLoading.value = false
+  }
+}
+
+const repairDataSourceDate = async () => {
+  const date = dataSourceCountDate.value || dataSourceCounts.value?.trade_date || ''
+  if (!date) {
+    ElMessage.warning('请先选择统计日期')
+    return
+  }
+  if (!confirm(`确认修复 ${date} 的日线和 5m/15m/30m/60m 分钟数据吗？`)) return
+  dataSourceRepairing.value = true
+  try {
+    const response = await axios.post(`${API_BASE}/system/data-source-counts/repair-date?trade_date=${encodeURIComponent(date)}`)
+    if (response.data?.success) {
+      ElMessage.success(response.data?.message || '按日期修复任务已启动')
+      pollTaskStatus(response.data?.task_name || 'data_source_date_repair', async () => {
+        dataSourceRepairing.value = false
+        await refreshDataSourceCounts()
+      })
+      return
+    }
+    dataSourceRepairing.value = false
+    ElMessage.error(response.data?.message || '启动修复失败')
+  } catch (error) {
+    dataSourceRepairing.value = false
+    ElMessage.error(error.response?.data?.detail || error.message || '按日期修复失败')
+  }
+}
+
 const loadStartupReferenceSyncSetting = async () => {
   try {
     const response = await axios.get(`${API_BASE}/system/startup-reference-sync-setting`)
@@ -1072,70 +1432,34 @@ const loadStartupReferenceSyncSetting = async () => {
   }
 }
 
-const loadPtradeAccountConfig = async () => {
-  ptradeAccountLoading.value = true
-  try {
-    const response = await axios.get(`${API_BASE}/system/ptrade-account-config`)
-    const data = response.data?.data || {}
-    ptradeAccountPublic.value = data
-    ptradeAccountForm.value = {
-      enabled: data.enabled !== false,
-      account_type: data.account_type || 'simulation',
-      broker_name: data.broker_name || 'PTrade',
-      username: data.username || '',
-      password: '',
-      trade_endpoint: data.trade_endpoint || '云仿真（交易端）',
-      notes: data.notes || ''
-    }
-  } catch (error) {
-    ElMessage.warning(error.response?.data?.detail || error.message || 'PTrade账号配置读取失败')
-  } finally {
-    ptradeAccountLoading.value = false
-  }
-}
-
-const savePtradeAccountConfig = async () => {
-  ptradeAccountSaving.value = true
-  try {
-    const form = ptradeAccountForm.value || {}
-    const response = await axios.post(`${API_BASE}/system/ptrade-account-config`, {
-      enabled: form.enabled !== false,
-      account_type: form.account_type || 'simulation',
-      broker_name: form.broker_name || 'PTrade',
-      username: form.username || '',
-      password: form.password || '',
-      trade_endpoint: form.trade_endpoint || '',
-      notes: form.notes || ''
-    })
-    const data = response.data?.data || {}
-    ptradeAccountPublic.value = data
-    ptradeAccountForm.value = {
-      ...ptradeAccountForm.value,
-      enabled: data.enabled !== false,
-      account_type: data.account_type || 'simulation',
-      broker_name: data.broker_name || 'PTrade',
-      username: data.username || '',
-      password: '',
-      trade_endpoint: data.trade_endpoint || '云仿真（交易端）',
-      notes: data.notes || ''
-    }
-    ElMessage.success(response.data?.message || 'PTrade账号配置已保存')
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || 'PTrade账号配置保存失败')
-  } finally {
-    ptradeAccountSaving.value = false
-  }
-}
-
 const refreshTdxGatewayDiagnostics = async () => {
   tdxGatewayLoading.value = true
   try {
     const response = await axios.get(`${API_BASE}/system/tdx-gateway/diagnostics?run_probe=true`)
-    tdxGatewayDiagnostics.value = response.data?.data || {}
+    const data = response.data?.data || {}
+    tdxGatewayDiagnostics.value = data.diagnostics || data || {}
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway诊断失败')
   } finally {
     tdxGatewayLoading.value = false
+  }
+}
+
+const probeTdxGateway = async () => {
+  tdxGatewayProbing.value = true
+  try {
+    const response = await axios.post(`${API_BASE}/system/tdx-gateway/probe`)
+    const data = response.data?.data || {}
+    tdxGatewayDiagnostics.value = data.diagnostics || tdxGatewayDiagnostics.value
+    if (response.data?.success) {
+      ElMessage.success('TDX Gateway真实取数探针通过')
+    } else {
+      ElMessage.warning('TDX Gateway真实取数探针未通过，请查看当前阻塞')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway真实取数探针失败')
+  } finally {
+    tdxGatewayProbing.value = false
   }
 }
 
@@ -1146,11 +1470,11 @@ const waitForTdxGatewayReady = async (timeoutMs = 45000) => {
     await sleep(3000)
     try {
       const response = await axios.get(`${API_BASE}/system/tdx-gateway/diagnostics?run_probe=true`)
-      lastPayload = response.data?.data || {}
+      const data = response.data?.data || {}
+      lastPayload = data.diagnostics || data || {}
       tdxGatewayDiagnostics.value = lastPayload
-      const health = unwrapGatewayBody(lastPayload.health)
       const probe = lastPayload.market_data_probe || {}
-      if (health.ready || health.status === 'available' || probe.probe_ok) {
+      if (probe.probe_ok || lastPayload.verdict?.ready) {
         return { ok: true, payload: lastPayload }
       }
     } catch (error) {
@@ -1164,19 +1488,45 @@ const waitForTdxGatewayReady = async (timeoutMs = 45000) => {
   return { ok: false, payload: lastPayload }
 }
 
+const recoverTdxGateway = async () => {
+  tdxGatewayRecovering.value = true
+  try {
+    const response = await axios.post(`${API_BASE}/system/tdx-gateway/recover?allow_restart=true`)
+    const data = response.data?.data || {}
+    tdxGatewayDiagnostics.value = data.diagnostics || tdxGatewayDiagnostics.value
+    if (data.recovered || data.diagnostics?.verdict?.ready) {
+      ElMessage.success('TDX Gateway已恢复并通过真实取数')
+    } else if (data.restart_requested) {
+      ElMessage.success('已请求重启Gateway，正在等待真实取数恢复')
+      const ready = await waitForTdxGatewayReady()
+      if (ready.ok) {
+        ElMessage.success('TDX Gateway已恢复')
+      } else {
+        ElMessage.warning('Gateway重启后仍未通过真实取数，请查看阻塞清单')
+      }
+    } else {
+      ElMessage.warning(response.data?.message || '一键恢复结束，请查看诊断结果')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway一键恢复失败')
+  } finally {
+    tdxGatewayRecovering.value = false
+  }
+}
+
 const initializeTdxGateway = async () => {
   tdxGatewayInitializing.value = true
   try {
     const response = await axios.post(`${API_BASE}/system/tdx-gateway/initialize`)
     tdxGatewayDiagnostics.value = response.data?.data?.diagnostics || {}
-    if (response.data?.success) {
-      ElMessage.success('TDX Gateway重新初始化完成')
+    if (tdxGatewayDiagnostics.value?.verdict?.ready) {
+      ElMessage.success('TDX Gateway重新初始化完成并通过真实取数')
     } else {
       const ready = await waitForTdxGatewayReady(18000)
       if (ready.ok) {
-        ElMessage.success('TDX Gateway已恢复')
+        ElMessage.success('TDX Gateway已恢复并通过真实取数')
       } else {
-        ElMessage.warning('TDX Gateway初始化未通过，请查看诊断')
+        ElMessage.warning('TDX Gateway初始化后仍未通过真实取数，请查看阻塞清单')
       }
     }
   } catch (error) {
@@ -1195,9 +1545,9 @@ const restartTdxGateway = async () => {
       ElMessage.success('TDX Gateway重启请求已发送，正在等待恢复')
       const ready = await waitForTdxGatewayReady()
       if (ready.ok) {
-        ElMessage.success('TDX Gateway已恢复')
+        ElMessage.success('TDX Gateway已恢复并通过真实取数')
       } else {
-        ElMessage.warning('TDX Gateway重启后仍未通过诊断，请查看错误')
+        ElMessage.warning('TDX Gateway重启后仍未通过真实取数，请查看阻塞清单')
       }
     } else {
       ElMessage.warning(response.data?.message || '重启请求未成功，请查看诊断')
@@ -1737,6 +2087,78 @@ const triggerMarketMinuteHistoryRepairNow = async () => {
   }
 }
 
+const buildAutoRepairQuery = () => {
+  const params = new URLSearchParams()
+  params.set('days', String(autoRepairForm.value.days || 30))
+  for (const period of autoRepairForm.value.periods || []) {
+    params.append('periods', period)
+  }
+  return params.toString()
+}
+
+const runAutoRepair = async () => {
+  if (!canRunAutoRepair.value) {
+    ElMessage.warning('请先选择修复范围')
+    return
+  }
+  const categoryText = autoRepairForm.value.category === 'strategy' ? '策略' : '数据'
+  if (!confirm(`确认执行${categoryText}自动修复吗？`)) return
+  autoRepairRunning.value = true
+  try {
+    if (autoRepairForm.value.category === 'strategy') {
+      let failedCount = 0
+      for (const task of autoRepairSelectedStrategyTasks.value) {
+        const status = await runStrategyMaintenanceTask(task, { waitForCompletion: true, showToast: false })
+        if (status === 'failed') failedCount += 1
+      }
+      await refreshStrategyMaintenanceStatus()
+      if (failedCount > 0) {
+        ElMessage.warning(`策略自动修复完成，失败 ${failedCount} 项`)
+      } else {
+        ElMessage.success('策略自动修复完成')
+      }
+      autoRepairRunning.value = false
+      return
+    }
+
+    const scope = autoRepairForm.value.dataScope
+    let taskName = ''
+    let response = null
+    if (scope === 'minute_history') {
+      response = await axios.post(`${API_BASE}/system/core-data-maintenance/run-task/market_minute_history_repair?${buildAutoRepairQuery()}`)
+      taskName = response.data?.task_name || 'market_minute_history_repair'
+    } else if (scope === 'index_history') {
+      response = await axios.post(`${API_BASE}/system/repair-history-klines`, {
+        periods: autoRepairForm.value.periods,
+        type: 'index'
+      })
+      taskName = 'repair_history_klines'
+    } else if (scope === 'daily_stock') {
+      response = await axios.post(`${API_BASE}/system/repair-daily-klines`)
+      taskName = 'repair_daily_klines'
+    } else if (scope === 'all_stock_history') {
+      response = await axios.post(`${API_BASE}/system/repair-all-history-klines`)
+      taskName = 'repair_all_history_klines'
+    } else if (scope === 'emotion_cycle') {
+      response = await axios.post(`${API_BASE}/system/repair-emotion-cycle-30d?days=${autoRepairForm.value.days || 30}`)
+      taskName = 'repair_emotion_cycle_30d'
+    }
+
+    if (response?.data?.success && taskName) {
+      ElMessage.success(response.data?.message || '自动修复任务已启动')
+      pollTaskStatus(taskName, () => {
+        autoRepairRunning.value = false
+      })
+      return
+    }
+    autoRepairRunning.value = false
+    ElMessage.error(response?.data?.message || '启动失败')
+  } catch (error) {
+    autoRepairRunning.value = false
+    ElMessage.error(error.response?.data?.detail || error.message || '自动修复失败')
+  }
+}
+
 const syncMaintenanceTask = async (task) => {
   const backendTaskName = maintenanceTaskNameMap[task.key]
   if (!backendTaskName) {
@@ -2068,9 +2490,9 @@ const toggleEmotionAuto5m = async () => {
 onMounted(() => {
   loadStrategySuccessMemory()
   refreshCoreMaintenanceStatus()
+  refreshDataSourceCounts()
   refreshStrategyMaintenanceStatus()
   loadStartupReferenceSyncSetting()
-  loadPtradeAccountConfig()
   refreshTdxGatewayDiagnostics()
   coreMaintenanceRefreshTimer.value = setInterval(async () => {
     await refreshCoreMaintenanceStatus()
@@ -2273,6 +2695,42 @@ onUnmounted(() => {
   border-color: rgba(197, 107, 8, 0.24);
 }
 
+.gateway-verdict {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: #f7f9fc;
+}
+
+.gateway-verdict strong {
+  color: #172746;
+  font-size: 15px;
+}
+
+.gateway-verdict span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.gateway-verdict.level-ok {
+  border-color: rgba(11, 143, 99, 0.24);
+  background: #f3fbf7;
+}
+
+.gateway-verdict.level-warning {
+  border-color: rgba(197, 107, 8, 0.28);
+  background: #fff9ed;
+}
+
+.gateway-verdict.level-error {
+  border-color: rgba(196, 61, 50, 0.28);
+  background: #fff5f3;
+}
+
 .gateway-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2332,6 +2790,256 @@ onUnmounted(() => {
 
 .danger-line strong {
   color: var(--red);
+}
+
+.gateway-check-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.gateway-check {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.gateway-check span,
+.gateway-blockers span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gateway-check strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #26395f;
+  font-size: 13px;
+}
+
+.gateway-check.ok {
+  border-color: rgba(11, 143, 99, 0.18);
+}
+
+.gateway-check.blocked {
+  border-color: rgba(196, 61, 50, 0.22);
+  background: #fffafa;
+}
+
+.gateway-blockers {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(196, 61, 50, 0.22);
+  background: #fff5f3;
+}
+
+.gateway-blockers strong {
+  color: var(--red);
+  font-size: 14px;
+}
+
+.gateway-manual {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(49, 95, 189, 0.18);
+  background: #f7faff;
+}
+
+.gateway-manual > strong {
+  color: #203153;
+  font-size: 14px;
+}
+
+.gateway-command {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.gateway-command span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gateway-command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: #172746;
+  background: rgba(49, 95, 189, 0.08);
+  font-size: 12px;
+}
+
+.data-source-panel {
+  margin-top: 16px;
+  margin-bottom: 16px;
+  border: 1px solid #e5ebf5;
+  border-radius: 10px;
+  padding: 14px;
+  background: #fbfdff;
+}
+
+.data-source-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.data-source-toolbar h3 {
+  margin: 2px 0 0;
+  color: #203153;
+  font-size: 16px;
+}
+
+.data-source-date-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.date-input {
+  min-width: 150px;
+  height: 38px;
+  border: 1px solid #d9e1ee;
+  border-radius: 10px;
+  padding: 0 10px;
+  color: #203153;
+  background: #fff;
+  font-size: 13px;
+}
+
+.data-source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 10px;
+  color: #6d7d96;
+  font-size: 12px;
+}
+
+.data-source-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.data-source-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-source-table th {
+  padding: 10px 12px;
+  color: #6a7890;
+  background: #f1f5fb;
+  text-align: left;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.data-source-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid #e8eef7;
+  color: #243956;
+  vertical-align: top;
+}
+
+.data-source-table tr:last-child td {
+  border-bottom: none;
+}
+
+.data-source-table td strong,
+.data-source-table td small {
+  display: block;
+}
+
+.data-source-table td small {
+  margin-top: 3px;
+  color: #8a97aa;
+  font-size: 11px;
+}
+
+.data-source-row-missing td {
+  background: #fff8f7;
+}
+
+.data-source-row-incomplete td {
+  background: #fffaf0;
+}
+
+.period-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 520px;
+}
+
+.period-chip {
+  display: inline-grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  gap: 4px 6px;
+  min-height: 28px;
+  border: 1px solid #dbe5f1;
+  border-radius: 8px;
+  padding: 5px 7px;
+  color: #40536d;
+  background: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.period-chip strong {
+  color: #203153;
+}
+
+.period-chip em {
+  color: #60718a;
+  font-style: normal;
+}
+
+.period-chip small {
+  grid-column: 1 / -1;
+  margin-top: 0;
+  color: #a35a08;
+}
+
+.period-chip.complete {
+  border-color: rgba(11, 143, 99, 0.18);
+  background: #f4fbf7;
+}
+
+.period-chip.incomplete {
+  border-color: rgba(197, 107, 8, 0.24);
+  background: #fff8eb;
+}
+
+.period-summary {
+  color: #556983;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.table-empty {
+  color: #7b8aa1;
+  text-align: center;
 }
 
 .pipeline-grid {
@@ -2670,45 +3378,98 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.account-config-grid {
+.advanced-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  margin-bottom: 12px;
 }
 
-.account-config-grid label,
-.account-notes {
+.auto-repair-card {
+  grid-column: 1 / -1;
+  border-color: rgba(49, 95, 189, 0.26);
+  background: linear-gradient(180deg, #ffffff, #f7fbff);
+}
+
+.auto-repair-head {
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.auto-repair-layout {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.segmented-control {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  max-width: 360px;
+  border: 1px solid #dbe5f3;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #eef4fb;
+}
+
+.segmented-control button {
+  min-height: 38px;
+  border: none;
+  color: #425775;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.segmented-control button.active {
+  color: #fff;
+  background: #315fbd;
+}
+
+.auto-repair-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.auto-repair-fields label {
+  display: grid;
   gap: 6px;
   color: #52657f;
   font-size: 13px;
   font-weight: 700;
 }
 
-.account-config-grid input,
-.account-config-grid select,
-.account-notes input {
-  width: 100%;
+.auto-repair-fields select {
   min-height: 38px;
   border: 1px solid #d9e2f0;
   border-radius: 8px;
   padding: 0 10px;
   color: var(--ink);
   background: #fff;
-  font-size: 14px;
-  box-sizing: border-box;
 }
 
-.account-notes {
-  margin-bottom: 12px;
+.auto-period-box {
+  grid-column: 1 / -1;
+  align-items: center;
+  margin-bottom: 0;
 }
 
-.advanced-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.auto-repair-preview {
+  grid-column: 1 / -1;
+  min-height: 38px;
+  border: 1px solid #e1e8f3;
+  border-radius: 8px;
+  padding: 10px;
+  color: #52657f;
+  background: #fbfdff;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.auto-repair-submit {
+  width: fit-content;
 }
 
 .manual-card {
@@ -2828,8 +3589,13 @@ onUnmounted(() => {
     grid-template-columns: 1fr;
   }
 
-  .account-config-grid {
+  .auto-repair-head,
+  .auto-repair-fields {
     grid-template-columns: 1fr;
+  }
+
+  .auto-repair-head {
+    flex-direction: column;
   }
 
   .section-title-row,

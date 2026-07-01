@@ -32,6 +32,10 @@ def _latest_stock_trade_date_from_clickhouse():
             SELECT MAX(k.trade_date)
             FROM kline_daily k
             JOIN stocks s ON s.code = k.code
+            JOIN trade_calendar c
+              ON c.trade_date = k.trade_date
+             AND c.market = 'SH'
+             AND c.is_trading = 1
             WHERE s.type = 'stock'
             """
         )

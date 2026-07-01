@@ -1,9 +1,9 @@
 """
 系统配置API
 
-提供系统配置相关的接口，包括：
-1. 同步一二三行业板块
-2. 修复历史K线数据
+提供系统配置相关的接口，包括?
+1. 同步丢二三行业板块
+2. 修复历史K线数?
 """
 
 from collections import defaultdict
@@ -23,6 +23,7 @@ import threading
 import subprocess
 import sys
 from pathlib import Path
+from pathlib import PureWindowsPath
 from sqlalchemy import desc, func, text
 import yaml
 
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/system", tags=["系统配置"])
 logger = get_logger("system_config")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# 情绪周期自动修复调度器（按需启动）
+# 情绪周期自动修复调度器（按需启动?
 _emotion_scheduler = None
 _emotion_scheduler_lock = threading.Lock()
 _emotion_job_id = "emotion_cycle_auto_fix_5m"
@@ -63,12 +64,15 @@ _core_maintenance_task_map = {
     "market_intraday_kline_refresh": "sync_today_intraday_kline",
     "minute_kline_daily_repair_validate": "minute_kline_daily_repair_validate",
     "market_minute_history_repair": "market_minute_history_repair",
+    "data_source_date_repair": "data_source_date_repair",
     "sector_intraday_stats_refresh": "update_sector_intraday_stats",
     "official_daily": "official_daily_close_sync",
     "repair_daily": "repair_previous_daily_kline",
 }
 _core_maintenance_bootstrap_lock = threading.Lock()
 _core_maintenance_bootstrap_thread = None
+_trade_calendar_preflight_lock = threading.Lock()
+_trade_calendar_preflight_date = None
 _core_data_manual_sync_lock = threading.Lock()
 _core_data_manual_sync_thread = None
 _gen2_v4_event_refresh_lock = threading.Lock()
@@ -171,7 +175,7 @@ def _ensure_emotion_scheduler():
             _emotion_scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
             _emotion_scheduler.start()
         except Exception as e:
-            logger.error(f"启动情绪周期调度器失败: {e}")
+            logger.error(f"启动情绪周期调度器失? {e}")
             raise
     return _emotion_scheduler
 
@@ -263,7 +267,7 @@ def _result_payload_indicates_failure(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
     validation_status = str(payload.get("validation_status") or "").strip().lower()
-    if validation_status and validation_status not in {"passed", "success", "ok"}:
+    if validation_status and validation_status not in {"passed", "success", "ok", "skipped_non_trading_day"}:
         return True
     status = str(payload.get("status") or "").strip().lower()
     if status in {"failed", "failure", "error"}:
@@ -715,12 +719,12 @@ def _maybe_send_minute_kline_coverage_alert(result: Dict[str, Any], threshold: f
 
     trade_dates = result.get("trade_dates") or []
     lines = [
-        "AiStock 分钟K线补全验证覆盖率低于阈值，请手动执行 TDX 盘后数据下载后再覆盖重建。",
+        "AiStock minute K-line repair validation coverage is below threshold; please refresh QMT local history and rebuild.",
         "",
-        f"检查交易日: {', '.join(map(str, trade_dates))}",
-        f"阈值: {threshold:.0%}",
+        f"trade_dates: {', '.join(map(str, trade_dates))}",
+        f"threshold: {threshold:.0%}",
         "",
-        "低覆盖周期:",
+        "low coverage periods:",
     ]
     for item in low_periods:
         lines.append(
@@ -728,21 +732,21 @@ def _maybe_send_minute_kline_coverage_alert(result: Dict[str, Any], threshold: f
             f"({item['complete_codes']}/{item['total_codes']} complete, bad={item['still_bad_codes']})"
         )
 
-    tdx_freshness = result.get("tdx_freshness") or {}
-    if tdx_freshness:
+    qmt_result = result.get("qmt_xtquant_result") or {}
+    if qmt_result:
         lines.extend(
             [
                 "",
-                "TDX 本地盘后文件状态:",
-                f"- ok: {tdx_freshness.get('ok')}",
-                f"- fresh_files: {tdx_freshness.get('fresh_files')}",
-                f"- newest_mtime: {tdx_freshness.get('newest_mtime')}",
+                "QMT minute repair result:",
+                f"- returncode: {qmt_result.get('returncode')}",
+                f"- report_path: {qmt_result.get('report_path')}",
+                f"- repair_code_count: {qmt_result.get('repair_code_count')}",
             ]
         )
 
     try:
         email_result = _send_system_alert_email(
-            subject="[AiStock] 分钟K线覆盖率低于95%，请手动下载TDX盘后数据",
+            subject="[AiStock] minute K-line coverage below 95%; please refresh QMT local history",
             body="\n".join(lines),
         )
         logger.warning("minute kline coverage alert email sent: %s", email_result)
@@ -799,6 +803,79 @@ def _is_trading_day_today(session) -> bool:
         return False
 
 
+def _ensure_trade_calendar_fresh_for_today(task_name: str) -> Dict[str, Any]:
+    global _trade_calendar_preflight_date
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _trade_calendar_preflight_lock:
+        if _trade_calendar_preflight_date != today:
+            try:
+                logger.info(f"preflight trade calendar sync before {task_name}: {today}")
+                update_trade_calendar_task()
+                status = task_manager.get_task_status("update_trade_calendar")
+                if status.get("error"):
+                    raise RuntimeError(str(status.get("error")))
+                _trade_calendar_preflight_date = today
+            except Exception as exc:
+                msg = f"trade_calendar_preflight_failed: {exc}"
+                logger.error(msg)
+                task_manager.update_progress(task_name, {"current": 0, "total": 0, "message": msg})
+                task_manager.set_results(
+                    task_name,
+                    {
+                        "message": msg,
+                        "skipped": True,
+                        "skip_reason": "trade_calendar_preflight_failed",
+                        "validation_status": "failed",
+                    },
+                )
+                task_manager.set_error(task_name, msg)
+                return {"ok": False, "trading_day": False, "message": msg}
+
+    try:
+        from scheduler.trading_calendar import TradingCalendar
+
+        now_dt = datetime.now()
+        if not TradingCalendar.is_trading_day(now_dt):
+            msg = f"skip auto data update for non-trading day after calendar sync: {today}"
+            logger.info(msg)
+            task_manager.update_progress(task_name, {"current": 0, "total": 0, "message": msg})
+            task_manager.set_results(
+                task_name,
+                {
+                    "message": msg,
+                    "skipped": True,
+                    "skip_reason": "non_trading_day",
+                    "validation_status": "skipped_non_trading_day",
+                },
+                mark_success=True,
+            )
+            return {"ok": True, "trading_day": False, "message": msg}
+        return {"ok": True, "trading_day": True, "message": "trading_day"}
+    except Exception as exc:
+        msg = f"trade_calendar_check_failed: {exc}"
+        logger.error(msg)
+        task_manager.update_progress(task_name, {"current": 0, "total": 0, "message": msg})
+        task_manager.set_results(
+            task_name,
+            {
+                "message": msg,
+                "skipped": True,
+                "skip_reason": "trade_calendar_check_failed",
+                "validation_status": "failed",
+            },
+        )
+        task_manager.set_error(task_name, msg)
+        return {"ok": False, "trading_day": False, "message": msg}
+
+
+def _run_core_data_update_after_trade_calendar(task_name: str, task_fn):
+    preflight = _ensure_trade_calendar_fresh_for_today(task_name)
+    if not preflight.get("ok") or not preflight.get("trading_day"):
+        return
+    return task_fn()
+
+
 def _resolve_intraday_daily_trade_date(now_dt: Optional[datetime] = None) -> str:
     """Use previous trade date before 09:15; today's price is not reliable yet."""
     from scheduler.trading_calendar import TradingCalendar
@@ -828,8 +905,621 @@ def _is_intraday_auto_update_window(now_dt: Optional[datetime] = None) -> bool:
     )
 
 
+def _parse_data_source_count_date(value: Optional[str]) -> str:
+    raw = (value or datetime.now().strftime("%Y-%m-%d")).strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        raise HTTPException(status_code=400, detail="trade_date must be YYYY-MM-DD")
+    try:
+        datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="trade_date is invalid")
+    return raw
+
+
+def _data_source_empty_row(key: str, label: str, category: str) -> Dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "category": category,
+        "row_count": 0,
+        "code_count": 0,
+        "expected_row_count": 0,
+        "missing_rows": 0,
+        "extra_rows": 0,
+        "coverage_rate": 0.0,
+        "latest_date": None,
+        "periods": [],
+        "ok": False,
+        "complete": False,
+        "message": "no data",
+    }
+
+
+def _clickhouse_date_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    return str(value)
+
+
+def _resolve_latest_data_source_count_date(client) -> str:
+    from utils.market_warehouse import clickhouse_table_exists
+
+    queries: List[str] = []
+    if clickhouse_table_exists("kline_daily"):
+        queries.append("SELECT max(trade_date) FROM kline_daily")
+    if clickhouse_table_exists("sector_kline_daily"):
+        queries.append("SELECT max(trade_date) FROM sector_kline_daily")
+    for table_name in ("kline_minute_5", "kline_minute_15", "kline_minute_30", "kline_minute_60"):
+        if clickhouse_table_exists(table_name):
+            queries.append(f"SELECT max(toDate(datetime)) FROM {table_name}")
+
+    latest_dates: List[str] = []
+    for sql in queries:
+        try:
+            rows = client.query(sql).result_rows
+            text_value = _clickhouse_date_text(rows[0][0] if rows else None)
+            if text_value:
+                latest_dates.append(text_value)
+        except Exception as exc:
+            logger.warning(f"resolve latest data source date failed: sql={sql}, error={exc}")
+
+    return max(latest_dates) if latest_dates else datetime.now().strftime("%Y-%m-%d")
+
+
+def _query_data_source_counts(
+    client,
+    table_name: str,
+    date_expr: str,
+    target_date: str,
+    stock_side: bool,
+) -> Dict[str, Any]:
+    join_key = "k.code" if table_name == "kline_daily" else "assumeNotNull(k.code)"
+    side_filter = "s.type = 'stock'" if stock_side else "s.type = 'index'"
+    rows = client.query(
+        f"""
+        SELECT count() AS row_count, uniqExact({join_key}) AS code_count
+        FROM {table_name} k
+        LEFT JOIN stocks s ON {join_key} = s.code
+        WHERE {date_expr} = toDate('{target_date}')
+          AND {join_key} != ''
+          AND {side_filter}
+        """
+    ).result_rows
+    row = rows[0] if rows else (0, 0)
+    latest_expr = date_expr.replace("k.", "")
+    latest_rows = client.query(f"SELECT max({latest_expr}) FROM {table_name}").result_rows
+    return {
+        "row_count": int(row[0] or 0),
+        "code_count": int(row[1] or 0),
+        "latest_date": _clickhouse_date_text(latest_rows[0][0] if latest_rows else None),
+    }
+
+
+def _query_minute_data_source_counts(
+    client,
+    table_name: str,
+    target_date: str,
+    stock_side: bool,
+) -> Dict[str, Any]:
+    join_key = "assumeNotNull(k.code)"
+    side_filter = "s.type = 'stock'" if stock_side else "s.type = 'index'"
+    daily_volume_filter = "AND kd.volume > 0" if stock_side else ""
+    rows = client.query(
+        f"""
+        WITH daily_codes AS (
+            SELECT kd.code AS code
+            FROM kline_daily kd
+            INNER JOIN stocks s ON kd.code = s.code
+            WHERE kd.trade_date = toDate('{target_date}')
+              AND {side_filter}
+              {daily_volume_filter}
+            GROUP BY kd.code
+        )
+        SELECT count() AS row_count, uniqExact({join_key}) AS code_count
+        FROM {table_name} k
+        WHERE k.datetime >= toDateTime('{target_date} 00:00:00')
+          AND k.datetime < toDateTime('{target_date} 00:00:00') + INTERVAL 1 DAY
+          AND {join_key} != ''
+          AND {join_key} IN (SELECT code FROM daily_codes)
+        """
+    ).result_rows
+    row = rows[0] if rows else (0, 0)
+    latest_rows = client.query(f"SELECT max(toDate(datetime)) FROM {table_name}").result_rows
+    return {
+        "row_count": int(row[0] or 0),
+        "code_count": int(row[1] or 0),
+        "latest_date": _clickhouse_date_text(latest_rows[0][0] if latest_rows else None),
+    }
+
+
+def _build_daily_data_source_row(
+    client,
+    table_name: str,
+    key: str,
+    label: str,
+    category: str,
+    target_date: str,
+    stock_side: Optional[bool] = None,
+) -> Dict[str, Any]:
+    from utils.market_warehouse import clickhouse_table_exists
+
+    row = _data_source_empty_row(key, label, category)
+    if not clickhouse_table_exists(table_name):
+        row["message"] = f"{table_name} missing"
+        return row
+
+    if stock_side is None:
+        result_rows = client.query(
+            f"""
+            SELECT count() AS row_count, uniqExact(code) AS code_count
+            FROM {table_name}
+            WHERE trade_date = toDate('{target_date}')
+            """
+        ).result_rows
+        latest_rows = client.query(f"SELECT max(trade_date) FROM {table_name}").result_rows
+        result = {
+            "row_count": int((result_rows[0][0] if result_rows else 0) or 0),
+            "code_count": int((result_rows[0][1] if result_rows else 0) or 0),
+            "latest_date": _clickhouse_date_text(latest_rows[0][0] if latest_rows else None),
+        }
+    else:
+        result = _query_data_source_counts(client, table_name, "k.trade_date", target_date, stock_side)
+
+    row.update(result)
+    row["ok"] = row["row_count"] > 0 and row["code_count"] > 0
+    row["expected_row_count"] = row["row_count"]
+    row["missing_rows"] = 0
+    row["extra_rows"] = 0
+    row["coverage_rate"] = 1.0 if row["ok"] else 0.0
+    row["complete"] = bool(row["ok"])
+    row["message"] = "ok" if row["ok"] else "missing for date"
+    return row
+
+
+def _build_minute_data_source_row(
+    client,
+    key: str,
+    label: str,
+    category: str,
+    target_date: str,
+    stock_side: bool,
+) -> Dict[str, Any]:
+    from utils.market_warehouse import clickhouse_table_exists
+
+    row = _data_source_empty_row(key, label, category)
+    periods = [
+        ("5m", "kline_minute_5", 48),
+        ("15m", "kline_minute_15", 16),
+        ("30m", "kline_minute_30", 8),
+        ("60m", "kline_minute_60", 4),
+    ]
+    total_rows = 0
+    total_expected_rows = 0
+    total_missing_rows = 0
+    total_extra_rows = 0
+    max_codes = 0
+    latest_dates: List[str] = []
+    detail_rows: List[Dict[str, Any]] = []
+    expected_code_count = 0
+
+    if clickhouse_table_exists("kline_daily"):
+        if stock_side:
+            daily_baseline_rows = client.query(
+                f"""
+                SELECT count() AS row_count, uniqExact(k.code) AS code_count
+                FROM kline_daily k
+                INNER JOIN stocks s ON k.code = s.code
+                WHERE k.trade_date = toDate('{target_date}')
+                  AND s.type = 'stock'
+                  AND k.volume > 0
+                  AND k.code != ''
+                """
+            ).result_rows
+            expected_code_count = int((daily_baseline_rows[0][1] if daily_baseline_rows else 0) or 0)
+        else:
+            daily_baseline = _query_data_source_counts(client, "kline_daily", "k.trade_date", target_date, stock_side)
+            expected_code_count = int(daily_baseline.get("code_count") or 0)
+
+    for period, table_name, expected_per_code in periods:
+        if not clickhouse_table_exists(table_name):
+            detail_rows.append({
+                "period": period,
+                "table": table_name,
+                "row_count": 0,
+                "code_count": 0,
+                "expected_per_code": expected_per_code,
+                "expected_row_count": 0,
+                "missing_rows": 0,
+                "extra_rows": 0,
+                "coverage_rate": 0.0,
+                "latest_date": None,
+                "ok": False,
+                "complete": False,
+                "message": "table missing",
+            })
+            continue
+        result = _query_minute_data_source_counts(client, table_name, target_date, stock_side)
+        expected_row_count = expected_code_count * expected_per_code
+        missing_rows = max(expected_row_count - int(result["row_count"] or 0), 0)
+        extra_rows = max(int(result["row_count"] or 0) - expected_row_count, 0)
+        coverage_rate = (float(result["row_count"]) / expected_row_count) if expected_row_count > 0 else 0.0
+        complete = (
+            expected_row_count > 0
+            and int(result["code_count"] or 0) == expected_code_count
+            and missing_rows == 0
+            and extra_rows == 0
+        )
+        total_rows += result["row_count"]
+        total_expected_rows += expected_row_count
+        total_missing_rows += missing_rows
+        total_extra_rows += extra_rows
+        max_codes = max(max_codes, expected_code_count, result["code_count"])
+        if result.get("latest_date"):
+            latest_dates.append(result["latest_date"])
+        detail_rows.append({
+            "period": period,
+            "table": table_name,
+            **result,
+            "expected_code_count": expected_code_count,
+            "expected_per_code": expected_per_code,
+            "expected_row_count": expected_row_count,
+            "missing_rows": missing_rows,
+            "extra_rows": extra_rows,
+            "coverage_rate": round(coverage_rate, 6),
+            "ok": result["row_count"] > 0 and result["code_count"] > 0,
+            "complete": complete,
+            "message": "complete" if complete else ("incomplete" if result["row_count"] > 0 else "missing for date"),
+        })
+
+    row.update({
+        "row_count": total_rows,
+        "code_count": max_codes,
+        "expected_row_count": total_expected_rows,
+        "missing_rows": total_missing_rows,
+        "extra_rows": total_extra_rows,
+        "coverage_rate": round(float(total_rows) / total_expected_rows, 6) if total_expected_rows > 0 else 0.0,
+        "latest_date": max(latest_dates) if latest_dates else None,
+        "periods": detail_rows,
+    })
+    row["ok"] = total_rows > 0 and max_codes > 0
+    row["complete"] = row["ok"] and total_expected_rows > 0 and total_missing_rows == 0 and total_extra_rows == 0
+    row["message"] = "complete" if row["complete"] else ("incomplete" if row["ok"] else "missing for date")
+    return row
+
+
+def _build_data_source_counts_payload(trade_date: Optional[str]) -> Dict[str, Any]:
+    from utils.market_warehouse import clickhouse_available, clickhouse_client, clickhouse_table_exists
+
+    if not clickhouse_available():
+        raise HTTPException(status_code=503, detail="ClickHouse unavailable")
+
+    client = clickhouse_client()
+    if not clickhouse_table_exists("stocks"):
+        raise HTTPException(status_code=503, detail="stocks table missing")
+
+    target_date = _parse_data_source_count_date(trade_date) if str(trade_date or "").strip() else _resolve_latest_data_source_count_date(client)
+
+    rows = [
+        _build_daily_data_source_row(client, "kline_daily", "stock_daily", "个股日线", "daily", target_date, True),
+        _build_minute_data_source_row(client, "stock_minute", "个股分钟", "minute", target_date, True),
+        _build_daily_data_source_row(client, "kline_daily", "index_daily", "指数日线", "daily", target_date, False),
+        _build_minute_data_source_row(client, "index_minute", "指数分钟", "minute", target_date, False),
+        _build_daily_data_source_row(client, "sector_kline_daily", "sector_daily", "板块日线", "daily", target_date, None),
+    ]
+    latest_available_date = max([item.get("latest_date") for item in rows if item.get("latest_date")] or [None])
+    missing_count = len([item for item in rows if not item.get("ok")])
+    incomplete_count = len([item for item in rows if not item.get("complete")])
+    return {
+        "trade_date": target_date,
+        "latest_available_date": latest_available_date,
+        "checked_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "summary": {
+            "total": len(rows),
+            "ok": len(rows) - missing_count,
+            "missing": missing_count,
+            "complete": len(rows) - incomplete_count,
+            "incomplete": incomplete_count,
+        },
+        "rows": rows,
+    }
+
+
+def _cleanup_incomplete_stock_minute_rows_for_date(target_date: str) -> Dict[str, Any]:
+    from utils.market_warehouse import clickhouse_client, clickhouse_table_exists
+
+    client = clickhouse_client()
+    periods = [
+        ("5m", "kline_minute_5", 48),
+        ("15m", "kline_minute_15", 16),
+        ("30m", "kline_minute_30", 8),
+        ("60m", "kline_minute_60", 4),
+    ]
+    summary: Dict[str, Any] = {}
+    for period, table_name, expected_count in periods:
+        if not clickhouse_table_exists(table_name):
+            continue
+        rows = client.query(
+            f"""
+            SELECT assumeNotNull(k.code) AS code, count() AS row_count
+            FROM {table_name} k
+            LEFT JOIN stocks s ON assumeNotNull(k.code) = s.code
+            WHERE toDate(k.datetime) = toDate('{target_date}')
+              AND s.type = 'stock'
+            GROUP BY code
+            HAVING row_count != {expected_count}
+            """
+        ).result_rows
+        codes = [str(row[0]) for row in rows if row and row[0]]
+        if codes:
+            code_sql = ",".join("'" + code.replace("\\", "\\\\").replace("'", "\\'") + "'" for code in codes)
+            client.command(
+                f"""
+                ALTER TABLE {table_name}
+                DELETE WHERE toDate(datetime) = toDate('{target_date}')
+                  AND code IN ({code_sql})
+                SETTINGS mutations_sync = 1
+                """
+            )
+        summary[period] = {
+            "table": table_name,
+            "expected_per_code": expected_count,
+            "removed_codes": codes[:200],
+            "removed_code_count": len(codes),
+            "removed_rows": sum(int(row[1] or 0) for row in rows),
+        }
+    return summary
+
+
+def data_source_date_repair_task(trade_date: str, task_already_started: bool = False):
+    task_name = "data_source_date_repair"
+    normalized_date = _parse_data_source_count_date(trade_date)
+
+    if not data_update_lock.acquire(blocking=False):
+        msg = "已有其它数据更新任务正在执行，按日期修复跳过"
+        logger.warning(msg)
+        task_manager.set_error(task_name, msg)
+        return
+
+    try:
+        if not task_already_started:
+            if not task_manager.start_task(task_name, trigger_source="manual"):
+                task_manager.set_error(task_name, "date repair task is already running")
+                return
+
+        try:
+            from scheduler.trading_calendar import TradingCalendar
+
+            target_dt = datetime.strptime(normalized_date, "%Y-%m-%d")
+            if not TradingCalendar.is_trading_day(target_dt):
+                msg = f"skip data source date repair for non-trading day: {normalized_date}"
+                task_manager.update_progress(task_name, {"current": 0, "total": 0, "message": msg})
+                task_manager.set_results(
+                    task_name,
+                    {
+                        "message": msg,
+                        "trade_date": normalized_date,
+                        "skipped": True,
+                        "skip_reason": "non_trading_day",
+                        "validation_status": "skipped_non_trading_day",
+                    },
+                    mark_success=True,
+                )
+                return
+        except Exception as exc:
+            logger.warning(f"failed to validate repair trade date {normalized_date}: {exc}")
+
+        task_manager.update_progress(
+            task_name,
+            {"current": 0, "total": 2, "message": f"弢始修?{normalized_date} 日线数据"},
+        )
+
+        preferred_source = str(app_config.get("data_sync.preferred_source", "qmt_xtquant") or "qmt_xtquant").strip().lower()
+        if preferred_source in {"qmt", "qmtmini", "qmt_xtquant", "xtquant"}:
+            qmt_script = REPO_ROOT / "scripts" / "qmt_xtquant_data_source_task.py"
+            if not qmt_script.exists():
+                raise RuntimeError(f"script_not_found:{qmt_script}")
+            qmt_report = report_path("system_data_source_repair", f"qmt_xtquant_{normalized_date}_{datetime.now():%Y%m%d_%H%M%S}.json")
+            qmt_report.parent.mkdir(parents=True, exist_ok=True)
+            qmt_daily_batch_size = int(app_config.get("data_sync.qmt_xtquant.daily_batch_size", 80) or 80)
+            qmt_minute_batch_size = int(app_config.get("data_sync.qmt_xtquant.minute_batch_size", 30) or 30)
+            qmt_minute_periods_raw = app_config.get(
+                "data_sync.qmt_xtquant.minute_periods",
+                ["5m", "15m", "30m", "60m"],
+            )
+            if isinstance(qmt_minute_periods_raw, (list, tuple)):
+                qmt_minute_periods = ",".join(str(item).strip() for item in qmt_minute_periods_raw if str(item).strip())
+            else:
+                qmt_minute_periods = str(qmt_minute_periods_raw or "5m,15m,30m,60m").strip()
+            qmt_minute_phase = str(app_config.get("data_sync.qmt_xtquant.minute_phase", "fetch-validate") or "fetch-validate").strip()
+            if qmt_minute_phase not in {"fetch", "validate-stage", "fetch-validate", "apply", "all"}:
+                qmt_minute_phase = "fetch-validate"
+            qmt_max_retries = int(app_config.get("data_sync.qmt_xtquant.max_retries", 2) or 2)
+            qmt_retry_sleep = float(app_config.get("data_sync.qmt_xtquant.retry_sleep_sec", 1.0) or 1.0)
+            qmt_minute_batch_timeout = int(app_config.get("data_sync.qmt_xtquant.minute_batch_timeout_sec", 180) or 180)
+            qmt_timeout_sec = int(app_config.get("data_sync.qmt_xtquant.timeout_sec", 3 * 60 * 60) or (3 * 60 * 60))
+            qmt_cmd = [
+                sys.executable,
+                str(qmt_script),
+                "--mode",
+                "date-repair",
+                "--start-date",
+                normalized_date,
+                "--end-date",
+                normalized_date,
+                "--daily-phase",
+                "all",
+                "--daily-batch-size",
+                str(qmt_daily_batch_size),
+                "--minute-batch-size",
+                str(qmt_minute_batch_size),
+                "--minute-periods",
+                qmt_minute_periods,
+                "--minute-phase",
+                qmt_minute_phase,
+                "--max-retries",
+                str(qmt_max_retries),
+                "--retry-sleep",
+                str(qmt_retry_sleep),
+                "--minute-batch-timeout-sec",
+                str(qmt_minute_batch_timeout),
+                "--report",
+                str(qmt_report),
+            ]
+            qmt_proc = subprocess.run(
+                qmt_cmd,
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=qmt_timeout_sec,
+            )
+            qmt_ok = qmt_proc.returncode == 0
+            coverage = _build_data_source_counts_payload(normalized_date)
+            coverage_summary = coverage.get("summary") or {}
+            result = {
+                "message": f"{normalized_date} QMT/xtquant data source repair completed" if qmt_ok else f"{normalized_date} QMT/xtquant data source repair did not fully pass",
+                "trade_date": normalized_date,
+                "preferred_source": preferred_source,
+                "qmt_xtquant": {
+                    "ok": qmt_ok,
+                    "returncode": qmt_proc.returncode,
+                    "report_path": str(qmt_report),
+                    "stdout_tail": (qmt_proc.stdout or "")[-4000:],
+                    "stderr_tail": (qmt_proc.stderr or "")[-4000:],
+                },
+                "coverage": coverage,
+                "validation_status": "passed" if qmt_ok else "failed",
+            }
+            task_manager.update_progress(task_name, {"current": 2, "total": 2, "message": result["message"]})
+            task_manager.set_results(task_name, result, mark_success=qmt_ok)
+            if not qmt_ok:
+                task_manager.set_error(
+                    task_name,
+                    result["qmt_xtquant"]["stderr_tail"]
+                    or result["qmt_xtquant"]["stdout_tail"]
+                    or f"{result['message']}; coverage_summary={coverage_summary}",
+                )
+            return
+
+        daily_script = REPO_ROOT / "scripts" / "backfill_tqcenter_daily_to_clickhouse.py"
+        minute_script = REPO_ROOT / "scripts" / "build_tdx_minute_periods.py"
+        if not daily_script.exists():
+            raise RuntimeError(f"script_not_found:{daily_script}")
+        if not minute_script.exists():
+            raise RuntimeError(f"script_not_found:{minute_script}")
+
+        daily_report = report_path("system_data_source_repair", f"daily_{normalized_date}_{datetime.now():%Y%m%d_%H%M%S}.json")
+        daily_report.parent.mkdir(parents=True, exist_ok=True)
+        daily_cmd = [
+            sys.executable,
+            str(daily_script),
+            "--phase",
+            "all",
+            "--start-date",
+            normalized_date,
+            "--end-date",
+            normalized_date,
+            "--batch-size",
+            "200",
+            "--reset-stage",
+            "--report",
+            str(daily_report),
+        ]
+        daily_proc = subprocess.run(
+            daily_cmd,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45 * 60,
+        )
+        daily_ok = daily_proc.returncode == 0
+        task_manager.update_progress(
+            task_name,
+            {"current": 1, "total": 2, "message": f"daily repair done; start minute repair for {normalized_date}"},
+        )
+
+        minute_cmd = [
+            sys.executable,
+            str(minute_script),
+            "--tdx-root",
+            os.getenv("AISTOCK_LOCAL_TDX_ROOT", r"D:\TDX\vipdoc"),
+            "--start-date",
+            normalized_date,
+            "--end-date",
+            normalized_date,
+            "--periods",
+            "5m,15m,30m,60m",
+            "--delete-range",
+        ]
+        minute_proc = subprocess.run(
+            minute_cmd,
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60 * 60,
+        )
+        minute_ok = minute_proc.returncode == 0
+        minute_cleanup = _cleanup_incomplete_stock_minute_rows_for_date(normalized_date) if minute_ok else {}
+        coverage = _build_data_source_counts_payload(normalized_date)
+        coverage_summary = coverage.get("summary") or {}
+        coverage_ok = (
+            int(coverage_summary.get("missing") or 0) == 0
+            and int(coverage_summary.get("incomplete") or 0) == 0
+        )
+        validation_status = "passed" if daily_ok and minute_ok and coverage_ok else "failed"
+        result = {
+            "message": f"{normalized_date} 数据源按日期修复完成" if validation_status == "passed" else f"{normalized_date} 数据源按日期修复未完全过",
+            "trade_date": normalized_date,
+            "daily": {
+                "ok": daily_ok,
+                "returncode": daily_proc.returncode,
+                "report_path": str(daily_report),
+                "stdout_tail": (daily_proc.stdout or "")[-4000:],
+                "stderr_tail": (daily_proc.stderr or "")[-4000:],
+            },
+            "minute": {
+                "ok": minute_ok,
+                "returncode": minute_proc.returncode,
+                "stdout_tail": (minute_proc.stdout or "")[-4000:],
+                "stderr_tail": (minute_proc.stderr or "")[-4000:],
+                "cleanup": minute_cleanup,
+            },
+            "coverage": coverage,
+            "validation_status": validation_status,
+        }
+        task_manager.update_progress(task_name, {"current": 2, "total": 2, "message": result["message"]})
+        task_manager.set_results(task_name, result, mark_success=validation_status == "passed")
+        if validation_status != "passed":
+            task_manager.set_error(
+                task_name,
+                result["daily"]["stderr_tail"]
+                or result["minute"]["stderr_tail"]
+                or f"{result['message']}; coverage_summary={coverage_summary}",
+            )
+    except subprocess.TimeoutExpired as exc:
+        task_manager.set_error(task_name, f"按日期数据源修复超时: {exc}")
+    except Exception as exc:
+        logger.exception(f"按日期数据源修复失败: {exc}")
+        task_manager.set_error(task_name, str(exc))
+    finally:
+        if data_update_lock.locked():
+            data_update_lock.release()
+
+
 def _skip_intraday_auto_update_if_closed(task_name: str, force: bool = False) -> bool:
+    from scheduler.trading_calendar import TradingCalendar
+
     now_dt = datetime.now()
+    preflight = _ensure_trade_calendar_fresh_for_today(task_name)
+    if not preflight.get("ok") or not preflight.get("trading_day"):
+        return True
     if force:
         return False
     if _is_intraday_auto_update_window(now_dt):
@@ -1035,7 +1725,7 @@ def _repair_emotion_for_dates(dates: List[Any]):
 
 
 class RepairKlinesRequest(BaseModel):
-    """修复K线数据请求模型"""
+    """System configuration task helper."""
     periods: Optional[List[str]] = None
     type: Optional[Union[str, List[str]]] = None
     force: bool = False
@@ -1045,16 +1735,6 @@ class StartupReferenceSyncToggleRequest(BaseModel):
     enabled: bool
 
 
-class PTradeAccountConfigRequest(BaseModel):
-    account_type: str = "simulation"
-    broker_name: Optional[str] = "PTrade"
-    username: Optional[str] = ""
-    password: Optional[str] = None
-    trade_endpoint: Optional[str] = ""
-    enabled: bool = True
-    notes: Optional[str] = ""
-
-
 def _mask_secret(value: Any) -> str:
     text = str(value or "")
     if not text:
@@ -1062,51 +1742,6 @@ def _mask_secret(value: Any) -> str:
     if len(text) <= 4:
         return "*" * len(text)
     return f"{text[:2]}{'*' * max(4, len(text) - 4)}{text[-2:]}"
-
-
-def _ptrade_account_config_public() -> Dict[str, Any]:
-    cfg = app_config.get("ptrade.account", default={}, config_file="settings.yaml") or {}
-    if not isinstance(cfg, dict):
-        cfg = {}
-    password = str(cfg.get("password") or "")
-    username = str(cfg.get("username") or "")
-    return {
-        "enabled": bool(cfg.get("enabled", True)),
-        "account_type": str(cfg.get("account_type") or "simulation"),
-        "broker_name": str(cfg.get("broker_name") or "PTrade"),
-        "username": username,
-        "username_masked": _mask_secret(username),
-        "password_configured": bool(password),
-        "password_masked": _mask_secret(password),
-        "trade_endpoint": str(cfg.get("trade_endpoint") or ""),
-        "notes": str(cfg.get("notes") or ""),
-        "updated_at": cfg.get("updated_at"),
-        "storage": "config/settings.local.yaml",
-    }
-
-
-def _save_ptrade_account_config(request: PTradeAccountConfigRequest) -> Dict[str, Any]:
-    account_type = str(request.account_type or "simulation").strip().lower()
-    if account_type not in {"simulation", "real"}:
-        raise HTTPException(status_code=400, detail="account_type must be simulation or real")
-
-    def _mutate(data: Dict[str, Any]):
-        ptrade_cfg = data.setdefault("ptrade", {})
-        account_cfg = ptrade_cfg.setdefault("account", {})
-        account_cfg["enabled"] = bool(request.enabled)
-        account_cfg["account_type"] = account_type
-        account_cfg["broker_name"] = str(request.broker_name or "PTrade").strip() or "PTrade"
-        account_cfg["username"] = str(request.username or "").strip()
-        if request.password is not None and str(request.password) != "":
-            account_cfg["password"] = str(request.password)
-        elif "password" not in account_cfg:
-            account_cfg["password"] = ""
-        account_cfg["trade_endpoint"] = str(request.trade_endpoint or "").strip()
-        account_cfg["notes"] = str(request.notes or "").strip()
-        account_cfg["updated_at"] = datetime.now().isoformat(sep=" ", timespec="seconds")
-
-    _save_settings_local_yaml(_mutate)
-    return _ptrade_account_config_public()
 
 
 def _tdx_gateway_url() -> str:
@@ -1153,11 +1788,221 @@ def _tdx_gateway_market_probe() -> Dict[str, Any]:
     return result
 
 
+def _tdx_gateway_body(section: Any) -> Dict[str, Any]:
+    if not isinstance(section, dict):
+        return {}
+    body = section.get("body")
+    if isinstance(body, dict):
+        return body
+    data = section.get("data")
+    if isinstance(data, dict):
+        return data
+    return section
+
+
+def _tdx_gateway_host_data(section: Any) -> Dict[str, Any]:
+    body = _tdx_gateway_body(section)
+    data = body.get("data") if isinstance(body, dict) else None
+    return data if isinstance(data, dict) else body
+
+
+def _tdx_gateway_watchdog_snapshot() -> Dict[str, Any]:
+    log_path = REPO_ROOT / "runtime" / "logs" / "tdx_gateway_memory_watchdog.csv"
+    if not log_path.exists():
+        return {"ok": False, "reason": "log_missing", "path": str(log_path)}
+    try:
+        lines = [line.strip() for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+    except Exception as exc:
+        return {"ok": False, "reason": "read_failed", "path": str(log_path), "error": str(exc)}
+    if len(lines) <= 1:
+        return {"ok": False, "reason": "empty", "path": str(log_path)}
+    header = [item.strip() for item in lines[0].split(",")]
+    latest = [item.strip() for item in lines[-1].split(",")]
+    row = {header[idx]: latest[idx] if idx < len(latest) else "" for idx in range(len(header))}
+    recent_actions: List[Dict[str, Any]] = []
+    for line in lines[-20:]:
+        parts = [item.strip() for item in line.split(",")]
+        if len(parts) < len(header):
+            continue
+        item = {header[idx]: parts[idx] if idx < len(parts) else "" for idx in range(len(header))}
+        action = str(item.get("action") or "").strip()
+        if action and action not in {"sample", "no_gateway"}:
+            recent_actions.append(item)
+    return {
+        "ok": True,
+        "path": str(log_path),
+        "latest": row,
+        "recent_actions": recent_actions[-5:],
+    }
+
+
+def _tdx_gateway_is_ready(diagnostics: Dict[str, Any]) -> bool:
+    probe = diagnostics.get("market_data_probe") or {}
+    return bool(probe.get("probe_ok"))
+
+
+def _tdx_gateway_verdict(diagnostics: Dict[str, Any]) -> Dict[str, Any]:
+    health_result = diagnostics.get("health") or {}
+    health = _tdx_gateway_body(health_result)
+    host = _tdx_gateway_host_data(diagnostics.get("host_diagnostics"))
+    process_section = host.get("process") if isinstance(host, dict) else {}
+    process = _tdx_gateway_host_data(process_section)
+    probe = diagnostics.get("market_data_probe") or {}
+    watchdog = diagnostics.get("watchdog") or {}
+    watchdog_latest = watchdog.get("latest") if isinstance(watchdog, dict) else {}
+    watchdog_actions = watchdog.get("recent_actions") if isinstance(watchdog, dict) else []
+    latest_watchdog_action = str((watchdog_latest or {}).get("action") or "").strip()
+    last_stop_action = next(
+        (
+            item
+            for item in reversed(watchdog_actions or [])
+            if str(item.get("action") or "").startswith("stop_threshold_exceeded")
+        ),
+        None,
+    )
+
+    gateway_reachable = bool(health_result.get("ok"))
+    health_ready = bool(health.get("ready") or str(health.get("status") or "").lower() == "available")
+    probe_ok = bool(probe.get("probe_ok") or probe.get("ok"))
+    process_ok = bool(process.get("pid") or process.get("data", {}).get("pid"))
+    task_result = process.get("lastTaskResult")
+    task_state = str(process.get("taskState") or "").strip()
+    backend_gateway_url = str((diagnostics.get("backend") or {}).get("gateway_url") or "").strip()
+
+    checks = [
+        {
+            "key": "backend_gateway_url",
+            "label": "后端 Gateway 地址",
+            "ok": bool(diagnostics.get("gateway_url")),
+            "status": diagnostics.get("gateway_url") or backend_gateway_url or "-",
+        },
+        {
+            "key": "gateway_reachable",
+            "label": "Gateway HTTP 可达",
+            "ok": gateway_reachable,
+            "status": "reachable" if gateway_reachable else (health_result.get("error") or "unreachable"),
+        },
+        {
+            "key": "health_ready",
+            "label": "Health ready",
+            "ok": health_ready,
+            "status": health.get("status") or ("ready" if health_ready else "not_ready"),
+        },
+        {
+            "key": "market_data_probe",
+            "label": "真实取数探针",
+            "ok": probe_ok,
+            "status": "passed" if probe_ok else (probe.get("error") or "failed"),
+        },
+        {
+            "key": "host_process",
+            "label": "瀹夸富鏈?Gateway 杩涚▼",
+            "ok": process_ok,
+            "status": f"pid={process.get('pid')}" if process_ok else "not_found_or_unavailable",
+        },
+        {
+            "key": "scheduled_task",
+            "label": "Windows 璁″垝浠诲姟",
+            "ok": bool(task_state),
+            "status": f"state={task_state or '-'} result={task_result if task_result is not None else '-'}",
+        },
+        {
+            "key": "backend_startup_safe",
+            "label": "后端启动降级",
+            "ok": str((diagnostics.get("backend") or {}).get("strict_startup") or "0") in {"", "0", "false", "False"},
+            "status": f"strict={(diagnostics.get('backend') or {}).get('strict_startup') or '0'}",
+        },
+        {
+            "key": "memory_watchdog",
+            "label": "鍐呭瓨瀹堟姢",
+            "ok": bool(watchdog.get("ok")) and latest_watchdog_action not in {"stop_threshold_exceeded", "restart_failed"},
+            "status": latest_watchdog_action or (watchdog.get("reason") if isinstance(watchdog, dict) else "-") or "-",
+        },
+    ]
+
+    blockers: List[Dict[str, Any]] = []
+    actions: List[Dict[str, Any]] = []
+    if last_stop_action:
+        blockers.append(
+            {
+                "key": "watchdog_stopped_gateway",
+                "message": (
+                    "TDX Gateway was recently stopped by the memory guard. "
+                    f"{last_stop_action.get('timestamp')} private={last_stop_action.get('private_gb')}GB "
+                    f"threshold={last_stop_action.get('threshold_gb')}GB."
+                ),
+            }
+        )
+    if not gateway_reachable:
+        message = "Backend cannot reach the TDX Gateway HTTP service."
+        if last_stop_action:
+            message = "Backend cannot reach TDX Gateway; the latest blocker came from the memory guard."
+        blockers.append({"key": "gateway_unreachable", "message": message})
+        actions.append({"key": "restart", "label": "Restart Gateway", "endpoint": "/api/system/tdx-gateway/restart", "method": "POST"})
+    elif not health_ready:
+        blockers.append({"key": "gateway_not_ready", "message": "Gateway HTTP is reachable, but TdxQuant is not ready."})
+        actions.append({"key": "initialize", "label": "Initialize", "endpoint": "/api/system/tdx-gateway/initialize", "method": "POST"})
+    if health_ready and not probe_ok:
+        blockers.append({"key": "probe_failed", "message": "Health is ready, but the market-data probe failed."})
+        actions.append({"key": "initialize", "label": "Initialize", "endpoint": "/api/system/tdx-gateway/initialize", "method": "POST"})
+        actions.append({"key": "recover", "label": "Recover", "endpoint": "/api/system/tdx-gateway/recover", "method": "POST"})
+    if not process_ok:
+        actions.append({"key": "restart", "label": "Restart Gateway", "endpoint": "/api/system/tdx-gateway/restart", "method": "POST"})
+
+    ready = probe_ok
+    level = "ok" if ready else ("warning" if gateway_reachable else "error")
+    if ready:
+        summary = "TDX Gateway passed the market-data probe."
+    elif health_ready:
+        summary = "TDX Gateway health is ready, but the market-data probe did not pass."
+    elif gateway_reachable:
+        summary = "TDX Gateway is reachable but not ready."
+    elif last_stop_action:
+        summary = "TDX Gateway was recently stopped by the memory guard."
+    else:
+        summary = "TDX Gateway is unreachable."
+
+    if not any(item.get("key") == "recover" for item in actions):
+        actions.append({"key": "recover", "label": "Recover", "endpoint": "/api/system/tdx-gateway/recover", "method": "POST"})
+
+    host_repo_root = str(os.environ.get("AISTOCK_HOST_REPO_ROOT") or "").strip()
+    host_gateway_script = (
+        str(PureWindowsPath(host_repo_root) / "scripts" / "start_tdx_gateway.bat")
+        if host_repo_root
+        else str(REPO_ROOT / "scripts" / "start_tdx_gateway.bat")
+    )
+    return {
+        "ready": ready,
+        "level": level,
+        "summary": summary,
+        "checks": checks,
+        "blockers": blockers,
+        "actions": actions,
+        "manual_commands": [
+            {
+                "label": "通过 Windows 计划任务启动",
+                "command": 'schtasks /Run /TN "AiStock TDX Gateway"',
+            },
+            {
+                "label": "直接启动 Gateway 脚本",
+                "command": host_gateway_script,
+            },
+        ],
+        "recovery_order": [
+            "刷新诊断",
+            "真实取数探针",
+            "重新初始?TdxQuant 句柄",
+            "浠嶅け璐ユ椂閲嶅惎 Gateway",
+                "Run the market-data probe again after restart",
+        ],
+    }
+
+
 def _build_tdx_gateway_diagnostics(run_probe: bool = True) -> Dict[str, Any]:
     admin = _tdx_gateway_request("GET", "/admin/diagnostics?run_probe=false", timeout=12)
     market_probe = _tdx_gateway_market_probe() if run_probe else None
     health = _tdx_gateway_request("GET", "/health", timeout=8)
-    return {
+    diagnostics = {
         "gateway_url": _tdx_gateway_url(),
         "backend": {
             "strict_startup": str(os.environ.get("AISTOCK_STRICT_TDXQ_STARTUP") or ""),
@@ -1167,8 +2012,39 @@ def _build_tdx_gateway_diagnostics(run_probe: bool = True) -> Dict[str, Any]:
         "health": health,
         "host_diagnostics": admin,
         "market_data_probe": market_probe,
+        "watchdog": _tdx_gateway_watchdog_snapshot(),
         "checked_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
     }
+    diagnostics["verdict"] = _tdx_gateway_verdict(diagnostics)
+    return diagnostics
+
+
+def _run_tdx_gateway_recovery(allow_restart: bool = True) -> Dict[str, Any]:
+    steps: List[Dict[str, Any]] = []
+    before = _build_tdx_gateway_diagnostics(run_probe=True)
+    steps.append({"name": "before_diagnostics", "ok": _tdx_gateway_is_ready(before), "diagnostics": before})
+    if _tdx_gateway_is_ready(before):
+        return {"ok": True, "recovered": False, "steps": steps, "diagnostics": before}
+
+    init_result = _tdx_gateway_request("POST", "/initialize", timeout=45)
+    steps.append({"name": "initialize", "ok": bool(init_result.get("ok")), "result": init_result})
+    after_init = _build_tdx_gateway_diagnostics(run_probe=True)
+    steps.append({"name": "after_initialize_probe", "ok": _tdx_gateway_is_ready(after_init), "diagnostics": after_init})
+    if _tdx_gateway_is_ready(after_init):
+        return {"ok": True, "recovered": True, "steps": steps, "diagnostics": after_init}
+
+    if allow_restart:
+        restart_result = _tdx_gateway_request("POST", "/admin/restart", timeout=10)
+        steps.append({"name": "restart_requested", "ok": bool(restart_result.get("ok")), "result": restart_result})
+        return {
+            "ok": bool(restart_result.get("ok")),
+            "recovered": False,
+            "restart_requested": bool(restart_result.get("ok")),
+            "steps": steps,
+            "diagnostics": _build_tdx_gateway_diagnostics(run_probe=False),
+        }
+
+    return {"ok": False, "recovered": False, "steps": steps, "diagnostics": after_init}
 
 
 def _ensure_strategy_daily_scheduler():
@@ -1263,7 +2139,7 @@ def _build_strategy_daily_runner_payload() -> Dict[str, Any]:
 
 
 class SystemTaskManager:
-    """系统任务管理器，用于跟踪后台任务状态"""
+    """Track background system task state."""
     
     def __init__(self):
         self.timeline_limit = 200
@@ -1416,6 +2292,13 @@ class SystemTaskManager:
                 "results": None,
                 "error": None
             },
+            "data_source_date_repair": {
+                "is_running": False,
+                "started_at": None,
+                "progress": {"current": 0, "total": 0, "message": ""},
+                "results": None,
+                "error": None
+            },
             "core_data_maintenance": {
                 "is_running": False,
                 "paused": True,
@@ -1479,7 +2362,7 @@ class SystemTaskManager:
         _persist_system_task_run(task_name, status, timeline_item["message"], task)
     
     def get_task_status(self, task_name: str) -> Dict[str, Any]:
-        """获取任务状态"""
+        """System configuration task helper."""
         task = self.tasks.get(task_name)
         if not task:
             return {"error": "Task not found"}
@@ -1487,7 +2370,7 @@ class SystemTaskManager:
         return task
     
     def start_task(self, task_name: str, trigger_source: str = "auto") -> bool:
-        """开始任务"""
+        """System configuration task helper."""
         if task_name not in self.tasks:
             logger.error(f"Task not registered: {task_name}")
             return False
@@ -1495,7 +2378,7 @@ class SystemTaskManager:
             return False
         self._ensure_task_meta(task_name)
         self.tasks[task_name]["paused"] = False
-        # 重置任务状态
+        # 重置任务状?
         self.tasks[task_name]["is_running"] = True
         self.tasks[task_name]["started_at"] = _now_iso()
         self.tasks[task_name]["last_run_at"] = self.tasks[task_name]["started_at"]
@@ -1508,12 +2391,12 @@ class SystemTaskManager:
         return True
     
     def update_progress(self, task_name: str, progress: Dict[str, Any]):
-        """更新任务进度"""
+        """System configuration task helper."""
         if task_name in self.tasks:
             self.tasks[task_name]["progress"].update(progress)
     
     def set_error(self, task_name: str, error: str):
-        """设置任务错误"""
+        """System configuration task helper."""
         if task_name in self.tasks:
             self._ensure_task_meta(task_name)
             task = self.tasks[task_name]
@@ -1527,7 +2410,7 @@ class SystemTaskManager:
             self._append_timeline(task_name, "failed", message=error)
     
     def set_results(self, task_name: str, results: Dict[str, Any], mark_success: Optional[bool] = None):
-        """设置任务结果"""
+        """System configuration task helper."""
         if task_name in self.tasks:
             self._ensure_task_meta(task_name)
             task = self.tasks[task_name]
@@ -1556,7 +2439,7 @@ class SystemTaskManager:
 # 初始化任务管理器
 task_manager = SystemTaskManager()
 
-# 重量级数据更新任务互斥锁，避免并发触发导致内存暴涨
+# 重量级数据更新任务互斥锁，避免并发触发导致内存暴?
 data_update_lock = threading.Lock()
 
 
@@ -1566,8 +2449,8 @@ def update_stock_list_task():
     try:
         from api.stocks import update_stock_list as run_update_stock_list
 
-        logger.info("开始更新股票列表")
-        task_manager.update_progress(task_name, {"message": "开始更新股票列表..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始更新股票列?.."})
 
         result = run_update_stock_list()
         if not result or not result.get("success"):
@@ -1598,8 +2481,8 @@ def update_index_list_task():
     try:
         from api.stocks import update_indices as run_update_indices
 
-        logger.info("开始更新指数列表")
-        task_manager.update_progress(task_name, {"message": "开始更新指数列表..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始更新指数列?.."})
 
         result = run_update_indices()
         if not result or int(result.get("success") or 0) <= 0:
@@ -1642,8 +2525,8 @@ def update_sector_intraday_stats_task(force: bool = False):
         from utils.market_warehouse import clickhouse_client
         from models.stock_models import Sector, SectorStock, Stock, KlineDaily
 
-        logger.info("开始刷新板块当日成分涨跌统计")
-        task_manager.update_progress(task_name, {"message": "开始刷新板块当日成分涨跌统计..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始刷新板块当日成分涨跌统?.."})
 
         session = next(db.get_session())
         latest_trade_date = session.query(func.max(KlineDaily.trade_date)).join(
@@ -1653,12 +2536,12 @@ def update_sector_intraday_stats_task(force: bool = False):
         ).scalar()
 
         if not latest_trade_date:
-            task_manager.set_results(task_name, {"message": "暂无股票日线数据，跳过板块统计刷新"})
+            task_manager.set_results(task_name, {"message": "no stock daily data; skipped"})
             return
 
         sector_codes = [row[0] for row in session.query(Sector.code).all()]
         total_sectors = len(sector_codes)
-        task_manager.update_progress(task_name, {"total": total_sectors, "current": 0, "message": f"共{total_sectors}个板块需要刷新"})
+        task_manager.update_progress(task_name, {"message": "task progress"})
 
         sector_members = defaultdict(list)
         for sector_code, stock_code in session.query(SectorStock.sector_code, SectorStock.stock_code).all():
@@ -1790,14 +2673,14 @@ def update_sector_intraday_stats_task(force: bool = False):
 
 
 def sync_sectors_task():
-    """同步一二三行业板块的后台任务"""
+    """System configuration task helper."""
     task_name = "sync_sectors"
 
     try:
         from scripts.sync_sectors_and_mapping import SectorSyncer
 
-        logger.info("开始同步一二三行业板块")
-        task_manager.update_progress(task_name, {"message": "开始同步行业板块..."})
+        logger.info("弢始同步一二三行业板块")
+        task_manager.update_progress(task_name, {"message": "弢始同步行业板?.."})
 
         syncer = SectorSyncer()
         syncer.sync_all_sectors()
@@ -1818,12 +2701,12 @@ def sync_sectors_task():
 
 def sync_sector_history_task(days=90):
     """
-    同步板块历史涨跌数据的后台任务
+    同步板块历史涨跌数据的后台任?
     
-    同步所有板块的历史涨跌幅、成交量、成交额，并计算上涨家数、下跌家数等统计信息
+    同步扢有板块的历史涨跌幅成交量、成交额，并计算上涨家数、下跌家数等统计信息
     
     Args:
-        days: 同步多少天的历史数据，默认30天
+        days: 同步多少天的历史数据，默?0?
     """
     task_name = "sync_sector_history"
     
@@ -1834,28 +2717,26 @@ def sync_sector_history_task(days=90):
         from sqlalchemy.exc import IntegrityError
         import pandas as pd
         
-        from data_fetcher.sources.tdxquant_pool import tdxquant_pool
+        from data_fetcher.manager import DataSourceManager
         from models.stock_models import SectorKlineDaily, Stock, KlineDaily
         from utils.database import db
         
-        logger.info(f"开始同步板块历史涨跌数据，天数: {days}")
-        task_manager.update_progress(task_name, {"message": f"开始同步板块历史数据（{days}天）..."})
+        logger.info(f"弢始同步板块历史涨跌数据，天数: {days}")
+        task_manager.update_progress(task_name, {"message": f"弢始同步板块历史数据（{days}天）..."})
         
         # 确保TdxQuant已初始化
-        if not tdxquant_pool._ensure_initialized():
-            raise Exception("TdxQuant未初始化")
+        if False:
+            raise Exception("TdxQuant鏈垵濮嬪寲")
         
-        # 1. 从数据库获取所有一二三级行业板块
+        # 1. 从数据库获取扢有一二三级行业板?
         task_manager.update_progress(task_name, {"message": "从数据库获取行业板块列表..."})
         from models.stock_models import Sector
-        from data_fetcher.sources.tdxquant import TdxQuantDataSource
+        data_sources = DataSourceManager()
         
-        tdxquant = TdxQuantDataSource("tdxquant", {"enabled": True, "priority": 0})
-        
-        # 获取数据库会话
+        # 获取数据库会?
         session_temp = next(db.get_session())
         try:
-            # 查询所有行业板块（type='industry'）
+            # 查询扢有行业板块（type='industry'?
             sectors = session_temp.query(Sector).filter(
                 Sector.type == 'industry'
             ).all()
@@ -1868,10 +2749,10 @@ def sync_sector_history_task(days=90):
                     'level': sector.level
                 })
             
-            logger.info(f"从数据库获取行业板块列表成功: {len(sector_list)} 个板块")
+            logger.info("task message")
             task_manager.update_progress(task_name, {
                 "total": len(sector_list),
-                "message": f"共 {len(sector_list)} 个行业板块需要同步"
+                "message": "task message"
             })
         finally:
             session_temp.close()
@@ -1882,7 +2763,7 @@ def sync_sector_history_task(days=90):
         start_date_str = start_date.strftime('%Y%m%d')
         end_date_str = end_date.strftime('%Y%m%d')
         
-        # 3. 获取数据库会话
+        # 3. 获取数据库会?
         session = next(db.get_session())
         
         total_saved = 0
@@ -1900,20 +2781,19 @@ def sync_sector_history_task(days=90):
                 })
                 
                 try:
-                    # 获取板块K线数据
-                    kline_data = tdxquant.get_stock_history(
+                    # 获取板块K线数?
+                    kline_data = data_sources.get_stock_history(
                         stock_code=sector_code,
                         start_date=start_date.strftime('%Y-%m-%d'),
                         end_date=end_date.strftime('%Y-%m-%d'),
-                        period='1d',
-                        dividend_type='front'
+                        period='1d'
                     )
                     
                     if kline_data is None or kline_data.empty:
-                        logger.warning(f"板块 {sector_code} 无K线数据")
+                        logger.warning("task warning")
                         continue
                     
-                    # 获取该板块的成分股（从SectorStock表中查询）
+                    # 获取该板块的成分股（从SectorStock表中查询?
                     from models.stock_models import SectorStock
                     sector_stocks = session.query(SectorStock.stock_code).filter(
                         SectorStock.sector_code == sector_code
@@ -1924,7 +2804,7 @@ def sync_sector_history_task(days=90):
                     # 先按日期升序排序，确保数据按时间顺序排列
                     kline_data_sorted = kline_data.sort_values('date').reset_index(drop=True)
                     
-                    # 遍历每个交易日
+                    # 遍历每个交易?
                     for idx, row in kline_data_sorted.iterrows():
                         try:
                             trade_date = row['date'].date() if hasattr(row['date'], 'date') else pd.to_datetime(row['date']).date()
@@ -1936,14 +2816,14 @@ def sync_sector_history_task(days=90):
                             volume = int(row['volume'])
                             amount = float(row['amount'])
                             
-                            # 计算涨跌幅
+                            # 璁＄畻娑ㄨ穼骞?
                             change_pct = Decimal('0.00')
-                            if idx > 0:  # 不是第一天
+                            if idx > 0:  # 涓嶆槸绗竴澶?
                                 prev_close = float(kline_data_sorted.iloc[idx - 1]['close'])
                                 if prev_close > 0:
                                     change_pct = Decimal(str(round((close_price - prev_close) / prev_close * 100, 2)))
                             
-                            # 计算成分股涨跌统计
+                            # 计算成分股涨跌统?
                             rise_count = 0
                             fall_count = 0
                             flat_count = 0
@@ -1967,13 +2847,13 @@ def sync_sector_history_task(days=90):
                                     else:
                                         flat_count += 1
                                     
-                                    # 判断涨跌停（简化判断，实际应根据股票类型判断涨跌停幅度）
+                                    # 判断涨跌停（箢化判断，实际应根据股票类型判断涨跌停幅度?
                                     if sk.change_pct >= 9.5:
                                         limit_up_count += 1
                                     elif sk.change_pct <= -9.5:
                                         limit_down_count += 1
                             
-                            # 检查是否已存在
+                            # 棢查是否已存在
                             existing = session.query(SectorKlineDaily).filter(
                                 and_(
                                     SectorKlineDaily.code == sector_code,
@@ -1998,7 +2878,7 @@ def sync_sector_history_task(days=90):
                                 existing.close = Decimal(str(close_price))
                                 existing.created_at = datetime.now()
                             else:
-                                # 创建新记录
+                                # 创建新记?
                                 new_record = SectorKlineDaily(
                                     code=sector_code,
                                     trade_date=trade_date,
@@ -2042,15 +2922,14 @@ def sync_sector_history_task(days=90):
                     "success_sectors": success_count,
                     "total_records": total_saved,
                     "days": days,
-                    "date_range": f"{start_date_str} 至 {end_date_str}"
+                    "date_range": f"{start_date_str} 鑷?{end_date_str}"
                 }
             }
             task_manager.set_results(task_name, results)
-            logger.info(f"板块历史涨跌数据同步完成: {success_count}/{len(sector_list)} 个板块, {total_saved} 条记录")
+            logger.info("task message")
             
         finally:
             session.close()
-            tdxquant_pool.close()
         
     except Exception as e:
         logger.error(f"同步板块历史涨跌数据失败: {e}")
@@ -2060,14 +2939,14 @@ def sync_sector_history_task(days=90):
 
 
 def repair_history_klines_task(periods=None, type=None):
-    """修复历史K线数据的后台任务"""
+    """System configuration task helper."""
     task_name = "repair_history_klines"
     
     try:
         from scripts.sync_all_klines import KlineSyncer
         
-        logger.info(f"开始修复历史K线数据，类型: {type}")
-        task_manager.update_progress(task_name, {"message": "开始同步K线数据..."})
+        logger.info(f"弢始修复历史K线数据，类型: {type}")
+        task_manager.update_progress(task_name, {"message": "弢始同步K线数?.."})
         
         # 创建同步器并执行
         syncer = KlineSyncer()
@@ -2075,19 +2954,19 @@ def repair_history_klines_task(periods=None, type=None):
         
         # 设置结果
         results = {
-            "message": "历史K线数据同步完成",
+            "message": "task message",
             "stats": syncer.stats
         }
         task_manager.set_results(task_name, results)
-        logger.info("历史K线数据同步完成")
+        logger.info("task message")
         
     except Exception as e:
-        logger.error(f"修复历史K线数据失败: {e}")
+        logger.error(f"修复历史K线数据失? {e}")
         task_manager.set_error(task_name, str(e))
 
 
 def repair_daily_klines_task():
-    """修复日K线数据的后台任务"""
+    """System configuration task helper."""
     task_name = "repair_daily_klines"
     
     try:
@@ -2095,13 +2974,13 @@ def repair_daily_klines_task():
         from models.stock_models import KlineDaily
         import pandas as pd
         
-        logger.info("开始修复日K线数据")
-        task_manager.update_progress(task_name, {"message": "开始修复日K线数据..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始修复日K线数?.."})
         
-        # 获取所有股票代码
+        # 获取扢有股票代?
         session = next(db.get_session())
         try:
-            # 获取所有股票代码
+            # 获取扢有股票代?
             from models.stock_models import Stock
             stocks = session.query(Stock.code).filter(
                 Stock.type.in_(['stock', 'index'])
@@ -2109,7 +2988,7 @@ def repair_daily_klines_task():
             stock_codes = [stock.code for stock in stocks]
             total_stocks = len(stock_codes)
             
-            task_manager.update_progress(task_name, {"total": total_stocks, "message": f"共{total_stocks}只股票需要修复"})
+            task_manager.update_progress(task_name, {"message": "task progress"})
             
             repaired_stocks = 0
             repaired_records = 0
@@ -2121,13 +3000,13 @@ def repair_daily_klines_task():
                     "message": f"正在修复 {code} ({i+1}/{total_stocks})"
                 })
                 
-                # 获取该股票的所有日线数据
+                # 获取该股票的扢有日线数?
                 klines = session.query(KlineDaily).filter(
                     KlineDaily.code == code
                 ).order_by(KlineDaily.trade_date).all()
                 
                 if len(klines) > 1:
-                    # 转换为DataFrame进行计算
+                    # 杞崲涓篋ataFrame杩涜璁＄畻
                     data = []
                     for kline in klines:
                         data.append({
@@ -2138,11 +3017,11 @@ def repair_daily_klines_task():
                     
                     df = pd.DataFrame(data)
                     
-                    # 计算涨跌额和涨跌幅
+                    # 璁＄畻娑ㄨ穼棰濆拰娑ㄨ穼骞?
                     df['change_amount'] = df['close'].diff()
                     df['change_pct'] = (df['change_amount'] / df['close'].shift(1)) * 100
                     
-                    # 计算振幅（需要high和low数据）
+                    # 计算振幅（需要high和low数据?
                     for j, kline in enumerate(klines):
                         if j > 0:
                             prev_close = klines[j-1].close
@@ -2153,18 +3032,18 @@ def repair_daily_klines_task():
                                 kline.change_pct = float(df.loc[j, 'change_pct'])
                                 repaired_records += 1
                     
-                    # 每处理10只股票提交一次
+                    # 每处?0只股票提交一?
                     if (i + 1) % 10 == 0:
                         session.commit()
                     
                     repaired_stocks += 1
             
-            # 提交剩余的修改
+            # 提交剩余的修?
             session.commit()
             
             # 设置结果
             results = {
-                "message": "日K线数据修复完成",
+                "message": "task message",
                 "stats": {
                     "repaired_stocks": repaired_stocks,
                     "repaired_records": repaired_records,
@@ -2172,13 +3051,13 @@ def repair_daily_klines_task():
                 }
             }
             task_manager.set_results(task_name, results)
-            logger.info(f"日K线数据修复完成，修复了{repaired_stocks}只股票的{repaired_records}条记录")
+            logger.info("task message")
             
         finally:
             session.close()
             
     except Exception as e:
-        logger.error(f"修复日K线数据失败: {e}")
+        logger.error(f"修复日K线数据失? {e}")
         task_manager.set_error(task_name, str(e))
 
 
@@ -2188,7 +3067,7 @@ CORE_INDEX_CODES = {"999999.SH", "399001.SZ"}
 
 
 def _get_previous_close_for_code(code: str, trade_date: str) -> Optional[float]:
-    """查询指定标的在目标交易日前一交易日的收盘价。"""
+    """System configuration task helper."""
     try:
         from utils.database import db
 
@@ -2214,8 +3093,8 @@ def _get_previous_close_for_code(code: str, trade_date: str) -> Optional[float]:
 
 def _validate_index_daily_df(code: str, df, trade_date: str) -> Dict[str, Any]:
     """
-    对单指数日线数据做写库前校验。
-    返回: {"passed": bool, "reason": str, "change_pct": float|None}
+    对单指数日线数据做写库前校验?
+    杩斿洖: {"passed": bool, "reason": str, "change_pct": float|None}
     """
     try:
         if df is None or df.empty:
@@ -2256,7 +3135,7 @@ def _validate_index_daily_df(code: str, df, trade_date: str) -> Dict[str, Any]:
 
 def _tushare_index_cross_check(code: str, trade_date: str, target_close: float) -> Dict[str, Any]:
     """
-    使用 Tushare 对异常指数做交叉校验（仅判定，不直接落库）。
+    使用 Tushare 对异常指数做交叉校验（仅判定，不直接落库）?
     """
     try:
         from scheduler.tasks.tushare_daily_kline_task import TushareDailyKlineTask
@@ -2272,7 +3151,7 @@ def _tushare_index_cross_check(code: str, trade_date: str, target_close: float) 
             return {"available": True, "passed": False, "reason": "invalid_close"}
 
         diff_pct = abs(target_close - ts_close) / ts_close * 100
-        # 交叉校验阈值适度放宽，避免口径细差导致误报
+        # 交叉校验阈度放宽，避免口径细差导致误?
         if diff_pct > 1.5:
             return {
                 "available": True,
@@ -2286,11 +3165,11 @@ def _tushare_index_cross_check(code: str, trade_date: str, target_close: float) 
 
 
 def _legacy_update_today_data_task(periods=None):
-    """更新当天最新数据的后台任务（只更新指数）"""
+    """System configuration task helper."""
     task_name = "update_today_data"
 
     if not data_update_lock.acquire(blocking=False):
-        msg = "已有其他数据更新任务在执行，请稍后重试"
+        msg = "task is already running"
         logger.warning(msg)
         task_manager.set_error(task_name, msg)
         return
@@ -2299,13 +3178,13 @@ def _legacy_update_today_data_task(periods=None):
         from scripts.sync_all_klines import KlineSyncer
         from datetime import datetime
         
-        logger.info("开始更新当天指数数据")
-        task_manager.update_progress(task_name, {"message": "开始更新当天指数数据..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始更新当天指数数?.."})
         
-        # 创建同步器
+        # 创建同步?
         syncer = KlineSyncer()
 
-        # 预取一次指数列表，避免每个周期重复加载全量列表导致额外内存占用
+        # 预取丢次指数列表，避免每个周期重复加载全量列表导致额外内存占用
         all_indices = syncer.get_all_indices()
         
         # 确定要同步的周期
@@ -2318,25 +3197,25 @@ def _legacy_update_today_data_task(periods=None):
         blocked_codes: List[Dict[str, Any]] = []
         validation_status = "passed"
         validation_reason = "ok"
-        active_source = "tdxquant"
+        active_source = "qmt_xtquant"
         
         # 计算总任务数
         for period in sync_periods:
-            # 只同步指数
+            # 只同步指?
             total_tasks += len(all_indices)
         
-        task_manager.update_progress(task_name, {"total": total_tasks, "message": f"共{total_tasks}个指数任务需要执行"})
+        task_manager.update_progress(task_name, {"message": "task progress"})
         
         # 逐个周期同步
         for period in sync_periods:
             if period not in syncer.periods:
-                logger.warning(f"未知的周期: {period}，跳过")
+                logger.warning("task warning")
                 continue
             
             period_name = syncer.periods[period]
-            logger.info(f"开始更新 {period_name} ({period}) 当天指数数据")
+            logger.info(f"弢始更?{period_name} ({period}) 当天指数数据")
             
-            # 只同步指数
+            # 只同步指?
             stocks = all_indices
             
             if not stocks:
@@ -2352,23 +3231,23 @@ def _legacy_update_today_data_task(periods=None):
                     # 只获取当天的数据
                     today = datetime.now().strftime('%Y-%m-%d')
                     
-                    # 获取K线数据
-                    df = syncer.tdxquant.get_stock_history(
+                    # 鑾峰彇K绾挎暟鎹?
+                    df = syncer.market_data_source.get_stock_history(
                         stock_code=code,
                         start_date=today,
                         end_date=today,
                         period=period,
-                        dividend_type='front'  # 前复权
+                        dividend_type='front'  # 前复?
                     )
                     
                     if df is not None and not df.empty:
                         # 保存到数据库
                         syncer._save_kline_to_db(code, period, df)
-                        logger.info(f"✅ {code} {name} {period} 当天指数数据更新成功: {len(df)} 条")
+                        logger.info("task message")
                     else:
-                        logger.warning(f"⚠️  {code} {name} {period} 当天无数据")
+                        logger.warning("task warning")
                     
-                    # 释放DataFrame内存
+                    # 閲婃斁DataFrame鍐呭瓨
                     if df is not None:
                         del df
                         import gc
@@ -2381,7 +3260,7 @@ def _legacy_update_today_data_task(periods=None):
                     })
                     
                 except Exception as e:
-                    logger.error(f"❌ {stock['code']} {stock['name']} {period} 更新失败: {e}")
+                    logger.error(f"?{stock['code']} {stock['name']} {period} 更新失败: {e}")
                     completed_tasks += 1
                     task_manager.update_progress(task_name, {
                         "current": completed_tasks,
@@ -2409,7 +3288,7 @@ def _legacy_update_today_data_task(periods=None):
 
 
 def update_today_data_task(periods=None, force: bool = False):
-    """更新当天最新数据的后台任务（只更新指数，含异常拦截）。"""
+    """System configuration task helper."""
     task_name = "update_today_data"
 
     if _skip_intraday_auto_update_if_closed(task_name, force=force):
@@ -2434,8 +3313,8 @@ def update_today_data_task(periods=None, force: bool = False):
         import pandas as pd
         from scripts.sync_all_klines import KlineSyncer
 
-        logger.info("开始更新当天指数数据")
-        task_manager.update_progress(task_name, {"message": "开始更新当天指数数据..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始更新当天指数数?.."})
 
         syncer = KlineSyncer()
         all_indices = syncer.get_all_indices()
@@ -2453,23 +3332,25 @@ def update_today_data_task(periods=None, force: bool = False):
         blocked_codes: List[Dict[str, Any]] = []
         validation_status = "passed"
         validation_reason = "ok"
-        active_source = "tdxquant"
+        active_source = "qmt_xtquant"
 
         def _try_batch_sync_index_daily(indices: List[Dict[str, Any]], completed: int) -> Dict[str, Any]:
-            from data_fetcher.sources.tdxquant_pool import tdxquant_pool
+            from data_fetcher.sources.qmtmini_client import QmtMiniMarketClient
             from utils.market_warehouse import clickhouse_client
 
             query_date = _resolve_intraday_daily_trade_date()
             code_list = [str(item.get("code")) for item in indices if item.get("code")]
             if not code_list:
                 return {"used": True, "completed": completed, "success": 0, "failed": 0, "blocked": []}
-            if not tdxquant_pool._ensure_initialized():
-                reason = "tdxquant_unavailable"
-                task_manager.update_progress(task_name, {"message": f"指数日线批量路径不可用，已停止: {reason}"})
+            if False:
+                reason = "qmt_xtquant_unavailable"
+                task_manager.update_progress(task_name, {"message": f"指数日线批量路径不可用，已停? {reason}"})
                 return {"used": False, "completed": completed, "success": 0, "failed": len(code_list), "blocked": [], "reason": reason}
 
-            market_data = tdxquant_pool.get_market_data(
-                field_list=[],
+            qmt_market = QmtMiniMarketClient()
+            qmt_market.connect()
+            market_data = qmt_market.get_market_data_tdx_shape(
+                field_list=["Open", "High", "Low", "Close", "Volume", "Amount"],
                 stock_list=code_list,
                 period="1d",
                 start_time=query_date.replace("-", ""),
@@ -2483,8 +3364,8 @@ def update_today_data_task(periods=None, force: bool = False):
             if close_df is not None and not close_df.empty:
                 exact_coverage = min(1.0, len(close_df.columns) / len(code_list))
             if close_df is None or close_df.empty or exact_coverage < 0.70:
-                latest_market_data = tdxquant_pool.get_market_data(
-                    field_list=[],
+                latest_market_data = qmt_market.get_market_data_tdx_shape(
+                    field_list=["Open", "High", "Low", "Close", "Volume", "Amount"],
                     stock_list=code_list,
                     period="1d",
                     count=1,
@@ -2513,7 +3394,7 @@ def update_today_data_task(periods=None, force: bool = False):
                 final_coverage = min(1.0, len(close_df.columns) / len(code_list))
             if final_coverage < 0.70:
                 reason = f"coverage={final_coverage:.2%}<70%"
-                task_manager.update_progress(task_name, {"message": f"指数日线批量覆盖率不足，已停止: {reason}"})
+                task_manager.update_progress(task_name, {"message": f"指数日线批量覆盖率不足，已停? {reason}"})
                 logger.error(f"index daily batch rejected: {reason}")
                 return {"used": False, "completed": completed, "success": 0, "failed": len(code_list), "blocked": [], "reason": reason}
 
@@ -2624,7 +3505,7 @@ def update_today_data_task(periods=None, force: bool = False):
 
             if not rows:
                 reason = "no valid rows after batch validation"
-                task_manager.update_progress(task_name, {"message": f"指数日线批量失败，已跳过逐条回退: {reason}"})
+                task_manager.update_progress(task_name, {"message": f"指数日线批量失败，已跳过逐条回: {reason}"})
                 return {"used": False, "completed": completed, "success": 0, "failed": failed, "blocked": blocked, "reason": reason}
 
             def _quote(value: Any) -> str:
@@ -2713,15 +3594,15 @@ def update_today_data_task(periods=None, force: bool = False):
                 validation_reason = index_snapshot_error
                 logger.exception(f"intraday global index snapshot collection failed: {exc}")
 
-        task_manager.update_progress(task_name, {"total": total_tasks, "message": f"共{total_tasks}个指数任务需要执行"})
+        task_manager.update_progress(task_name, {"message": "task progress"})
 
         for period in sync_periods:
             if period not in syncer.periods:
-                logger.warning(f"未知的周期: {period}，跳过")
+                logger.warning("task warning")
                 continue
 
             period_name = syncer.periods[period]
-            logger.info(f"开始更新 {period_name} ({period}) 当天指数数据")
+            logger.info(f"弢始更?{period_name} ({period}) 当天指数数据")
 
             current_indices = minute_indices if period in minute_periods else all_indices
             if not current_indices:
@@ -2749,7 +3630,7 @@ def update_today_data_task(periods=None, force: bool = False):
                     logger.exception(f"index daily batch path failed: {e}")
                     task_manager.update_progress(
                         task_name,
-                        {"message": f"指数日线批量路径异常，已跳过逐条回退: {e}"},
+                        {"message": f"指数日线批量路径异常，已跳过逐条回: {e}"},
                     )
                     failed_tasks += len(all_indices)
                     validation_status = "failed"
@@ -2779,7 +3660,7 @@ def update_today_data_task(periods=None, force: bool = False):
                     name = stock["name"]
                     today = datetime.now().strftime("%Y-%m-%d")
 
-                    df = syncer.tdxquant.get_stock_history(
+                    df = syncer.market_data_source.get_stock_history(
                         stock_code=code,
                         start_date=today,
                         end_date=today,
@@ -2789,13 +3670,13 @@ def update_today_data_task(periods=None, force: bool = False):
 
                     if df is None or df.empty:
                         failed_tasks += 1
-                        logger.warning(f"⚠️  {code} {name} {period} 当天无数据")
+                        logger.warning("task warning")
                     else:
                         should_save = True
                         if period == "1d":
                             check_result = _validate_index_daily_df(code, df, today)
                             if not check_result.get("passed"):
-                                retry_df = syncer.tdxquant.get_stock_history(
+                                retry_df = syncer.market_data_source.get_stock_history(
                                     stock_code=code,
                                     start_date=today,
                                     end_date=today,
@@ -2842,10 +3723,10 @@ def update_today_data_task(periods=None, force: bool = False):
                         if should_save:
                             syncer._save_kline_to_db(code, period, df)
                             success_tasks += 1
-                            logger.info(f"✅ {code} {name} {period} 当天指数数据更新成功: {len(df)} 条")
+                            logger.info("task message")
                         else:
                             failed_tasks += 1
-                            logger.error(f"❌ 拦截指数异常写入: {code} {name}, reason={validation_reason}")
+                            logger.error(f"?拦截指数异常写入: {code} {name}, reason={validation_reason}")
 
                     completed_tasks += 1
                     task_manager.update_progress(
@@ -2855,7 +3736,7 @@ def update_today_data_task(periods=None, force: bool = False):
                 except Exception as e:
                     failed_tasks += 1
                     completed_tasks += 1
-                    logger.error(f"❌ {stock['code']} {stock['name']} {period} 更新失败: {e}")
+                    logger.error(f"?{stock['code']} {stock['name']} {period} 更新失败: {e}")
                     task_manager.update_progress(
                         task_name,
                         {"current": completed_tasks, "message": f"更新 {stock['code']} {period_name} 失败 ({completed_tasks}/{total_tasks})"},
@@ -2884,7 +3765,7 @@ def update_today_data_task(periods=None, force: bool = False):
         logger.info("当天指数数据更新完成")
 
         if validation_status == "failed":
-            task_manager.set_error(task_name, f"指数当天数据更新未完全通过: {validation_reason}")
+            task_manager.set_error(task_name, f"指数当天数据更新未完全过: {validation_reason}")
     except Exception as e:
         logger.error(f"更新当天指数数据失败: {e}")
         task_manager.set_error(task_name, str(e))
@@ -2894,11 +3775,11 @@ def update_today_data_task(periods=None, force: bool = False):
 
 
 def _legacy_update_stock_today_data_task(periods=None):
-    """更新当天最新股票数据的后台任务"""
+    """System configuration task helper."""
     task_name = "update_stock_today_data"
 
     if not data_update_lock.acquire(blocking=False):
-        msg = "已有其他数据更新任务在执行，请稍后重试"
+        msg = "task is already running"
         logger.warning(msg)
         task_manager.set_error(task_name, msg)
         return
@@ -2907,13 +3788,13 @@ def _legacy_update_stock_today_data_task(periods=None):
         from scripts.sync_all_klines import KlineSyncer
         from datetime import datetime
         
-        logger.info("开始更新当天个股数据")
-        task_manager.update_progress(task_name, {"message": "开始更新当天个股数据..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始更新当天个股数?.."})
         
-        # 创建同步器
+        # 创建同步?
         syncer = KlineSyncer()
 
-        # 预取一次股票列表，避免每个周期重复查询导致内存抖动
+        # 预取丢次股票列表，避免每个周期重复查询导致内存抖动
         all_stocks = syncer.get_all_stocks()
         watchlist_stocks = syncer.get_watchlist_and_holding_stocks()
         all_indices = syncer.get_all_indices()
@@ -2931,29 +3812,29 @@ def _legacy_update_stock_today_data_task(periods=None):
                 # 1分钟数据只同步自选股和持仓股
                 total_tasks += len(watchlist_stocks)
             else:
-                # 其他周期同步所有股票
+                # 其他周期同步扢有股?
                 total_tasks += len(all_stocks)
-            # 日线额外同步关键指数（首页涨跌统计依赖 999999.SH/399001.SZ）
+            # 日线额外同步关键指数（首页涨跌统计依?999999.SH/399001.SZ?
             if period == "1d":
                 total_tasks += len(critical_indices)
         
-        task_manager.update_progress(task_name, {"total": total_tasks, "message": f"共{total_tasks}个股票任务需要执行"})
+        task_manager.update_progress(task_name, {"message": "task progress"})
         
         # 逐个周期同步
         for period in sync_periods:
             if period not in syncer.periods:
-                logger.warning(f"未知的周期: {period}，跳过")
+                logger.warning("task warning")
                 continue
             
             period_name = syncer.periods[period]
-            logger.info(f"开始更新 {period_name} ({period}) 当天股票数据")
+            logger.info(f"弢始更?{period_name} ({period}) 当天股票数据")
             
             # 根据周期选择股票列表
             if period == '1m':
                 # 1分钟数据只同步自选股和持仓股
                 stocks = watchlist_stocks
             else:
-                # 其他周期同步所有股票
+                # 其他周期同步扢有股?
                 stocks = all_stocks
             
             if not stocks:
@@ -2966,20 +3847,20 @@ def _legacy_update_stock_today_data_task(periods=None):
                     code = stock['code']
                     name = stock['name']
                     
-                    # 只获取当天的数据（若当天无数据，日线自动回退上一交易日）
+                    # 只获取当天的数据（若当天无数据，日线自动回上一交易日）
                     today = datetime.now().strftime('%Y-%m-%d')
                     query_date = today
                     
-                    # 获取K线数据
-                    df = syncer.tdxquant.get_stock_history(
+                    # 鑾峰彇K绾挎暟鎹?
+                    df = syncer.market_data_source.get_stock_history(
                         stock_code=code,
                         start_date=query_date,
                         end_date=query_date,
                         period=period,
-                        dividend_type='front'  # 前复权
+                        dividend_type='front'  # 前复?
                     )
 
-                    # 日线在凌晨/休市时可能当日无数据，回退上一交易日重试
+                    # 日线在凌?休市时可能当日无数据，回逢上一交易日重?
                     if (df is None or df.empty) and period == '1d':
                         from scheduler.trading_calendar import TradingCalendar
 
@@ -2987,11 +3868,11 @@ def _legacy_update_stock_today_data_task(periods=None):
                         previous_trading_day = TradingCalendar.get_previous_trading_day(now_dt).strftime('%Y-%m-%d')
                         if previous_trading_day != query_date:
                             logger.warning(
-                                f"⚠️  {code} {name} 1d 当天无数据，回退上一交易日重试: {previous_trading_day} "
+                                f"⚠️  {code} {name} 1d 当天无数据，回上一交易日重? {previous_trading_day} "
                                 f"(当前时间: {now_dt.strftime('%Y-%m-%d %H:%M:%S')})"
                             )
                             query_date = previous_trading_day
-                            df = syncer.tdxquant.get_stock_history(
+                            df = syncer.market_data_source.get_stock_history(
                                 stock_code=code,
                                 start_date=query_date,
                                 end_date=query_date,
@@ -3002,14 +3883,14 @@ def _legacy_update_stock_today_data_task(periods=None):
                     if df is not None and not df.empty:
                         # 保存到数据库
                         syncer._save_kline_to_db(code, period, df)
-                        logger.info(f"✅ {code} {name} {period} 数据更新成功: {len(df)} 条 (date={query_date})")
+                        logger.info(f"?{code} {name} {period} 数据更新成功: {len(df)} ?(date={query_date})")
                     else:
                         logger.warning(
-                            f"⚠️  {code} {name} {period} 无数据 "
+                            f"⚠️  {code} {name} {period} 无数?"
                             f"(query_date={query_date}, now={datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
                         )
                     
-                    # 释放DataFrame内存
+                    # 閲婃斁DataFrame鍐呭瓨
                     if df is not None:
                         del df
                         import gc
@@ -3022,14 +3903,14 @@ def _legacy_update_stock_today_data_task(periods=None):
                     })
                     
                 except Exception as e:
-                    logger.error(f"❌ {stock['code']} {stock['name']} {period} 更新失败: {e}")
+                    logger.error(f"?{stock['code']} {stock['name']} {period} 更新失败: {e}")
                     completed_tasks += 1
                     task_manager.update_progress(task_name, {
                         "current": completed_tasks,
                         "message": f"更新 {stock['code']} {period_name} 失败 ({completed_tasks}/{total_tasks})"
                     })
 
-            # 补充：日线同步关键指数，避免首页涨跌统计停留在旧交易日
+            # 补充：日线同步关键指数，避免首页涨跌统计停留在旧交易?
             if period == "1d" and critical_indices:
                 for stock in critical_indices:
                     try:
@@ -3038,7 +3919,7 @@ def _legacy_update_stock_today_data_task(periods=None):
                         today = datetime.now().strftime('%Y-%m-%d')
                         query_date = today
 
-                        df = syncer.tdxquant.get_stock_history(
+                        df = syncer.market_data_source.get_stock_history(
                             stock_code=code,
                             start_date=query_date,
                             end_date=query_date,
@@ -3053,7 +3934,7 @@ def _legacy_update_stock_today_data_task(periods=None):
                             previous_trading_day = TradingCalendar.get_previous_trading_day(now_dt).strftime('%Y-%m-%d')
                             if previous_trading_day != query_date:
                                 query_date = previous_trading_day
-                                df = syncer.tdxquant.get_stock_history(
+                                df = syncer.market_data_source.get_stock_history(
                                     stock_code=code,
                                     start_date=query_date,
                                     end_date=query_date,
@@ -3063,9 +3944,9 @@ def _legacy_update_stock_today_data_task(periods=None):
 
                         if df is not None and not df.empty:
                             syncer._save_kline_to_db(code, period, df)
-                            logger.info(f"✅ {code} {name} {period} 关键指数更新成功: {len(df)} 条 (date={query_date})")
+                            logger.info(f"?{code} {name} {period} 关键指数更新成功: {len(df)} ?(date={query_date})")
                         else:
-                            logger.warning(f"⚠️  {code} {name} {period} 关键指数无数据 (query_date={query_date})")
+                            logger.warning(f"⚠️  {code} {name} {period} 关键指数无数?(query_date={query_date})")
 
                         if df is not None:
                             del df
@@ -3078,14 +3959,14 @@ def _legacy_update_stock_today_data_task(periods=None):
                             "message": f"正在更新 {code} 关键指数日线 ({completed_tasks}/{total_tasks})"
                         })
                     except Exception as e:
-                        logger.error(f"❌ {stock.get('code')} {stock.get('name')} {period} 关键指数更新失败: {e}")
+                        logger.error(f"?{stock.get('code')} {stock.get('name')} {period} 关键指数更新失败: {e}")
                         completed_tasks += 1
                         task_manager.update_progress(task_name, {
                             "current": completed_tasks,
                             "message": f"更新关键指数 {stock.get('code')} 失败 ({completed_tasks}/{total_tasks})"
                         })
         
-        # 自动补算情绪周期：避免首页缺失某个交易日（例如 4/8）
+        # 自动补算情绪周期：避免首页缺失某个交易日（例?4/8?
         if "1d" in sync_periods:
             try:
                 from models.stock_models import EmotionCycle, KlineDaily
@@ -3108,16 +3989,16 @@ def _legacy_update_stock_today_data_task(periods=None):
                         if emotion_cycle:
                             session.add(emotion_cycle)
                             session.commit()
-                            logger.info(f"✅ 情绪周期已生成: {latest_date}")
+                            logger.info(f"?情绪周期已生? {latest_date}")
                         else:
-                            logger.warning(f"⚠️ 情绪周期生成失败: {latest_date}")
+                            logger.warning(f"鈿狅笍 鎯呯华鍛ㄦ湡鐢熸垚澶辫触: {latest_date}")
                 finally:
                     try:
                         session.close()
                     except Exception:
                         pass
             except Exception as e:
-                logger.error(f"生成情绪周期失败: {e}")
+                logger.error(f"鐢熸垚鎯呯华鍛ㄦ湡澶辫触: {e}")
         
         # 设置结果
         results = {
@@ -3452,7 +4333,7 @@ def update_market_today_minute_data_task(periods=None, force: bool = False):
 
         status = "passed" if failed == 0 and not errors else "failed"
         result = {
-            "message": f"盘中股票/指数分钟级快照完成: success={success}, failed={failed}",
+            "message": f"盘中股票/指数分钟级快照完? success={success}, failed={failed}",
             "periods": sync_periods,
             "stats": {"total": total, "success": success, "failed": failed},
             "stock_pool_count": len(stock_codes),
@@ -3475,7 +4356,7 @@ def update_market_today_minute_data_task(periods=None, force: bool = False):
         if status != "passed":
             task_manager.set_error(task_name, "; ".join(errors) or "intraday market minute snapshot failed")
     except Exception as exc:
-        logger.exception(f"盘中股票/指数分钟级快照失败: {exc}")
+        logger.exception(f"盘中股票/指数分钟级快照失? {exc}")
         task_manager.set_error(task_name, str(exc))
     finally:
         if data_update_lock.locked():
@@ -3490,6 +4371,11 @@ def sync_today_intraday_kline_task(
 ):
     """Refresh strategy-critical same-day 15m/30m K-lines into ClickHouse."""
     task_name = "sync_today_intraday_kline"
+
+    if target_date is None:
+        preflight = _ensure_trade_calendar_fresh_for_today(task_name)
+        if not preflight.get("ok") or not preflight.get("trading_day"):
+            return
 
     if not data_update_lock.acquire(blocking=False):
         msg = "已有其他数据更新任务正在执行，请稍后重试"
@@ -3509,30 +4395,66 @@ def sync_today_intraday_kline_task(
             normalized_periods = ["15m", "30m"]
 
         normalized_date = (target_date or datetime.now().strftime("%Y-%m-%d"))[:10]
-        script_path = REPO_ROOT / "scripts" / "sync_intraday_minutes_fast.py"
+        try:
+            from scheduler.trading_calendar import TradingCalendar
+
+            target_dt = datetime.strptime(normalized_date, "%Y-%m-%d")
+            if not TradingCalendar.is_trading_day(target_dt):
+                msg = f"skip intraday minute K-line sync for non-trading day: {normalized_date}"
+                logger.info(msg)
+                task_manager.update_progress(task_name, {"current": 0, "total": 0, "message": msg})
+                task_manager.set_results(
+                    task_name,
+                    {
+                        "message": msg,
+                        "target_date": normalized_date,
+                        "periods": normalized_periods,
+                        "validation_status": "skipped_non_trading_day",
+                    },
+                    mark_success=True,
+                )
+                return
+        except Exception as exc:
+            logger.warning(f"failed to validate intraday minute K-line trade date {normalized_date}: {exc}")
+
+        script_path = REPO_ROOT / "scripts" / "qmt_xtquant_minute_backfill_validate.py"
         if not script_path.exists():
             raise RuntimeError(f"script_not_found:{script_path}")
+
+        intraday_stock_pool = _build_intraday_minute_stock_pool(_IntradayMinutePoolSource())
+        intraday_index_pool = _build_intraday_minute_index_pool(_get_intraday_minute_indices())
+        target_codes = [
+            str(item.get("code")).strip().upper()
+            for item in [*intraday_stock_pool, *intraday_index_pool]
+            if str(item.get("code") or "").strip()
+        ]
+        target_codes = list(dict.fromkeys(target_codes))
 
         cmd = [
             sys.executable,
             str(script_path),
-            "--target-date",
+            "--phase",
+            "all",
+            "--start-date",
             normalized_date,
-            "--types",
-            "stock,index",
+            "--end-date",
+            normalized_date,
             "--periods",
             ",".join(normalized_periods),
             "--batch-size",
-            "500",
-            "--min-complete-codes",
-            "3000",
+            "30",
+            "--reset-stage",
         ]
+        if target_codes:
+            cmd.extend(["--codes", ",".join(target_codes)])
+        else:
+            cmd.append("--include-index")
         task_manager.update_progress(
             task_name,
             {
                 "current": 0,
                 "total": len(normalized_periods),
-                "message": f"开始同步当天全市场分钟K线: {normalized_date} {','.join(normalized_periods)}",
+                "message": f"弢始同步当天全市场分钟K? {normalized_date} {','.join(normalized_periods)}",
             },
         )
 
@@ -3547,7 +4469,7 @@ def sync_today_intraday_kline_task(
                 timeout=max(300, int(timeout_seconds or 1800)),
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"当天分钟K线落库超时: timeout={timeout_seconds}s")
+            raise RuntimeError(f"当天分钟K线落库超? timeout={timeout_seconds}s")
 
         stdout_tail = (proc.stdout or "")[-8000:]
         stderr_tail = (proc.stderr or "")[-8000:]
@@ -3568,7 +4490,7 @@ def sync_today_intraday_kline_task(
 
         ok = proc.returncode == 0 and bool(parsed_summary.get("ok", proc.returncode == 0))
         result = {
-            "message": "当天全市场15m/30m分钟K线落库完成" if ok else "当天全市场15m/30m分钟K线落库失败",
+            "message": "current market minute sync completed" if ok else "current market minute sync failed",
             "target_date": normalized_date,
             "periods": normalized_periods,
             "returncode": int(proc.returncode or 0),
@@ -3582,7 +4504,7 @@ def sync_today_intraday_kline_task(
         if not ok:
             task_manager.set_error(task_name, result["stderr_tail"] or result["stdout_tail"] or result["message"])
     except Exception as exc:
-        logger.exception(f"当天全市场分钟K线落库失败: {exc}")
+        logger.exception(f"当天全市场分钟K线落库失? {exc}")
         task_manager.set_error(task_name, str(exc))
     finally:
         if data_update_lock.locked():
@@ -3590,7 +4512,7 @@ def sync_today_intraday_kline_task(
 
 
 def update_stock_today_data_task(periods=None, force: bool = False):
-    """更新当天最新股票数据的后台任务。"""
+    """System configuration task helper."""
     task_name = "update_stock_today_data"
 
     if _skip_intraday_auto_update_if_closed(task_name, force=force):
@@ -3616,8 +4538,8 @@ def update_stock_today_data_task(periods=None, force: bool = False):
         from scripts.sync_all_klines import KlineSyncer
         from scheduler.trading_calendar import TradingCalendar
 
-        logger.info("开始更新当天个股数据")
-        task_manager.update_progress(task_name, {"message": "开始更新当天个股数据..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始更新当天个股数?.."})
 
         syncer = KlineSyncer()
         all_stocks = syncer.get_all_stocks()
@@ -3642,7 +4564,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
         for period in sync_periods:
             if period not in minute_periods:
                 total_tasks += len(daily_assets if period == "1d" else all_stocks)
-        task_manager.update_progress(task_name, {"total": total_tasks, "message": f"共{total_tasks}个股票任务需要执行"})
+        task_manager.update_progress(task_name, {"message": "task progress"})
 
         minute_snapshot_result: Optional[Dict[str, Any]] = None
         minute_snapshot_error: Optional[str] = None
@@ -3714,24 +4636,26 @@ def update_stock_today_data_task(periods=None, force: bool = False):
             total: int,
         ) -> Dict[str, Any]:
             """
-            1次股票列表 + N次 get_market_data 批量行情的日线快照更新。
-            启用前做样本校验，不通过则返回 used=False 让主流程自动回退旧逻辑。
+            1次股票列?+ N?get_market_data 批量行情的日线快照更新?
+            启用前做样本校验，不通过则返?used=False 让主流程自动回旧辑?
             """
-            from data_fetcher.sources.tdxquant_pool import tdxquant_pool
+            from data_fetcher.sources.qmtmini_client import QmtMiniMarketClient
 
             query_date = _resolve_daily_trade_date()
-            batch_size = 600
+            batch_size = 200
             sleep_between_batches = 0.05
             total_codes = len(stocks)
 
             if total_codes == 0:
                 return {"used": True, "completed": completed}
-            if not tdxquant_pool._ensure_initialized():
-                reason = "tdxquant_unavailable"
-                task_manager.update_progress(task_name, {"message": f"日线批量路径不可用，已停止: {reason}"})
+            if False:
+                reason = "qmt_xtquant_unavailable"
+                task_manager.update_progress(task_name, {"message": f"日线批量路径不可用，已停? {reason}"})
                 return {"used": False, "completed": completed, "failed": total_codes, "reason": reason}
 
             code_list = [s.get("code") for s in stocks if s.get("code")]
+            qmt_market = QmtMiniMarketClient()
+            qmt_market.connect()
             total_batches = math.ceil(len(code_list) / batch_size)
             rows: List[Dict[str, Any]] = []
             written_codes: set[str] = set()
@@ -3762,8 +4686,8 @@ def update_stock_today_data_task(periods=None, force: bool = False):
             for i in range(total_batches):
                 batch_codes = code_list[i * batch_size:(i + 1) * batch_size]
                 try:
-                    market_data = tdxquant_pool.get_market_data(
-                        field_list=[],
+                    market_data = qmt_market.get_market_data_tdx_shape(
+                        field_list=["Open", "High", "Low", "Close", "Volume", "Amount"],
                         stock_list=batch_codes,
                         period="1d",
                         count=1,
@@ -4031,15 +4955,15 @@ def update_stock_today_data_task(periods=None, force: bool = False):
 
         for period in sync_periods:
             if period not in syncer.periods:
-                logger.warning(f"未知的周期: {period}，跳过")
+                logger.warning("task warning")
                 continue
 
             period_name = syncer.periods[period]
-            logger.info(f"开始更新 {period_name} ({period}) 当天股票数据")
+            logger.info(f"弢始更?{period_name} ({period}) 当天股票数据")
             if period in minute_periods:
                 stocks = intraday_minute_stocks
                 logger.info(
-                    f"盘中分钟线仅同步候选/持仓/观察池: period={period}, target_count={len(stocks)}"
+                    f"盘中分钟线仅同步候?持仓/观察? period={period}, target_count={len(stocks)}"
                 )
             elif period == "1d":
                 stocks = daily_assets
@@ -4111,7 +5035,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                                             "message": f"retry daily snapshot {code} ({idx}/{len(retry_stocks)})",
                                         },
                                     )
-                                    df = syncer.tdxquant.get_stock_history(
+                                    df = syncer.market_data_source.get_stock_history(
                                         stock_code=code,
                                         start_date=query_date,
                                         end_date=query_date,
@@ -4123,7 +5047,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                                         previous_trading_day = TradingCalendar.get_previous_trading_day(now_dt).strftime("%Y-%m-%d")
                                         if previous_trading_day != query_date:
                                             query_date = previous_trading_day
-                                            df = syncer.tdxquant.get_stock_history(
+                                            df = syncer.market_data_source.get_stock_history(
                                                 stock_code=code,
                                                 start_date=query_date,
                                                 end_date=query_date,
@@ -4158,7 +5082,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                         batch_result["retry_codes"] = retry_codes
                         daily_batch_result = dict(batch_result)
                 except Exception as e:
-                    logger.warning(f"日线批量路径异常，回退逐股路径: {e}")
+                    logger.warning(f"日线批量路径异常，回逢逐股路径: {e}")
                     daily_batch_used = False
 
             minute_batch_used = False
@@ -4181,7 +5105,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                 return
                 task_manager.update_progress(
                     task_name,
-                    {"message": "日线批量路径未启用，已跳过逐股回退；请查看 daily batch precheck/exception 日志"},
+                    {"message": "日线批量路径未启用，已跳过股回；请查看 daily batch precheck/exception 日志"},
                 )
                 continue
 
@@ -4194,7 +5118,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                         today = datetime.now().strftime("%Y-%m-%d")
                         query_date = today
 
-                        df = syncer.tdxquant.get_stock_history(
+                        df = syncer.market_data_source.get_stock_history(
                             stock_code=code,
                             start_date=query_date,
                             end_date=query_date,
@@ -4207,11 +5131,11 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                             previous_trading_day = TradingCalendar.get_previous_trading_day(now_dt).strftime("%Y-%m-%d")
                             if previous_trading_day != query_date:
                                 logger.warning(
-                                    f"⚠️  {code} {name} 1d 当天无数据，回退上一交易日重试: {previous_trading_day} "
+                                    f"⚠️  {code} {name} 1d 当天无数据，回上一交易日重? {previous_trading_day} "
                                     f"(当前时间: {now_dt.strftime('%Y-%m-%d %H:%M:%S')})"
                                 )
                                 query_date = previous_trading_day
-                                df = syncer.tdxquant.get_stock_history(
+                                df = syncer.market_data_source.get_stock_history(
                                     stock_code=code,
                                     start_date=query_date,
                                     end_date=query_date,
@@ -4223,19 +5147,19 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                             saved = int(syncer._save_kline_to_db(code, period, df) or 0)
                             if saved > 0:
                                 success_tasks += 1
-                                logger.info(f"✅ {code} {name} {period} 数据更新成功: {len(df)} 条 (date={query_date})")
+                                logger.info(f"?{code} {name} {period} 数据更新成功: {len(df)} ?(date={query_date})")
                             else:
                                 failed_tasks += 1
-                                logger.warning(f"⚠️  {code} {name} {period} 写入0行 (query_date={query_date})")
+                                logger.warning(f"鈿狅笍  {code} {name} {period} 鍐欏叆0琛?(query_date={query_date})")
                         else:
                             failed_tasks += 1
                             logger.warning(
-                                f"⚠️  {code} {name} {period} 无数据 "
+                                f"⚠️  {code} {name} {period} 无数?"
                                 f"(query_date={query_date}, now={datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
                             )
                     except Exception as e:
                         failed_tasks += 1
-                        logger.error(f"❌ {stock['code']} {stock['name']} {period} 更新失败: {e}")
+                        logger.error(f"?{stock['code']} {stock['name']} {period} 更新失败: {e}")
                     finally:
                         if df is not None:
                             del df
@@ -4255,7 +5179,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                         today = datetime.now().strftime("%Y-%m-%d")
                         query_date = today
 
-                        df = syncer.tdxquant.get_stock_history(
+                        df = syncer.market_data_source.get_stock_history(
                             stock_code=code,
                             start_date=query_date,
                             end_date=query_date,
@@ -4268,7 +5192,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                             previous_trading_day = TradingCalendar.get_previous_trading_day(now_dt).strftime("%Y-%m-%d")
                             if previous_trading_day != query_date:
                                 query_date = previous_trading_day
-                                df = syncer.tdxquant.get_stock_history(
+                                df = syncer.market_data_source.get_stock_history(
                                     stock_code=code,
                                     start_date=query_date,
                                     end_date=query_date,
@@ -4279,13 +5203,13 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                         if df is not None and not df.empty:
                             syncer._save_kline_to_db(code, period, df)
                             success_tasks += 1
-                            logger.info(f"✅ {code} {name} {period} 关键指数更新成功: {len(df)} 条 (date={query_date})")
+                            logger.info(f"?{code} {name} {period} 关键指数更新成功: {len(df)} ?(date={query_date})")
                         else:
                             failed_tasks += 1
-                            logger.warning(f"⚠️  {code} {name} {period} 关键指数无数据 (query_date={query_date})")
+                            logger.warning(f"⚠️  {code} {name} {period} 关键指数无数?(query_date={query_date})")
                     except Exception as e:
                         failed_tasks += 1
-                        logger.error(f"❌ {stock.get('code')} {stock.get('name')} {period} 关键指数更新失败: {e}")
+                        logger.error(f"?{stock.get('code')} {stock.get('name')} {period} 关键指数更新失败: {e}")
                     finally:
                         if df is not None:
                             del df
@@ -4318,16 +5242,16 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                         if emotion_cycle:
                             session.add(emotion_cycle)
                             session.commit()
-                            logger.info(f"✅ 情绪周期已生成: {latest_date}")
+                            logger.info(f"?情绪周期已生? {latest_date}")
                         else:
-                            logger.warning(f"⚠️ 情绪周期生成失败: {latest_date}")
+                            logger.warning(f"鈿狅笍 鎯呯华鍛ㄦ湡鐢熸垚澶辫触: {latest_date}")
                 finally:
                     try:
                         session.close()
                     except Exception:
                         pass
             except Exception as e:
-                logger.error(f"生成情绪周期失败: {e}")
+                logger.error(f"鐢熸垚鎯呯华鍛ㄦ湡澶辫触: {e}")
 
             try:
                 daily_trade_date = _resolve_daily_trade_date()
@@ -4350,17 +5274,48 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                 logger.error(f"G2 V4 event dataset refresh failed after daily snapshot: {e}")
                 v4_event_refresh_result = {"ok": False, "error": str(e)}
 
+        daily_coverage_rate = round(float(success_tasks) / float(total_tasks), 6) if total_tasks > 0 else 0.0
+        tolerated_daily_gap_threshold = 0.995
+        daily_batch_failed = int((daily_batch_result or {}).get("failed", 0) or 0)
+        has_only_small_daily_gaps = (
+            daily_batch_result is not None
+            and failed_tasks > 0
+            and failed_tasks == daily_batch_failed
+            and success_tasks > 0
+            and daily_coverage_rate >= tolerated_daily_gap_threshold
+        )
+        validation_status = "passed" if failed_tasks == 0 or has_only_small_daily_gaps else "failed"
+        validation_reason = "ok" if failed_tasks == 0 else (
+            f"daily_snapshot_partial_coverage:{success_tasks}/{total_tasks}; failed_tasks={failed_tasks}"
+            if has_only_small_daily_gaps
+            else f"failed_tasks={failed_tasks}"
+        )
+        warnings: List[Dict[str, Any]] = []
+        if has_only_small_daily_gaps:
+            warnings.append(
+                {
+                    "type": "daily_snapshot_partial_coverage",
+                    "message": "daily snapshot coverage is above tolerance; unresolved codes kept for review",
+                    "coverage_rate": daily_coverage_rate,
+                    "threshold": tolerated_daily_gap_threshold,
+                    "failed_tasks": failed_tasks,
+                    "failed_codes": (daily_batch_result or {}).get("failed_codes") or [],
+                }
+            )
+
         results = {
             "message": "当天个股数据更新完成",
             "stats": {"total": total_tasks, "success": success_tasks, "failed": failed_tasks},
+            "coverage_rate": daily_coverage_rate,
             "intraday_snapshot": minute_snapshot_result,
             "intraday_snapshot_error": minute_snapshot_error,
             "daily_retry_failures": daily_retry_failures,
             "daily_retry_failure_count": len(daily_retry_failures),
             "daily_batch_result": daily_batch_result,
             "gen2_v4_event_refresh": v4_event_refresh_result,
-            "validation_status": "passed" if failed_tasks == 0 else "failed",
-            "validation_reason": "ok" if failed_tasks == 0 else f"failed_tasks={failed_tasks}",
+            "validation_status": validation_status,
+            "validation_reason": validation_reason,
+            "warnings": warnings,
         }
         task_manager.update_progress(
             task_name,
@@ -4373,10 +5328,10 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                 ),
             },
         )
-        task_manager.set_results(task_name, results)
+        task_manager.set_results(task_name, results, mark_success=validation_status == "passed")
         logger.info("当天个股数据更新完成")
-        if failed_tasks > 0:
-            task_manager.set_error(task_name, f"个股当天数据更新未完全通过: failed_tasks={failed_tasks}")
+        if validation_status != "passed":
+            task_manager.set_error(task_name, f"个股当天数据更新未完全过: failed_tasks={failed_tasks}")
     except Exception as e:
         logger.error(f"更新当天个股数据失败: {e}")
         task_manager.set_error(task_name, str(e))
@@ -4389,7 +5344,7 @@ def _legacy_official_daily_close_sync_task(task_already_started: bool = False):
     task_name = "official_daily_close_sync"
 
     if not data_update_lock.acquire(blocking=False):
-        msg = "已有其他数据更新任务正在执行，官方日线写库跳过"
+        msg = "task is already running"
         logger.warning(msg)
         task_manager.set_error(task_name, msg)
         return
@@ -4400,23 +5355,23 @@ def _legacy_official_daily_close_sync_task(task_already_started: bool = False):
 
         if not task_already_started:
             if not task_manager.start_task(task_name):
-                task_manager.set_error(task_name, "盘后正式日线任务正在运行中，请稍后再试")
+                task_manager.set_error(task_name, "task is already running")
                 return
-        task_manager.update_progress(task_name, {"message": "开始盘后正式日线落库..."})
+        task_manager.update_progress(task_name, {"message": "弢始盘后正式日线落?.."})
 
         syncer = KlineSyncer()
         try:
             from scheduler.tasks.tushare_daily_kline_task import TushareDailyKlineTask
 
-            task_manager.update_progress(task_name, {"message": "使用 Tushare 执行盘后日线主写入..."})
+            task_manager.update_progress(task_name, {"message": "使用 Tushare 执行盘后日线主写?.."})
             tushare_task = TushareDailyKlineTask()
             tushare_task.execute()
         except Exception as source_exc:
-            logger.warning(f"Tushare 盘后日线任务不可用，回退到 KlineSyncer: {source_exc}")
-            task_manager.update_progress(task_name, {"message": "Tushare 不可用，回退到 KlineSyncer 同步 1d..."})
+            logger.warning(f"Tushare 盘后日线任务不可用，回?KlineSyncer: {source_exc}")
+            task_manager.update_progress(task_name, {"message": "Tushare 不可用，回?KlineSyncer 同步 1d..."})
             syncer.sync_all_klines(max_workers=3, periods=["1d"])
 
-        task_manager.update_progress(task_name, {"message": "执行交易日完整性校验与自动补修..."})
+        task_manager.update_progress(task_name, {"message": "执行交易日完整校验与自动补修..."})
         repair_result = syncer.ensure_trade_date_complete(max_workers=3)
 
         task_manager.set_results(
@@ -4437,24 +5392,46 @@ def _legacy_official_daily_close_sync_task(task_already_started: bool = False):
 def official_daily_close_sync_task(task_already_started: bool = False):
     task_name = "official_daily_close_sync"
 
+    preflight = _ensure_trade_calendar_fresh_for_today(task_name)
+    if not preflight.get("ok") or not preflight.get("trading_day"):
+        return
+
     if not data_update_lock.acquire(blocking=False):
-        msg = "已有其他数据更新任务正在执行，盘后正式日线写库跳过"
+        msg = "task is already running"
         logger.warning(msg)
         task_manager.set_error(task_name, msg)
         return
 
     try:
         from scripts.sync_all_klines import KlineSyncer
+        from scheduler.trading_calendar import TradingCalendar
         from utils.database import db
 
         if not task_already_started:
             if not task_manager.start_task(task_name):
-                task_manager.set_error(task_name, "盘后正式日线任务正在运行中，请稍后再试")
+                task_manager.set_error(task_name, "task is already running")
                 return
-        task_manager.update_progress(task_name, {"message": "开始执行盘后正式日线落库..."})
+
+        now_dt = datetime.now()
+        if not TradingCalendar.is_trading_day(now_dt):
+            msg = f"skip official daily close sync for non-trading day: {now_dt.strftime('%Y-%m-%d')}"
+            logger.info(msg)
+            task_manager.update_progress(task_name, {"current": 0, "total": 0, "message": msg})
+            task_manager.set_results(
+                task_name,
+                {
+                    "message": msg,
+                    "skipped": True,
+                    "skip_reason": "non_trading_day",
+                    "validation_status": "skipped_non_trading_day",
+                },
+                mark_success=True,
+            )
+            return
+        task_manager.update_progress(task_name, {"message": "弢始执行盘后正式日线落?.."})
 
         syncer = KlineSyncer()
-        active_source = "tdxquant"
+        active_source = "qmt_xtquant"
         validation_status = "passed"
         validation_reason = "ok"
         blocked_codes: List[Dict[str, Any]] = []
@@ -4462,21 +5439,21 @@ def official_daily_close_sync_task(task_already_started: bool = False):
         repair_results: Dict[str, Any] = {}
 
         for sync_type, label in (("stock", "股票"), ("index", "指数")):
-            task_manager.update_progress(task_name, {"message": f"使用 TdxQuant 执行{label} 1d 正式写库..."})
+            task_manager.update_progress(task_name, {"message": f"using QMT xtquant for {label} 1d official sync..."})
             try:
                 before_stats = dict(getattr(syncer, "stats", {}) or {})
                 syncer.sync_all_klines(max_workers=3, periods=["1d"], type=sync_type)
                 after_stats = dict(getattr(syncer, "stats", {}) or {})
                 sync_results[sync_type] = {
-                    "source": "tdxquant",
+                    "source": "qmt_xtquant",
                     "total_delta": int(after_stats.get("total", 0) or 0) - int(before_stats.get("total", 0) or 0),
                     "success_delta": int(after_stats.get("success", 0) or 0) - int(before_stats.get("success", 0) or 0),
                     "failed_delta": int(after_stats.get("failed", 0) or 0) - int(before_stats.get("failed", 0) or 0),
                 }
             except Exception as source_exc:
-                active_source = "tdxquant_partial_with_tushare_fallback"
-                logger.warning(f"TdxQuant 盘后{label}同步失败，尝试 Tushare 兜底: {source_exc}")
-                task_manager.update_progress(task_name, {"message": f"TdxQuant 不可用，使用 Tushare 兜底同步{label} 1d..."})
+                active_source = "qmt_xtquant_partial_with_tushare_fallback"
+                logger.warning(f"QMT after-hours {label} sync failed; trying Tushare fallback: {source_exc}")
+                task_manager.update_progress(task_name, {"message": f"QMT unavailable; using Tushare fallback for {label} 1d..."})
                 try:
                     from scheduler.tasks.tushare_daily_kline_task import TushareDailyKlineTask
 
@@ -4484,9 +5461,9 @@ def official_daily_close_sync_task(task_already_started: bool = False):
                     tushare_task.execute()
                     sync_results[sync_type] = {"source": "tushare_fallback", "error": str(source_exc)}
                 except Exception as fallback_exc:
-                    raise RuntimeError(f"{label}日线 TdxQuant 与 Tushare 均不可用: {fallback_exc}") from fallback_exc
+                    raise RuntimeError(f"{label} daily QMT and Tushare are both unavailable: {fallback_exc}") from fallback_exc
 
-            task_manager.update_progress(task_name, {"message": f"执行{label}交易日完整性校验与自动修复..."})
+            task_manager.update_progress(task_name, {"message": f"执行{label}交易日完整校验与自动修复..."})
             repair_result = syncer.ensure_trade_date_complete(sync_type=sync_type, max_workers=3)
             repair_results[sync_type] = repair_result
             if repair_result.get("status") != "completed":
@@ -4510,7 +5487,7 @@ def official_daily_close_sync_task(task_already_started: bool = False):
             },
         )
         if validation_status == "failed":
-            task_manager.set_error(task_name, f"日线校验未通过: {validation_reason}")
+            task_manager.set_error(task_name, f"日线校验未过: {validation_reason}")
     except Exception as exc:
         logger.error(f"盘后正式日线落库失败: {exc}")
         task_manager.set_error(task_name, str(exc))
@@ -4523,10 +5500,11 @@ def minute_kline_daily_repair_validate_task(
     task_already_started: bool = False,
     days: int = 2,
     task_name: str = "minute_kline_daily_repair_validate",
+    periods: Optional[List[str]] = None,
 ):
 
     if not data_update_lock.acquire(blocking=False):
-        msg = "已有其他数据更新任务正在执行，分钟K线补全验证跳过"
+        msg = "task is already running"
         logger.warning(msg)
         task_manager.set_error(task_name, msg)
         return
@@ -4558,7 +5536,6 @@ def minute_kline_daily_repair_validate_task(
         start_date = trade_dates[0]
         end_date = trade_dates[-1]
 
-        periods = ["5m", "15m", "30m", "60m"]
         expected_per_day = {"5m": 48, "15m": 16, "30m": 8, "60m": 4}
         table_map = {
             "5m": "kline_minute_5",
@@ -4566,6 +5543,10 @@ def minute_kline_daily_repair_validate_task(
             "30m": "kline_minute_30",
             "60m": "kline_minute_60",
         }
+        requested_periods = [str(item).strip().lower() for item in (periods or ["5m", "15m", "30m", "60m"]) if str(item).strip()]
+        periods = [item for item in requested_periods if item in table_map]
+        if not periods:
+            periods = ["5m", "15m", "30m", "60m"]
 
         syncer = KlineSyncer()
         assets = []
@@ -4583,7 +5564,7 @@ def minute_kline_daily_repair_validate_task(
             {
                 "current": 0,
                 "total": total_checks,
-                "message": f"检查最近{len(trade_dates)}个交易日分钟K线: {start_date}~{end_date}",
+                "message": f"checking last {len(trade_dates)} trading days minute K-lines: {start_date}~{end_date}",
             },
         )
 
@@ -4647,136 +5628,63 @@ def minute_kline_daily_repair_validate_task(
         success = 0
         failed = 0
         failure_examples: List[Dict[str, Any]] = []
-        local_tdx_result: Dict[str, Any] = {}
+        qmt_result: Dict[str, Any] = {}
         fallback_result: Dict[str, Any] = {}
 
-        import os
-
-        tdx_root = Path(
-            os.environ.get("AISTOCK_TDX_VIPDOC")
-            or os.environ.get("AISTOCK_LOCAL_TDX_ROOT")
-            or r"D:\TDX\vipdoc"
-        )
-        builder_script = Path(__file__).resolve().parents[1] / "scripts" / "build_tdx_minute_periods.py"
-        def _local_tdx_has_after_close_data(root: Path, target_date: str) -> Dict[str, Any]:
-            cutoff = datetime.strptime(target_date[:10], "%Y-%m-%d").replace(hour=15, minute=1)
-            folders = [root / "sh" / "fzline", root / "sz" / "fzline", root / "bj" / "fzline"]
-            files_checked = 0
-            fresh_files = 0
-            newest_mtime: Optional[datetime] = None
-            for folder in folders:
-                if not folder.exists():
-                    continue
-                for path in folder.glob("*.lc5"):
-                    files_checked += 1
-                    try:
-                        mtime = datetime.fromtimestamp(path.stat().st_mtime)
-                    except OSError:
-                        continue
-                    if newest_mtime is None or mtime > newest_mtime:
-                        newest_mtime = mtime
-                    if mtime >= cutoff:
-                        fresh_files += 1
-            return {
-                "ok": fresh_files >= 100,
-                "files_checked": files_checked,
-                "fresh_files": fresh_files,
-                "newest_mtime": newest_mtime.isoformat(timespec="seconds") if newest_mtime else None,
-                "cutoff": cutoff.isoformat(timespec="seconds"),
-            }
-
-        tdx_freshness = _local_tdx_has_after_close_data(tdx_root, str(end_date)[:10]) if tdx_root.exists() else {
-            "ok": False,
-            "reason": f"tdx_root_not_found:{tdx_root}",
-        }
-        if not tdx_root.exists():
+        qmt_script = Path(__file__).resolve().parents[1] / "scripts" / "qmt_xtquant_minute_backfill_validate.py"
+        if not qmt_script.exists():
             failed = 1
-            failure_examples.append({"provider": "local_tdx_lc5", "reason": f"tdx_root_not_found:{tdx_root}"})
-        elif not builder_script.exists():
-            failed = 1
-            failure_examples.append({"provider": "local_tdx_lc5", "reason": f"script_not_found:{builder_script}"})
-        elif not tdx_freshness.get("ok"):
-            failure_examples.append({"provider": "local_tdx_lc5", "reason": "after_close_data_not_fresh", **tdx_freshness})
+            failure_examples.append({"provider": "qmt_xtquant", "reason": f"script_not_found:{qmt_script}"})
         else:
-            report_path = (
-                Path(__file__).resolve().parents[1]
-                / "data"
-                / "reports"
-                / f"tdx_minute_repair_{datetime.now():%Y%m%d_%H%M%S}.json"
+            qmt_report = report_path(
+                "system_minute_kline_repair",
+                f"qmt_minute_repair_{datetime.now():%Y%m%d_%H%M%S}.json",
             )
-            codes_file = None
-            if repair_codes:
-                codes_file = (
-                    Path(__file__).resolve().parents[1]
-                    / "data"
-                    / "runtime"
-                    / f"minute_repair_codes_{datetime.now():%Y%m%d_%H%M%S}.txt"
-                )
-                codes_file.parent.mkdir(parents=True, exist_ok=True)
-                codes_file.write_text("\n".join(repair_codes) + "\n", encoding="utf-8")
-            cmd = [
+            qmt_report.parent.mkdir(parents=True, exist_ok=True)
+            qmt_cmd = [
                 sys.executable,
-                str(builder_script),
-                "--tdx-root",
-                str(tdx_root),
+                str(qmt_script),
+                "--phase",
+                "all",
                 "--start-date",
                 str(start_date)[:10],
                 "--end-date",
                 str(end_date)[:10],
                 "--periods",
                 ",".join(periods),
-                "--delete-range",
-                "--progress-every",
-                "500",
-                "--report-path",
-                str(report_path),
+                "--batch-size",
+                "30",
+                "--include-index",
+                "--reset-stage",
+                "--report",
+                str(qmt_report),
             ]
-            if codes_file is not None:
-                cmd.extend(["--codes-file", str(codes_file)])
+            if repair_codes:
+                qmt_cmd.extend(["--codes", ",".join(repair_codes)])
             task_manager.update_progress(
                 task_name,
                 {
                     "current": 0,
                     "total": max(1, len(repair_codes) or len(asset_by_code)),
-                    "message": f"从本地TDX lc5重建最近{len(trade_dates)}个交易日分钟K线: {start_date}~{end_date}",
+                    "message": f"rebuilding minute K-lines from QMT: {start_date}~{end_date}",
                 },
             )
-            stdout_tail: List[str] = []
-            stderr_tail: List[str] = []
-            proc = subprocess.Popen(
-                cmd,
+            proc = subprocess.run(
+                qmt_cmd,
                 cwd=str(Path(__file__).resolve().parents[1]),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                bufsize=1,
+                timeout=45 * 60,
             )
-            if proc.stdout is not None:
-                for line in proc.stdout:
-                    stdout_tail.append(line)
-                    stdout_tail = stdout_tail[-80:]
-                    match = re.search(r"progress files=(\d+)/(\d+)", line)
-                    if match:
-                        task_manager.update_progress(
-                            task_name,
-                            {
-                                "current": int(match.group(1)),
-                                "total": int(match.group(2)),
-                                "message": line.strip(),
-                            },
-                        )
-            if proc.stderr is not None:
-                stderr_tail = proc.stderr.readlines()[-80:]
-            proc.wait()
-            local_tdx_result = {
+            qmt_result = {
+                "provider": "qmt_xtquant",
                 "returncode": proc.returncode,
-                "report_path": str(report_path),
-                "codes_file": str(codes_file) if codes_file else None,
+                "report_path": str(qmt_report),
                 "repair_code_count": len(repair_codes),
-                "stdout_tail": "".join(stdout_tail)[-4000:],
-                "stderr_tail": "".join(stderr_tail)[-4000:],
+                "stdout_tail": (proc.stdout or "")[-4000:],
+                "stderr_tail": (proc.stderr or "")[-4000:],
             }
             if proc.returncode == 0:
                 success = total_repairs
@@ -4784,20 +5692,18 @@ def minute_kline_daily_repair_validate_task(
                 failed = 1
                 failure_examples.append(
                     {
-                        "provider": "local_tdx_lc5",
+                        "provider": "qmt_xtquant",
                         "returncode": proc.returncode,
-                        "report_path": str(report_path),
+                        "report_path": str(qmt_report),
                     }
                 )
 
-        if failed > 0 or not local_tdx_result:
+        if failed > 0 or not qmt_result:
             fallback_script = Path(__file__).resolve().parents[1] / "scripts" / "collect_baostock_all_minutes.py"
             if fallback_script.exists():
-                fallback_report = (
-                    Path(__file__).resolve().parents[1]
-                    / "data"
-                    / "reports"
-                    / f"baostock_minute_fallback_{datetime.now():%Y%m%d_%H%M%S}.json"
+                fallback_report = report_path(
+                    "system_minute_kline_repair",
+                    f"baostock_minute_fallback_{datetime.now():%Y%m%d_%H%M%S}.json",
                 )
                 fallback_timeout_sec = 45 * 60
                 fallback_cmd = [
@@ -4828,44 +5734,28 @@ def minute_kline_daily_repair_validate_task(
                     {
                         "current": 0,
                         "total": max(1, total_repairs),
-                        "message": f"本地TDX盘后数据未就绪，使用baostock备用源补全: {start_date}~{end_date}",
+                        "message": f"QMT minute repair failed; using baostock fallback: {start_date}~{end_date}",
                     },
                 )
-                proc = subprocess.Popen(
+                proc = subprocess.run(
                     fallback_cmd,
                     cwd=str(Path(__file__).resolve().parents[1]),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    timeout=fallback_timeout_sec,
                 )
-                timed_out = False
-                try:
-                    stdout_text, stderr_text = proc.communicate(timeout=fallback_timeout_sec)
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    if sys.platform.startswith("win"):
-                        subprocess.run(
-                            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                            capture_output=True,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
-                        )
-                    else:
-                        proc.kill()
-                    stdout_text, stderr_text = proc.communicate()
                 fallback_result = {
                     "provider": "baostock",
                     "returncode": proc.returncode,
                     "timeout_sec": fallback_timeout_sec,
-                    "timed_out": timed_out,
+                    "timed_out": False,
                     "report_path": str(fallback_report),
-                    "stdout_tail": (stdout_text or "")[-4000:],
-                    "stderr_tail": (stderr_text or "")[-4000:],
+                    "stdout_tail": (proc.stdout or "")[-4000:],
+                    "stderr_tail": (proc.stderr or "")[-4000:],
                 }
-                if (not timed_out) and proc.returncode == 0:
+                if proc.returncode == 0:
                     failed = 0
                     success = total_repairs
                 else:
@@ -4874,7 +5764,6 @@ def minute_kline_daily_repair_validate_task(
                         {
                             "provider": "baostock",
                             "returncode": proc.returncode,
-                            "timed_out": timed_out,
                             "report_path": str(fallback_report),
                         }
                     )
@@ -4914,7 +5803,7 @@ def minute_kline_daily_repair_validate_task(
                     {
                         "current": processed,
                         "total": total_repairs,
-                        "message": f"补拉 {code} {period} ({processed}/{total_repairs})",
+                        "message": f"琛ユ媺 {code} {period} ({processed}/{total_repairs})",
                     },
                 )
                 try:
@@ -5001,7 +5890,7 @@ def minute_kline_daily_repair_validate_task(
 
         validation_status = "passed" if failed == 0 and not low_coverage_periods else "failed"
         result = {
-            "message": f"分钟K线最近{len(trade_dates)}个交易日补全验证完成",
+            "message": f"minute K-line repair validation completed for last {len(trade_dates)} trading days",
             "trade_dates": trade_dates,
             "asset_count": len(asset_by_code),
             "periods": periods,
@@ -5010,8 +5899,7 @@ def minute_kline_daily_repair_validate_task(
             "repairs": {"planned": total_repairs, "success": success, "failed": failed},
             "coverage_threshold": coverage_threshold,
             "low_coverage_periods": low_coverage_periods,
-            "tdx_freshness": tdx_freshness,
-            "local_tdx_result": local_tdx_result,
+            "qmt_xtquant_result": qmt_result,
             "fallback_result": fallback_result,
             "failure_examples": failure_examples,
             "still_bad": still_bad,
@@ -5023,18 +5911,23 @@ def minute_kline_daily_repair_validate_task(
         if validation_status != "passed" and (failed > 0 or bool(low_coverage_periods)):
             task_manager.set_error(task_name, f"分钟K线补全验证未完全通过: still_bad={len(still_bad)}, failed={failed}")
     except Exception as exc:
-        logger.exception(f"分钟K线补全验证失败: {exc}")
+        logger.exception(f"分钟K线补全验证失? {exc}")
         task_manager.set_error(task_name, str(exc))
     finally:
         if data_update_lock.locked():
             data_update_lock.release()
 
 
-def market_minute_history_repair_task(task_already_started: bool = False, days: int = 30):
+def market_minute_history_repair_task(
+    task_already_started: bool = False,
+    days: int = 30,
+    periods: Optional[List[str]] = None,
+):
     return minute_kline_daily_repair_validate_task(
         task_already_started=task_already_started,
         days=days,
         task_name="market_minute_history_repair",
+        periods=periods,
     )
 
 
@@ -5042,7 +5935,7 @@ def repair_previous_daily_kline_task(task_already_started: bool = False):
     task_name = "repair_previous_daily_kline"
 
     if not data_update_lock.acquire(blocking=False):
-        msg = "已有其他数据更新任务正在执行，次日巡检修复跳过"
+        msg = "已有其他数据更新任务正在执行，次日巡棢修复跳过"
         logger.warning(msg)
         task_manager.set_error(task_name, msg)
         return
@@ -5052,9 +5945,9 @@ def repair_previous_daily_kline_task(task_already_started: bool = False):
 
         if not task_already_started:
             if not task_manager.start_task(task_name):
-                task_manager.set_error(task_name, "次日巡检修复任务正在运行中，请稍后再试")
+                task_manager.set_error(task_name, "task is already running")
                 return
-        task_manager.update_progress(task_name, {"message": "开始次日巡检并修复上一交易日日线..."})
+        task_manager.update_progress(task_name, {"message": "弢始次日巡棢并修复上丢交易日日?.."})
 
         syncer = KlineSyncer()
         result = syncer.ensure_trade_date_complete(max_workers=3)
@@ -5062,7 +5955,7 @@ def repair_previous_daily_kline_task(task_already_started: bool = False):
         if isinstance(result, dict) and result.get("status") == "failed":
             task_manager.set_error(
                 task_name,
-                f"次日巡检修复未通过: {result.get('after', {}).get('actual_count')}/"
+                f"次日巡检修复未过: {result.get('after', {}).get('actual_count')}/"
                 f"{result.get('after', {}).get('baseline_count')}",
             )
     except Exception as exc:
@@ -5074,26 +5967,26 @@ def repair_previous_daily_kline_task(task_already_started: bool = False):
 
 
 def repair_all_history_klines_task():
-    """修复全量历史K线数据的后台任务"""
+    """System configuration task helper."""
     task_name = "repair_all_history_klines"
     
     try:
-        logger.info("开始修复全量历史K线数据")
-        task_manager.update_progress(task_name, {"message": "开始修复全量历史K线数据..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始修复全量历史K线数?.."})
         
-        # 首先修复日K线数据
-        logger.info("开始修复日K线数据")
-        task_manager.update_progress(task_name, {"message": "开始修复日K线数据..."})
+        # 首先修复日K线数?
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始修复日K线数?.."})
         
         # 调用修复日K线数据的函数
         from utils.database import db
         from models.stock_models import KlineDaily
         import pandas as pd
         
-        # 获取所有股票代码
+        # 获取扢有股票代?
         session = next(db.get_session())
         try:
-            # 获取所有股票代码
+            # 获取扢有股票代?
             from models.stock_models import Stock
             stocks = session.query(Stock.code).filter(
                 Stock.type.in_(['stock', 'index'])
@@ -5101,7 +5994,7 @@ def repair_all_history_klines_task():
             stock_codes = [stock.code for stock in stocks]
             total_stocks = len(stock_codes)
             
-            task_manager.update_progress(task_name, {"total": total_stocks * 2, "message": f"共{total_stocks}只股票需要修复日K线数据"})
+            task_manager.update_progress(task_name, {"message": "task progress"})
             
             repaired_stocks = 0
             repaired_records = 0
@@ -5110,16 +6003,16 @@ def repair_all_history_klines_task():
             for i, code in enumerate(stock_codes):
                 task_manager.update_progress(task_name, {
                     "current": i + 1,
-                    "message": f"正在修复 {code} 的日K线数据 ({i+1}/{total_stocks})"
+                    "message": f"正在修复 {code} 的日K线数?({i+1}/{total_stocks})"
                 })
                 
-                # 获取该股票的所有日线数据
+                # 获取该股票的扢有日线数?
                 klines = session.query(KlineDaily).filter(
                     KlineDaily.code == code
                 ).order_by(KlineDaily.trade_date).all()
                 
                 if len(klines) > 1:
-                    # 转换为DataFrame进行计算
+                    # 杞崲涓篋ataFrame杩涜璁＄畻
                     data = []
                     for kline in klines:
                         data.append({
@@ -5130,11 +6023,11 @@ def repair_all_history_klines_task():
                     
                     df = pd.DataFrame(data)
                     
-                    # 计算涨跌额和涨跌幅
+                    # 璁＄畻娑ㄨ穼棰濆拰娑ㄨ穼骞?
                     df['change_amount'] = df['close'].diff()
                     df['change_pct'] = (df['change_amount'] / df['close'].shift(1)) * 100
                     
-                    # 计算振幅（需要high和low数据）
+                    # 计算振幅（需要high和low数据?
                     for j, kline in enumerate(klines):
                         if j > 0:
                             prev_close = klines[j-1].close
@@ -5145,23 +6038,23 @@ def repair_all_history_klines_task():
                                 kline.change_pct = float(df.loc[j, 'change_pct'])
                                 repaired_records += 1
                     
-                    # 每处理10只股票提交一次
+                    # 每处?0只股票提交一?
                     if (i + 1) % 10 == 0:
                         session.commit()
                     
                     repaired_stocks += 1
             
-            # 提交剩余的修改
+            # 提交剩余的修?
             session.commit()
             
-            logger.info(f"日K线数据修复完成，修复了{repaired_stocks}只股票的{repaired_records}条记录")
+            logger.info("task message")
             
         finally:
             session.close()
         
-        # 然后同步全量历史K线数据
-        logger.info("开始同步全量历史K线数据")
-        task_manager.update_progress(task_name, {"message": "开始同步全量历史K线数据..."})
+        # 然后同步全量历史K线数?
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始同步全量历史K线数?.."})
         
         from scripts.sync_all_klines import KlineSyncer
         
@@ -5171,28 +6064,28 @@ def repair_all_history_klines_task():
         
         # 设置结果
         results = {
-            "message": "修复全量历史K线数据完成",
+            "message": "task message",
             "stats": {
                 "repaired_daily_klines": repaired_records,
                 "synced_history_klines": syncer.stats.get("total", 0)
             }
         }
         task_manager.set_results(task_name, results)
-        logger.info("修复全量历史K线数据完成")
+        logger.info("task message")
         
     except Exception as e:
-        logger.error(f"修复全量历史K线数据失败: {e}")
+        logger.error(f"修复全量历史K线数据失? {e}")
         task_manager.set_error(task_name, str(e))
 
 def update_trade_calendar_task():
-    """更新股市日历的后台任务"""
+    """System configuration task helper."""
     task_name = "update_trade_calendar"
     
     try:
-        logger.info("开始更新股市日历")
-        task_manager.update_progress(task_name, {"message": "开始更新股市日历..."})
+        logger.info("task message")
+        task_manager.update_progress(task_name, {"message": "弢始更新股市日?.."})
         
-        # 调用同步交易日历的函数
+        # 调用同步交易日历的函?
         from scripts.sync_trade_calendar import sync_trade_calendar
         
         # 执行同步
@@ -5212,7 +6105,7 @@ def update_trade_calendar_task():
 
 def repair_emotion_cycle_30d_task(days: int = 30):
     """
-    一键修复近 N 个交易日的情绪周期数据（默认 30）。
+    丢键修复近 N 个交易日的情绪周期数据（默认 30）?
     """
     task_name = "repair_emotion_cycle_30d"
     try:
@@ -5220,11 +6113,11 @@ def repair_emotion_cycle_30d_task(days: int = 30):
         from models.stock_models import KlineDaily
 
         if data_update_lock.locked():
-            # 避免与其它重任务并发
+            # 閬垮厤涓庡叾瀹冮噸浠诲姟骞跺彂
             raise Exception("数据更新任务繁忙，请稍后重试")
 
         data_update_lock.acquire()
-        task_manager.update_progress(task_name, {"message": f"开始修复近{days}个交易日的情绪周期..."})
+        task_manager.update_progress(task_name, {"message": f"弢始修复近{days}个交易日的情绪周?.."})
 
         session = next(db.get_session())
         try:
@@ -5246,12 +6139,12 @@ def repair_emotion_cycle_30d_task(days: int = 30):
         task_manager.set_results(
             task_name,
             {
-                "message": f"近{len(dates)}个交易日情绪周期修复完成",
+                "message": f"emotion cycle repair completed for last {len(dates)} trading days",
                 "stats": {"days": len(dates), "saved": saved_total, "skipped": skipped_total},
             },
         )
     except Exception as e:
-        logger.error(f"修复近30天情绪周期失败: {e}")
+        logger.error(f"修复?0天情绪周期失? {e}")
         task_manager.set_error(task_name, str(e))
     finally:
         if data_update_lock.locked():
@@ -5263,7 +6156,7 @@ def repair_emotion_cycle_30d_task(days: int = 30):
 
 def repair_emotion_cycle_latest_task():
     """
-    手动：根据最新日线数据重算最新交易日情绪周期。
+    手动：根据最新日线数据重算最新交易日情绪周期?
     """
     task_name = "repair_emotion_cycle_latest"
     try:
@@ -5275,7 +6168,7 @@ def repair_emotion_cycle_latest_task():
             raise Exception("数据更新任务繁忙，请稍后重试")
 
         data_update_lock.acquire()
-        task_manager.update_progress(task_name, {"message": "开始重算最新交易日情绪周期..."})
+        task_manager.update_progress(task_name, {"message": "弢始重算最新交易日情绪周期..."})
 
         session = next(db.get_session())
         try:
@@ -5285,7 +6178,7 @@ def repair_emotion_cycle_latest_task():
             session.close()
 
         if not latest_date:
-            raise Exception("找不到最新交易日，请先同步日线数据")
+            raise Exception("required data not available")
 
         task_manager.update_progress(task_name, {"total": 1, "current": 1, "message": f"重算情绪周期: {latest_date}"})
         r = _repair_emotion_for_dates([latest_date])
@@ -5293,12 +6186,12 @@ def repair_emotion_cycle_latest_task():
         task_manager.set_results(
             task_name,
             {
-                "message": "最新交易日情绪周期已更新",
+                "message": "task message",
                 "stats": {"date": str(latest_date), "saved": r.get("saved", 0), "skipped": r.get("skipped", 0)},
             },
         )
     except Exception as e:
-        logger.error(f"重算最新交易日情绪周期失败: {e}")
+        logger.error(f"重算朢新交易日情绪周期失败: {e}")
         task_manager.set_error(task_name, str(e))
     finally:
         if data_update_lock.locked():
@@ -5310,7 +6203,7 @@ def repair_emotion_cycle_latest_task():
 
 def _emotion_auto_job():
     """
-    盘中每5分钟自动修复一次（仅交易日 + 交易时段）。
+    盘中?分钟自动修复丢次（仅交易日 + 交易时段）?
     """
     task_name = "emotion_cycle_auto_5m"
     from utils.database import db
@@ -5326,12 +6219,12 @@ def _emotion_auto_job():
             task_manager.update_progress(task_name, {"message": f"非交易日跳过: {now_dt.strftime('%F %T')}"})
             return
 
-        # 仅交易时段（A股 9:30-11:30, 13:00-15:00）
+        # 仅交易时段（A?9:30-11:30, 13:00-15:00?
         hm = now_dt.strftime("%H:%M")
         in_am = "09:30" <= hm <= "11:30"
         in_pm = "13:00" <= hm <= "15:00"
         if not (in_am or in_pm):
-            task_manager.update_progress(task_name, {"message": f"非交易时段跳过: {now_dt.strftime('%F %T')}"})
+            task_manager.update_progress(task_name, {"message": f"非交易时段跳? {now_dt.strftime('%F %T')}"})
             return
 
         dates = _get_recent_complete_kline_dates(session, 1)
@@ -5374,10 +6267,10 @@ def _run_core_maintenance_bootstrap_refresh():
     for task_name, task_fn in refresh_plan:
         current = task_manager.get_task_status(task_name)
         if current.get("is_running"):
-            logger.info(f"启动快刷跳过 {task_name}：任务已在运行")
+            logger.info("task message")
             continue
         if not task_manager.start_task(task_name, trigger_source="startup"):
-            logger.info(f"启动快刷跳过 {task_name}：无法启动")
+            logger.info("task message")
             continue
         try:
             task_fn()
@@ -5424,7 +6317,7 @@ def _run_manual_core_data_sync():
         refresh_plan = refresh_plan[:4] + [
             (
                 "minute_kline_daily_repair_validate",
-                "朢?日分钟K线补全验?",
+                "?日分钟K线补全验?",
                 lambda: minute_kline_daily_repair_validate_task(task_already_started=True),
             ),
             (
@@ -5439,7 +6332,7 @@ def _run_manual_core_data_sync():
 
     task_manager.update_progress(
         master_task_name,
-        {"current": 0, "total": len(refresh_plan), "message": "开始串行同步核心数据..."},
+        {"current": 0, "total": len(refresh_plan), "message": "弢始串行同步核心数?.."},
     )
 
     step_results: List[Dict[str, Any]] = []
@@ -5453,7 +6346,7 @@ def _run_manual_core_data_sync():
 
             task_manager.update_progress(
                 master_task_name,
-                {"current": index - 1, "total": len(refresh_plan), "message": f"正在执行：{label}"},
+                {"current": index - 1, "total": len(refresh_plan), "message": f"running: {label}"},
             )
 
             try:
@@ -5473,7 +6366,7 @@ def _run_manual_core_data_sync():
                 }
             )
             if task_status.get("error"):
-                raise RuntimeError(f"{label}失败: {task_status.get('error')}")
+                raise RuntimeError(f"{label}澶辫触: {task_status.get('error')}")
 
             task_manager.update_progress(
                 master_task_name,
@@ -5483,7 +6376,7 @@ def _run_manual_core_data_sync():
         task_manager.set_results(
             master_task_name,
             {
-                "message": "股票、指数、板块核心数据同步完成",
+                "message": "task message",
                 "steps": step_results,
             },
         )
@@ -5494,7 +6387,7 @@ def _run_manual_core_data_sync():
         if not task_status.get("error") and not task_status.get("results"):
             task_manager.set_results(
                 master_task_name,
-                {"message": "股票、指数、板块核心数据同步完成", "steps": step_results},
+                "task message",
             )
 
 
@@ -5506,8 +6399,8 @@ def _run_manual_today_full_market_refresh():
         ("update_trade_calendar", "同步交易日历", lambda: update_trade_calendar_task(), True),
         ("update_stock_list", "同步股票列表", lambda: update_stock_list_task(), True),
         ("update_index_list", "同步指数列表", lambda: update_index_list_task(), True),
-        ("sync_sectors", "同步板块列表与成分", lambda: sync_sectors_task(), True),
-        ("update_stock_today_data", "同步当天股票/指数日线并刷新V4事件源", lambda: update_stock_today_data_task(["1d"], force=True), True),
+        ("sync_sectors", "Sync sector list and constituents", lambda: sync_sectors_task(), True),
+        ("update_stock_today_data", "Update current stock/index daily data", lambda: update_stock_today_data_task(["1d"], force=True), True),
         (
             "update_market_today_minute_data",
             "同步当天股票/指数分钟快照",
@@ -5516,7 +6409,7 @@ def _run_manual_today_full_market_refresh():
         ),
         (
             "sync_today_intraday_kline",
-            "同步当天全市场15m/30m分钟K线",
+            "task message",
             lambda: sync_today_intraday_kline_task(task_already_started=True),
             True,
         ),
@@ -5527,13 +6420,13 @@ def _run_manual_today_full_market_refresh():
             [
                 (
                     "official_daily_close_sync",
-                    "盘后正式日线写库与完整性校验",
+                    "task message",
                     lambda: official_daily_close_sync_task(task_already_started=True),
                     True,
                 ),
                 (
                     "minute_kline_daily_repair_validate",
-                    "当天分钟K线补全自检",
+                    "当天分钟K线补全自棢",
                     lambda: minute_kline_daily_repair_validate_task(task_already_started=True),
                     True,
                 ),
@@ -5549,7 +6442,7 @@ def _run_manual_today_full_market_refresh():
         refresh_plan.append(
             (
                 "minute_kline_daily_repair_validate",
-                "盘中分钟K线可用性自检",
+                "盘中分钟K线可用自棢",
                 lambda: minute_kline_daily_repair_validate_task(task_already_started=True, days=1),
                 False,
             )
@@ -5558,9 +6451,13 @@ def _run_manual_today_full_market_refresh():
     if not task_manager.start_task(master_task_name, trigger_source="manual"):
         return
 
-    kickoff_message = "开始一键更新当天全市场数据并自检..."
+    preflight = _ensure_trade_calendar_fresh_for_today(master_task_name)
+    if not preflight.get("ok") or not preflight.get("trading_day"):
+        return
+
+    kickoff_message = "弢始一键更新当天全市场数据并自棢..."
     if not after_close:
-        kickoff_message = "开始一键更新当天全市场数据，盘后完整性校验仅在 15:05 后执行..."
+        kickoff_message = "弢始一键更新当天全市场数据，盘后完整校验仅?15:05 后执?.."
     task_manager.update_progress(
         master_task_name,
         {"current": 0, "total": len(refresh_plan), "message": kickoff_message},
@@ -5600,13 +6497,13 @@ def _run_manual_today_full_market_refresh():
 
             task_manager.update_progress(
                 master_task_name,
-                {"current": index - 1, "total": len(refresh_plan), "message": f"正在执行：{label}"},
+                {"current": index - 1, "total": len(refresh_plan), "message": f"running: {label}"},
             )
 
             try:
                 task_fn()
             except Exception as exc:
-                logger.error(f"当天全市场更新执行 {task_name} 失败: {exc}")
+                logger.error(f"当天全市场更新执?{task_name} 失败: {exc}")
                 task_manager.set_error(task_name, str(exc))
 
             task_status = task_manager.get_task_status(task_name)
@@ -5631,9 +6528,9 @@ def _run_manual_today_full_market_refresh():
             )
 
         critical_failed_steps = [item for item in failed_steps if item.get("critical")]
-        done_message = "当天所有核心数据源更新并自检完成"
+        done_message = "当天扢有核心数据源更新并自棢完成"
         if not after_close:
-            done_message = "当天所有核心数据源更新完成，盘后正式写库请在 15:05 后复核"
+            done_message = "core data update completed"
         if failed_steps:
             done_message = f"当天全市场更新完成但存在失败步骤: failed={len(failed_steps)}, critical_failed={len(critical_failed_steps)}"
         results = {
@@ -5669,9 +6566,9 @@ def _run_manual_today_full_market_refresh():
     finally:
         task_status = task_manager.get_task_status(master_task_name)
         if not task_status.get("error") and not task_status.get("results"):
-            fallback_message = "当天所有核心数据源更新并自检完成"
+            fallback_message = "当天扢有核心数据源更新并自棢完成"
             if not after_close:
-                fallback_message = "当天所有核心数据源更新完成，盘后正式写库请在 15:05 后复核"
+                fallback_message = "core data update completed"
             task_manager.set_results(
                 master_task_name,
                 {
@@ -5739,7 +6636,7 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        update_stock_list_task,
+        lambda: _run_core_data_update_after_trade_calendar("update_stock_list", update_stock_list_task),
         CronTrigger(day_of_week="mon-fri", hour=18, minute=12),
         id=_core_maintenance_job_ids["stock_list_sync"],
         replace_existing=True,
@@ -5747,7 +6644,7 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        update_index_list_task,
+        lambda: _run_core_data_update_after_trade_calendar("update_index_list", update_index_list_task),
         CronTrigger(day_of_week="mon-fri", hour=18, minute=14),
         id=_core_maintenance_job_ids["index_list_sync"],
         replace_existing=True,
@@ -5755,7 +6652,7 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        sync_sectors_task,
+        lambda: _run_core_data_update_after_trade_calendar("sync_sectors", sync_sectors_task),
         CronTrigger(day_of_week="mon-fri", hour=18, minute=16),
         id=_core_maintenance_job_ids["sector_list_sync"],
         replace_existing=True,
@@ -5763,7 +6660,10 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        lambda: update_stock_today_data_task(["1d"]),
+        lambda: _run_core_data_update_after_trade_calendar(
+            "update_stock_today_data",
+            lambda: update_stock_today_data_task(["1d"]),
+        ),
         # Intraday 1d snapshots mainly serve UI freshness and same-day audit data.
         # G2/G3 live confirmation depends on minute snapshots / completed 30m bars,
         # so a 15-minute cadence is enough and reduces repeated TDX daily pulls.
@@ -5774,7 +6674,10 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        lambda: update_market_today_minute_data_task(["5m", "15m", "30m", "60m"]),
+        lambda: _run_core_data_update_after_trade_calendar(
+            "update_market_today_minute_data",
+            lambda: update_market_today_minute_data_task(["5m", "15m", "30m", "60m"]),
+        ),
         CronTrigger(day_of_week="mon-fri", hour="9-11,13-14", minute="3/5"),
         id=_core_maintenance_job_ids["market_intraday_minutes"],
         replace_existing=True,
@@ -5782,7 +6685,10 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        lambda: sync_today_intraday_kline_task(task_already_started=False),
+        lambda: _run_core_data_update_after_trade_calendar(
+            "sync_today_intraday_kline",
+            lambda: sync_today_intraday_kline_task(task_already_started=False),
+        ),
         # Strategy refresh depends on ClickHouse 15m/30m bars, not only quote snapshots.
         # Run shortly after 30-minute slots so G2/G3 can consume fresh same-day bars.
         CronTrigger(day_of_week="mon-fri", hour="10-11,13-15", minute="2,32"),
@@ -5792,7 +6698,10 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        update_sector_intraday_stats_task,
+        lambda: _run_core_data_update_after_trade_calendar(
+            "update_sector_intraday_stats",
+            update_sector_intraday_stats_task,
+        ),
         CronTrigger(day_of_week="mon-fri", hour="9-11,13-14", minute="4/5"),
         id=_core_maintenance_job_ids["sector_intraday_stats_refresh"],
         replace_existing=True,
@@ -5800,7 +6709,10 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        minute_kline_daily_repair_validate_task,
+        lambda: _run_core_data_update_after_trade_calendar(
+            "minute_kline_daily_repair_validate",
+            minute_kline_daily_repair_validate_task,
+        ),
         CronTrigger(day_of_week="mon-fri", hour=19, minute=10),
         id=_core_maintenance_job_ids["minute_kline_daily_repair_validate"],
         replace_existing=True,
@@ -5808,7 +6720,10 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        official_daily_close_sync_task,
+        lambda: _run_core_data_update_after_trade_calendar(
+            "official_daily_close_sync",
+            official_daily_close_sync_task,
+        ),
         CronTrigger(day_of_week="mon-fri", hour=18, minute=30),
         id=_core_maintenance_job_ids["official_daily"],
         replace_existing=True,
@@ -5816,14 +6731,17 @@ def start_core_data_maintenance_scheduler():
         coalesce=True,
     )
     scheduler.add_job(
-        repair_previous_daily_kline_task,
+        lambda: _run_core_data_update_after_trade_calendar(
+            "repair_previous_daily_kline",
+            repair_previous_daily_kline_task,
+        ),
         CronTrigger(day_of_week="tue-sat", hour=0, minute=30),
         id=_core_maintenance_job_ids["repair_daily"],
         replace_existing=True,
         max_instances=1,
         coalesce=True,
     )
-    _set_core_maintenance_status(True, "核心数据自动维护已启用")
+    _set_core_maintenance_status(True, "core maintenance enabled")
     results = task_manager.tasks["core_data_maintenance"].get("results") or {}
     results["jobs"] = _core_scheduler_jobs_status()
     task_manager.tasks["core_data_maintenance"]["results"] = results
@@ -5837,21 +6755,33 @@ def stop_core_data_maintenance_scheduler():
             scheduler.remove_job(job_id)
         except Exception:
             pass
-    _set_core_maintenance_status(False, "核心数据自动维护已暂停")
+    _set_core_maintenance_status(False, "core maintenance disabled")
     results = task_manager.tasks["core_data_maintenance"].get("results") or {}
     results["jobs"] = _core_scheduler_jobs_status()
     task_manager.tasks["core_data_maintenance"]["results"] = results
     return results
 
 
-def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, Any]:
+def _empty_duration_profile() -> Dict[str, Any]:
+    return {
+        "recent_run_count": 0,
+        "recent_avg_duration_sec": None,
+        "recent_min_duration_sec": None,
+        "recent_max_duration_sec": None,
+    }
+
+
+def _build_core_data_maintenance_payload(timeline_limit: int = 20, include_history: bool = True) -> Dict[str, Any]:
     results = task_manager.tasks["core_data_maintenance"].get("results") or {}
     jobs = _core_scheduler_jobs_status()
     results["jobs"] = jobs
     task_manager.tasks["core_data_maintenance"]["results"] = results
     extra_task_names = ["core_data_maintenance", "today_full_market_refresh"]
     tracked_task_names = list(_core_maintenance_task_map.values()) + extra_task_names
-    persisted_runs = _load_persisted_task_runs(tracked_task_names, limit=max(200, timeline_limit * 10))
+    if include_history:
+        persisted_runs = _load_persisted_task_runs(tracked_task_names, limit=max(200, timeline_limit * 10))
+    else:
+        persisted_runs = {"by_task": {}, "timeline": []}
     persisted_by_task = persisted_runs.get("by_task") or {}
 
     status_task_names = dict(_core_maintenance_task_map)
@@ -5863,7 +6793,7 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, 
     task_status_normalized = {}
     for key, task in task_status.items():
         task_name = status_task_names[key]
-        profile = _calc_duration_profile(task_name, recent_limit=10)
+        profile = _calc_duration_profile(task_name, recent_limit=10) if include_history else _empty_duration_profile()
         persisted = persisted_by_task.get(task_name) or {}
         persisted_latest = persisted.get("latest") or {}
         persisted_success = persisted.get("last_success") or {}
@@ -5964,7 +6894,7 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20) -> Dict[str, 
         overall_status = "success"
 
     timeline = task_manager.latest_timeline(limit=timeline_limit, task_names=tracked_task_names)
-    if len(timeline) < timeline_limit:
+    if include_history and len(timeline) < timeline_limit:
         seen = {(item.get("task_name"), item.get("status"), item.get("created_at")) for item in timeline}
         for item in persisted_runs.get("timeline") or []:
             key = (item.get("task_name"), item.get("status"), item.get("created_at"))
@@ -6017,7 +6947,7 @@ async def update_startup_reference_sync_setting(request: StartupReferenceSyncTog
         enabled = set_startup_reference_sync_enabled(request.enabled)
         return {
             "success": True,
-            "message": "启动初始化基础数据开关已更新，重启后生效",
+            "message": "启动初始化基硢数据弢关已更新，重启后生效",
             "data": {
                 "enabled": enabled,
                 "default_enabled": _startup_reference_sync_default_enabled(),
@@ -6025,15 +6955,15 @@ async def update_startup_reference_sync_setting(request: StartupReferenceSyncTog
             },
         }
     except Exception as exc:
-        logger.error(f"更新启动初始化基础数据开关失败: {exc}")
-        raise HTTPException(status_code=500, detail="更新启动初始化基础数据开关失败")
+        logger.error(f"更新启动初始化基硢数据弢关失? {exc}")
+        raise HTTPException(status_code=500, detail="task is already running")
 
 
 @router.post("/core-data-maintenance/start")
 async def start_core_data_maintenance():
     try:
         results = start_core_data_maintenance_scheduler()
-        return {"success": True, "message": "核心数据自动维护已启动", "data": results}
+        return {"success": True, "message": "ok", "data": results}
     except Exception as exc:
         logger.error(f"启动核心数据自动维护失败: {exc}")
         task_manager.set_error("core_data_maintenance", str(exc))
@@ -6044,7 +6974,7 @@ async def start_core_data_maintenance():
 async def stop_core_data_maintenance():
     try:
         results = stop_core_data_maintenance_scheduler()
-        return {"success": True, "message": "核心数据自动维护已暂停", "data": results}
+        return {"success": True, "message": "ok", "data": results}
     except Exception as exc:
         logger.error(f"停止核心数据自动维护失败: {exc}")
         raise HTTPException(status_code=500, detail="停止核心数据自动维护失败")
@@ -6052,7 +6982,34 @@ async def stop_core_data_maintenance():
 
 @router.get("/core-data-maintenance/status")
 async def get_core_data_maintenance_status():
-    return {"success": True, "data": _build_core_data_maintenance_payload(timeline_limit=20)}
+    return {"success": True, "data": _build_core_data_maintenance_payload(timeline_limit=20, include_history=False)}
+
+
+@router.get("/data-source-counts")
+async def get_data_source_counts(trade_date: Optional[str] = Query(default=None)):
+    return {"success": True, "data": _build_data_source_counts_payload(trade_date)}
+
+
+@router.post("/data-source-counts/repair-date")
+async def repair_data_source_counts_date(trade_date: str = Query(...)):
+    normalized_date = _parse_data_source_count_date(trade_date)
+    task_name = "data_source_date_repair"
+    current = task_manager.get_task_status(task_name)
+    if current and current.get("is_running"):
+        raise HTTPException(status_code=400, detail="task is already running")
+
+    if not task_manager.start_task(task_name, trigger_source="manual"):
+        raise HTTPException(status_code=400, detail="task is already running")
+    task_manager.update_progress(task_name, {"message": f"任务已入队，准备修复 {normalized_date} 数据?.."})
+
+    thread = threading.Thread(target=data_source_date_repair_task, args=(normalized_date, True), daemon=True)
+    thread.start()
+    return {
+        "success": True,
+        "message": f"{normalized_date} 数据源修复任务已启动",
+        "task_name": task_name,
+        "task": task_manager.get_task_status(task_name),
+    }
 
 
 @router.get("/core-data-maintenance/timeline")
@@ -6075,53 +7032,56 @@ async def run_official_daily_close_now(background_tasks: BackgroundTasks):
     task_name = "official_daily_close_sync"
     current = task_manager.get_task_status(task_name)
     if current and current.get("is_running"):
-        raise HTTPException(status_code=400, detail="盘后正式日线任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
 
     if not task_manager.start_task(task_name, trigger_source="manual"):
-        raise HTTPException(status_code=400, detail="盘后正式日线任务正在运行中，请稍后再试")
-    task_manager.update_progress(task_name, {"message": "任务已入队，准备执行..."})
+        raise HTTPException(status_code=400, detail="task is already running")
+    task_manager.update_progress(task_name, {"message": "浠诲姟宸插叆闃燂紝鍑嗗鎵ц..."})
 
     thread = threading.Thread(target=official_daily_close_sync_task, args=(True,), daemon=True)
     thread.start()
     return {
         "success": True,
-        "message": "盘后正式日线任务已手动启动",
+        "message": "task message",
         "task": task_manager.get_task_status(task_name),
     }
 
 
 @router.post("/core-data-maintenance/run-task/{task_key}")
 async def run_core_maintenance_task_now(
-    task_key: str, force: bool = Query(default=False, description="Force intraday tasks even outside trading window")
+    task_key: str,
+    force: bool = Query(default=False, description="Force intraday tasks even outside trading window"),
+    days: int = Query(default=30, ge=1, le=365, description="Repair lookback trading days"),
+    periods: Optional[List[str]] = Query(default=None, description="Minute periods to repair"),
 ):
     """Manually trigger a single core maintenance task immediately."""
     task_configs = {
         "trade_calendar": {
             "task_name": "update_trade_calendar",
             "runner": lambda force=False: threading.Thread(target=update_trade_calendar_task, daemon=True).start(),
-            "message": "交易日历同步任务已手动启动",
+            "message": "task message",
         },
         "stock_list_sync": {
             "task_name": "update_stock_list",
             "runner": lambda force=False: threading.Thread(target=update_stock_list_task, daemon=True).start(),
-            "message": "股票列表同步任务已手动启动",
+            "message": "task message",
         },
         "index_list_sync": {
             "task_name": "update_index_list",
             "runner": lambda force=False: threading.Thread(target=update_index_list_task, daemon=True).start(),
-            "message": "指数列表同步任务已手动启动",
+            "message": "task message",
         },
         "sector_list_sync": {
             "task_name": "sync_sectors",
             "runner": lambda force=False: threading.Thread(target=sync_sectors_task, daemon=True).start(),
-            "message": "板块列表同步任务已手动启动",
+            "message": "task message",
         },
         "stock_intraday": {
             "task_name": "update_stock_today_data",
             "runner": lambda force=False: threading.Thread(
                 target=update_stock_today_data_task, args=(["1d"], force), daemon=True
             ).start(),
-            "message": "盘中股票/指数日线快照任务已手动启动",
+            "message": "task message",
         },
         "market_intraday_minutes": {
             "task_name": "update_market_today_minute_data",
@@ -6135,19 +7095,19 @@ async def run_core_maintenance_task_now(
             "runner": lambda force=False: threading.Thread(
                 target=sync_today_intraday_kline_task, kwargs={"task_already_started": True}, daemon=True
             ).start(),
-            "message": "当天全市场15m/30m分钟K线落库任务已手动启动",
+            "message": "当天全市?5m/30m分钟K线落库任务已手动启动",
         },
         "minute_kline_daily_repair_validate": {
             "task_name": "minute_kline_daily_repair_validate",
             "runner": lambda force=False: threading.Thread(
                 target=minute_kline_daily_repair_validate_task, args=(True,), daemon=True
             ).start(),
-        "message": "最近2个交易日分钟K线补全验证任务已手动启动",
+        "message": "朢?个交易日分钟K线补全验证任务已手动启动",
         },
         "market_minute_history_repair": {
             "task_name": "market_minute_history_repair",
             "runner": lambda force=False: threading.Thread(
-                target=market_minute_history_repair_task, args=(True, 30), daemon=True
+                target=market_minute_history_repair_task, args=(True, days, periods), daemon=True
             ).start(),
             "message": "股票/指数历史分钟级修复任务已手动启动",
         },
@@ -6156,21 +7116,21 @@ async def run_core_maintenance_task_now(
             "runner": lambda force=False: threading.Thread(
                 target=update_sector_intraday_stats_task, kwargs={"force": force}, daemon=True
             ).start(),
-            "message": "板块当日统计刷新任务已手动启动",
+            "message": "task message",
         },
         "official_daily": {
             "task_name": "official_daily_close_sync",
             "runner": lambda force=False: threading.Thread(
                 target=official_daily_close_sync_task, args=(True,), daemon=True
             ).start(),
-            "message": "盘后正式日线写库任务已手动启动",
+            "message": "task message",
         },
         "repair_daily": {
             "task_name": "repair_previous_daily_kline",
             "runner": lambda force=False: threading.Thread(
                 target=repair_previous_daily_kline_task, args=(True,), daemon=True
             ).start(),
-            "message": "次日自动巡检修复任务已手动启动",
+            "message": "task message",
         },
     }
 
@@ -6184,11 +7144,11 @@ async def run_core_maintenance_task_now(
     task_name = config["task_name"]
     current = task_manager.get_task_status(task_name)
     if current and current.get("is_running"):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
 
     if not task_manager.start_task(task_name, trigger_source="manual"):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
-    task_manager.update_progress(task_name, {"message": "任务已入队，准备执行..."})
+        raise HTTPException(status_code=400, detail="task is already running")
+    task_manager.update_progress(task_name, {"message": "浠诲姟宸插叆闃燂紝鍑嗗鎵ц..."})
 
     config["runner"](force=force_for_task)
     return {
@@ -6197,25 +7157,6 @@ async def run_core_maintenance_task_now(
         "task_name": task_name,
         "task": task_manager.get_task_status(task_name),
     }
-
-
-@router.get("/ptrade-account-config")
-async def get_ptrade_account_config():
-    return {"success": True, "data": _ptrade_account_config_public()}
-
-
-@router.post("/ptrade-account-config")
-async def update_ptrade_account_config(request: PTradeAccountConfigRequest):
-    return {
-        "success": True,
-        "message": "PTrade账户配置已保存到本地私有配置",
-        "data": _save_ptrade_account_config(request),
-    }
-
-
-@router.get("/tdx-gateway/diagnostics")
-async def get_tdx_gateway_diagnostics(run_probe: bool = True):
-    return {"success": True, "data": _build_tdx_gateway_diagnostics(run_probe=run_probe)}
 
 
 @router.post("/tdx-gateway/initialize")
@@ -6230,6 +7171,50 @@ async def initialize_tdx_gateway():
             "initialize": init_result,
             "diagnostics": _build_tdx_gateway_diagnostics(run_probe=True),
         },
+    }
+
+
+@router.get("/tdx-gateway/diagnostics")
+async def get_tdx_gateway_diagnostics(run_probe: bool = True):
+    diagnostics = _build_tdx_gateway_diagnostics(run_probe=run_probe)
+    return {
+        "success": True,
+        "message": "TDX Gateway diagnostics refreshed",
+        "data": {
+            "diagnostics": diagnostics,
+        },
+    }
+
+
+@router.post("/tdx-gateway/probe")
+async def probe_tdx_gateway():
+    diagnostics = _build_tdx_gateway_diagnostics(run_probe=True)
+    return {
+        "success": _tdx_gateway_is_ready(diagnostics),
+        "message": (
+            "TDX Gateway market data probe passed"
+            if _tdx_gateway_is_ready(diagnostics)
+            else "TDX Gateway market data probe failed; review diagnostics"
+        ),
+        "data": {
+            "diagnostics": diagnostics,
+        },
+    }
+
+
+@router.post("/tdx-gateway/recover")
+async def recover_tdx_gateway(allow_restart: bool = True):
+    result = _run_tdx_gateway_recovery(allow_restart=allow_restart)
+    return {
+        "success": bool(result.get("ok")),
+        "message": (
+            "TDX Gateway recovered"
+            if result.get("recovered")
+            else "TDX Gateway restart requested; wait and refresh diagnostics"
+            if result.get("restart_requested")
+            else "TDX Gateway recovery finished; review diagnostics"
+        ),
+        "data": result,
     }
 
 
@@ -6267,7 +7252,7 @@ async def sync_core_assets_now():
 
     return {
         "success": True,
-        "message": "核心数据同步任务已启动，将按顺序同步股票、指数、板块的列表和当日日K",
+        "message": "核心数据同步任务已启动，将按顺序同步股票、指数板块的列表和当日日K",
         "task_name": "core_data_manual_sync",
         "task": task_manager.get_task_status("core_data_manual_sync"),
     }
@@ -6285,7 +7270,7 @@ async def refresh_today_full_market_now():
 
     return {
         "success": True,
-        "message": "当天股票、指数、板块数据一键更新任务已启动，将按顺序刷新并在盘后执行完整性自检",
+        "message": "当天股票、指数板块数据一键更新任务已启动，将按顺序刷新并在盘后执行完整自棢",
         "task_name": "today_full_market_refresh",
         "task": task_manager.get_task_status("today_full_market_refresh"),
     }
@@ -6294,15 +7279,15 @@ async def refresh_today_full_market_now():
 @router.post("/sync-sectors")
 async def trigger_sync_sectors(background_tasks: BackgroundTasks):
     """
-    触发同步一二三行业板块任务
+    触发同步丢二三行业板块任务
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "sync_sectors"
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=sync_sectors_task, daemon=True)
@@ -6310,7 +7295,7 @@ async def trigger_sync_sectors(background_tasks: BackgroundTasks):
     
     return {
         "success": True,
-        "message": "行业板块同步任务已启动",
+        "message": "task message",
         "task": task_manager.get_task_status(task_name)
     }
 
@@ -6320,21 +7305,21 @@ async def trigger_sync_sector_history(background_tasks: BackgroundTasks, days: i
     """
     触发同步板块历史涨跌数据任务
     
-    同步所有板块的历史涨跌幅、成交量、成交额，并计算板块当天上涨家数、下跌家数、
-    平盘家数、涨停家数、跌停家数等统计信息
+    同步扢有板块的历史涨跌幅成交量、成交额，并计算板块当天上涨家数、下跌家数?
+    平盘家数、涨停家数跌停家数等统计信息
     
     Args:
-        days: 同步多少天的历史数据，默认30天
+        days: 同步多少天的历史数据，默?0?
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "sync_sector_history"
     
     logger.info(f"接收到同步板块历史数据请求，天数: {days}")
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=sync_sector_history_task, args=(days,), daemon=True)
@@ -6350,26 +7335,26 @@ async def trigger_sync_sector_history(background_tasks: BackgroundTasks, days: i
 @router.post("/repair-history-klines")
 async def trigger_repair_history_klines(background_tasks: BackgroundTasks, request: RepairKlinesRequest):
     """
-    触发修复历史K线数据任务
+    触发修复历史K线数据任?
     
     Args:
-        request: 请求体，包含periods字段（要同步的K线级别列表，如 ["1min", "5min", "daily"]）
-                和type字段（要同步的类型，如 "index" 或 "stock"）
+        request: 请求体，包含periods字段（要同步的K线级别列表，?["1min", "5min", "daily"]?
+                和type字段（要同步的类型，?"index" ?"stock"?
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "repair_history_klines"
     
-    # 处理type参数，支持字符串或数组形式
+    # 处理type参数，支持字符串或数组形?
     type_value = request.type
     if isinstance(type_value, list) and len(type_value) > 0:
         type_value = type_value[0]
     
-    logger.info(f"接收到K线同步请求，周期参数: {request.periods}，类型: {type_value}")
+    logger.info(f"接收到K线同步请求，周期参数: {request.periods}，类? {type_value}")
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=repair_history_klines_task, args=(request.periods, type_value), daemon=True)
@@ -6385,19 +7370,19 @@ async def trigger_repair_history_klines(background_tasks: BackgroundTasks, reque
 @router.post("/repair-daily-klines")
 async def trigger_repair_daily_klines(background_tasks: BackgroundTasks):
     """
-    触发修复日K线数据任务
+    触发修复日K线数据任?
     
-    修复所有股票的日K线涨跌幅、振幅、涨跌额等数据
+    修复扢有股票的日K线涨跌幅、振幅涨跌额等数?
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "repair_daily_klines"
     
-    logger.info("接收到日K线数据修复请求")
+    logger.info("task message")
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=repair_daily_klines_task, daemon=True)
@@ -6413,19 +7398,19 @@ async def trigger_repair_daily_klines(background_tasks: BackgroundTasks):
 @router.post("/repair-all-history-klines")
 async def trigger_repair_all_history_klines(background_tasks: BackgroundTasks):
     """
-    触发修复全量历史K线数据任务
+    触发修复全量历史K线数据任?
     
-    结合修复日K线数据和同步全量历史K线，修复所有股票的历史K线数据
+    结合修复日K线数据和同步全量历史K线，修复扢有股票的历史K线数?
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "repair_all_history_klines"
     
-    logger.info("接收到修复全量历史K线数据请求")
+    logger.info("task message")
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=repair_all_history_klines_task, daemon=True)
@@ -6442,17 +7427,17 @@ async def trigger_update_trade_calendar(background_tasks: BackgroundTasks):
     """
     触发更新股市日历任务
     
-    从通达信获取历史交易日期并更新到数据库
+    从达信获取历史交易日期并更新到数据库
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "update_trade_calendar"
     
-    logger.info("接收到更新股市日历请求")
+    logger.info("task message")
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=update_trade_calendar_task, daemon=True)
@@ -6460,7 +7445,7 @@ async def trigger_update_trade_calendar(background_tasks: BackgroundTasks):
     
     return {
         "success": True,
-        "message": "股市日历更新任务已启动",
+        "message": "task message",
         "task": task_manager.get_task_status(task_name)
     }
 
@@ -6469,17 +7454,17 @@ async def trigger_update_trade_calendar(background_tasks: BackgroundTasks):
 async def trigger_update_stock_list(background_tasks: BackgroundTasks):
     task_name = "update_stock_list"
 
-    logger.info("接收到更新股票列表请求")
+    logger.info("task message")
 
     if not task_manager.start_task(task_name, trigger_source="manual"):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
 
     thread = threading.Thread(target=update_stock_list_task, daemon=True)
     thread.start()
 
     return {
         "success": True,
-        "message": "股票列表更新任务已启动",
+        "message": "task message",
         "task": task_manager.get_task_status(task_name)
     }
 
@@ -6491,17 +7476,17 @@ async def trigger_update_sector_intraday_stats(
 ):
     task_name = "update_sector_intraday_stats"
 
-    logger.info("接收到刷新板块当日统计请求")
+    logger.info("task message")
 
     if not task_manager.start_task(task_name, trigger_source="manual"):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
 
     thread = threading.Thread(target=update_sector_intraday_stats_task, kwargs={"force": force}, daemon=True)
     thread.start()
 
     return {
         "success": True,
-        "message": "板块当日统计刷新任务已启动",
+        "message": "task message",
         "task": task_manager.get_task_status(task_name)
     }
 
@@ -6509,7 +7494,7 @@ async def trigger_update_sector_intraday_stats(
 @router.get("/trade-calendar/status")
 async def get_trade_calendar_status():
     """
-    获取交易日历落库状态（只读）。
+    获取交易日历落库状（只读）?
     """
     try:
         from utils.database import db
@@ -6562,29 +7547,29 @@ async def get_trade_calendar_status():
             },
         }
     except Exception as e:
-        logger.error(f"获取交易日历状态失败: {e}")
-        raise HTTPException(status_code=500, detail="获取交易日历状态失败")
+        logger.error(f"获取交易日历状失? {e}")
+        raise HTTPException(status_code=500, detail="task is already running")
 
 
 @router.post("/update-today-data")
 async def trigger_update_today_data(background_tasks: BackgroundTasks, request: RepairKlinesRequest):
     """
-    触发更新当天最新数据任务（只更新指数）
+    触发更新当天朢新数据任务（只更新指数）
     
-    更新所有指数的当天最新数据，包括分钟级别K线
+    更新扢有指数的当天朢新数据，包括分钟级别K?
     
     Args:
-        request: 请求体，包含periods字段（要更新的K线级别列表，如 ["1m", "5m", "1d"]）
+        request: 请求体，包含periods字段（要更新的K线级别列表，?["1m", "5m", "1d"]?
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "update_today_data"
     
     logger.info(f"接收到当天指数数据更新请求，周期参数: {request.periods}")
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=update_today_data_task, args=(request.periods, request.force), daemon=True)
@@ -6592,7 +7577,7 @@ async def trigger_update_today_data(background_tasks: BackgroundTasks, request: 
     
     return {
         "success": True,
-        "message": "当天指数数据更新任务已启动",
+        "message": "task message",
         "task": task_manager.get_task_status(task_name)
     }
 
@@ -6600,22 +7585,22 @@ async def trigger_update_today_data(background_tasks: BackgroundTasks, request: 
 @router.post("/update-stock-today-data")
 async def trigger_update_stock_today_data(background_tasks: BackgroundTasks, request: RepairKlinesRequest):
     """
-    触发更新当天最新股票数据任务
+    触发更新当天朢新股票数据任?
     
-    更新所有个股的当天最新数据，包括所有周期的K线
+    更新扢有个股的当天朢新数据，包括扢有周期的K?
     
     Args:
-        request: 请求体，包含periods字段（要更新的K线级别列表，如 ["1m", "5m", "1d"]）
+        request: 请求体，包含periods字段（要更新的K线级别列表，?["1m", "5m", "1d"]?
     
     Returns:
-        任务状态
+        任务状?
     """
     task_name = "update_stock_today_data"
     
     logger.info(f"接收到当天股票数据更新请求，周期参数: {request.periods}")
     
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     
     # 在后台线程中执行任务
     thread = threading.Thread(target=update_stock_today_data_task, args=(request.periods, request.force), daemon=True)
@@ -6623,7 +7608,7 @@ async def trigger_update_stock_today_data(background_tasks: BackgroundTasks, req
     
     return {
         "success": True,
-        "message": "当天股票数据更新任务已启动",
+        "message": "task message",
         "task": task_manager.get_task_status(task_name)
     }
 
@@ -6631,12 +7616,12 @@ async def trigger_update_stock_today_data(background_tasks: BackgroundTasks, req
 @router.post("/repair-emotion-cycle-30d")
 async def trigger_repair_emotion_cycle_30d(background_tasks: BackgroundTasks, days: int = 30):
     """
-    一键修复近 N 个交易日情绪周期数据（默认30）。
+    丢键修复近 N 个交易日情绪周期数据（默?0）?
     """
     task_name = "repair_emotion_cycle_30d"
     logger.info(f"接收到修复近{days}个交易日情绪周期请求")
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     thread = threading.Thread(target=repair_emotion_cycle_30d_task, args=(days,), daemon=True)
     thread.start()
     return {"success": True, "message": "情绪周期30天修复任务已启动", "task": task_manager.get_task_status(task_name)}
@@ -6645,34 +7630,34 @@ async def trigger_repair_emotion_cycle_30d(background_tasks: BackgroundTasks, da
 @router.post("/repair-emotion-cycle-latest")
 async def trigger_repair_emotion_cycle_latest(background_tasks: BackgroundTasks):
     """
-    手动：根据最新日线数据更新情绪指标（最新交易日）。
+    手动：根据最新日线数据更新情绪指标（朢新交易日）?
     """
     task_name = "repair_emotion_cycle_latest"
     logger.info("接收到重算最新交易日情绪周期请求")
     if not task_manager.start_task(task_name):
-        raise HTTPException(status_code=400, detail="任务正在运行中，请稍后再试")
+        raise HTTPException(status_code=400, detail="task is already running")
     thread = threading.Thread(target=repair_emotion_cycle_latest_task, daemon=True)
     thread.start()
-    return {"success": True, "message": "最新情绪周期更新任务已启动", "task": task_manager.get_task_status(task_name)}
+    return {"success": True, "message": "朢新情绪周期更新任务已启动", "task": task_manager.get_task_status(task_name)}
 
 
 @router.post("/emotion-cycle-auto-5m/start")
 async def start_emotion_cycle_auto_5m():
     """
-    交易日盘中每5分钟自动修复一次情绪周期（基于最新日线数据）。
+    交易日盘中每5分钟自动修复丢次情绪周期（基于朢新日线数据）?
     """
     task_name = "emotion_cycle_auto_5m"
     sched = _ensure_emotion_scheduler()
     try:
         from apscheduler.triggers.cron import CronTrigger
 
-        # 若已存在任务，先移除再添加（避免重复）
+        # 鑻ュ凡瀛樺湪浠诲姟锛屽厛绉婚櫎鍐嶆坊鍔狅紙閬垮厤閲嶅锛?
         try:
             sched.remove_job(_emotion_job_id)
         except Exception:
             pass
 
-        # 每5分钟触发一次，实际 job 内会判断是否交易日/交易时段
+        # ?分钟触发丢次，实际 job 内会判断是否交易?交易时段
         sched.add_job(
             _emotion_auto_job,
             CronTrigger(minute="*/5"),
@@ -6686,17 +7671,17 @@ async def start_emotion_cycle_auto_5m():
         task_manager.tasks[task_name]["is_running"] = True
         task_manager.tasks[task_name]["started_at"] = datetime.now().isoformat()
         task_manager.update_progress(task_name, {"message": "已开启：交易日盘中每5分钟自动修复"})
-        return {"success": True, "message": "已开启自动修复", "task": task_manager.get_task_status(task_name)}
+        return {"success": True, "message": "ok", "task": task_manager.get_task_status(task_name)}
     except Exception as e:
-        logger.error(f"开启自动修复失败: {e}")
+        logger.error(f"弢启自动修复失? {e}")
         task_manager.set_error(task_name, str(e))
-        raise HTTPException(status_code=500, detail="开启自动修复失败")
+        raise HTTPException(status_code=500, detail="task is already running")
 
 
 @router.post("/emotion-cycle-auto-5m/stop")
 async def stop_emotion_cycle_auto_5m():
     """
-    关闭情绪周期自动修复。
+    关闭情绪周期自动修复?
     """
     task_name = "emotion_cycle_auto_5m"
     try:
@@ -6706,8 +7691,8 @@ async def stop_emotion_cycle_auto_5m():
         except Exception:
             pass
         task_manager.tasks[task_name]["is_running"] = False
-        task_manager.update_progress(task_name, {"message": "已关闭自动修复"})
-        return {"success": True, "message": "已关闭自动修复", "task": task_manager.get_task_status(task_name)}
+        task_manager.update_progress(task_name, {"message": "task progress"})
+        return {"success": True, "message": "ok", "task": task_manager.get_task_status(task_name)}
     except Exception as e:
         logger.error(f"关闭自动修复失败: {e}")
         task_manager.set_error(task_name, str(e))
@@ -6717,16 +7702,16 @@ async def stop_emotion_cycle_auto_5m():
 @router.get("/task-status/{task_name}")
 async def get_task_status(task_name: str):
     """
-    获取指定任务的状态
+    获取指定任务的状?
     
     Args:
-        task_name: 任务名称 (sync_sectors 或 repair_history_klines)
+        task_name: 任务名称 (sync_sectors ?repair_history_klines)
     
     Returns:
-        任务状态
+        任务状?
     """
     if task_name not in task_manager.tasks:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail="task is already running")
     
     return {
         "success": True,
@@ -6737,10 +7722,10 @@ async def get_task_status(task_name: str):
 @router.get("/all-tasks-status")
 async def get_all_tasks_status():
     """
-    获取所有系统任务的状态
+    获取扢有系统任务的状?
     
     Returns:
-        所有任务状态
+        扢有任务状?
     """
     return {
         "success": True,

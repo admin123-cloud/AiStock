@@ -45,13 +45,6 @@ from utils.market_warehouse import clean_minute_bars_df, clickhouse_available, c
 from utils.config import config as app_config
 from utils.paths import report_path, runtime_path
 from scheduler.trading_calendar import TradingCalendar
-from execution.ptrade_bridge import PTradeFileBridge
-from scripts.ptrade_bridge_readiness_audit import run_audit as run_ptrade_bridge_readiness_audit
-from scripts.ptrade_bridge_live_probe import run_probe as run_ptrade_bridge_live_probe
-from scripts.ptrade_bridge_acceptance import run_acceptance as run_ptrade_bridge_acceptance
-from scripts.ptrade_bridge_live_submit_test import run_live_submit_test as run_ptrade_bridge_live_submit_test
-from scripts.ptrade_bridge_watch_acceptance import run_watch_acceptance as run_ptrade_bridge_watch_acceptance
-from scripts.ptrade_bridge_evidence_report import build_evidence as build_ptrade_bridge_evidence_report
 
 warnings.filterwarnings(
     "ignore",
@@ -62,7 +55,6 @@ warnings.filterwarnings(
 router = APIRouter(prefix="/trading", tags=["trading"])
 logger = get_logger("trading")
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PTRADE_BRIDGE = PTradeFileBridge()
 GEN2_SHADOW_UPDATE_TASKS: Dict[str, Dict[str, Any]] = {}
 GEN2_SHADOW_UPDATE_TASK_LOCK = threading.Lock()
 GEN2_BACKTEST_UPDATE_TASKS: Dict[str, Dict[str, Any]] = {}
@@ -71,12 +63,6 @@ GEN2_OFFICIAL_REBUILD_TASKS: Dict[str, Dict[str, Any]] = {}
 GEN2_OFFICIAL_REBUILD_TASK_LOCK = threading.Lock()
 GEN2_MAINLINE_UPDATE_TASKS: Dict[str, Dict[str, Any]] = {}
 GEN2_MAINLINE_UPDATE_TASK_LOCK = threading.Lock()
-PTRADE_ACCEPTANCE_TASKS: Dict[str, Dict[str, Any]] = {}
-PTRADE_ACCEPTANCE_TASK_LOCK = threading.Lock()
-PTRADE_LIVE_SUBMIT_TEST_TASKS: Dict[str, Dict[str, Any]] = {}
-PTRADE_LIVE_SUBMIT_TEST_TASK_LOCK = threading.Lock()
-PTRADE_WATCH_ACCEPTANCE_TASKS: Dict[str, Dict[str, Any]] = {}
-PTRADE_WATCH_ACCEPTANCE_TASK_LOCK = threading.Lock()
 
 DEFAULT_V4_OUTPUT_DIR = r"C:\Users\Administrator\Documents\Codex\2026-04-23-aistock-100000-a-3-a-t\output_v4"
 DEFAULT_V42_OUTPUT_DIR = r"C:\Users\Administrator\Documents\Codex\2026-04-23-aistock-100000-a-3-a-t\output_v42"
@@ -193,6 +179,11 @@ GEN2_30M_BAR_CLOSE_TIMES = (
     time(14, 30),
     time(15, 0),
 )
+
+
+def _startup_schedulers_enabled() -> bool:
+    value = str(os.environ.get("AISTOCK_STARTUP_SCHEDULERS_ENABLED", "1")).strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
 def _ensure_v4_monitor_dir() -> None:
@@ -2114,8 +2105,31 @@ def _monitor_job_wrapper() -> None:
 
 
 def _configure_v4_monitor_scheduler() -> Dict[str, Any]:
-    scheduler = _ensure_v4_monitor_scheduler()
     state = _load_v4_monitor_state()
+    if not _startup_schedulers_enabled():
+        if _v4_monitor_scheduler is not None:
+            try:
+                _v4_monitor_scheduler.remove_job(_v4_monitor_job_id)
+            except Exception:
+                pass
+        return {
+            "enabled": bool(state.get("enabled")),
+            "interval_seconds": int(state.get("interval_seconds") or 60),
+            "trading_hours_only": bool(state.get("trading_hours_only")),
+            "quiet_minutes": int(state.get("quiet_minutes") or 0),
+            "repeat_reminder_minutes": int(state.get("repeat_reminder_minutes") or 60),
+            "reminder_active": bool(state.get("reminder_active")),
+            "reminder_activated_at": state.get("reminder_activated_at"),
+            "recipient_email": str(state.get("recipient_email") or ""),
+            "next_run_time": None,
+            "last_run_at": state.get("last_run_at"),
+            "last_email_sent_at": state.get("last_email_sent_at"),
+            "last_error": state.get("last_error"),
+            "scheduler_enabled": False,
+            "scheduler_wired": False,
+            "scheduler_disabled_reason": "AISTOCK_STARTUP_SCHEDULERS_ENABLED=0",
+        }
+    scheduler = _ensure_v4_monitor_scheduler()
     try:
         scheduler.remove_job(_v4_monitor_job_id)
     except Exception:
@@ -4473,8 +4487,38 @@ def _gen2_strategy_refresh_job_wrapper() -> None:
 
 
 def _configure_gen2_strategy_refresh_scheduler() -> Dict[str, Any]:
-    scheduler = _ensure_v4_monitor_scheduler()
     state = _load_gen2_strategy_refresh_state()
+    current_bar_slot = _gen2_30m_bar_slot(datetime.now(), int(state.get("data_delay_minutes") or 2))
+    if not _startup_schedulers_enabled():
+        if _v4_monitor_scheduler is not None:
+            try:
+                _v4_monitor_scheduler.remove_job(_gen2_strategy_refresh_job_id)
+            except Exception:
+                pass
+        return {
+            "enabled": bool(state.get("enabled")),
+            "trading_hours_only": bool(state.get("trading_hours_only")),
+            "data_delay_minutes": int(state.get("data_delay_minutes") or 2),
+            "run_shadow_monitor": bool(state.get("run_shadow_monitor")),
+            "run_mainline_hotspots": bool(state.get("run_mainline_hotspots")),
+            "mainline_mode": str(state.get("mainline_mode") or "sector"),
+            "mainline_limit": int(state.get("mainline_limit") or 30),
+            "force_each_bar_once": bool(state.get("force_each_bar_once", True)),
+            "current_bar_slot": current_bar_slot,
+            "next_run_time": None,
+            "last_bar_slot": state.get("last_bar_slot"),
+            "last_run_at": state.get("last_run_at"),
+            "last_success_at": state.get("last_success_at"),
+            "last_skip_at": state.get("last_skip_at"),
+            "last_error": state.get("last_error"),
+            "last_result": state.get("last_result"),
+            "last_mainline_task_id": state.get("last_mainline_task_id"),
+            "state_path": str(GEN2_STRATEGY_REFRESH_STATE_PATH),
+            "scheduler_enabled": False,
+            "scheduler_wired": False,
+            "scheduler_disabled_reason": "AISTOCK_STARTUP_SCHEDULERS_ENABLED=0",
+        }
+    scheduler = _ensure_v4_monitor_scheduler()
     try:
         scheduler.remove_job(_gen2_strategy_refresh_job_id)
     except Exception:
@@ -4491,7 +4535,6 @@ def _configure_gen2_strategy_refresh_scheduler() -> Dict[str, Any]:
         )
     job = scheduler.get_job(_gen2_strategy_refresh_job_id)
     next_run_time = str(job.next_run_time) if job and job.next_run_time else None
-    current_bar_slot = _gen2_30m_bar_slot(datetime.now(), int(state.get("data_delay_minutes") or 2))
     return {
         "enabled": bool(state.get("enabled")),
         "trading_hours_only": bool(state.get("trading_hours_only")),
@@ -4515,8 +4558,46 @@ def _configure_gen2_strategy_refresh_scheduler() -> Dict[str, Any]:
 
 
 def _configure_gen2_shadow_buy_monitor_scheduler() -> Dict[str, Any]:
-    scheduler = _ensure_v4_monitor_scheduler()
     state = _load_gen2_shadow_monitor_state()
+    if not _startup_schedulers_enabled():
+        if _v4_monitor_scheduler is not None:
+            try:
+                _v4_monitor_scheduler.remove_job(_gen2_shadow_monitor_job_id)
+            except Exception:
+                pass
+        return {
+            "enabled": bool(state.get("enabled")),
+            "interval_seconds": int(state.get("interval_seconds") or 120),
+            "pool_rank": int(state.get("pool_rank") or 200),
+            "alpha191_gate": str(state.get("alpha191_gate") or "off"),
+            "trading_hours_only": bool(state.get("trading_hours_only")),
+            "heartbeat_enabled": bool(state.get("heartbeat_enabled", True)),
+            "heartbeat_email_minutes": int(state.get("heartbeat_email_minutes") or 30),
+            "official_rebuild_enabled": bool(state.get("official_rebuild_enabled", True)),
+            "official_rebuild_legacy_330": bool(state.get("official_rebuild_legacy_330", True)),
+            "official_rebuild_include_breakout": bool(state.get("official_rebuild_include_breakout", True)),
+            "official_rebuild_timeout_seconds": int(state.get("official_rebuild_timeout_seconds") or 10800),
+            "official_rebuild_retry_minutes": int(state.get("official_rebuild_retry_minutes") or 10),
+            "recipient_email": str(state.get("recipient_email") or ""),
+            "next_run_time": None,
+            "last_official_rebuild_date": state.get("last_official_rebuild_date"),
+            "last_official_rebuild_at": state.get("last_official_rebuild_at"),
+            "last_official_rebuild_ok": state.get("last_official_rebuild_ok"),
+            "last_official_rebuild_attempt_at": state.get("last_official_rebuild_attempt_at"),
+            "last_official_rebuild_failed_at": state.get("last_official_rebuild_failed_at"),
+            "last_official_rebuild_task_id": state.get("last_official_rebuild_task_id"),
+            "last_official_rebuild_task_status": state.get("last_official_rebuild_task_status"),
+            "last_official_rebuild_result": state.get("last_official_rebuild_result"),
+            "last_run_at": state.get("last_run_at"),
+            "last_email_sent_at": state.get("last_email_sent_at"),
+            "last_heartbeat_sent_at": state.get("last_heartbeat_sent_at"),
+            "last_error": state.get("last_error"),
+            "last_result": state.get("last_result"),
+            "scheduler_enabled": False,
+            "scheduler_wired": False,
+            "scheduler_disabled_reason": "AISTOCK_STARTUP_SCHEDULERS_ENABLED=0",
+        }
+    scheduler = _ensure_v4_monitor_scheduler()
     try:
         scheduler.remove_job(_gen2_shadow_monitor_job_id)
     except Exception:
@@ -9918,29 +9999,31 @@ def _run_gen2_intraday_minute_repair(target_date: str, periods: Optional[List[st
         return {"ok": False, "target_date": target_date, "error": "invalid target_date"}
     period_list = [str(p).strip() for p in (periods or ["15m", "30m"]) if str(p).strip()]
     argv = [
-        "sync_intraday_minutes_fast.py",
-        "--target-date",
+        "qmt_xtquant_minute_backfill_validate.py",
+        "--phase",
+        "all",
+        "--start-date",
         normalized_date,
-        "--types",
-        "stock,index",
+        "--end-date",
+        normalized_date,
         "--periods",
         ",".join(period_list),
         "--batch-size",
-        "500",
-        "--min-complete-codes",
-        "3000",
+        "30",
+        "--include-index",
+        "--reset-stage",
     ]
-    cmd = [sys.executable, str(REPO_ROOT / "scripts" / "sync_intraday_minutes_fast.py"), *argv[1:]]
+    cmd = [sys.executable, str(REPO_ROOT / "scripts" / "qmt_xtquant_minute_backfill_validate.py"), *argv[1:]]
     started_at = datetime.now()
     try:
         import contextlib
         import io
 
         import importlib
-        import scripts.sync_intraday_minutes_fast as sync_intraday_minutes_fast
+        import scripts.qmt_xtquant_minute_backfill_validate as qmt_xtquant_minute_backfill_validate
 
-        sync_intraday_minutes_fast = importlib.reload(sync_intraday_minutes_fast)
-        sync_intraday_minutes_fast_main = sync_intraday_minutes_fast.main
+        qmt_xtquant_minute_backfill_validate = importlib.reload(qmt_xtquant_minute_backfill_validate)
+        qmt_xtquant_minute_main = qmt_xtquant_minute_backfill_validate.main
 
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()
@@ -9948,7 +10031,7 @@ def _run_gen2_intraday_minute_repair(target_date: str, periods: Optional[List[st
         try:
             sys.argv = argv
             with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                returncode = int(sync_intraday_minutes_fast_main() or 0)
+                returncode = int(qmt_xtquant_minute_main() or 0)
         finally:
             sys.argv = old_argv
         finished_at = datetime.now()
@@ -10132,7 +10215,7 @@ def _run_gen2_mainline_update_task(task_id: str, target_date: Optional[str], lim
             minute_check = _ensure_gen2_mainline_intraday_minutes(selected_date)
             minute_step = {
                 "name": "intraday_minute_precheck",
-                "script": "sync_intraday_minutes_fast.py",
+                "script": "qmt_xtquant_minute_backfill_validate.py",
                 "cmd": (minute_check.get("repair") or {}).get("cmd", []),
                 "ok": bool(minute_check.get("ok")),
                 "status": "completed" if minute_check.get("ok") else "failed",
@@ -11545,64 +11628,6 @@ def _market_gate_from_order_payload(data: Dict[str, Any], signal_date: str) -> O
     return result
 
 
-def _has_active_ptrade_order(code6: str, signal_date: str, side: str = "BUY") -> bool:
-    try:
-        rows = PTRADE_BRIDGE.list_orders(limit=500).get("rows") or []
-    except Exception:
-        return False
-    active_statuses = {"pending", "processing", "dry_run", "waiting_approval", "submitted", "ack"}
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        if _normalize_stock_code6(item.get("code")) != code6:
-            continue
-        if str(item.get("side") or "").upper() != side:
-            continue
-        if str(item.get("signal_date") or "") != signal_date:
-            continue
-        if str(item.get("_bridge_status") or "").lower() not in active_statuses:
-            continue
-        return True
-    return False
-
-
-def _ptrade_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "y", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "n", "off"}:
-            return False
-        return default
-    return bool(value)
-
-
-def _ptrade_payload_requests_live_submit(data: Dict[str, Any]) -> bool:
-    dry_run = _ptrade_bool(data.get("dry_run"), default=True)
-    require_approval = _ptrade_bool(data.get("require_approval"), default=True)
-    approved = _ptrade_bool(data.get("approved"), default=False)
-    return (not dry_run) and (approved or not require_approval)
-
-
-def _ptrade_live_submit_readiness_guard(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if not _ptrade_payload_requests_live_submit(data):
-        return None
-    status = PTRADE_BRIDGE.status()
-    readiness = status.get("readiness") if isinstance(status, dict) else {}
-    if isinstance(readiness, dict) and bool(readiness.get("ready_for_live_order")):
-        return None
-    return {
-        "ok": False,
-        "message": "PTrade live submit is not ready; run heartbeat/dry-run probe first.",
-        "ready_for_live_order": False,
-        "readiness": readiness,
-    }
-
-
 @router.post("/gen2/paper-order")
 def submit_gen2_paper_order(payload: Dict[str, Any]):
     started_at = datetime.now()
@@ -11610,9 +11635,9 @@ def submit_gen2_paper_order(payload: Dict[str, Any]):
     signal_date = _normalize_date_str(data.get("signal_date")) or _normalize_date_str(_resolve_latest_stock_trade_date())
     code6 = _normalize_stock_code6(data.get("code"))
     if not signal_date:
-        return _sanitize({"ok": False, "message": "无法解析 G2 目标日期。"})
+        return _sanitize({"ok": False, "message": "Unable to resolve G2 signal date."})
     if not code6:
-        return _sanitize({"ok": False, "message": "无法识别提交的 6 位代码。"})
+        return _sanitize({"ok": False, "message": "Unable to resolve submitted 6-digit stock code."})
 
     row = _candidate_from_order_payload(data, signal_date, code6)
     if row is None:
@@ -11620,7 +11645,7 @@ def submit_gen2_paper_order(payload: Dict[str, Any]):
         return _sanitize(
             {
                 "ok": False,
-                "message": f"{code6} {signal_date} 缺少页面候选股快照，已拒绝下单；请刷新 G2 实盘页后重试。",
+                "message": f"{code6} {signal_date} is missing the page candidate snapshot; refresh the G2 page and retry.",
                 "candidate": None,
                 "candidate_lookup_mode": "request_snapshot_missing",
                 "submit_elapsed_seconds": submit_elapsed_seconds,
@@ -11628,9 +11653,9 @@ def submit_gen2_paper_order(payload: Dict[str, Any]):
         )
     candidate_lookup_mode = "request_snapshot"
     if not bool(row.get("buyable")):
-        return _sanitize({"ok": False, "message": f"{code6} 当前不可买入。", "candidate": row, "candidate_lookup_mode": candidate_lookup_mode})
+        return _sanitize({"ok": False, "message": f"{code6} is not buyable now.", "candidate": row, "candidate_lookup_mode": candidate_lookup_mode})
     if bool(row.get("is_suspended")):
-        return _sanitize({"ok": False, "message": f"{code6} 当前处于停牌/涨停。", "candidate": row, "candidate_lookup_mode": candidate_lookup_mode})
+        return _sanitize({"ok": False, "message": f"{code6} is suspended or limit-up now.", "candidate": row, "candidate_lookup_mode": candidate_lookup_mode})
 
     gate = _market_gate_from_order_payload(data, signal_date)
     if gate is None:
@@ -11638,7 +11663,7 @@ def submit_gen2_paper_order(payload: Dict[str, Any]):
         return _sanitize(
             {
                 "ok": False,
-                "message": f"{signal_date} 缺少页面大盘门禁快照，已拒绝下单；请刷新 G2 实盘页后重试。",
+                "message": f"{signal_date} is missing the market gate snapshot; refresh the G2 page and retry.",
                 "candidate": row,
                 "market_gate": None,
                 "candidate_lookup_mode": candidate_lookup_mode,
@@ -11648,69 +11673,21 @@ def submit_gen2_paper_order(payload: Dict[str, Any]):
         )
     market_gate_lookup_mode = "request_snapshot"
     if not bool(gate.get("available")):
-        return _sanitize({"ok": False, "message": gate.get("message") or "市场门控不可用，已禁止下单。", "candidate": row, "market_gate": gate, "candidate_lookup_mode": candidate_lookup_mode, "market_gate_lookup_mode": market_gate_lookup_mode})
+        return _sanitize({"ok": False, "message": gate.get("message") or "Market gate is unavailable; order is blocked.", "candidate": row, "market_gate": gate, "candidate_lookup_mode": candidate_lookup_mode, "market_gate_lookup_mode": market_gate_lookup_mode})
     if not bool(gate.get("can_open")):
-        return _sanitize({"ok": False, "message": gate.get("message") or "市场门控未满足开仓条件。", "candidate": row, "market_gate": gate, "candidate_lookup_mode": candidate_lookup_mode, "market_gate_lookup_mode": market_gate_lookup_mode})
-
-    if _has_active_ptrade_order(code6, signal_date, side="BUY"):
-        return _sanitize({"ok": False, "message": f"{code6} 在 {signal_date} 已存在未关闭买单。", "candidate": row, "candidate_lookup_mode": candidate_lookup_mode})
+        return _sanitize({"ok": False, "message": gate.get("message") or "Market gate blocks opening a position.", "candidate": row, "market_gate": gate, "candidate_lookup_mode": candidate_lookup_mode, "market_gate_lookup_mode": market_gate_lookup_mode})
 
     quantity = _to_int(data.get("quantity"), default=0) or 0
     if quantity <= 0:
         quantity = _default_gen2_paper_quantity(row.get("entry_price"))
     if quantity <= 0 or quantity % 100 != 0:
-        return _sanitize({"ok": False, "message": "下单数量需为正整数且为100的整数倍。", "candidate": row})
+        return _sanitize({"ok": False, "message": "Order quantity must be positive and a multiple of 100.", "candidate": row})
 
-    limit_price = _to_float(data.get("price"))
-    if limit_price is None:
-        limit_price = _to_float(row.get("entry_price"))
-
-    order_payload = {
-        "source": "gen2_live_page",
-        "strategy": "g2_v2_complete_paper",
-        "signal_date": signal_date,
-        "code": code6,
-        "name": str(row.get("name") or ""),
-        "side": "BUY",
-        "quantity": quantity,
-        "price": limit_price,
-        "price_type": "limit" if limit_price else "market",
-        "dry_run": bool(data.get("dry_run", True)),
-        "require_approval": bool(data.get("require_approval", True)),
-        "approved": bool(data.get("approved", False)),
-        "reason": str(data.get("reason") or f"G2 g2_v2_complete {signal_date} {code6} {str(row.get('stage_label') or 'buyable')}"),
-        "risk": {
-            "market_gate": gate.get("message"),
-            "v4_rank": row.get("v4_rank"),
-            "alpha191_volume5_score": row.get("alpha191_volume5_score"),
-            "alpha191_volume5_rank_in_day": row.get("alpha191_volume5_rank_in_day"),
-            "runup_from_60d_low": row.get("runup_from_60d_low"),
-            "source_family": row.get("source_family"),
-            "signal_family": row.get("signal_family"),
-            "confirm_datetime": row.get("confirm_datetime"),
-            "entry_price": row.get("entry_price"),
-        },
-    }
-    guard = _ptrade_live_submit_readiness_guard(order_payload)
-    if guard:
-        submit_elapsed_seconds = round((datetime.now() - started_at).total_seconds(), 6)
-        return _sanitize(
-            {
-                **guard,
-                "candidate": row,
-                "market_gate": gate,
-                "candidate_lookup_mode": candidate_lookup_mode,
-                "market_gate_lookup_mode": market_gate_lookup_mode,
-                "submit_elapsed_seconds": submit_elapsed_seconds,
-            }
-        )
-    order = PTRADE_BRIDGE.submit_order(order_payload)
     submit_elapsed_seconds = round((datetime.now() - started_at).total_seconds(), 6)
     return _sanitize(
         {
-            "ok": True,
-            "message": f"{code6} 已提交纸面买单。",
-            "order": order,
+            "ok": False,
+            "message": "Legacy file-bridge paper order has been retired; use the G3 paper execution workflow or QMT Mini trading path.",
             "candidate": row,
             "market_gate": gate,
             "candidate_lookup_mode": candidate_lookup_mode,
@@ -11718,459 +11695,6 @@ def submit_gen2_paper_order(payload: Dict[str, Any]):
             "submit_elapsed_seconds": submit_elapsed_seconds,
         }
     )
-@router.get("/ptrade/bridge/status")
-def get_ptrade_bridge_status():
-    return _sanitize(PTRADE_BRIDGE.status())
-
-
-def _ptrade_acceptance_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
-    quantity = max(100, _to_int(data.get("quantity"), 100))
-    quantity = max(100, (quantity // 100) * 100)
-    return {
-        "bridge_dir": PTRADE_BRIDGE.paths.root,
-        "heartbeat_timeout_seconds": min(180.0, max(0.1, _to_float(data.get("heartbeat_timeout_seconds")) or 120.0)),
-        "poll_seconds": min(5.0, max(0.05, _to_float(data.get("poll_seconds")) or 1.0)),
-        "max_heartbeat_age_seconds": max(1.0, _to_float(data.get("max_heartbeat_age_seconds")) or 30.0),
-        "submit_dry_run": not bool(data.get("skip_dry_run", False)),
-        "dry_run_timeout_seconds": min(60.0, max(0.1, _to_float(data.get("dry_run_timeout_seconds")) or 30.0)),
-        "code": str(data.get("code") or "600000"),
-        "price": _to_float(data.get("price")) or 10.5,
-        "quantity": quantity,
-    }
-
-
-def _ptrade_live_submit_test_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
-    quantity = max(100, _to_int(data.get("quantity"), 100))
-    quantity = max(100, (quantity // 100) * 100)
-    return {
-        "bridge_dir": PTRADE_BRIDGE.paths.root,
-        "approve_live_submit": bool(data.get("approve_live_submit", False)),
-        "code": str(data.get("code") or "600000"),
-        "side": str(data.get("side") or "BUY"),
-        "price": _to_float(data.get("price")) or 10.5,
-        "quantity": quantity,
-        "timeout_seconds": min(60.0, max(0.1, _to_float(data.get("timeout_seconds")) or 30.0)),
-        "poll_seconds": min(5.0, max(0.05, _to_float(data.get("poll_seconds")) or 1.0)),
-        "max_submit_seconds": max(0.01, _to_float(data.get("max_submit_seconds")) or 0.5),
-        "max_order_value": min(20000.0, max(100.0, _to_float(data.get("max_order_value")) or 20000.0)),
-    }
-
-
-def _ptrade_watch_acceptance_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
-    quantity = max(100, _to_int(data.get("quantity"), 100))
-    quantity = max(100, (quantity // 100) * 100)
-    return {
-        "bridge_dir": PTRADE_BRIDGE.paths.root,
-        "watch_timeout_seconds": min(900.0, max(0.1, _to_float(data.get("watch_timeout_seconds")) or 600.0)),
-        "poll_seconds": min(5.0, max(0.05, _to_float(data.get("poll_seconds")) or 1.0)),
-        "max_heartbeat_age_seconds": max(1.0, _to_float(data.get("max_heartbeat_age_seconds")) or 30.0),
-        "dry_run_timeout_seconds": min(60.0, max(0.1, _to_float(data.get("dry_run_timeout_seconds")) or 30.0)),
-        "code": str(data.get("code") or "600000"),
-        "price": _to_float(data.get("price")) or 10.5,
-        "quantity": quantity,
-    }
-
-
-def _set_ptrade_acceptance_task(task_id: str, payload: Dict[str, Any]) -> None:
-    with PTRADE_ACCEPTANCE_TASK_LOCK:
-        task = PTRADE_ACCEPTANCE_TASKS.setdefault(task_id, {})
-        task.update(_sanitize(payload))
-
-
-def _get_ptrade_acceptance_task(task_id: str) -> Optional[Dict[str, Any]]:
-    with PTRADE_ACCEPTANCE_TASK_LOCK:
-        task = PTRADE_ACCEPTANCE_TASKS.get(task_id)
-        return dict(task) if task else None
-
-
-def _find_active_ptrade_acceptance_task() -> Optional[Dict[str, Any]]:
-    with PTRADE_ACCEPTANCE_TASK_LOCK:
-        for task in PTRADE_ACCEPTANCE_TASKS.values():
-            if task.get("status") in {"queued", "running"}:
-                return dict(task)
-    return None
-
-
-def _run_ptrade_acceptance_task(task_id: str, kwargs: Dict[str, Any]) -> None:
-    _set_ptrade_acceptance_task(
-        task_id,
-        {
-            "status": "running",
-            "progress": 10,
-            "started_at": datetime.now().isoformat(timespec="seconds"),
-        },
-    )
-    try:
-        result = run_ptrade_bridge_acceptance(**kwargs)
-        _set_ptrade_acceptance_task(
-            task_id,
-            {
-                "status": "completed" if result.get("ok") else "failed",
-                "progress": 100,
-                "completed_at": datetime.now().isoformat(timespec="seconds"),
-                "result": result,
-                "error": "" if result.get("ok") else "; ".join(str(x) for x in (result.get("next_actions") or [])[:2]),
-            },
-        )
-    except Exception as exc:
-        _set_ptrade_acceptance_task(
-            task_id,
-            {
-                "status": "failed",
-                "progress": 100,
-                "completed_at": datetime.now().isoformat(timespec="seconds"),
-                "error": str(exc),
-            },
-        )
-
-
-def _set_ptrade_live_submit_test_task(task_id: str, payload: Dict[str, Any]) -> None:
-    with PTRADE_LIVE_SUBMIT_TEST_TASK_LOCK:
-        task = PTRADE_LIVE_SUBMIT_TEST_TASKS.setdefault(task_id, {})
-        task.update(_sanitize(payload))
-
-
-def _get_ptrade_live_submit_test_task(task_id: str) -> Optional[Dict[str, Any]]:
-    with PTRADE_LIVE_SUBMIT_TEST_TASK_LOCK:
-        task = PTRADE_LIVE_SUBMIT_TEST_TASKS.get(task_id)
-        return dict(task) if task else None
-
-
-def _find_active_ptrade_live_submit_test_task() -> Optional[Dict[str, Any]]:
-    with PTRADE_LIVE_SUBMIT_TEST_TASK_LOCK:
-        for task in PTRADE_LIVE_SUBMIT_TEST_TASKS.values():
-            if task.get("status") in {"queued", "running"}:
-                return dict(task)
-    return None
-
-
-def _run_ptrade_live_submit_test_task(task_id: str, kwargs: Dict[str, Any]) -> None:
-    _set_ptrade_live_submit_test_task(
-        task_id,
-        {
-            "status": "running",
-            "progress": 10,
-            "started_at": datetime.now().isoformat(timespec="seconds"),
-        },
-    )
-    try:
-        result = run_ptrade_bridge_live_submit_test(**kwargs)
-        failed_checks = [
-            item
-            for item in (result.get("checks") or [])
-            if isinstance(item, dict) and item.get("required") and not item.get("ok")
-        ]
-        _set_ptrade_live_submit_test_task(
-            task_id,
-            {
-                "status": "completed" if result.get("ok") else "failed",
-                "progress": 100,
-                "completed_at": datetime.now().isoformat(timespec="seconds"),
-                "result": result,
-                "error": "" if result.get("ok") else "; ".join(str(x.get("name") or x) for x in failed_checks)[:200],
-            },
-        )
-    except Exception as exc:
-        _set_ptrade_live_submit_test_task(
-            task_id,
-            {
-                "status": "failed",
-                "progress": 100,
-                "completed_at": datetime.now().isoformat(timespec="seconds"),
-                "error": str(exc),
-            },
-        )
-
-
-def _set_ptrade_watch_acceptance_task(task_id: str, payload: Dict[str, Any]) -> None:
-    with PTRADE_WATCH_ACCEPTANCE_TASK_LOCK:
-        task = PTRADE_WATCH_ACCEPTANCE_TASKS.setdefault(task_id, {})
-        task.update(_sanitize(payload))
-
-
-def _get_ptrade_watch_acceptance_task(task_id: str) -> Optional[Dict[str, Any]]:
-    with PTRADE_WATCH_ACCEPTANCE_TASK_LOCK:
-        task = PTRADE_WATCH_ACCEPTANCE_TASKS.get(task_id)
-        return dict(task) if task else None
-
-
-def _find_active_ptrade_watch_acceptance_task() -> Optional[Dict[str, Any]]:
-    with PTRADE_WATCH_ACCEPTANCE_TASK_LOCK:
-        for task in PTRADE_WATCH_ACCEPTANCE_TASKS.values():
-            if task.get("status") in {"queued", "running"}:
-                return dict(task)
-    return None
-
-
-def _run_ptrade_watch_acceptance_task(task_id: str, kwargs: Dict[str, Any]) -> None:
-    _set_ptrade_watch_acceptance_task(
-        task_id,
-        {
-            "status": "running",
-            "progress": 10,
-            "started_at": datetime.now().isoformat(timespec="seconds"),
-        },
-    )
-    try:
-        result = run_ptrade_bridge_watch_acceptance(**kwargs)
-        next_actions = result.get("next_actions") or []
-        _set_ptrade_watch_acceptance_task(
-            task_id,
-            {
-                "status": "completed" if result.get("ok") else "failed",
-                "progress": 100,
-                "completed_at": datetime.now().isoformat(timespec="seconds"),
-                "result": result,
-                "error": "" if result.get("ok") else "; ".join(str(x) for x in next_actions[:2])[:200],
-            },
-        )
-    except Exception as exc:
-        _set_ptrade_watch_acceptance_task(
-            task_id,
-            {
-                "status": "failed",
-                "progress": 100,
-                "completed_at": datetime.now().isoformat(timespec="seconds"),
-                "error": str(exc),
-            },
-        )
-
-
-@router.get("/ptrade/bridge/readiness-audit")
-def get_ptrade_bridge_readiness_audit(
-    require_empty_queue_for_live: bool = Query(True, description="require empty pending/processing queue before live test"),
-):
-    return _sanitize(
-        run_ptrade_bridge_readiness_audit(
-            bridge_dir=PTRADE_BRIDGE.paths.root,
-            require_empty_queue_for_live=bool(require_empty_queue_for_live),
-        )
-    )
-
-
-@router.get("/ptrade/bridge/evidence-report")
-def get_ptrade_bridge_evidence_report(
-    refresh_order_path_probe: bool = Query(True, description="refresh isolated nonblocking order-path proof"),
-):
-    return _sanitize(
-        build_ptrade_bridge_evidence_report(
-            bridge_dir=PTRADE_BRIDGE.paths.root,
-            refresh_order_path_probe=bool(refresh_order_path_probe),
-        )
-    )
-
-
-@router.post("/ptrade/bridge/live-probe")
-def run_ptrade_bridge_live_probe_api(payload: Optional[Dict[str, Any]] = None):
-    data = payload if isinstance(payload, dict) else {}
-    timeout_seconds = min(60.0, max(0.1, _to_float(data.get("timeout_seconds")) or 30.0))
-    poll_seconds = min(5.0, max(0.05, _to_float(data.get("poll_seconds")) or 1.0))
-    quantity = max(100, _to_int(data.get("quantity"), 100))
-    quantity = max(100, (quantity // 100) * 100)
-    result = run_ptrade_bridge_live_probe(
-        bridge_dir=PTRADE_BRIDGE.paths.root,
-        submit_dry_run=bool(data.get("submit_dry_run", False)),
-        require_heartbeat=bool(data.get("require_heartbeat", False)),
-        max_heartbeat_age_seconds=max(1.0, _to_float(data.get("max_heartbeat_age_seconds")) or 15.0),
-        code=str(data.get("code") or "600000"),
-        price=_to_float(data.get("price")) or 10.5,
-        quantity=quantity,
-        timeout_seconds=timeout_seconds,
-        poll_seconds=poll_seconds,
-        max_submit_seconds=max(0.01, _to_float(data.get("max_submit_seconds")) or 0.5),
-    )
-    return _sanitize(result)
-
-
-@router.post("/ptrade/bridge/acceptance")
-def run_ptrade_bridge_acceptance_api(payload: Optional[Dict[str, Any]] = None):
-    data = payload if isinstance(payload, dict) else {}
-    result = run_ptrade_bridge_acceptance(**_ptrade_acceptance_kwargs(data))
-    return _sanitize(result)
-
-
-@router.post("/ptrade/bridge/acceptance/start")
-def start_ptrade_bridge_acceptance_task(payload: Optional[Dict[str, Any]] = None):
-    active = _find_active_ptrade_acceptance_task()
-    if active:
-        return _sanitize(active)
-    data = payload if isinstance(payload, dict) else {}
-    kwargs = _ptrade_acceptance_kwargs(data)
-    task_id = f"ptrade_acceptance_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
-    _set_ptrade_acceptance_task(
-        task_id,
-        {
-            "task_id": task_id,
-            "status": "queued",
-            "progress": 0,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "bridge_dir": str(kwargs.get("bridge_dir")),
-            "heartbeat_timeout_seconds": kwargs.get("heartbeat_timeout_seconds"),
-            "dry_run_timeout_seconds": kwargs.get("dry_run_timeout_seconds"),
-            "submit_dry_run": kwargs.get("submit_dry_run"),
-        },
-    )
-    thread = threading.Thread(
-        target=_run_ptrade_acceptance_task,
-        args=(task_id, kwargs),
-        name=f"ptrade-acceptance-{task_id}",
-        daemon=True,
-    )
-    thread.start()
-    return _sanitize(_get_ptrade_acceptance_task(task_id) or {"task_id": task_id, "status": "queued", "progress": 0})
-
-
-@router.get("/ptrade/bridge/acceptance-task/{task_id}")
-def get_ptrade_bridge_acceptance_task(task_id: str):
-    task = _get_ptrade_acceptance_task(task_id)
-    if task:
-        return _sanitize(task)
-    return {"task_id": task_id, "status": "missing", "progress": 0, "error": "task not found"}
-
-
-@router.post("/ptrade/bridge/watch-acceptance/start")
-def start_ptrade_bridge_watch_acceptance_task(payload: Optional[Dict[str, Any]] = None):
-    active = _find_active_ptrade_watch_acceptance_task()
-    if active:
-        return _sanitize(active)
-    data = payload if isinstance(payload, dict) else {}
-    kwargs = _ptrade_watch_acceptance_kwargs(data)
-    task_id = f"ptrade_watch_acceptance_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
-    _set_ptrade_watch_acceptance_task(
-        task_id,
-        {
-            "task_id": task_id,
-            "status": "queued",
-            "progress": 0,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "bridge_dir": str(kwargs.get("bridge_dir")),
-            "watch_timeout_seconds": kwargs.get("watch_timeout_seconds"),
-            "dry_run_timeout_seconds": kwargs.get("dry_run_timeout_seconds"),
-        },
-    )
-    thread = threading.Thread(
-        target=_run_ptrade_watch_acceptance_task,
-        args=(task_id, kwargs),
-        name=f"ptrade-watch-acceptance-{task_id}",
-        daemon=True,
-    )
-    thread.start()
-    return _sanitize(_get_ptrade_watch_acceptance_task(task_id) or {"task_id": task_id, "status": "queued", "progress": 0})
-
-
-@router.get("/ptrade/bridge/watch-acceptance-task/{task_id}")
-def get_ptrade_bridge_watch_acceptance_task(task_id: str):
-    task = _get_ptrade_watch_acceptance_task(task_id)
-    if task:
-        return _sanitize(task)
-    return {"task_id": task_id, "status": "missing", "progress": 0, "error": "task not found"}
-
-
-@router.post("/ptrade/bridge/live-submit-test/start")
-def start_ptrade_bridge_live_submit_test_task(payload: Optional[Dict[str, Any]] = None):
-    active = _find_active_ptrade_live_submit_test_task()
-    if active:
-        return _sanitize(active)
-    data = payload if isinstance(payload, dict) else {}
-    kwargs = _ptrade_live_submit_test_kwargs(data)
-    task_id = f"ptrade_live_submit_test_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
-    _set_ptrade_live_submit_test_task(
-        task_id,
-        {
-            "task_id": task_id,
-            "status": "queued",
-            "progress": 0,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "bridge_dir": str(kwargs.get("bridge_dir")),
-            "approve_live_submit": bool(kwargs.get("approve_live_submit")),
-            "code": kwargs.get("code"),
-            "price": kwargs.get("price"),
-            "quantity": kwargs.get("quantity"),
-            "max_order_value": kwargs.get("max_order_value"),
-        },
-    )
-    thread = threading.Thread(
-        target=_run_ptrade_live_submit_test_task,
-        args=(task_id, kwargs),
-        name=f"ptrade-live-submit-test-{task_id}",
-        daemon=True,
-    )
-    thread.start()
-    return _sanitize(_get_ptrade_live_submit_test_task(task_id) or {"task_id": task_id, "status": "queued", "progress": 0})
-
-
-@router.get("/ptrade/bridge/live-submit-test-task/{task_id}")
-def get_ptrade_bridge_live_submit_test_task(task_id: str):
-    task = _get_ptrade_live_submit_test_task(task_id)
-    if task:
-        return _sanitize(task)
-    return {"task_id": task_id, "status": "missing", "progress": 0, "error": "task not found"}
-
-
-@router.post("/ptrade/bridge/config")
-def save_ptrade_bridge_config(payload: Dict[str, Any]):
-    data = payload if isinstance(payload, dict) else {}
-    return _sanitize({"ok": True, "config": PTRADE_BRIDGE.save_config(data)})
-
-
-@router.post("/ptrade/bridge/processing/recover-stale")
-def recover_stale_ptrade_bridge_processing(payload: Optional[Dict[str, Any]] = None):
-    data = payload if isinstance(payload, dict) else {}
-    max_age_seconds = max(30, _to_int(data.get("max_age_seconds"), 300))
-    reason = str(data.get("reason") or "").strip()
-    return _sanitize(PTRADE_BRIDGE.mark_stale_processing(max_age_seconds=max_age_seconds, reason=reason))
-
-
-@router.get("/ptrade/bridge/orders")
-def list_ptrade_bridge_orders(limit: int = Query(100, ge=1, le=500)):
-    return _sanitize(PTRADE_BRIDGE.list_orders(limit=int(limit)))
-
-
-@router.get("/ptrade/bridge/fills")
-def list_ptrade_bridge_fills(limit: int = Query(100, ge=1, le=500)):
-    return _sanitize(PTRADE_BRIDGE.list_fills(limit=int(limit)))
-
-
-@router.get("/ptrade/bridge/positions")
-def list_ptrade_bridge_positions(limit: int = Query(20, ge=1, le=100)):
-    snapshots = PTRADE_BRIDGE.list_position_snapshots(limit=int(limit))
-    latest = PTRADE_BRIDGE.latest_positions()
-    return _sanitize(
-        {
-            "ok": bool(latest.get("ok")),
-            "latest": latest,
-            "snapshots": snapshots.get("rows") or [],
-            "updated_at": snapshots.get("updated_at"),
-        }
-    )
-
-
-@router.post("/ptrade/bridge/orders")
-def submit_ptrade_bridge_order(payload: Dict[str, Any]):
-    started_at = datetime.now()
-    try:
-        data = payload if isinstance(payload, dict) else {}
-        guard = _ptrade_live_submit_readiness_guard(data)
-        if guard:
-            submit_elapsed_seconds = round((datetime.now() - started_at).total_seconds(), 6)
-            return _sanitize({**guard, "submit_elapsed_seconds": submit_elapsed_seconds})
-        order_data = PTRADE_BRIDGE.submit_order(data)
-        submit_elapsed_seconds = round((datetime.now() - started_at).total_seconds(), 6)
-        return _sanitize({"ok": True, "order": order_data, "submit_elapsed_seconds": submit_elapsed_seconds})
-    except Exception as exc:
-        submit_elapsed_seconds = round((datetime.now() - started_at).total_seconds(), 6)
-        return _sanitize({"ok": False, "message": str(exc), "submit_elapsed_seconds": submit_elapsed_seconds})
-
-
-@router.post("/ptrade/bridge/orders/{order_id}/cancel")
-def cancel_ptrade_bridge_order(order_id: str, payload: Optional[Dict[str, Any]] = None):
-    reason = ""
-    if isinstance(payload, dict):
-        reason = str(payload.get("reason") or "")
-    try:
-        return _sanitize(PTRADE_BRIDGE.cancel_order(order_id, reason=reason))
-    except Exception as exc:
-        return _sanitize({"ok": False, "message": str(exc), "order_id": order_id})
 
 
 @router.post("/v4/manual-holdings/signals")
@@ -12702,4 +12226,3 @@ def get_v4_manual_holding_entry_backtest(
             "recent_samples": realized_rows,
         }
     )
-

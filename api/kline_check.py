@@ -1425,8 +1425,7 @@ def process_repair_trade_date_task(task_id: str, trade_date: str, data_type: str
 
 PREVIOUS_DAY_REPAIR_PERIODS = {"1d", "5m", "15m", "30m", "60m"}
 MINUTE_REPAIR_FREQ = {"5m": "5", "15m": "15", "30m": "30", "60m": "60"}
-PREVIOUS_DAY_REPAIR_SOURCES = {"auto", "tdxquant", "baostock"}
-TDXQUANT_FAST_MINUTE_PERIODS = {"15m", "30m"}
+PREVIOUS_DAY_REPAIR_SOURCES = {"auto", "qmt_xtquant", "baostock"}
 
 
 def _normalize_previous_day_periods(raw_periods: object) -> list[str]:
@@ -1556,8 +1555,8 @@ def _inadequate_periods(
     ]
 
 
-def _source_allows_tdxquant(source: str) -> bool:
-    return source in ("auto", "tdxquant")
+def _source_allows_qmt_xtquant(source: str) -> bool:
+    return source in ("auto", "qmt_xtquant")
 
 
 def _source_allows_baostock(source: str) -> bool:
@@ -1698,43 +1697,34 @@ def process_repair_previous_trade_date_task(
                 repair_attempts: list[dict] = []
                 latest_coverage = minute_before
 
-                if _source_allows_tdxquant(source):
-                    tdxquant_periods = [p for p in minute_periods if p in TDXQUANT_FAST_MINUTE_PERIODS]
-                    if tdxquant_periods:
+                if _source_allows_qmt_xtquant(source):
+                    qmt_periods = [p for p in minute_periods if p in MINUTE_REPAIR_FREQ]
+                    if qmt_periods:
                         cmd = [
                             sys.executable,
-                            str(REPO_ROOT / "scripts" / "sync_intraday_minutes_fast.py"),
-                            "--target-date",
+                            str(REPO_ROOT / "scripts" / "qmt_xtquant_minute_backfill_validate.py"),
+                            "--phase",
+                            "all",
+                            "--start-date",
+                            trade_date,
+                            "--end-date",
                             trade_date,
                             "--periods",
-                            ",".join(tdxquant_periods),
-                            "--types",
-                            "stock,index" if data_type in ("", "all") else data_type,
+                            ",".join(qmt_periods),
                             "--batch-size",
-                            "500",
+                            "30",
+                            "--reset-stage",
                         ]
+                        if data_type in ("", "all", "index"):
+                            cmd.append("--include-index")
                         if codes:
                             cmd.extend(["--codes", ",".join(codes)])
-                            cmd.extend(["--min-complete-codes", str(max(1, len(set(codes))))])
-                        tdxquant_result = _run_cmd(cmd, timeout_seconds=timeout_seconds)
+                        qmt_result = _run_cmd(cmd, timeout_seconds=timeout_seconds)
                         latest_coverage = [_period_coverage(period, trade_date, codes=codes or None) for period in minute_periods]
-                        tdxquant_result["coverage_after"] = latest_coverage
-                        tdxquant_result["supported_periods"] = tdxquant_periods
+                        qmt_result["coverage_after"] = latest_coverage
+                        qmt_result["supported_periods"] = qmt_periods
                         repair_attempts.append(
-                            {"name": "tdxquant_fast_minute_repair", "ok": bool(tdxquant_result.get("ok")), "result": tdxquant_result}
-                        )
-                    else:
-                        repair_attempts.append(
-                            {
-                                "name": "tdxquant_fast_minute_repair",
-                                "ok": True,
-                                "result": {
-                                    "skipped": True,
-                                    "reason": "no_supported_periods",
-                                    "supported_periods": sorted(TDXQUANT_FAST_MINUTE_PERIODS),
-                                    "requested_periods": minute_periods,
-                                },
-                            }
+                            {"name": "qmt_xtquant_minute_repair", "ok": bool(qmt_result.get("ok")), "result": qmt_result}
                         )
 
                 remaining_periods = _inadequate_periods(latest_coverage, minute_periods, requested_codes=codes)

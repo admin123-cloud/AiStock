@@ -21,7 +21,7 @@ class MinuteKlineTask:
         self.periods = ["15m", "30m"]
 
     async def execute(self) -> int:
-        from scripts.sync_intraday_minutes_fast import main as sync_intraday_minutes_fast_main
+        from scripts.qmt_xtquant_minute_backfill_validate import main as qmt_xtquant_minute_main
 
         logger.info("Start minute K-line sync task, periods=%s", ",".join(self.periods))
 
@@ -31,19 +31,21 @@ class MinuteKlineTask:
             old_argv = sys.argv[:]
             try:
                 sys.argv = [
-                    "sync_intraday_minutes_fast.py",
-                    "--target-date",
+                    "qmt_xtquant_minute_backfill_validate.py",
+                    "--phase",
+                    "all",
+                    "--start-date",
                     str(date.today()),
-                    "--types",
-                    "stock,index",
+                    "--end-date",
+                    str(date.today()),
                     "--periods",
                     ",".join(self.periods),
                     "--batch-size",
-                    "500",
-                    "--min-complete-codes",
-                    "3000",
+                    "30",
+                    "--include-index",
+                    "--reset-stage",
                 ]
-                return int(sync_intraday_minutes_fast_main() or 0)
+                return int(qmt_xtquant_minute_main() or 0)
             finally:
                 sys.argv = old_argv
 

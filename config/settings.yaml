@@ -85,20 +85,33 @@ strategy_daily_runner:
   hour: 17
   minute: 0
   weekdays_only: true
-ptrade:
-  account:
-    enabled: true
-    account_type: simulation
-    broker_name: PTrade
-    username: ''
-    password: ''
-    trade_endpoint: 云仿真（交易端）
-    notes: ''
 data_sync:
-  preferred_source: tdxquant
+  preferred_source: qmt_xtquant
   external_fallback_enabled: true
   external_fallback_periods:
   - 1d
   external_fallback_providers:
   - akshare
   - tushare
+  qmt_xtquant:
+    enabled: true
+    qmt_root: D:\国金证券QMT交易端
+    quote_host: 127.0.0.1
+    quote_port: 58610
+    userdata_dir: D:\国金证券QMT交易端\userdata_mini
+    daily_batch_size: 80
+    minute_batch_size: 30
+    minute_phase: fetch-validate
+    minute_periods:
+    - 5m
+    - 15m
+    - 30m
+    - 60m
+    max_retries: 2
+    retry_sleep_sec: 1.0
+    minute_batch_timeout_sec: 180
+    timeout_sec: 10800
+    single_quote_subscription_limit: 50
+    whole_quote_markets:
+    - SH
+    - SZ

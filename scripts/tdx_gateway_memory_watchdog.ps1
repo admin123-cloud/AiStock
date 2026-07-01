@@ -2,12 +2,18 @@ param(
   [double]$ThresholdGB = 16,
   [int]$Port = 8765,
   [int]$IntervalSeconds = 30,
+  [switch]$EnsureRunning,
+  [int]$RestartCooldownSeconds = 90,
+  [string]$StartScript = "",
   [string]$LogFile = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $RootDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+if (-not $StartScript) {
+  $StartScript = Join-Path $RootDir "scripts\start_tdx_gateway.bat"
+}
 if (-not $LogFile) {
   $LogDir = Join-Path $RootDir "runtime\logs"
   if (-not (Test-Path -LiteralPath $LogDir)) {
@@ -35,6 +41,28 @@ if (-not (Test-Path -LiteralPath $LogFile)) {
 }
 
 $thresholdBytes = [int64]($ThresholdGB * 1GB)
+$lastRestartAt = [datetime]::MinValue
+
+function Start-Gateway {
+  param([string]$Reason)
+  if (-not (Test-Path -LiteralPath $StartScript)) {
+    Write-Sample "$(Get-Date -Format "yyyy-MM-dd HH:mm:ss"),,0,0,0,,$ThresholdGB,start_script_missing:$StartScript"
+    return
+  }
+  $elapsed = ([datetime]::Now - $script:lastRestartAt).TotalSeconds
+  if ($elapsed -lt $RestartCooldownSeconds) {
+    Write-Sample "$(Get-Date -Format "yyyy-MM-dd HH:mm:ss"),,0,0,0,,$ThresholdGB,restart_cooldown:$Reason"
+    return
+  }
+  $script:lastRestartAt = [datetime]::Now
+  try {
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$StartScript`"" -WorkingDirectory $RootDir -WindowStyle Hidden | Out-Null
+    Write-Sample "$(Get-Date -Format "yyyy-MM-dd HH:mm:ss"),,0,0,0,,$ThresholdGB,restart_requested:$Reason"
+  } catch {
+    $message = $_.Exception.Message -replace ',', ';'
+    Write-Sample "$(Get-Date -Format "yyyy-MM-dd HH:mm:ss"),,0,0,0,,$ThresholdGB,restart_failed:$message"
+  }
+}
 
 while ($true) {
   $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -45,6 +73,9 @@ while ($true) {
 
     if ($processes.Count -eq 0) {
       Write-Sample "$stamp,,0,0,0,$freeVirtualGB,$ThresholdGB,no_gateway"
+      if ($EnsureRunning) {
+        Start-Gateway -Reason "no_gateway"
+      }
     }
 
     foreach ($process in $processes) {
@@ -61,6 +92,10 @@ while ($true) {
         $action = "stop_threshold_exceeded"
         try {
           Stop-Process -Id $pidValue -Force -ErrorAction Stop
+          if ($EnsureRunning) {
+            Start-Sleep -Seconds 5
+            Start-Gateway -Reason "threshold_exceeded"
+          }
         } catch {
           $action = "stop_failed:$($_.Exception.Message -replace ',', ';')"
         }

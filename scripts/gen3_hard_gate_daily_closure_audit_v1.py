@@ -165,9 +165,6 @@ def _risk_state(closed: list[dict[str, Any]]) -> RiskState:
     elif consecutive >= 0.20:
         action = "pause_new_buy"
         reason = "consecutive_realized_loss_pause_new_buy"
-    elif recent_hard_stop >= 2:
-        action = "pause_new_buy"
-        reason = "hard_stop_cooldown_pause_new_buy"
     elif current_dd <= -0.15:
         action = "reduce_risk"
         reason = "mtm_drawdown_reduce_risk"

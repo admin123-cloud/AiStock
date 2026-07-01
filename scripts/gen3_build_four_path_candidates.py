@@ -595,7 +595,7 @@ def build_candidates(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build G3 four-path independent daily candidate sources.")
     parser.add_argument("--start-date", default="2020-01-01")
-    parser.add_argument("--end-date", default="2026-05-29")
+    parser.add_argument("--end-date", default=pd.Timestamp.today().strftime("%Y-%m-%d"))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--top-n", type=int, default=20, help="Max candidates per chain per signal day.")
     parser.add_argument("--min-amount20", type=float, default=30000.0, help="20-day avg amount liquidity floor; local amount unit follows kline_daily.")

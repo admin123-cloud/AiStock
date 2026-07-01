@@ -4,7 +4,7 @@
       <div class="title-block">
         <div class="eyebrow">第三代定型策略</div>
         <h1>G3 工作台</h1>
-        <p>五策略统一调度：机构主升、强势突破、震荡弱势修复、恐慌出清修复、量能续强补位。页面只展示影子/纸面执行，正式自动下单保持关闭。</p>
+        <p>正式实盘路由聚焦机构主升、强势突破、震荡弱势修复和恐慌出清修复；量能续强补位已退役为观察源。</p>
       </div>
       <div class="top-actions">
         <el-button :loading="loading" @click="load(false)">刷新页面</el-button>
@@ -100,19 +100,6 @@
         <el-table-column label="触发原因" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">{{ exitReasonText(row) }}</template>
         </el-table-column>
-        <el-table-column label="PTrade" width="120">
-          <template #default="{ row }">
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :loading="isPtradeSellSubmitting(row)"
-              @click="submitPtradeSellOrder(row)"
-            >
-              模拟卖出
-            </el-button>
-          </template>
-        </el-table-column>
         <el-table-column label="退出合同" min-width="240" show-overflow-tooltip>
           <template #default="{ row }">{{ exitContractText(row) }}</template>
         </el-table-column>
@@ -185,8 +172,8 @@
     <section class="panel action-panel">
       <div class="panel-head">
         <div>
-          <h2>下一交易日买入关注</h2>
-          <p>买入候选是为下一个交易日准备的；先用真实账户回答还能买多少，最终买入仓位受真实持仓和现金约束。</p>
+          <h2>买入建议</h2>
+          <p>买入建议按当前策略候选批次展示；先用真实账户回答还能买多少，最终买入仓位受真实持仓、现金和交易时点约束。</p>
         </div>
         <el-tag :type="realAccountBuyCapacityType" effect="dark">
           {{ realAccountBuyCapacityText }}
@@ -251,25 +238,16 @@
           >
             {{ selectedPaperExecution ? '已记录纸面执行' : '记录纸面执行' }}
           </el-button>
-          <el-button
-            type="success"
-            plain
-            :loading="ptradeBuySubmitting"
-            :disabled="!canSubmitPtradeBuy"
-            @click="submitSelectedPtradeBuyOrder"
-          >
-            PTrade模拟买入
-          </el-button>
         </div>
       </div>
 
-      <el-empty v-else description="暂无下一交易日合格买入候选票据" />
+      <el-empty v-else description="暂无合格买入建议票据" />
 
       <div class="account-subhead shadow-subhead">
         <h3>{{ shadowTicketTableTitle }}</h3>
         <small>{{ shadowTicketTableExplain }}</small>
       </div>
-      <el-table :data="displayShadowTickets" stripe size="small" empty-text="暂无下一交易日买入候选票据">
+      <el-table :data="displayShadowTickets" stripe size="small" empty-text="暂无买入建议票据">
         <el-table-column prop="code" label="代码" width="110" />
         <el-table-column prop="name" label="名称" min-width="110" />
         <el-table-column prop="route_label" label="路由" width="120" />
@@ -317,98 +295,6 @@
         </el-table-column>
       </el-table>
 
-    </section>
-
-    <section class="panel ptrade-panel">
-      <div class="panel-head">
-        <div>
-          <h2>PTrade 模拟交易通道</h2>
-          <p>跟踪 G3 买入/卖出信号写入 PTrade 文件桥后的消费状态；当前仍保持 dry_run，不打开真实下单。</p>
-        </div>
-        <div class="ops-actions">
-          <el-tag :type="ptradeSimulationReady ? 'success' : 'warning'" effect="dark">
-            {{ ptradeSimulationReady ? '模拟通道可用' : '等待PTrade心跳' }}
-          </el-tag>
-          <el-button size="small" :loading="ptradeStatusLoading" @click="loadPtradeStatus">刷新PTrade状态</el-button>
-          <el-button size="small" type="primary" plain :loading="ptradeE2eLoading" @click="runPtradeE2eAcceptance">一键模拟验收</el-button>
-          <el-button size="small" type="warning" plain :loading="ptradeInternalAcceptanceLoading" @click="runPtradeInternalAcceptance">内部策略验收</el-button>
-        </div>
-      </div>
-      <div class="ptrade-grid">
-        <div class="ptrade-card">
-          <span>桥接目录</span>
-          <strong>{{ ptradeBridgeStatus.bridge_dir || '--' }}</strong>
-          <small>{{ ptradeStatus?.simulation_message || '--' }}</small>
-        </div>
-        <div class="ptrade-card">
-          <span>消费者来源</span>
-          <strong>{{ ptradeConsumerText }}</strong>
-          <small>{{ ptradeStatus?.implementation_message || '--' }}</small>
-        </div>
-        <div class="ptrade-card">
-          <span>PTrade心跳</span>
-          <strong>{{ ptradeReadiness.ptrade_heartbeat_recent ? '新鲜' : '缺失/过期' }}</strong>
-          <small>age {{ fmt(ptradeBridgeStatus.ptrade_heartbeat_age_seconds, 1) }}s / live {{ ptradeReadiness.ptrade_live_order_enabled ? 'on' : 'off' }}</small>
-        </div>
-        <div class="ptrade-card">
-          <span>队列</span>
-          <strong>{{ ptradeBridgeStatus.pending_count || 0 }} / {{ ptradeBridgeStatus.processing_count || 0 }}</strong>
-          <small>pending / processing；stale {{ ptradeBridgeStatus.processing_stale_count || 0 }}</small>
-        </div>
-        <div class="ptrade-card">
-          <span>G3买入dry-run</span>
-          <strong>{{ ptradeStatus?.g3_dry_run_buy_proven ? '已证明' : '未证明' }}</strong>
-          <small>{{ latestPtradeBuyText }}</small>
-        </div>
-        <div class="ptrade-card">
-          <span>G3卖出dry-run</span>
-          <strong>{{ ptradeStatus?.g3_dry_run_sell_proven ? '已证明' : '未证明' }}</strong>
-          <small>{{ latestPtradeSellText }}</small>
-        </div>
-        <div class="ptrade-card">
-          <span>端到端验收</span>
-          <strong>{{ ptradeStatus?.g3_e2e_acceptance_ok ? '通过' : '未通过' }}</strong>
-          <small>{{ ptradeE2eText }}</small>
-        </div>
-        <div class="ptrade-card">
-          <span>PTrade内部策略</span>
-          <strong>{{ ptradeStatus?.g3_internal_strategy_acceptance_ok ? '已接管' : '未验收' }}</strong>
-          <small>{{ ptradeInternalAcceptanceText }}</small>
-        </div>
-      </div>
-
-      <div class="ptrade-execution-head">
-        <div>
-          <h3>G3 模拟执行流水</h3>
-          <small>只展示最近真实 G3 票据的纸面/PTrade dry-run 记录；验收测试单默认隐藏。</small>
-        </div>
-        <el-switch
-          v-model="showAcceptanceExecutions"
-          size="small"
-          active-text="显示验收测试单"
-          inactive-text="隐藏验收测试单"
-        />
-      </div>
-      <el-table :data="filteredPaperExecutions" stripe size="small" class="paper-table" empty-text="暂无 G3 模拟执行流水">
-        <el-table-column prop="created_at" label="记录时间" width="170" />
-        <el-table-column prop="code" label="代码" width="110" />
-        <el-table-column prop="name" label="名称" min-width="110" />
-        <el-table-column prop="route_label" label="路由" width="130" />
-        <el-table-column label="方向" width="78">
-          <template #default="{ row }">{{ row.side || executionSideText(row) }}</template>
-        </el-table-column>
-        <el-table-column label="价格" width="90" align="right">
-          <template #default="{ row }">{{ price(row.execution_price) }}</template>
-        </el-table-column>
-        <el-table-column prop="quantity" label="数量" width="90" align="right" />
-        <el-table-column label="金额" width="110" align="right">
-          <template #default="{ row }">{{ fmt(row.notional, 0) }}</template>
-        </el-table-column>
-        <el-table-column label="硬止损" width="90" align="right">
-          <template #default="{ row }">{{ price(row.hard_stop) }}</template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="150" show-overflow-tooltip />
-      </el-table>
     </section>
 
     <section class="panel ops-panel">
@@ -463,9 +349,9 @@
           <small>{{ monitorState.last_email_error || '暂无异常' }}</small>
         </div>
         <div class="ops-card locked">
-          <span>G2 补位融合</span>
+          <span>G2 补位状态</span>
           <strong>{{ parityCount }}/{{ parityTotal }}</strong>
-          <small>邮件告警待接入，正式下单仍关闭</small>
+          <small>已退出实盘交易，仅保留观察</small>
         </div>
       </div>
       <el-table :data="workflowChecks" stripe size="small" empty-text="暂无运行检查">
@@ -496,7 +382,7 @@
       <div class="panel-head">
         <div>
           <h2>G3 融合观察</h2>
-          <p>每天用 workflow、盘前烟测、30m 确认和纸面执行台账做一次验收；通过 30 个观察日后，确认 G2 补位能力已稳定归入 G3。</p>
+          <p>每天用 workflow、盘前烟测、30m 确认和纸面执行台账做一次验收；G2 补位只保留源和历史归因观察，不再作为实盘买入路线。</p>
         </div>
         <div class="ops-actions">
           <el-button size="small" :loading="observationLoading" @click="loadObservations">刷新观察</el-button>
@@ -600,13 +486,13 @@
       </div>
       <div class="metric-card" :class="g2SupplementStatus.ok ? 'ok' : 'blocked'">
         <span>G2补位源</span>
-        <strong>{{ g2SupplementStatus.ok ? '新鲜' : '过期' }}</strong>
+        <strong>{{ g2SupplementStatus.live_enabled ? '启用' : '已退役' }}</strong>
         <small>{{ g2SupplementStatusText }}</small>
       </div>
       <div class="metric-card accent">
         <span>默认合同</span>
         <strong>2槽 / 50%</strong>
-        <small>五策略统一调度；市场热度仅观察，极端热度禁开</small>
+        <small>四条实盘路由；G2补位仅观察</small>
       </div>
       <div class="metric-card">
         <span>账户风控</span>
@@ -707,12 +593,7 @@ import {
   runGen3StateAlphaRefreshOnce,
   runGen3StateAlphaShadowMonitorOnce,
   setGen3StateAlphaShadowMonitorConfig,
-  submitGen3StateAlphaPaperOrder,
-  getGen3StateAlphaPtradeStatus,
-  runGen3StateAlphaPtradeE2eAcceptance,
-  runGen3StateAlphaPtradeInternalStrategyAcceptance,
-  submitGen3StateAlphaPtradeBuyOrder,
-  submitGen3StateAlphaPtradeSellOrder
+  submitGen3StateAlphaPaperOrder
 } from '@/api/trading'
 
 const loading = ref(false)
@@ -722,11 +603,6 @@ const opsRunLoading = ref(false)
 const opsNotifyLoading = ref(false)
 const opsConfigLoading = ref(false)
 const paperSubmitting = ref(false)
-const ptradeBuySubmitting = ref(false)
-const ptradeSellSubmitting = ref({})
-const ptradeStatusLoading = ref(false)
-const ptradeE2eLoading = ref(false)
-const ptradeInternalAcceptanceLoading = ref(false)
 const observationLoading = ref(false)
 const observationRunLoading = ref(false)
 const brokerLoading = ref(false)
@@ -736,11 +612,9 @@ const payload = ref(null)
 const workflowPayload = ref(null)
 const refreshTask = ref({})
 const paperExecutions = ref([])
-const showAcceptanceExecutions = ref(false)
 const brokerPayload = ref(null)
 const brokerTradesPayload = ref(null)
 const observationPayload = ref(null)
-const ptradeStatus = ref(null)
 const candidateRoute = ref('all')
 
 const summary = computed(() => payload.value?.summary || {})
@@ -753,12 +627,7 @@ const nextTradeBuyTickets = computed(() => {
   const rows = Array.isArray(payload.value?.next_trade_buy_tickets)
     ? payload.value.next_trade_buy_tickets
     : afterhoursShadowTickets.value
-  const currentDateText = String(currentTicketDate.value || '')
-  const currentDate = /^\d{4}-\d{2}-\d{2}$/.test(currentDateText) ? currentDateText : ''
-  return rows.filter((item) => {
-    const entryDate = String(item?.entry_date || item?.planned_entry_ts || '').slice(0, 10)
-    return !currentDate || !entryDate || entryDate > currentDate
-  })
+  return rows
 })
 const selectedTicket = computed(() => nextTradeBuyTickets.value[0] || {})
 const displayShadowTickets = computed(() => nextTradeBuyTickets.value)
@@ -781,37 +650,7 @@ const brokerTrades = computed(() => Array.isArray(brokerTradesPayload.value?.bro
 const brokerCapital = computed(() => brokerPayload.value?.capital || {})
 const exitManagement = computed(() => payload.value?.exit_management || {})
 const exitSummary = computed(() => exitManagement.value?.summary || brokerPayload.value?.exit_advice_summary || {})
-const ptradeBridgeStatus = computed(() => ptradeStatus.value?.bridge_status || {})
-const ptradeReadiness = computed(() => ptradeStatus.value?.readiness || {})
-const ptradeSimulationReady = computed(() => !!ptradeStatus.value?.simulation_ready)
-const ptradeConsumerText = computed(() => {
-  const stage = ptradeStatus.value?.implementation_stage || ptradeBridgeStatus.value?.ptrade_consumer_type || ''
-  if (stage === 'ptrade_internal_strategy') return 'PTrade内部策略'
-  if (stage === 'ptrade_python_script_runner') return 'PTrade Python脚本'
-  if (stage === 'local_api_runner') return '本机dry-run runner'
-  if (stage === 'no_consumer_heartbeat' || stage === 'missing') return '无心跳'
-  return stage || '--'
-})
-const latestPtradeBuyText = computed(() => ptradeOrderText(ptradeStatus.value?.latest_g3_buy_order))
-const latestPtradeSellText = computed(() => ptradeOrderText(ptradeStatus.value?.latest_g3_sell_order))
-const ptradeE2eText = computed(() => {
-  const report = ptradeStatus.value?.g3_e2e_acceptance || {}
-  const buy = report.buy_ack_status || '--'
-  const sell = report.sell_ack_status || '--'
-  return `${report.completed_at || '--'} / BUY ${buy} / SELL ${sell}`
-})
-const ptradeInternalAcceptanceText = computed(() => {
-  const report = ptradeStatus.value?.g3_internal_strategy_acceptance || {}
-  if (report.message) return report.message
-  const buy = report.buy_ack_status || '--'
-  const sell = report.sell_ack_status || '--'
-  return `${report.completed_at || '--'} / BUY ${buy} / SELL ${sell}`
-})
-const filteredPaperExecutions = computed(() => (
-  paperExecutions.value
-    .filter((item) => showAcceptanceExecutions.value || !isAcceptancePaperExecution(item))
-    .slice(0, 30)
-))
+const filteredPaperExecutions = computed(() => paperExecutions.value.slice(0, 30))
 const brokerHoldingMarketValue = computed(() => {
   const explicitValue = Number(brokerCapital.value.holding_market_value ?? brokerCapital.value.market_value)
   if (Number.isFinite(explicitValue)) return explicitValue
@@ -898,28 +737,29 @@ const nextTradeTicketDate = computed(() => (
   || ''
 ))
 const shadowTicketTableTitle = computed(() => (
-  nextTradeTicketDate.value ? `${nextTradeTicketDate.value} 买入候选票据` : '下一交易日买入候选票据'
+  nextTradeTicketDate.value ? `${nextTradeTicketDate.value} 买入建议票据` : '买入建议票据'
 ))
 const shadowTicketTableExplain = computed(() => {
   if (nextTradeBuyTickets.value.length) {
     const currentDate = currentTicketDate.value
     const latestDate = nextTradeTicketDate.value || '--'
-    return `当前影子持仓仍按 ${currentDate} 台账管理；这里展示 ${latestDate} 应重点关注的买入候选，非交易时段不会自动改写当前持仓。`
+    return `这里展示 ${latestDate} 当前应重点关注的买入建议；候选日期用于标记批次，非交易时段不会自动改写当前持仓。当前影子台账日期 ${currentDate}。`
   }
-  return dateDisplayAnalysis.value.message || '当前没有独立的下一交易日买入候选；这里不会用正在持有的影子仓位兜底。'
+  return dateDisplayAnalysis.value.message || '当前没有独立的买入建议；这里不会用正在持有的影子仓位兜底。'
 })
 const dateDisplayStatusText = computed(() => {
   const status = dateDisplayAnalysis.value.status || ''
   const date = dateDisplayAnalysis.value.display_entry_date || dateDisplayAnalysis.value.expected_next_trade_date || nextTradeTicketDate.value || '--'
   if (status === 'ready') return `${date} 候选有效`
   if (status === 'filtered_non_trading') return '已过滤非交易日'
-  if (status === 'date_mismatch') return '日期不一致'
+  if (status === 'date_note') return '日期提示'
+  if (status === 'date_mismatch') return '日期提示'
   return `${date} 暂无候选`
 })
 const dateDisplayTagType = computed(() => {
   const status = dateDisplayAnalysis.value.status || ''
   if (status === 'ready') return 'success'
-  if (status === 'filtered_non_trading' || status === 'date_mismatch') return 'warning'
+  if (status === 'filtered_non_trading' || status === 'date_note' || status === 'date_mismatch') return 'warning'
   return 'info'
 })
 const shadowHoldingExplainText = computed(() => {
@@ -949,9 +789,7 @@ const g2SupplementStatusText = computed(() => {
 })
 const g2SupplementEnabled = computed(() => (
   truthy(summary.value.g2_gap_supplement_enabled)
-  || g2SupplementRows.value > 0
-  || g2SupplementCandidates.value.length > 0
-  || g2SupplementTickets.value.length > 0
+  || truthy(summary.value.g2_gap_supplement_live_enabled)
 ))
 const g2SupplementRows = computed(() => Number(
   summary.value.g2_gap_supplement_rows
@@ -1060,14 +898,6 @@ const canSubmitPaperOrder = computed(() => (
   && !selectedPaperExecution.value
 ))
 
-const canSubmitPtradeBuy = computed(() => (
-  !!selectedTicket.value?.code
-  && truthy(selectedTicket.value?.qualified_shadow_buy)
-  && truthy(selectedTicket.value?.m30_confirmed)
-  && selectedTicketExecutablePositionPct.value > 0.001
-  && !ptradeBuySubmitting.value
-))
-
 const candidateRouteOptions = computed(() => {
   const routes = new Map([['all', '全部']])
   candidates.value.forEach((item) => {
@@ -1120,18 +950,6 @@ function findPaperExecution(row) {
   }) || null
 }
 
-function isAcceptancePaperExecution(row) {
-  const haystack = [
-    row?.source,
-    row?.name,
-    row?.ticket_key,
-    row?.notes,
-    row?.execution_id,
-    row?.ptrade_order_id
-  ].map((item) => String(item || '').toLowerCase()).join(' ')
-  return ['e2e', 'acceptance', 'smoke', 'probe', 'gen3-ptrade-e2e', 'gen3 ptrade e2e'].some((token) => haystack.includes(token))
-}
-
 function executionSideText(row) {
   const status = String(row?.status || '').toLowerCase()
   if (status.includes('sell') || status.includes('卖')) return 'SELL'
@@ -1161,19 +979,27 @@ function isShadowLedgerSessionCreatedAt(value) {
 }
 
 function currentShadowPrice(row) {
-  const direct = Number(row?.current_price ?? row?.latest_price ?? row?.last_price ?? row?.close)
-  if (Number.isFinite(direct) && direct > 0) return direct
+  const direct = firstPositiveNumber(row?.current_price, row?.latest_price, row?.last_price, row?.close)
+  if (direct !== null) return direct
   const code = String(row?.code || row?.code_raw || '').toUpperCase()
   const latest = latestCandidateByCode.value.get(code) || {}
-  const fallback = Number(
-    latest.current_price
-    ?? latest.latest_price
-    ?? latest.last_price
-    ?? latest.close
-    ?? latest.reference_close
-    ?? latest.execution_price
+  const fallback = firstPositiveNumber(
+    latest.current_price,
+    latest.latest_price,
+    latest.last_price,
+    latest.close,
+    latest.reference_close,
+    latest.execution_price
   )
-  return Number.isFinite(fallback) && fallback > 0 ? fallback : null
+  return fallback
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const n = Number(value)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return null
 }
 
 function shadowPnlRatio(row) {
@@ -1269,7 +1095,8 @@ function plannedEntryDisplayText(row) {
 function exitContractText(row) {
   const text = String(row?.exit_contract || '')
   if (!text) return '暂无退出合同'
-  if (text.includes('2-slot compound default')) return '二槽复利合同：30m 跌破硬止损 -12% 全部退出；上涨 +12% 先卖一半；止盈后若跌破前一日低点，卖出剩余仓位；连续硬止损后暂停新买。'
+  if (text.includes('institutional mainwave dynamic contract')) return '机构主升动态合同：2槽、单槽50%；index_mom60<=5%；连续2笔已平仓机构主升亏损后暂停新买至少3个交易日，行情恢复后重启，最多15日复评；30m硬止损-12%，上涨+12%先卖一半，剩余仓按前低保护。'
+  if (text.includes('2-slot compound default')) return '二槽复利合同：30m硬止损-12%；上涨+12%先卖一半；剩余仓按前一日低点保护；机构主升新买冷却按连续2笔已平仓亏损的动态规则执行。'
   if (text.includes('G2 gap supplement')) return 'G2补位合同：使用G2成熟买点和止损线；30m 硬止损约 -5%；上涨约 +10% 先减半；后续按结构转弱或前低跌破退出。'
   if (text.includes('panic capitulation repair')) return '恐慌出清修复合同：恐慌释放后介入；结构止损约 -5%，硬止损约 -8%；上涨约 +8% 先减半；剩余仓位按前低跌破或30m转弱退出。'
   if (text.includes('range weak repair')) return '震荡弱势修复合同：弱势/震荡修复介入；结构止损约 -6%，硬止损约 -10%；上涨约 +8% 先减半；剩余仓位按前低跌破或30m转弱退出。'
@@ -1292,8 +1119,8 @@ function tradeDecisionExplain(row) {
   if (afterhoursShadowTickets.value.length) {
     parts.push(`这是 ${afterhoursTicketDate.value || '--'} 盘后最新候选，不代表已经替换当前影子持仓。`)
   }
-  if (heatState === 'high_heat_reduce_position' || heatState === 'high_heat_observe') {
-    parts.push(`市场热度偏高仅作为观察项，仓位按当前策略合同计算为 ${pct(finalPct)}。`)
+  if (heatState === 'high_heat_reduce_position' || heatState === 'high_heat_observe' || heatState === 'institutional_mom60_gt_5_block') {
+    parts.push(`机构主升 mom60 超过 5% 时只观察，不进入影子盘或买入候选；当前仓位为 ${pct(finalPct)}。`)
   } else {
     parts.push(`仓位按当前策略合同计算为 ${pct(finalPct)}。`)
   }
@@ -1362,16 +1189,6 @@ function fmt(value, digits = 2) {
   return n.toFixed(digits)
 }
 
-function ptradeOrderText(order) {
-  if (!order) return '--'
-  const raw = order.raw || {}
-  const side = order.side || raw.side || ''
-  const code = order.code || raw.code || ''
-  const status = order.status || order._bridge_status || '--'
-  const updatedAt = order.updated_at || order.created_at || ''
-  return `${side} ${code} / ${status}${updatedAt ? ` / ${updatedAt}` : ''}`
-}
-
 function money(value) {
   if (value === null || value === undefined || value === '') return '--'
   const n = Number(value)
@@ -1390,7 +1207,7 @@ async function load(refresh = false) {
   else loading.value = true
   try {
     payload.value = await getGen3StateAlphaCurrent({ refresh, limit: 120 })
-    await Promise.all([loadOps(), loadPaperExecutions(), loadBrokerState(), loadObservations(), loadPtradeStatus()])
+    await Promise.all([loadOps(), loadPaperExecutions(), loadBrokerState(), loadObservations()])
     if (refresh) ElMessage.success('G3正式五策略已刷新')
   } catch (error) {
     ElMessage.warning(error?.message || '读取G3正式五策略失败')
@@ -1406,66 +1223,6 @@ async function loadPaperExecutions() {
     paperExecutions.value = Array.isArray(data?.paper_executions) ? data.paper_executions : []
   } catch (error) {
     paperExecutions.value = []
-  }
-}
-
-async function loadPtradeStatus() {
-  ptradeStatusLoading.value = true
-  try {
-    ptradeStatus.value = await getGen3StateAlphaPtradeStatus({})
-  } catch (error) {
-    ptradeStatus.value = {
-      ok: false,
-      simulation_ready: false,
-      simulation_message: error?.message || 'PTrade模拟通道状态不可用',
-      bridge_status: {},
-      readiness: {}
-    }
-  } finally {
-    ptradeStatusLoading.value = false
-  }
-}
-
-async function runPtradeE2eAcceptance() {
-  ptradeE2eLoading.value = true
-  try {
-    const result = await runGen3StateAlphaPtradeE2eAcceptance({
-      timeout_seconds: 30,
-      poll_seconds: 1
-    })
-    if (result?.ptrade_status) ptradeStatus.value = result.ptrade_status
-    else await loadPtradeStatus()
-    if (result?.ok) {
-      ElMessage.success('G3-PTrade模拟买卖验收通过')
-    } else {
-      ElMessage.warning(result?.acceptance?.message || 'G3-PTrade模拟买卖验收未通过')
-    }
-  } catch (error) {
-    ElMessage.warning(error?.message || 'G3-PTrade模拟买卖验收失败')
-  } finally {
-    ptradeE2eLoading.value = false
-  }
-}
-
-async function runPtradeInternalAcceptance() {
-  ptradeInternalAcceptanceLoading.value = true
-  try {
-    const result = await runGen3StateAlphaPtradeInternalStrategyAcceptance({
-      wait_seconds: 0,
-      timeout_seconds: 30,
-      poll_seconds: 1
-    })
-    if (result?.ptrade_status) ptradeStatus.value = result.ptrade_status
-    else await loadPtradeStatus()
-    if (result?.ok) {
-      ElMessage.success('PTrade内部策略G3买卖验收通过')
-    } else {
-      ElMessage.warning(result?.acceptance?.message || 'PTrade内部策略尚未接管G3买卖通道')
-    }
-  } catch (error) {
-    ElMessage.warning(error?.message || 'PTrade内部策略验收失败')
-  } finally {
-    ptradeInternalAcceptanceLoading.value = false
   }
 }
 
@@ -1570,7 +1327,7 @@ async function submitSelectedPaperOrder() {
     })
     if (result?.ok) {
       ElMessage.success('G3 纸面执行已记录')
-      await Promise.all([loadPaperExecutions(), loadOps(), loadObservations(), loadPtradeStatus()])
+      await Promise.all([loadPaperExecutions(), loadOps(), loadObservations()])
     } else {
       ElMessage.warning(result?.message || 'G3 纸面执行记录失败')
     }
@@ -1578,87 +1335,6 @@ async function submitSelectedPaperOrder() {
     ElMessage.warning(error?.message || 'G3 纸面执行记录失败')
   } finally {
     paperSubmitting.value = false
-  }
-}
-
-function ptradeSellKey(row) {
-  return String(row?.ticket_key || row?.candidate_key || row?.trade_key || row?.code || row?.code_raw || '')
-}
-
-function isPtradeSellSubmitting(row) {
-  return !!ptradeSellSubmitting.value[ptradeSellKey(row)]
-}
-
-async function submitSelectedPtradeBuyOrder() {
-  if (!canSubmitPtradeBuy.value) return
-  ptradeBuySubmitting.value = true
-  try {
-    const ticket = selectedTicket.value || {}
-    const result = await submitGen3StateAlphaPtradeBuyOrder({
-      ticket_key: selectedTicketKey.value,
-      code: ticket.code || ticket.code_raw,
-      price: ticket.reference_close,
-      position_pct: selectedTicketExecutablePositionPct.value,
-      base_capital: brokerCapital.value.total_capital,
-      dry_run: true,
-      require_approval: true,
-      approved: false,
-      reason: 'G3 real-account capacity buy',
-      notes: 'submitted from G3 formal five strategy page'
-    })
-    if (result?.ok) {
-      ElMessage.success(`PTrade模拟买入已入队：${result.order?.order_id || '--'}`)
-      await Promise.all([loadPaperExecutions(), loadOps(), loadObservations(), loadPtradeStatus()])
-    } else {
-      ElMessage.warning(result?.message || 'PTrade模拟买入提交失败')
-    }
-  } catch (error) {
-    ElMessage.warning(error?.message || 'PTrade模拟买入提交失败')
-  } finally {
-    ptradeBuySubmitting.value = false
-  }
-}
-
-async function submitPtradeSellOrder(row) {
-  const key = ptradeSellKey(row)
-  if (!key || isPtradeSellSubmitting(row)) return
-  ptradeSellSubmitting.value = { ...ptradeSellSubmitting.value, [key]: true }
-  try {
-    const result = await submitGen3StateAlphaPtradeSellOrder({
-      ticket_key: row?.ticket_key || row?.candidate_key || row?.trade_key,
-      code: row?.code || row?.code_raw,
-      name: row?.name || row?.stock_name,
-      quantity: row?.suggested_sell_quantity || row?.quantity || row?.shares || row?.available_shares,
-      price: row?.current_price_for_exit || row?.current_price || row?.reference_close || row?.execution_price || row?.entry_price,
-      entry_date: row?.entry_date || row?.signal_date,
-      route: row?.route,
-      position_pct: row?.position_pct || row?.slot_pct,
-      management_action: row?.management_action || row?.exit_action_label,
-      exit_reason: row?.exit_reason || row?.management_action || 'manual_g3_exit',
-      current_price: row?.current_price_for_exit || row?.current_price,
-      suggested_sell_ratio: row?.suggested_sell_ratio,
-      trigger_price: row?.trigger_price,
-      hard_stop: row?.hard_stop,
-      structure_stop: row?.structure_stop || row?.previous_low_stop,
-      take_profit_1: row?.take_profit_1,
-      exit_contract: row?.exit_contract,
-      dry_run: true,
-      require_approval: true,
-      approved: false,
-      notes: 'submitted from G3 formal five strategy page'
-    })
-    if (result?.ok) {
-      ElMessage.success(`PTrade模拟卖出已入队：${result.order?.order_id || '--'}`)
-      await Promise.all([loadPaperExecutions(), loadOps(), loadObservations(), loadBrokerState(), loadPtradeStatus()])
-    } else {
-      ElMessage.warning(result?.message || 'PTrade模拟卖出提交失败')
-    }
-  } catch (error) {
-    ElMessage.warning(error?.message || 'PTrade模拟卖出提交失败')
-  } finally {
-    const next = { ...ptradeSellSubmitting.value }
-    delete next[key]
-    ptradeSellSubmitting.value = next
   }
 }
 
@@ -1721,7 +1397,7 @@ async function toggleMonitor() {
 
 onMounted(async () => {
   await load(false)
-  await Promise.all([loadOps(), loadPaperExecutions(), loadBrokerState(), loadObservations(), loadPtradeStatus()])
+  await Promise.all([loadOps(), loadPaperExecutions(), loadBrokerState(), loadObservations()])
 })
 </script>
 
@@ -1810,11 +1486,6 @@ onMounted(async () => {
   gap: 10px;
 }
 
-.ptrade-grid {
-  display: grid;
-  grid-template-columns: 1.5fr repeat(6, minmax(0, 1fr));
-  gap: 10px;
-}
 
 .ops-card {
   min-height: 86px;
@@ -1828,39 +1499,9 @@ onMounted(async () => {
   background: #f8fafc;
 }
 
-.ptrade-card {
-  min-height: 86px;
-  border: 1px solid #e4e9f1;
-  border-left: 4px solid #12b76a;
-  border-radius: 8px;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: #f8fafc;
-}
 
-.ptrade-card span {
-  color: #667085;
-  font-size: 12px;
-}
 
-.ptrade-card strong {
-  color: #1f2a44;
-  font-size: 16px;
-  line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.ptrade-card small {
-  color: #667085;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .ops-card.ok {
   border-left-color: #12b76a;
@@ -2190,23 +1831,8 @@ onMounted(async () => {
   line-height: 1.2;
 }
 
-.ptrade-execution-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 14px;
-}
 
-.ptrade-execution-head h3 {
-  margin: 0 0 4px;
-  color: #1f2a44;
-  font-size: 14px;
-}
 
-.ptrade-execution-head small {
-  color: #667085;
-}
 
 .check-row strong {
   font-size: 14px;
@@ -2244,8 +1870,7 @@ onMounted(async () => {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .ops-grid,
-  .ptrade-grid {
+  .ops-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
@@ -2274,7 +1899,6 @@ onMounted(async () => {
 
   .metric-grid,
   .ops-grid,
-  .ptrade-grid,
   .risk-strip,
   .summary-list,
   .summary-list.three {

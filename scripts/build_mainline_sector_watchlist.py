@@ -46,9 +46,13 @@ def _pct_text(value: Any) -> str:
 def _latest_trade_date() -> str:
     df = clickhouse_query_df(
         """
-        SELECT max(trade_date) AS trade_date
-        FROM kline_daily
-        WHERE code LIKE '%.SH' OR code LIKE '%.SZ'
+        SELECT max(k.trade_date) AS trade_date
+        FROM kline_daily k
+        JOIN trade_calendar c
+          ON c.trade_date = k.trade_date
+         AND c.market = 'SH'
+         AND c.is_trading = 1
+        WHERE k.code LIKE '%.SH' OR k.code LIKE '%.SZ'
         """
     )
     if df.empty or pd.isna(df.iloc[0]["trade_date"]):

@@ -21,6 +21,8 @@ from statistics import median
 from urllib.parse import quote
 from uuid import uuid4
 
+import pandas as pd
+
 from utils.database import db
 from utils.market_warehouse import (
     clean_minute_bars_df,
@@ -87,7 +89,16 @@ def _as_date(value: Any):
 def _latest_daily_trade_date(session: Session):
     if clickhouse_available():
         try:
-            latest = clickhouse_scalar("SELECT MAX(trade_date) FROM kline_daily")
+            latest = clickhouse_scalar(
+                """
+                SELECT MAX(k.trade_date)
+                FROM kline_daily k
+                JOIN trade_calendar c
+                  ON c.trade_date = k.trade_date
+                 AND c.market = 'SH'
+                 AND c.is_trading = 1
+                """
+            )
             if latest:
                 return _as_date(latest)
         except Exception as exc:
@@ -1911,7 +1922,7 @@ def select_stocks_by_new_highs(request: dict):
 
     session = DatabaseSessionManager.get_session()
     try:
-        end_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        end_date = _latest_daily_trade_date(session)
         if not end_date:
             return {
                 "trade_date": None,
@@ -2049,8 +2060,7 @@ class StockDataSyncer:
         Returns:
             同步结果
         """
-        from data_fetcher.sources.tdxquant import TdxQuantDataSource
-        from utils.config import ConfigManager
+        from data_fetcher.manager import DataSourceManager
         
         session = DatabaseSessionManager.get_session()
         try:
@@ -2062,8 +2072,50 @@ class StockDataSyncer:
             logger.info(f"开始{'轻量' if light_mode else ''}同步股票{code} 的数据")
             
             # 创建TdxQuant客户端（使用连接池）
-            tdxquant = TdxQuantDataSource(name="tdxquant", config={"enabled": True, "priority": 0})
-            logger.info(f"使用TdxQuant数据源（连接池）")
+            data_sources = DataSourceManager()
+            logger.info("使用统一数据源管理器同步股票数据")
+
+            class _UnifiedHistoryAdapter:
+                def __init__(self, manager):
+                    self.manager = manager
+
+                def get_market_data(
+                    self,
+                    field_list=None,
+                    stock_list=None,
+                    start_time=None,
+                    end_time=None,
+                    count=None,
+                    dividend_type=None,
+                    period="daily",
+                    fill_data=None,
+                ):
+                    target_code = (stock_list or [code])[0]
+                    df = self.manager.get_stock_history(
+                        target_code,
+                        str(start_time or ""),
+                        str(end_time or ""),
+                        period=period,
+                    )
+                    if df is None or df.empty:
+                        return {}
+                    work = df.copy()
+                    work["date"] = pd.to_datetime(work.get("date", work.get("datetime")), errors="coerce")
+                    work = work.dropna(subset=["date"]).sort_values("date")
+                    index = work["date"].dt.strftime("%Y-%m-%d")
+                    return {
+                        "Open": pd.DataFrame({target_code: pd.to_numeric(work["open"], errors="coerce").values}, index=index),
+                        "High": pd.DataFrame({target_code: pd.to_numeric(work["high"], errors="coerce").values}, index=index),
+                        "Low": pd.DataFrame({target_code: pd.to_numeric(work["low"], errors="coerce").values}, index=index),
+                        "Close": pd.DataFrame({target_code: pd.to_numeric(work["close"], errors="coerce").values}, index=index),
+                        "Volume": pd.DataFrame({target_code: pd.to_numeric(work["volume"], errors="coerce").fillna(0).values}, index=index),
+                        "Amount": pd.DataFrame({target_code: pd.to_numeric(work["amount"], errors="coerce").fillna(0).values}, index=index),
+                    }
+
+                def get_stock_history(self, stock_code, start_date, end_date, period):
+                    return self.manager.get_stock_history(stock_code, start_date, end_date, period=period)
+
+            market_source = _UnifiedHistoryAdapter(data_sources)
             
             sync_results = []
             synced_count = 0
@@ -2117,7 +2169,7 @@ class StockDataSyncer:
                             full_code = f"{code}.BJ"
                     
                     # 获取K线数据（前复权）
-                    data = tdxquant.get_market_data(
+                    data = market_source.get_market_data(
                         field_list=[],
                         stock_list=[full_code],
                         start_time=start_date,
@@ -2241,7 +2293,7 @@ class StockDataSyncer:
             # 同步分钟线数据
             try:
                 logger.info("同步分钟线数据...")
-                minute_periods = [1, 5, 15, 30, 60]
+                minute_periods = [5, 15, 30, 60]
                 minute_synced = 0
                 minute_skipped = 0
                 
@@ -2269,22 +2321,21 @@ class StockDataSyncer:
                         start_date = (datetime.now() - timedelta(days=2)).strftime('%Y%m%d')
                         
                         # 转换周期格式（使用统一的时间单位标准）
-                        from utils.period_constants import PERIOD_TO_TDX
                         if period_minutes == 1:
-                            pytdx_period = PERIOD_TO_TDX.get("1m", "1m")
+                            pytdx_period = "1m"
                         elif period_minutes == 5:
-                            pytdx_period = PERIOD_TO_TDX.get("5m", "5m")
+                            pytdx_period = "5m"
                         elif period_minutes == 15:
-                            pytdx_period = PERIOD_TO_TDX.get("15m", "15m")
+                            pytdx_period = "15m"
                         elif period_minutes == 30:
-                            pytdx_period = PERIOD_TO_TDX.get("30m", "30m")
+                            pytdx_period = "30m"
                         elif period_minutes == 60:
-                            pytdx_period = PERIOD_TO_TDX.get("60m", "60m")
+                            pytdx_period = "60m"
                         else:
                             continue
                         
                         # 获取分钟线数据
-                        minute_klines_df = tdxquant.get_stock_history(code, start_date, end_date, pytdx_period)
+                        minute_klines_df = market_source.get_stock_history(code, start_date, end_date, pytdx_period)
                         
                         # 转换为字典列表
                         minute_klines = []
@@ -2637,10 +2688,14 @@ def get_stocks_with_limit(
                 logger.warning(f"ClickHouse stock list latest kline fallback to SQLAlchemy engine: {exc}")
 
         items = []
+        latest_trade_date = _latest_daily_trade_date(session)
         for stock in stocks:
             latest_kline = latest_kline_map.get(stock.code)
             if latest_kline is None:
-                latest_kline = session.query(KlineDaily).filter(KlineDaily.code == stock.code).order_by(KlineDaily.trade_date.desc()).first()
+                fallback_query = session.query(KlineDaily).filter(KlineDaily.code == stock.code)
+                if latest_trade_date:
+                    fallback_query = fallback_query.filter(KlineDaily.trade_date <= latest_trade_date)
+                latest_kline = fallback_query.order_by(KlineDaily.trade_date.desc()).first()
             row = {
                 "code": stock.code,
                 "name": stock.name,
@@ -3011,18 +3066,18 @@ def update_stock_list():
     t_swap_done = t0
 
     try:
-        from data_fetcher.sources.tdxquant import TdxQuantDataSource
+        from data_fetcher.manager import DataSourceManager
         import os
         from clickhouse_connect import get_client
         from datetime import date as dt_date
 
-        tdxquant = TdxQuantDataSource("tdxquant", {"enabled": True, "priority": 0})
+        data_sources = DataSourceManager()
         try:
             from api.system_config import task_manager
             task_manager.update_progress("update_stock_list", {"stage": "fetch", "message": "股票列表更新: 拉取中"})
         except Exception:
             pass
-        stock_list = tdxquant.get_stock_list(market="ALL", stock_type="stock")
+        stock_list = data_sources.get_stock_list(market="ALL", stock_type="stock")
         t_fetch_done = time.perf_counter()
         if not stock_list:
             logger.error("Stock list is empty")
@@ -3081,7 +3136,7 @@ def update_stock_list():
 
             stock_info = None
             try:
-                stock_info = tdxquant.get_stock_info(code)
+                stock_info = data_sources.call_with_failover("get_stock_info", code)
             except Exception as exc:
                 logger.warning(f"Load stock info failed for {code}: {exc}")
 
@@ -3366,7 +3421,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
 @router.post("/update-indices")
 def update_indices():
     """更新指数列表到 ClickHouse。"""
-    from data_fetcher.sources.tdxquant import TdxQuantDataSource
+    from data_fetcher.manager import DataSourceManager
     from clickhouse_connect import get_client
     import logging
     import os
@@ -3380,14 +3435,14 @@ def update_indices():
     t_swap_done = t0
 
     try:
-        tdxquant = TdxQuantDataSource(name="tdxquant", config={"enabled": True, "priority": 0})
+        data_sources = DataSourceManager()
         logger.info("开始更新指数列表")
         try:
             from api.system_config import task_manager
             task_manager.update_progress("update_index_list", {"stage": "fetch", "message": "指数列表更新: 拉取中"})
         except Exception:
             pass
-        indices = tdxquant.get_stock_list(market="9", list_type=1)
+        indices = data_sources.call_with_failover("get_stock_list", market="9", list_type=1)
         t_fetch_done = time.perf_counter()
         if not indices:
             logger.warning("指数列表为空")
@@ -3850,7 +3905,7 @@ def select_stocks_by_main_rise_build_up(
 
     session = DatabaseSessionManager.get_session()
     try:
-        end_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        end_date = _latest_daily_trade_date(session)
         if not end_date:
             params = {
                 "days": days,
@@ -4068,7 +4123,7 @@ def analyze_main_rise_build_up_history(
 
     session = DatabaseSessionManager.get_session()
     try:
-        latest_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        latest_date = _latest_daily_trade_date(session)
         if not latest_date:
             summary = {"total_signals": 0, "formed_signals": 0, "hit_rate": 0, "stock_count": 0}
             params = {
@@ -4332,7 +4387,7 @@ def analyze_main_rise_build_up_history_signals(
         if not stock:
             raise HTTPException(status_code=404, detail=f"股票 {code} 不存在")
 
-        latest_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        latest_date = _latest_daily_trade_date(session)
         if not latest_date:
             return {"code": code, "name": stock.name, "signal_details": [], "total_signals": 0}
 
@@ -4673,7 +4728,7 @@ def select_stocks_by_oscillate_accumulate(
     session = DatabaseSessionManager.get_session()
     try:
         # 计算起始日期
-        end_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        end_date = _latest_daily_trade_date(session)
         if not end_date:
             return []
         
@@ -4774,7 +4829,7 @@ def select_stocks_by_trend_rebound_15d(request: dict):
 
     session = DatabaseSessionManager.get_session()
     try:
-        end_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        end_date = _latest_daily_trade_date(session)
         if not end_date:
             params_payload = {
                 "lookback_days": lookback_days,
@@ -5144,7 +5199,7 @@ def run_uptrend_backtest(request: dict, background_tasks: BackgroundTasks):
 
     session = DatabaseSessionManager.get_session()
     try:
-        latest_trade_date = session.query(func.max(KlineDaily.trade_date)).scalar()
+        latest_trade_date = _latest_daily_trade_date(session)
         if not latest_trade_date:
             raise HTTPException(status_code=400, detail="暂无可用日线数据")
 

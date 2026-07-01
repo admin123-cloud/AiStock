@@ -25,10 +25,13 @@ from utils.logger import get_logger
 logger = get_logger("main")
 
 
-def _strict_tdxquant_startup_enabled() -> bool:
-    value = str(os.environ.get("AISTOCK_STRICT_TDXQ_STARTUP", "0")).strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
+def _log_startup_scheduler_policy() -> None:
+    value = str(os.environ.get("AISTOCK_STARTUP_SCHEDULERS_ENABLED", "1")).strip().lower()
+    if value in {"0", "false", "no", "off"}:
+        logger.warning(
+            "AISTOCK_STARTUP_SCHEDULERS_ENABLED is set to a disabled value, "
+            "but startup schedulers are forced on by policy."
+        )
 
 
 @asynccontextmanager
@@ -42,20 +45,12 @@ async def lifespan(app: FastAPI):
         logger.error(f"Create tables failed: {exc}")
         raise
 
-    strict_tdxquant_startup = _strict_tdxquant_startup_enabled()
-    try:
-        from data_fetcher.sources.tdxquant_pool import tdxquant_pool
-
-        tdxquant_pool.require_available_for_startup(notify=strict_tdxquant_startup)
-        logger.info("TdxQuant startup health check passed")
-    except Exception as exc:
-        if strict_tdxquant_startup:
-            logger.error(f"TdxQuant startup health check failed: {exc}")
-            raise
-        logger.warning(f"TdxQuant startup health check failed, continuing in degraded mode: {exc}")
+    logger.info("TdxQuant startup health check skipped; QMT is the active market-data source")
 
     logger.info("AiStock Backend API started")
     logger.info("API docs: http://localhost:8000/docs")
+
+    _log_startup_scheduler_policy()
 
     try:
         from api.system_config import (

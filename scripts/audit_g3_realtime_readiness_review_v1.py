@@ -14,12 +14,558 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from api.gen3_state_alpha import PAPER_WATCH_REVIEWS_PATH, _broker_snapshot, get_gen3_state_alpha_current  # noqa: E402
-from scripts.ptrade_bridge_readiness_audit import run_audit as run_ptrade_audit  # noqa: E402
+from api.gen3_state_alpha import CANDIDATE_OMISSION_REVIEWS_PATH, DAILY_REVIEW_CHECKLIST_REVIEWS_PATH, FORMAL_ACTION_REVIEWS_PATH, NO_TRADE_DAY_REVIEWS_PATH, PAPER_EXECUTIONS_PATH, PAPER_WATCH_REVIEWS_PATH, PREMARKET_ACTION_ATTEMPTS_PATH, _broker_snapshot, get_gen3_state_alpha_current  # noqa: E402
 from utils.paths import report_path  # noqa: E402
 
 
 OUT_DIR = report_path("g3_realtime_readiness_review_v1")
+
+EMPTY_REPORT_COLUMNS = {
+    "next_trade_ticket_review.csv": [
+        "code",
+        "name",
+        "entry_date",
+        "route",
+        "strategy",
+        "risk_level",
+        "blocker_count",
+        "warning_count",
+        "blockers",
+        "warnings",
+        "notes",
+    ],
+    "ticket_review_checklist.csv": [
+        "rank",
+        "code",
+        "name",
+        "entry_date",
+        "route",
+        "strategy",
+        "checklist_level",
+        "formal_ready",
+        "formal_ready_reason",
+        "hidden_risks",
+        "manual_questions",
+        "action_recommendation",
+    ],
+    "natural_trade_consistency_review.csv": [
+        "rank",
+        "code",
+        "name",
+        "entry_date",
+        "consistency_score",
+        "consistency_grade",
+        "buy_point_logic",
+        "selection_logic",
+        "model_switch_logic",
+        "sell_point_logic",
+        "deductions",
+    ],
+    "natural_execution_decision_matrix.csv": [
+        "rank",
+        "code",
+        "name",
+        "entry_date",
+        "decision_level",
+        "execution_posture",
+        "source_deductions",
+        "required_before_execution",
+        "next_action",
+    ],
+    "pretrade_review_evidence.csv": [
+        "rank",
+        "code",
+        "name",
+        "entry_date",
+        "status",
+        "review_action",
+        "formal_ready",
+        "risk_acknowledged",
+        "confirmation_complete",
+        "next_action",
+    ],
+    "formal_launch_action_queue.csv": [
+        "priority",
+        "stage",
+        "severity",
+        "object",
+        "action",
+        "unlocks",
+        "source",
+        "review_key",
+        "action_status",
+        "review_result",
+        "review_result_label",
+        "issue_area",
+        "evidence",
+        "natural_decision",
+        "optimization_suggestion",
+        "review_note",
+        "source",
+        "updated_at",
+    ],
+    "paper_watch_followup.csv": [
+        "rank",
+        "code",
+        "name",
+        "entry_date",
+        "watch_result",
+        "watch_result_label",
+        "issue_area",
+        "hidden_risk",
+        "optimization_suggestion",
+        "next_action",
+    ],
+    "day1_paper_review_pack.csv": [
+        "rank",
+        "code",
+        "name",
+        "entry_date",
+        "route",
+        "strategy",
+        "launch_posture",
+        "priority",
+        "buy_point_review",
+        "selection_review",
+        "model_switch_review",
+        "exit_contract_review",
+        "hidden_risk_focus",
+        "next_action",
+    ],
+    "day1_after_close_review_queue.csv": [
+        "rank",
+        "code",
+        "name",
+        "entry_date",
+        "launch_posture",
+        "after_close_status",
+        "watch_result",
+        "issue_area",
+        "hidden_risk_focus",
+        "next_action",
+    ],
+    "daily_live_review_board.csv": [
+        "priority",
+        "stage",
+        "review_scope",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "review_status",
+        "formal_trade_required",
+        "issue_area",
+        "required_action",
+        "evidence",
+        "natural_decision",
+        "optimization_focus",
+        "source",
+        "review_key",
+        "ticket_key",
+    ],
+    "strategy_learning_backlog.csv": [
+        "priority",
+        "learning_status",
+        "issue_area",
+        "review_scope",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "problem_signal",
+        "evidence",
+        "suggested_learning",
+        "source",
+        "review_key",
+        "ticket_key",
+    ],
+    "live_hidden_risk_watchlist.csv": [
+        "priority",
+        "watch_status",
+        "risk_level",
+        "issue_area",
+        "review_scope",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "risk_signal",
+        "evidence_gap",
+        "next_review_action",
+        "natural_trade_boundary",
+        "source",
+        "review_key",
+        "ticket_key",
+    ],
+    "live_daily_review_execution_checklist.csv": [
+        "priority",
+        "review_window",
+        "checkpoint_time",
+        "review_axis",
+        "review_scope",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "risk_level",
+        "watch_status",
+        "review_status",
+        "review_result",
+        "review_result_label",
+        "review_note",
+        "updated_at",
+        "evidence_to_collect",
+        "pass_condition",
+        "fail_condition",
+        "target_action",
+        "natural_trade_boundary",
+        "source",
+        "review_key",
+        "ticket_key",
+        "duplicate_source_count",
+    ],
+    "live_daily_review_action_layers.csv": [
+        "priority",
+        "action_layer",
+        "layer_label",
+        "review_window",
+        "checkpoint_time",
+        "item_count",
+        "pending_count",
+        "validated_count",
+        "issue_found_count",
+        "continue_watch_count",
+        "high_risk_count",
+        "review_axes",
+        "first_action",
+        "evidence_focus",
+        "pass_condition",
+        "fail_condition",
+        "buy_permission_effect",
+        "operator_instruction",
+    ],
+    "daily_review_checklist_reviews.csv": [
+        "priority",
+        "review_key",
+        "ticket_key",
+        "review_axis",
+        "review_scope",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "review_status",
+        "review_result",
+        "review_result_label",
+        "issue_area",
+        "evidence",
+        "natural_decision",
+        "optimization_suggestion",
+        "review_note",
+        "source",
+        "updated_at",
+    ],
+    "formal_action_reviews.csv": [
+        "priority",
+        "review_key",
+        "object",
+        "action",
+        "source",
+        "review_status",
+        "review_result",
+        "review_result_label",
+        "issue_area",
+        "evidence",
+        "natural_decision",
+        "optimization_suggestion",
+        "review_note",
+        "updated_at",
+    ],
+    "first_live_decision_card.csv": [
+        "generated_at",
+        "entry_date",
+        "next_trade_entry_date",
+        "decision_status",
+        "decision_label",
+        "execution_posture",
+        "live_buy_allowed",
+        "paper_execution_allowed",
+        "auto_order_allowed",
+        "primary_reason",
+        "risk_tone",
+        "formal_launch_status",
+        "ticket_count",
+        "formal_pending_count",
+        "board_pending_count",
+        "issue_found_count",
+        "first_required_action",
+        "top_action_list",
+        "review_focus",
+        "locked_modes",
+        "next_review_trigger",
+    ],
+    "live_review_task_queue.csv": [
+        "priority",
+        "window",
+        "task_type",
+        "review_scope",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "task_status",
+        "formal_trade_required",
+        "action",
+        "acceptance",
+        "fallback",
+        "review_method",
+        "source",
+        "review_key",
+        "ticket_key",
+    ],
+    "review_coverage_dashboard.csv": [
+        "priority",
+        "review_scope",
+        "task_type",
+        "total_count",
+        "covered_count",
+        "pending_count",
+        "issue_found_count",
+        "continue_watch_count",
+        "formal_required_count",
+        "coverage_pct",
+        "coverage_status",
+        "next_action",
+    ],
+    "live_review_evidence_rubric.csv": [
+        "priority",
+        "review_scope",
+        "task_type",
+        "review_axes",
+        "task_count",
+        "formal_required_count",
+        "pending_count",
+        "evidence_required",
+        "decision_rule",
+        "optimization_boundary",
+        "promotion_rule",
+        "next_action",
+    ],
+    "live_premarket_command_sheet.csv": [
+        "priority",
+        "command_window",
+        "command_type",
+        "decision_gate",
+        "review_scope",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "current_status",
+        "ledger_key",
+        "formal_trade_required",
+        "blocks_live_buy",
+        "unlock_status",
+        "action",
+        "acceptance",
+        "evidence_required",
+        "optimization_boundary",
+        "post_action_check",
+        "fallback",
+        "source",
+        "review_key",
+        "ticket_key",
+    ],
+    "live_admission_snapshot.csv": [
+        "generated_at",
+        "next_trade_entry_date",
+        "admission_status",
+        "admission_label",
+        "live_buy_allowed",
+        "paper_execution_allowed",
+        "auto_order_allowed",
+        "ticket_count",
+        "blocking_command_count",
+        "formal_command_count",
+        "first_blocking_key",
+        "first_blocking_scope",
+        "first_required_action",
+        "execution_posture",
+        "primary_reason",
+        "next_step",
+        "verification_rule",
+        "risk_tone",
+    ],
+    "live_blocker_resolution_plan.csv": [
+        "priority",
+        "blocking_key",
+        "review_scope",
+        "object",
+        "entry_date",
+        "action",
+        "source",
+        "current_status",
+        "resolution_type",
+        "execution_owner",
+        "can_auto_trigger",
+        "requires_manual_confirmation",
+        "blocks_live_buy",
+        "recommended_ui_action",
+        "recommended_api_action",
+        "evidence_required",
+        "completion_check",
+        "fallback",
+        "natural_trade_boundary",
+    ],
+    "live_blocker_evidence_ledger.csv": [
+        "priority",
+        "review_key",
+        "blocking_key",
+        "review_scope",
+        "object",
+        "source",
+        "action",
+        "resolution_type",
+        "evidence_status",
+        "review_result",
+        "review_result_label",
+        "issue_area",
+        "evidence",
+        "evidence_required",
+        "review_note",
+        "updated_at",
+        "recommended_ui_action",
+        "next_action",
+        "completion_check",
+        "natural_trade_boundary",
+    ],
+    "live_premarket_action_sequence.csv": [
+        "step",
+        "action_group",
+        "action_label",
+        "blocker_count",
+        "primary_blocking_key",
+        "review_scope",
+        "object",
+        "entry_date",
+        "source",
+        "action",
+        "resolution_types",
+        "evidence_statuses",
+        "can_execute_now",
+        "requires_manual_confirmation",
+        "recommended_ui_action",
+        "recommended_api_action",
+        "expected_effect",
+        "stop_if_fail",
+        "completion_check",
+        "natural_trade_boundary",
+    ],
+    "live_premarket_execution_recheck.csv": [
+        "generated_at",
+        "recheck_status",
+        "recheck_label",
+        "live_buy_allowed",
+        "blocking_command_count",
+        "sequence_step_count",
+        "ready_step_count",
+        "pending_evidence_count",
+        "validated_evidence_count",
+        "issue_evidence_count",
+        "current_step",
+        "current_action_group",
+        "current_action_label",
+        "current_can_execute_now",
+        "next_operator_action",
+        "recheck_rule",
+        "natural_trade_boundary",
+    ],
+    "live_premarket_action_attempts.csv": [
+        "priority",
+        "attempted_at",
+        "action_group",
+        "action_label",
+        "source",
+        "ok",
+        "sync_ok",
+        "review_ok",
+        "sync_mode",
+        "sync_message",
+        "holdings_count",
+        "review_key",
+        "review_result",
+        "review_status",
+        "review_axis",
+        "review_scope",
+        "issue_area",
+        "review_returncode",
+        "live_admission_status",
+        "live_admission_buy_allowed",
+        "live_admission_blocking_command_count",
+        "live_premarket_next_action",
+        "formal_buy_signal",
+        "auto_order_allowed",
+        "order_path_enabled",
+        "evidence_boundary",
+    ],
+    "live_manual_launch_acceptance.csv": [
+        "priority",
+        "acceptance_item",
+        "acceptance_label",
+        "status",
+        "status_label",
+        "is_hard_blocker",
+        "must_pass_before_live",
+        "current_value",
+        "required_value",
+        "evidence",
+        "next_action",
+        "natural_trade_boundary",
+    ],
+    "live_day1_review_journal.csv": [
+        "priority",
+        "journal_window",
+        "checkpoint_time",
+        "journal_type",
+        "source_table",
+        "object",
+        "code",
+        "name",
+        "entry_date",
+        "review_axis",
+        "status",
+        "is_blocking",
+        "required_before_live",
+        "action",
+        "evidence_to_record",
+        "pass_condition",
+        "fail_condition",
+        "next_action",
+        "natural_trade_boundary",
+        "review_key",
+        "ticket_key",
+    ],
+    "no_trade_day_review.csv": [
+        "rank",
+        "review_key",
+        "entry_date",
+        "review_type",
+        "posture",
+        "formal_trade_required",
+        "evidence",
+        "hidden_risk",
+        "natural_decision",
+        "next_action",
+        "source",
+        "review_status",
+        "review_result",
+        "review_result_label",
+        "issue_area",
+        "review_note",
+        "optimization_suggestion",
+        "review_updated_at",
+    ],
+}
 
 
 def _now_text() -> str:
@@ -64,6 +610,13 @@ def _md_table(df: pd.DataFrame, max_rows: int = 80) -> str:
     return df.head(max_rows).to_markdown(index=False)
 
 
+def _write_report_csv(name: str, df: pd.DataFrame) -> None:
+    out = df
+    if out.empty and len(out.columns) == 0:
+        out = pd.DataFrame(columns=EMPTY_REPORT_COLUMNS.get(name, []))
+    out.to_csv(OUT_DIR / name, index=False, encoding="utf-8-sig")
+
+
 def _risk_level(row: dict[str, Any]) -> str:
     blockers = int(row.get("blocker_count") or 0)
     warnings = int(row.get("warning_count") or 0)
@@ -99,6 +652,32 @@ def _ticket_checklist_level(risks: list[str], review_action: str) -> str:
     return "pass"
 
 
+def _is_institutional_mainwave(row: dict[str, Any]) -> bool:
+    route = str(row.get("route") or "")
+    strategy = str(row.get("trade_strategy") or row.get("strategy") or "")
+    return (
+        route == "institutional_mainwave"
+        or strategy in {"institutional_score120_mainwave", "机构主升Score120"}
+        or "机构主升" in strategy
+    )
+
+
+def _institutional_mom60_contract_block(row: dict[str, Any]) -> str:
+    if not _is_institutional_mainwave(row):
+        return ""
+    heat = str(row.get("index_mom60_heat_state") or "")
+    block_reason = str(row.get("block_reason") or "")
+    mom60 = _safe_float(row.get("index_mom60"), None)
+    if (
+        heat in {"high_heat_reduce_position", "high_heat_observe", "institutional_mom60_gt_5_block"}
+        or "mom60_gt_5" in heat
+        or "mom60_gt_5" in block_reason
+        or (mom60 is not None and mom60 > 0.05)
+    ):
+        return "机构主升当前合同要求 index_mom60<=5%；>5% 只能观察/阻断，不进入买入或纸面执行"
+    return ""
+
+
 def _same_sector_pair_decision(rows: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any]:
     sector = _text(row.get("sector_name") or row.get("l2_sector_name") or row.get("industry"), "")
     if not sector:
@@ -126,6 +705,15 @@ def _same_sector_pair_decision(rows: list[dict[str, Any]], row: dict[str, Any]) 
         }
 
     all_mainwave = all(str(item.get("route") or "") == "institutional_mainwave" for item in same_sector_rows)
+    contract_block = _institutional_mom60_contract_block(row)
+    if all_mainwave and contract_block:
+        return {
+            "sector_pair_count": len(same_sector_rows),
+            "same_sector_codes": codes,
+            "portfolio_decision_level": "block",
+            "portfolio_decision": "主升共振不放行高热度合同阻断",
+            "portfolio_decision_reason": f"{sector} 同板块 {len(same_sector_rows)} 张虽均为机构主升，但 {contract_block}",
+        }
     heat = _text(row.get("index_mom60_heat_state"), "")
     if all_mainwave and heat in {"high_heat_reduce_position", "high_heat_observe"}:
         return {
@@ -189,6 +777,10 @@ def _build_ticket_review_checklist(rows: list[dict[str, Any]], ticket_review: pd
         portfolio_decision = _same_sector_pair_decision(rows, row)
         risks: list[str] = []
         questions: list[str] = []
+        contract_block = _institutional_mom60_contract_block(row)
+        if contract_block:
+            risks.append(contract_block)
+            questions.append("这张票只能进入观察和盘后归因，不能写入买入或 Day1 纸面执行。")
 
         if not review_action:
             risks.append("尚未人工逐票复盘")
@@ -294,7 +886,7 @@ def _build_ticket_review_checklist(rows: list[dict[str, Any]], ticket_review: pd
         if review_action == "manual_approved" and not confirmation_complete:
             risks.append("人工放行缺少结构化确认项证据")
             questions.append("买点、热度、同板块、仓位、卖点和降级规则是否均已逐项确认？")
-        formal_ready = review_action == "manual_approved" and risk_acknowledged and confirmation_complete
+        formal_ready = review_action == "manual_approved" and risk_acknowledged and confirmation_complete and not contract_block
         formal_ready_reason = (
             "人工放行、风险确认和结构化确认项均已记录"
             if formal_ready
@@ -310,6 +902,9 @@ def _build_ticket_review_checklist(rows: list[dict[str, Any]], ticket_review: pd
             if review_action in {"skip", "reject"}
             else "尚未逐票复盘"
         )
+        if contract_block:
+            action = "contract_block: institutional_mainwave index_mom60>5%, observe only; no buy or Day1 paper execution"
+            formal_ready_reason = contract_block
         item = {
             "rank": idx,
             "code": row.get("code"),
@@ -341,6 +936,11 @@ def _build_ticket_review_checklist(rows: list[dict[str, Any]], ticket_review: pd
             "portfolio_decision_level": portfolio_decision["portfolio_decision_level"],
             "portfolio_decision": portfolio_decision["portfolio_decision"],
             "portfolio_decision_reason": portfolio_decision["portfolio_decision_reason"],
+            "contract_block": bool(contract_block),
+            "contract_block_reason": contract_block,
+            "index_mom60": row.get("index_mom60"),
+            "index_mom60_heat_state": row.get("index_mom60_heat_state"),
+            "block_reason": row.get("block_reason"),
             "model_switch_assessment": model_switch,
             "manual_approval_checklist": _join_unique(approval_items),
             "hidden_risks": _join_unique(risks),
@@ -348,7 +948,7 @@ def _build_ticket_review_checklist(rows: list[dict[str, Any]], ticket_review: pd
             "ticket_warnings": review.get("warnings"),
             "action_recommendation": action,
         }
-        item["checklist_level"] = _ticket_checklist_level(risks, review_action)
+        item["checklist_level"] = "block" if contract_block else _ticket_checklist_level(risks, review_action)
         out.append(item)
     return pd.DataFrame(out)
 
@@ -538,6 +1138,7 @@ def _candidate_checklist_level(risks: list[str], router_eligible: bool, selected
 def _build_candidate_omission_checklist(rows: list[dict[str, Any]], selected_rows: list[dict[str, Any]]) -> pd.DataFrame:
     selected_codes = {str(row.get("code") or "").strip() for row in selected_rows or [] if str(row.get("code") or "").strip()}
     selected_routes = {str(row.get("route") or "").strip() for row in selected_rows or [] if str(row.get("route") or "").strip()}
+    review_map = _read_candidate_omission_review_map()
     out: list[dict[str, Any]] = []
     for idx, row in enumerate(rows or [], start=1):
         code = str(row.get("code") or "").strip()
@@ -598,6 +1199,18 @@ def _build_candidate_omission_checklist(rows: list[dict[str, Any]], selected_row
             if not router_eligible
             else "人工复核排序/槽位约束，确认是否被误排除"
         )
+        ticket_key = _ticket_key_from_row(
+            {
+                "ticket_key": row.get("ticket_key"),
+                "candidate_key": row.get("candidate_key"),
+                "trade_key": row.get("trade_key"),
+                "entry_date": _date_text(row.get("entry_date") or row.get("trade_date")),
+                "route": route,
+                "code": code,
+            }
+        )
+        review = review_map.get(ticket_key, {})
+        watch_result = str(review.get("watch_result") or "").strip()
         item = {
             "rank": idx,
             "code": row.get("code"),
@@ -605,6 +1218,8 @@ def _build_candidate_omission_checklist(rows: list[dict[str, Any]], selected_row
             "entry_date": _date_text(row.get("entry_date") or row.get("trade_date")),
             "route": route,
             "strategy": _route_label(row),
+            "source": "candidate_omission_checklist",
+            "ticket_key": ticket_key,
             "selected_next_trade": selected,
             "router_eligible": router_eligible,
             "natural_action": row.get("natural_action"),
@@ -614,6 +1229,25 @@ def _build_candidate_omission_checklist(rows: list[dict[str, Any]], selected_row
             "hidden_risks": _join_unique(risks),
             "manual_questions": _join_unique(questions),
             "action_recommendation": action,
+            "omission_watch_status": "pending_observation"
+            if not watch_result
+            else "validated"
+            if watch_result == "as_expected"
+            else "continue_watch"
+            if watch_result == "continue_watch"
+            else "issue_found",
+            "watch_result": watch_result,
+            "watch_result_label": review.get("watch_result_label") or ("待观察" if not watch_result else watch_result),
+            "issue_area": review.get("issue_area") or "",
+            "review_context": review.get("review_context") or "",
+            "review_source": review.get("source") or "",
+            "review_note": review.get("review_note") or "",
+            "optimization_suggestion": review.get("optimization_suggestion") or "",
+            "review_selection_state": review.get("selection_state") or "",
+            "review_strategy_switch_assessment": review.get("strategy_switch_assessment") or "",
+            "review_candidate_block_reason": review.get("candidate_block_reason") or "",
+            "review_action_recommendation": review.get("action_recommendation") or "",
+            "review_updated_at": review.get("updated_at") or "",
         }
         item["checklist_level"] = _candidate_checklist_level(risks, router_eligible, selected)
         out.append(item)
@@ -766,6 +1400,152 @@ def _candidate_checklist_markdown(checklist: pd.DataFrame) -> str:
     return "\n".join(parts).strip()
 
 
+def _build_no_trade_day_review(
+    current: dict[str, Any],
+    next_trade_tickets: list[dict[str, Any]],
+    candidate_checklist: pd.DataFrame,
+    gates: pd.DataFrame,
+    holding_refresh_evidence: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    review_map = _read_no_trade_day_review_map()
+    date_display = current.get("date_display_analysis") if isinstance(current.get("date_display_analysis"), dict) else {}
+    entry_date = _date_text(
+        current.get("next_trade_entry_date")
+        or date_display.get("display_entry_date")
+        or current.get("entry_date")
+        or (current.get("summary") or {}).get("entry_date")
+    )
+
+    def add(
+        review_type: str,
+        posture: str,
+        formal_required: bool,
+        evidence: str,
+        hidden_risk: str,
+        natural_decision: str,
+        next_action: str,
+        source: str,
+    ) -> None:
+        base = {
+            "entry_date": entry_date,
+            "review_type": review_type,
+            "source": source,
+        }
+        review_key = _no_trade_day_review_key(base)
+        review = review_map.get(review_key, {})
+        review_result = str(review.get("review_result") or "").strip()
+        rows.append(
+            {
+                "rank": len(rows) + 1,
+                "review_key": review_key,
+                "entry_date": entry_date,
+                "review_type": review_type,
+                "posture": posture,
+                "formal_trade_required": formal_required,
+                "evidence": evidence,
+                "hidden_risk": hidden_risk,
+                "natural_decision": natural_decision,
+                "next_action": next_action,
+                "source": source,
+                "review_status": review.get("review_status") or ("pending_review" if not review_result else "reviewed"),
+                "review_result": review_result,
+                "review_result_label": review.get("review_result_label") or ("待复盘" if not review_result else review_result),
+                "issue_area": review.get("issue_area") or "",
+                "review_note": review.get("review_note") or "",
+                "optimization_suggestion": review.get("optimization_suggestion") or "",
+                "review_updated_at": review.get("updated_at") or "",
+            }
+        )
+
+    if not next_trade_tickets:
+        diagnosis = str(current.get("diagnosis_code") or current.get("diagnosis") or "NO_TRADE_TICKET")
+        candidate_count = len(current.get("all_source_candidates") or [])
+        add(
+            "no_final_ticket",
+            "observe_no_buy",
+            False,
+            f"diagnosis={diagnosis}; source_candidates={candidate_count}; next_trade_tickets=0",
+            "无票日不能被简单视为失败，需要区分自然空仓、盘中确认缺口、数据缺口和过热阻断。",
+            "保持空仓/不新开仓；不为了补满二槽而降低确认门槛。",
+            "盘前只处理持仓刷新和候选观察；若盘中确认补齐，重新跑 G3 审计后再判断。",
+            "current_payload",
+        )
+
+    if not candidate_checklist.empty:
+        router_eligible = candidate_checklist.get("router_eligible", pd.Series(dtype=bool)).map(_truthy)
+        selected = candidate_checklist.get("selected_next_trade", pd.Series(dtype=bool)).map(_truthy)
+        waiting = candidate_checklist[~router_eligible]
+        repair_waiting = waiting[
+            waiting.get("route", pd.Series(dtype=str)).astype(str).eq("panic_repair")
+            | waiting.get("hidden_risks", pd.Series(dtype=str)).astype(str).str.contains("修复", na=False)
+        ]
+        if not repair_waiting.empty:
+            codes = "、".join([f"{row.get('code')} {row.get('name')}" for row in repair_waiting.head(8).to_dict("records")])
+            add(
+                "repair_candidates_wait_intraday_confirm",
+                "observation_pool",
+                False,
+                f"{len(repair_waiting)} 个修复候选未通过路由准入：{codes}",
+                "修复票在未补齐盘中确认时容易把弱反弹误判成可交易补位。",
+                "修复候选只做遗漏观察池，不替代机构主升，也不因为当日无票而强行补位。",
+                "优先补齐盘中确认/分钟线证据；盘后复盘这些候选是否误杀，而不是盘前直接买入。",
+                "candidate_omission_checklist",
+            )
+        eligible_unselected = candidate_checklist[router_eligible & ~selected]
+        if not eligible_unselected.empty:
+            codes = "、".join([f"{row.get('code')} {row.get('name')}" for row in eligible_unselected.head(8).to_dict("records")])
+            add(
+                "eligible_candidate_not_selected",
+                "manual_omission_review",
+                False,
+                f"{len(eligible_unselected)} 个候选已过准入但未入最终票据：{codes}",
+                "可能存在排序、槽位、板块暴露或策略切换规则误伤。",
+                "先复核排序和组合约束，不直接放宽仓位或二槽规则。",
+                "逐票检查未入选原因；只有确认规则误伤后才进入策略调优队列。",
+                "candidate_omission_checklist",
+            )
+
+    if not holding_refresh_evidence.empty:
+        formal_pending = holding_refresh_evidence[
+            holding_refresh_evidence.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy)
+        ]
+        if not formal_pending.empty:
+            codes = "、".join([f"{row.get('code')} {row.get('name')}" for row in formal_pending.head(8).to_dict("records")])
+            add(
+                "holding_refresh_before_new_open",
+                "must_refresh_before_live",
+                True,
+                f"{len(formal_pending)} 个正式持仓刷新项：{codes}",
+                "退出价格不新鲜时，新开仓会挤占真实账户风险预算，导致卖点/买点合同互相污染。",
+                "先刷新真实持仓与退出判断，再考虑任何新开仓。",
+                "执行手动真实持仓刷新；若刷新失败，保持 not_formal_ready。",
+                "holding_refresh_evidence",
+            )
+
+    if not gates.empty:
+        gate_ok = gates.get("ok", pd.Series(dtype=bool)).map(_truthy)
+        gate_severity = gates.get("severity", pd.Series(dtype=str)).astype(str)
+        gate_warn = gates[(~gate_ok) & gate_severity.eq("warn")]
+        if not gate_warn.empty:
+            evidence = "；".join([f"{row.get('gate')}={row.get('message')}" for row in gate_warn.to_dict("records")])
+            formal_gate_warn = gate_warn[
+                gate_warn.get("gate", pd.Series(dtype=str)).astype(str).ne("has_next_trade_ticket")
+            ]
+            add(
+                "readiness_warning_context",
+                "manual_check_required",
+                not formal_gate_warn.empty,
+                evidence,
+                "warn 不是硬阻断，但实战第一天会放大操作噪声。",
+                "先把正式动作类 warn 清掉，观察类 warn 保留复盘即可。",
+                "盘前按 formal_trade_required 区分必须处理与只观察项。",
+                "readiness_gates",
+            )
+
+    return pd.DataFrame(rows)
+
+
 def _build_natural_execution_decision_matrix(natural_consistency: pd.DataFrame, ticket_checklist: pd.DataFrame) -> pd.DataFrame:
     if natural_consistency.empty:
         return pd.DataFrame([])
@@ -876,7 +1656,10 @@ def _build_pretrade_action_checklist(
         for row in gates[~gates["ok"]].to_dict("records"):
             status = str(row.get("status") or row.get("severity") or "warn")
             formal_required = True
-            if str(row.get("gate") or "") == "holding_exit_price_fresh" and not holding_checklist.empty:
+            gate_name = str(row.get("gate") or "")
+            if gate_name == "has_next_trade_ticket":
+                formal_required = False
+            if gate_name == "holding_exit_price_fresh" and not holding_checklist.empty:
                 real_holding_attention = holding_checklist[
                     (holding_checklist.get("source", pd.Series(dtype=str)).astype(str) == "real_account")
                     & holding_checklist.get("checklist_level", pd.Series(dtype=str)).isin(["block", "warn", "watch"])
@@ -981,14 +1764,14 @@ def _build_formal_launch_checklist(summary: dict[str, Any]) -> pd.DataFrame:
     )
     add(
         "has_next_trade_tickets",
-        ticket_count > 0,
-        "block",
+        True,
+        "watch",
         f"next_trade_ticket_count={ticket_count}",
         "没有下一交易日票据时不进入实盘买入流程",
     )
     add(
         "all_tickets_formally_reviewed",
-        ticket_count > 0 and formal_ready == ticket_count,
+        ticket_count == 0 or formal_ready == ticket_count,
         "warn",
         f"formal_ready={formal_ready}, ticket_count={ticket_count}",
         "逐票点击人工放行并确认风险，纸面观察不等于正式就绪",
@@ -1028,11 +1811,9 @@ def _build_execution_mode_matrix(
     summary: dict[str, Any],
     current: dict[str, Any],
     broker: dict[str, Any],
-    ptrade: dict[str, Any],
     gates: pd.DataFrame,
 ) -> pd.DataFrame:
     capital = broker.get("capital") if isinstance(broker.get("capital"), dict) else {}
-    ptrade_gates = ptrade.get("gates") if isinstance(ptrade.get("gates"), dict) else {}
     gate_map = {}
     if not gates.empty and "gate" in gates.columns:
         gate_map = {str(row.get("gate") or ""): row for row in gates.to_dict("records")}
@@ -1048,9 +1829,6 @@ def _build_execution_mode_matrix(
         and current.get("auto_order_allowed") is False
         and current.get("order_path_enabled") is False
     )
-    dry_run_ready = bool(ptrade_gates.get("dry_run_ready") or ptrade_gates.get("local_submit_ready") or ptrade_gates.get("dry_run_probe_ready"))
-    live_submit_ready = bool(ptrade_gates.get("live_submit_ready"))
-
     rows: list[dict[str, Any]] = []
 
     def add(mode: str, status: str, allowed: bool, evidence: str, required_before_use: str, failure_mode: str) -> None:
@@ -1082,22 +1860,6 @@ def _build_execution_mode_matrix(
         "完成真实持仓价格刷新、逐票人工放行、风险确认、临盘价格/现金/仓位复核",
         "任一条件未满足时只允许纸面观察或等待刷新",
     )
-    add(
-        "ptrade_dry_run",
-        "ready" if dry_run_ready and ticket_count > 0 else "not_ready",
-        dry_run_ready and ticket_count > 0,
-        f"dry_run_ready={dry_run_ready}, ticket_count={ticket_count}",
-        "仅用于文件桥/下单链路演练，不代表可真实成交",
-        "dry-run 失败时先修 PTrade 桥，不改策略买点",
-    )
-    add(
-        "ptrade_live_auto",
-        "locked" if order_locked and not live_submit_ready else "requires_reaudit",
-        False,
-        f"formal_buy_signal={current.get('formal_buy_signal')}, auto_order_allowed={current.get('auto_order_allowed')}, order_path_enabled={current.get('order_path_enabled')}, live_submit_ready={live_submit_ready}",
-        "当前合同要求自动实盘保持锁定；如需开启，必须单独授权并重跑全链路审计",
-        "不能把 dry-run 可用误判为自动实盘可用",
-    )
     return pd.DataFrame(rows)
 
 
@@ -1107,17 +1869,36 @@ def _build_formal_launch_action_queue(
     formal_launch_checklist: pd.DataFrame,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
+    review_map = _read_formal_action_review_map()
 
     def add(stage: str, obj: str, action: str, unlocks: str, source: str, severity: str = "warn") -> None:
+        base = {
+            "object": obj or "--",
+            "action": action or "--",
+            "source": source,
+        }
+        review_key = _formal_action_review_key(base)
+        review = review_map.get(review_key, {})
+        review_status = str(review.get("review_status") or "pending").strip()
         rows.append(
             {
                 "priority": len(rows) + 1,
                 "stage": stage,
                 "severity": severity,
-                "object": obj or "--",
-                "action": action or "--",
+                "object": base["object"],
+                "action": base["action"],
                 "unlocks": unlocks or "--",
                 "source": source,
+                "review_key": review_key,
+                "action_status": review_status,
+                "review_result": review.get("review_result"),
+                "review_result_label": review.get("review_result_label"),
+                "issue_area": review.get("issue_area") or severity,
+                "evidence": review.get("evidence"),
+                "natural_decision": review.get("natural_decision"),
+                "optimization_suggestion": review.get("optimization_suggestion"),
+                "review_note": review.get("review_note"),
+                "updated_at": review.get("updated_at"),
             }
         )
 
@@ -1250,6 +2031,109 @@ def _read_paper_watch_review_map() -> dict[str, dict[str, Any]]:
     return {str(key): value for key, value in rows.items() if isinstance(value, dict)}
 
 
+def _read_candidate_omission_review_map() -> dict[str, dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for key, value in _read_paper_watch_review_map().items():
+        if str(value.get("review_context") or "").strip() == "candidate_omission":
+            merged[str(key)] = value
+    try:
+        data = json.loads(CANDIDATE_OMISSION_REVIEWS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return merged
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    if not isinstance(rows, dict):
+        return merged
+    for key, value in rows.items():
+        if isinstance(value, dict):
+            merged[str(key)] = value
+    return merged
+
+
+def _read_no_trade_day_review_map() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(NO_TRADE_DAY_REVIEWS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    if not isinstance(rows, dict):
+        return {}
+    return {str(key): value for key, value in rows.items() if isinstance(value, dict)}
+
+
+def _read_formal_action_review_map() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(FORMAL_ACTION_REVIEWS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    if not isinstance(rows, dict):
+        return {}
+    return {str(key): value for key, value in rows.items() if isinstance(value, dict)}
+
+
+def _read_daily_review_checklist_review_map() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(DAILY_REVIEW_CHECKLIST_REVIEWS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    rows = data.get("reviews") if isinstance(data, dict) else {}
+    if not isinstance(rows, dict):
+        return {}
+    return {str(key): value for key, value in rows.items() if isinstance(value, dict)}
+
+
+def _read_premarket_action_attempts() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(PREMARKET_ACTION_ATTEMPTS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = data.get("attempts") if isinstance(data, dict) else []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _formal_action_review_key(row: dict[str, Any]) -> str:
+    key = str(row.get("review_key") or row.get("key") or "").strip()
+    if key:
+        return key
+    return "|".join(
+        [
+            str(row.get("source") or "").strip(),
+            str(row.get("object") or row.get("action_object") or "").strip(),
+            str(row.get("action") or row.get("required_action") or "").strip(),
+        ]
+    )
+
+
+def _no_trade_day_review_key(row: dict[str, Any]) -> str:
+    key = str(row.get("review_key") or row.get("key") or "").strip()
+    if key:
+        return key
+    return "|".join(
+        [
+            str(row.get("entry_date") or "").strip(),
+            str(row.get("review_type") or "").strip(),
+            str(row.get("source") or "").strip(),
+        ]
+    )
+
+
+def _daily_review_checklist_review_key(row: dict[str, Any]) -> str:
+    axis = str(row.get("review_axis") or "").strip()
+    for key in ("review_key", "key", "ticket_key"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return f"{axis}|{value}" if axis and not value.startswith(f"{axis}|") else value
+    return "|".join(
+        [
+            axis,
+            str(row.get("review_scope") or "").strip(),
+            str(row.get("object") or "").strip(),
+            str(row.get("code") or "").strip(),
+            str(row.get("entry_date") or "").strip(),
+        ]
+    )
+
+
 def _ticket_key_from_row(row: dict[str, Any]) -> str:
     for key in ("ticket_key", "candidate_key", "trade_key"):
         value = str(row.get(key) or "").strip()
@@ -1316,6 +2200,2356 @@ def _build_paper_watch_followup(ticket_review: pd.DataFrame, pretrade_review_evi
             }
         )
     return pd.DataFrame(rows)
+
+
+def _index_by_code(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    if df.empty or "code" not in df.columns:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in df.to_dict("records"):
+        code = str(row.get("code") or "").strip()
+        if code:
+            out[code] = row
+    return out
+
+
+def _build_day1_paper_review_pack(
+    ticket_review: pd.DataFrame,
+    pretrade_review_evidence: pd.DataFrame,
+    natural_consistency: pd.DataFrame,
+    natural_execution_matrix: pd.DataFrame,
+    ticket_checklist: pd.DataFrame,
+) -> pd.DataFrame:
+    if ticket_review.empty and pretrade_review_evidence.empty:
+        return pd.DataFrame([])
+
+    evidence_by_code = _index_by_code(pretrade_review_evidence)
+    consistency_by_code = _index_by_code(natural_consistency)
+    execution_by_code = _index_by_code(natural_execution_matrix)
+    checklist_by_code = _index_by_code(ticket_checklist)
+    source_rows = ticket_review.to_dict("records") if not ticket_review.empty else pretrade_review_evidence.to_dict("records")
+    rows: list[dict[str, Any]] = []
+
+    for idx, row in enumerate(source_rows, start=1):
+        code = str(row.get("code") or "").strip()
+        evidence = evidence_by_code.get(code, {})
+        consistency = consistency_by_code.get(code, {})
+        execution = execution_by_code.get(code, {})
+        checklist = checklist_by_code.get(code, {})
+        contract_source = {**row, **evidence, **checklist}
+        contract_block = _institutional_mom60_contract_block(contract_source)
+        if not contract_block and _truthy(checklist.get("contract_block")):
+            contract_block = str(checklist.get("contract_block_reason") or "机构主升当前合同阻断：只观察，不进入买入或纸面执行")
+        review_action = str(
+            row.get("pretrade_review_action")
+            or row.get("review_action")
+            or evidence.get("review_action")
+            or ""
+        ).strip()
+        if contract_block:
+            posture = "contract_block_observation"
+            action = "只做观察和盘后归因，不写 Day1 纸面执行；需等待 index_mom60<=5% 后重新出票"
+        elif review_action == "manual_approved" and _truthy(evidence.get("formal_ready")):
+            posture = "formal_candidate_after_manual_review"
+            action = "盘前再次核对真实持仓、价格、止损、止盈和账户现金；仍由人工决定是否执行"
+        elif review_action == "paper_watch":
+            posture = "paper_watch"
+            action = "按纸面观察记录开盘、盘中、收盘三段证据，盘后填写后评估"
+        elif review_action == "wait_refresh":
+            posture = "wait_refresh"
+            action = "等待持仓、价格或信号刷新后重跑审计，不做买入动作"
+        elif review_action in {"skip", "reject"}:
+            posture = "skip"
+            action = "本轮不跟踪买入，只保留是否误杀的盘后观察"
+        else:
+            posture = "unreviewed_to_paper_watch"
+            action = "先转入纸面观察；不得因为历史收益压力直接实盘放行"
+
+        hidden_focus = _join_unique(
+            [
+                str(row.get("warnings") or ""),
+                str(row.get("notes") or ""),
+                str(checklist.get("hidden_risks") or ""),
+                str(consistency.get("deductions") or ""),
+                str(execution.get("source_deductions") or ""),
+            ]
+        )
+        rows.append(
+            {
+                "rank": idx,
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "entry_date": row.get("entry_date") or evidence.get("entry_date"),
+                "route": row.get("route") or checklist.get("route"),
+                "strategy": row.get("strategy") or checklist.get("strategy"),
+                "pretrade_status": evidence.get("status") or row.get("pretrade_review_label") or "未复盘",
+                "launch_posture": posture,
+                "priority": "P0" if posture == "formal_candidate_after_manual_review" else "P2" if posture == "contract_block_observation" else "P1",
+                "buy_point_review": consistency.get("buy_point_logic") or checklist.get("buy_point_state") or "观察买点是否新鲜、是否追高、是否脱离30m确认",
+                "selection_review": consistency.get("selection_logic") or checklist.get("selection_state") or "观察选股是否来自主升核心，而非被热度或板块重复暴露牵引",
+                "model_switch_review": consistency.get("model_switch_logic") or checklist.get("strategy_switch_assessment") or "观察路由切换是否顺畅，G2补位不得替代主升逻辑",
+                "exit_contract_review": consistency.get("sell_point_logic") or row.get("exit_contract") or "记录硬止损、结构止损、第一止盈和前低保护是否可执行",
+                "portfolio_review": row.get("portfolio_decision") or checklist.get("portfolio_decision") or "确认二槽、同板块共振和真实账户剩余仓位约束",
+                "paper_watch_action": action,
+                "contract_block_reason": contract_block,
+                "after_close_required_note": "盘后归因到 buy_point / selection / model_switch / sell_exit / signal_validation，不按单日收益倒推调参",
+                "hidden_risk_focus": hidden_focus or "重点观察买点自然度、同板块拥挤、热度追高和退出合同是否通畅",
+                "next_action": action,
+                "ticket_key": row.get("ticket_key") or evidence.get("ticket_key"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _read_paper_execution_rows() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(PAPER_EXECUTIONS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = data.get("executions") if isinstance(data, dict) else []
+    return rows if isinstance(rows, list) else []
+
+
+def _execution_matches_review_row(execution: dict[str, Any], row: dict[str, Any]) -> bool:
+    execution_key = str(execution.get("ticket_key") or "").strip()
+    row_key = _ticket_key_from_row(row)
+    if execution_key and row_key and execution_key == row_key:
+        return True
+    execution_code = str(execution.get("code") or "").strip().upper()
+    row_code = str(row.get("code") or "").strip().upper()
+    execution_date = str(execution.get("entry_date") or "")[:10]
+    row_date = str(row.get("entry_date") or "")[:10]
+    return bool(execution_code and row_code and execution_code == row_code and execution_date and row_date and execution_date == row_date)
+
+
+def _build_day1_after_close_review_queue(day1_pack: pd.DataFrame, paper_watch_followup: pd.DataFrame) -> pd.DataFrame:
+    execution_rows = _read_paper_execution_rows()
+    review_map = _read_paper_watch_review_map()
+    followup_by_code = _index_by_code(paper_watch_followup)
+    source_rows = day1_pack.to_dict("records") if not day1_pack.empty else []
+    if not source_rows:
+        for execution in execution_rows:
+            if str(execution.get("source") or "") != "g3_day1_paper_review_pack":
+                continue
+            source_rows.append(
+                {
+                    "code": execution.get("code"),
+                    "name": execution.get("name"),
+                    "entry_date": execution.get("entry_date"),
+                    "ticket_key": execution.get("ticket_key"),
+                    "route": execution.get("route"),
+                    "strategy": execution.get("contract"),
+                    "launch_posture": "paper_executed",
+                }
+            )
+
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(source_rows, start=1):
+        key = _ticket_key_from_row(row)
+        execution = next((item for item in execution_rows if _execution_matches_review_row(item, row)), {})
+        review = review_map.get(key, {})
+        code = str(row.get("code") or execution.get("code") or "").strip()
+        followup = followup_by_code.get(code, {})
+        watch_result = str(review.get("watch_result") or followup.get("watch_result") or "").strip()
+        if str(row.get("launch_posture") or "") == "contract_block_observation":
+            status = "contract_block_observation"
+            next_action = "只做观察和盘后归因，不写纸面执行；等待 index_mom60<=5% 后由策略重新出票"
+        elif not execution:
+            status = "pending_paper_execution"
+            next_action = "先在风控合同页写入Day1纸面执行，再进入盘后归因"
+        elif not watch_result:
+            status = "pending_after_close_review"
+            next_action = "盘后填写观察结果：符合预期、买点偏急、选股隐患、策略切换隐患、卖点/风控隐患或继续观察"
+        elif watch_result == "as_expected":
+            status = "validated"
+            next_action = "保留逻辑，不因单日波动调参，继续观察同类信号复现"
+        elif watch_result == "continue_watch":
+            status = "continue_watch"
+            next_action = "延长观察窗口，等待更多价格、量能和退出合同证据"
+        else:
+            status = "issue_found"
+            next_action = "进入调优队列：先解释行为问题，再决定是否改规则或参数"
+        rows.append(
+            {
+                "rank": idx,
+                "code": row.get("code") or execution.get("code"),
+                "name": row.get("name") or execution.get("name"),
+                "entry_date": row.get("entry_date") or execution.get("entry_date"),
+                "ticket_key": key,
+                "execution_id": execution.get("execution_id"),
+                "paper_execution_status": execution.get("status") or ("missing" if not execution else ""),
+                "execution_price": execution.get("execution_price"),
+                "quantity": execution.get("quantity"),
+                "notional": execution.get("notional"),
+                "launch_posture": row.get("launch_posture"),
+                "after_close_status": status,
+                "watch_result": watch_result,
+                "watch_result_label": review.get("watch_result_label") or followup.get("watch_result_label") or ("待盘后复盘" if not watch_result else watch_result),
+                "issue_area": review.get("issue_area") or followup.get("issue_area") or "observation",
+                "buy_point_review": row.get("buy_point_review"),
+                "selection_review": row.get("selection_review"),
+                "model_switch_review": row.get("model_switch_review"),
+                "exit_contract_review": row.get("exit_contract_review"),
+                "hidden_risk_focus": row.get("hidden_risk_focus") or review.get("hidden_risk") or followup.get("hidden_risk"),
+                "review_note": review.get("review_note") or followup.get("review_note"),
+                "optimization_suggestion": review.get("optimization_suggestion") or followup.get("optimization_suggestion"),
+                "next_action": next_action,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _review_board_status_level(status: Any) -> int:
+    text = str(status or "").strip()
+    if text in {"block", "issue_found", "pending_execution_fix"}:
+        return 0
+    if text in {"pending_review", "pending_observation", "pending_after_close_review", "pending_paper_execution"}:
+        return 1
+    if text in {"continue_watch", "warn", "watch"}:
+        return 2
+    if text in {"validated", "pass", "ready"}:
+        return 4
+    return 3
+
+
+def _build_daily_live_review_board(
+    formal_launch_action_queue: pd.DataFrame,
+    no_trade_day_review: pd.DataFrame,
+    candidate_checklist: pd.DataFrame,
+    day1_paper_review_pack: pd.DataFrame,
+    day1_after_close_review_queue: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    def add(
+        stage: str,
+        review_scope: str,
+        obj: str,
+        code: Any = "",
+        name: Any = "",
+        entry_date: Any = "",
+        review_status: str = "",
+        formal_trade_required: bool = False,
+        issue_area: Any = "",
+        required_action: Any = "",
+        evidence: Any = "",
+        natural_decision: Any = "",
+        optimization_focus: Any = "",
+        source: Any = "",
+        review_key: Any = "",
+        ticket_key: Any = "",
+    ) -> None:
+        rows.append(
+            {
+                "priority": 0,
+                "stage": stage,
+                "review_scope": review_scope,
+                "object": obj,
+                "code": code,
+                "name": name,
+                "entry_date": entry_date,
+                "review_status": review_status,
+                "formal_trade_required": bool(formal_trade_required),
+                "issue_area": issue_area,
+                "required_action": required_action,
+                "evidence": evidence,
+                "natural_decision": natural_decision,
+                "optimization_focus": optimization_focus,
+                "source": source,
+                "review_key": review_key,
+                "ticket_key": ticket_key,
+            }
+        )
+
+    for row in formal_launch_action_queue.to_dict("records") if not formal_launch_action_queue.empty else []:
+        add(
+            "盘前正式动作",
+            "formal_action",
+            row.get("object"),
+            review_status=row.get("action_status") or "pending",
+            formal_trade_required=True,
+            issue_area=row.get("issue_area") or row.get("severity"),
+            required_action=row.get("action"),
+            evidence=row.get("review_note") or row.get("evidence") or row.get("unlocks"),
+            natural_decision=row.get("natural_decision") or row.get("review_result_label"),
+            optimization_focus=row.get("optimization_suggestion") or "先处理运行/持仓/复盘手续，不把流程缺口误判为交易模型问题。",
+            source=row.get("source") or "formal_launch_action_queue",
+            review_key=row.get("review_key"),
+        )
+
+    for row in no_trade_day_review.to_dict("records") if not no_trade_day_review.empty else []:
+        add(
+            "无票日复盘",
+            "no_trade_day",
+            row.get("review_type"),
+            entry_date=row.get("entry_date"),
+            review_status=row.get("review_status") or "pending_review",
+            formal_trade_required=_truthy(row.get("formal_trade_required")),
+            issue_area=row.get("issue_area"),
+            required_action=row.get("next_action"),
+            evidence=row.get("evidence"),
+            natural_decision=row.get("natural_decision"),
+            optimization_focus=row.get("optimization_suggestion") or row.get("hidden_risk"),
+            source=row.get("source"),
+            review_key=row.get("review_key"),
+        )
+
+    for row in candidate_checklist.to_dict("records") if not candidate_checklist.empty else []:
+        add(
+            "候选遗漏",
+            "candidate_omission",
+            row.get("strategy") or row.get("route"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            review_status=row.get("omission_watch_status") or "pending_observation",
+            formal_trade_required=False,
+            issue_area=row.get("issue_area"),
+            required_action=row.get("action_recommendation"),
+            evidence=row.get("selection_state"),
+            natural_decision=row.get("strategy_switch_assessment"),
+            optimization_focus=row.get("optimization_suggestion") or row.get("hidden_risks"),
+            source=row.get("source") or "candidate_omission_checklist",
+            ticket_key=row.get("ticket_key"),
+        )
+
+    for row in day1_paper_review_pack.to_dict("records") if not day1_paper_review_pack.empty else []:
+        add(
+            "Day1纸面",
+            "day1_paper_pack",
+            row.get("launch_posture"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            review_status=row.get("launch_posture") or "pending",
+            formal_trade_required=False,
+            required_action=row.get("next_action"),
+            evidence=row.get("buy_point_review"),
+            natural_decision=row.get("model_switch_review"),
+            optimization_focus=row.get("hidden_risk_focus") or row.get("selection_review"),
+            source="day1_paper_review_pack",
+            ticket_key=row.get("ticket_key"),
+        )
+
+    for row in day1_after_close_review_queue.to_dict("records") if not day1_after_close_review_queue.empty else []:
+        add(
+            "Day1盘后",
+            "day1_after_close",
+            row.get("after_close_status"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            review_status=row.get("after_close_status") or "pending_after_close_review",
+            formal_trade_required=False,
+            issue_area=row.get("issue_area"),
+            required_action=row.get("next_action"),
+            evidence=row.get("review_note") or row.get("after_close_required_note"),
+            natural_decision=row.get("watch_result_label"),
+            optimization_focus=row.get("hidden_risk_focus") or row.get("optimization_suggestion"),
+            source="day1_after_close_review_queue",
+            ticket_key=row.get("ticket_key"),
+        )
+
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    out["_status_level"] = out["review_status"].map(_review_board_status_level)
+    out["_formal_sort"] = out["formal_trade_required"].map(lambda x: 0 if _truthy(x) else 1)
+    out = out.sort_values(["_formal_sort", "_status_level", "stage", "code"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_status_level", "_formal_sort"])
+
+
+def _learning_status_from_review(status: Any) -> str:
+    text = str(status or "").strip()
+    if text in {"issue_found", "block"}:
+        return "needs_review"
+    if text == "continue_watch":
+        return "watch_more"
+    if text == "validated":
+        return "validated_rule"
+    return ""
+
+
+def _build_strategy_learning_backlog(
+    no_trade_day_review: pd.DataFrame,
+    candidate_checklist: pd.DataFrame,
+    paper_watch_followup: pd.DataFrame,
+    day1_after_close_review_queue: pd.DataFrame,
+    formal_action_reviews_report: pd.DataFrame,
+    daily_review_checklist_reviews_report: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    def add(
+        learning_status: str,
+        issue_area: Any,
+        review_scope: str,
+        obj: Any,
+        code: Any = "",
+        name: Any = "",
+        entry_date: Any = "",
+        problem_signal: Any = "",
+        evidence: Any = "",
+        suggested_learning: Any = "",
+        source: Any = "",
+        review_key: Any = "",
+        ticket_key: Any = "",
+    ) -> None:
+        if not learning_status:
+            return
+        rows.append(
+            {
+                "priority": 0,
+                "learning_status": learning_status,
+                "issue_area": issue_area or "observation",
+                "review_scope": review_scope,
+                "object": obj,
+                "code": code,
+                "name": name,
+                "entry_date": entry_date,
+                "problem_signal": problem_signal,
+                "evidence": evidence,
+                "suggested_learning": suggested_learning,
+                "source": source,
+                "review_key": review_key,
+                "ticket_key": ticket_key,
+            }
+        )
+
+    for row in no_trade_day_review.to_dict("records") if not no_trade_day_review.empty else []:
+        status = _learning_status_from_review(row.get("review_status"))
+        if status not in {"needs_review", "watch_more"}:
+            continue
+        add(
+            status,
+            row.get("issue_area"),
+            "no_trade_day",
+            row.get("review_type"),
+            entry_date=row.get("entry_date"),
+            problem_signal=row.get("review_result_label") or row.get("review_result"),
+            evidence=row.get("review_note") or row.get("evidence"),
+            suggested_learning=row.get("optimization_suggestion") or row.get("hidden_risk"),
+            source=row.get("source") or "no_trade_day_review",
+            review_key=row.get("review_key"),
+        )
+
+    for row in candidate_checklist.to_dict("records") if not candidate_checklist.empty else []:
+        status = _learning_status_from_review(row.get("omission_watch_status"))
+        if status not in {"needs_review", "watch_more"}:
+            continue
+        add(
+            status,
+            row.get("issue_area") or "selection_or_switch",
+            "candidate_omission",
+            row.get("strategy") or row.get("route"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            problem_signal=row.get("watch_result_label") or row.get("watch_result"),
+            evidence=row.get("review_note") or row.get("selection_state"),
+            suggested_learning=row.get("optimization_suggestion") or row.get("hidden_risks"),
+            source=row.get("review_source") or row.get("source") or "candidate_omission_checklist",
+            ticket_key=row.get("ticket_key"),
+        )
+
+    for row in paper_watch_followup.to_dict("records") if not paper_watch_followup.empty else []:
+        status = _learning_status_from_review(row.get("followup_status"))
+        if status not in {"needs_review", "watch_more"}:
+            continue
+        add(
+            status,
+            row.get("issue_area"),
+            "paper_watch_followup",
+            row.get("pretrade_reason"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            problem_signal=row.get("watch_result_label") or row.get("watch_result"),
+            evidence=row.get("review_note"),
+            suggested_learning=row.get("optimization_suggestion") or row.get("hidden_risk"),
+            source="paper_watch_followup",
+            ticket_key=row.get("ticket_key"),
+        )
+
+    for row in day1_after_close_review_queue.to_dict("records") if not day1_after_close_review_queue.empty else []:
+        status = _learning_status_from_review(row.get("after_close_status"))
+        if status not in {"needs_review", "watch_more"}:
+            continue
+        add(
+            status,
+            row.get("issue_area"),
+            "day1_after_close",
+            row.get("launch_posture"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            problem_signal=row.get("watch_result_label") or row.get("watch_result"),
+            evidence=row.get("review_note") or row.get("after_close_required_note"),
+            suggested_learning=row.get("optimization_suggestion") or row.get("hidden_risk_focus"),
+            source="day1_after_close_review_queue",
+            ticket_key=row.get("ticket_key"),
+        )
+
+    for row in formal_action_reviews_report.to_dict("records") if not formal_action_reviews_report.empty else []:
+        status = _learning_status_from_review(row.get("review_status"))
+        if status not in {"needs_review", "watch_more"}:
+            continue
+        add(
+            status,
+            row.get("issue_area") or "execution_process",
+            "formal_action",
+            row.get("object"),
+            problem_signal=row.get("review_result_label") or row.get("review_result"),
+            evidence=row.get("review_note") or row.get("evidence"),
+            suggested_learning=row.get("optimization_suggestion") or "先修复实战前动作证据链，不把执行流程缺口误判为收益优化空间",
+            source=row.get("source") or "formal_action_reviews",
+            review_key=row.get("review_key"),
+        )
+
+    strategy_axes = {"buy_point", "sell_point", "selection", "model_switch", "natural_trade_consistency"}
+    for row in daily_review_checklist_reviews_report.to_dict("records") if not daily_review_checklist_reviews_report.empty else []:
+        axis = str(row.get("review_axis") or row.get("issue_area") or "").strip()
+        if axis not in strategy_axes:
+            continue
+        status = _learning_status_from_review(row.get("review_status"))
+        if status not in {"needs_review", "watch_more"}:
+            continue
+        add(
+            status,
+            row.get("issue_area") or axis,
+            "daily_review_checklist",
+            row.get("object") or row.get("review_scope"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            problem_signal=row.get("review_result_label") or row.get("review_result"),
+            evidence=row.get("review_note") or row.get("evidence"),
+            suggested_learning=(
+                row.get("optimization_suggestion")
+                or row.get("natural_decision")
+                or "归入逐项复盘学习队列；先确认事实和合同边界，再决定是否调整买卖点、选股或策略切换。"
+            ),
+            source=row.get("source") or "daily_review_checklist_reviews",
+            review_key=row.get("review_key"),
+            ticket_key=row.get("ticket_key"),
+        )
+
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    status_rank = {"needs_review": 0, "watch_more": 1, "validated_rule": 2}
+    out["_status_rank"] = out["learning_status"].map(lambda x: status_rank.get(str(x), 9))
+    out = out.sort_values(["_status_rank", "issue_area", "entry_date", "code"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_status_rank"])
+
+
+def _build_live_hidden_risk_watchlist(
+    daily_live_review_board: pd.DataFrame,
+    live_blocker_evidence_ledger: pd.DataFrame,
+    strategy_learning_backlog: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    def add(
+        watch_status: str,
+        risk_level: str,
+        issue_area: Any,
+        review_scope: str,
+        obj: Any,
+        code: Any = "",
+        name: Any = "",
+        entry_date: Any = "",
+        risk_signal: Any = "",
+        evidence_gap: Any = "",
+        next_review_action: Any = "",
+        natural_trade_boundary: Any = "",
+        source: Any = "",
+        review_key: Any = "",
+        ticket_key: Any = "",
+    ) -> None:
+        rows.append(
+            {
+                "priority": 0,
+                "watch_status": watch_status,
+                "risk_level": risk_level,
+                "issue_area": issue_area or "observation",
+                "review_scope": review_scope,
+                "object": obj,
+                "code": code,
+                "name": name,
+                "entry_date": entry_date,
+                "risk_signal": risk_signal,
+                "evidence_gap": evidence_gap,
+                "next_review_action": next_review_action,
+                "natural_trade_boundary": natural_trade_boundary
+                or "先记录事实和证据，再决定是否调策略；不按单日收益压力反推放宽规则。",
+                "source": source,
+                "review_key": review_key,
+                "ticket_key": ticket_key,
+            }
+        )
+
+    for row in daily_live_review_board.to_dict("records") if not daily_live_review_board.empty else []:
+        status = str(row.get("review_status") or "").strip()
+        formal_required = _truthy(row.get("formal_trade_required"))
+        if status in {"validated", "pass", "ready"}:
+            continue
+        if status in {"issue_found", "block"}:
+            watch_status = "issue_found"
+            risk_level = "high"
+        elif formal_required:
+            watch_status = "pending_evidence"
+            risk_level = "high"
+        elif status in {"pending_review", "pending_observation", "pending_after_close_review", "pending_paper_execution", "pending"}:
+            watch_status = "pending_review"
+            risk_level = "medium"
+        elif status == "continue_watch":
+            watch_status = "continue_watch"
+            risk_level = "medium"
+        else:
+            continue
+        add(
+            watch_status,
+            risk_level,
+            row.get("issue_area"),
+            row.get("review_scope"),
+            row.get("object"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            risk_signal=row.get("required_action") or row.get("review_status"),
+            evidence_gap=row.get("evidence") or row.get("optimization_focus"),
+            next_review_action=row.get("required_action") or "补充复盘证据后重跑审计。",
+            source=row.get("source") or "daily_live_review_board",
+            review_key=row.get("review_key"),
+            ticket_key=row.get("ticket_key"),
+        )
+
+    for row in live_blocker_evidence_ledger.to_dict("records") if not live_blocker_evidence_ledger.empty else []:
+        status = str(row.get("evidence_status") or "").strip()
+        if status == "validated":
+            continue
+        risk_level = "high" if status in {"pending_evidence", "issue_found"} else "medium"
+        add(
+            status or "pending_evidence",
+            risk_level,
+            row.get("issue_area") or row.get("resolution_type") or "operation_evidence",
+            "live_blocker_evidence",
+            row.get("object"),
+            risk_signal=row.get("next_action") or row.get("resolution_type"),
+            evidence_gap=row.get("review_note") or row.get("evidence") or row.get("completion_check"),
+            next_review_action=row.get("next_action") or "补齐阻断证据并重跑审计。",
+            natural_trade_boundary=row.get("natural_trade_boundary"),
+            source="live_blocker_evidence_ledger",
+            review_key=row.get("blocking_key"),
+        )
+
+    for row in strategy_learning_backlog.to_dict("records") if not strategy_learning_backlog.empty else []:
+        status = str(row.get("learning_status") or "").strip()
+        risk_level = "high" if status == "needs_review" else "medium"
+        add(
+            status,
+            risk_level,
+            row.get("issue_area"),
+            row.get("review_scope"),
+            row.get("object"),
+            code=row.get("code"),
+            name=row.get("name"),
+            entry_date=row.get("entry_date"),
+            risk_signal=row.get("problem_signal"),
+            evidence_gap=row.get("evidence"),
+            next_review_action=row.get("suggested_learning") or "进入策略学习复盘。",
+            source=row.get("source") or "strategy_learning_backlog",
+            review_key=row.get("review_key"),
+            ticket_key=row.get("ticket_key"),
+        )
+
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    out = out.drop_duplicates(
+        subset=["review_scope", "object", "code", "entry_date", "review_key", "ticket_key", "source"],
+        keep="first",
+    )
+    risk_rank = {"high": 0, "medium": 1, "low": 2}
+    status_rank = {"issue_found": 0, "pending_evidence": 1, "needs_review": 2, "pending_review": 3, "continue_watch": 4, "watch_more": 5}
+    out["_risk_rank"] = out["risk_level"].map(lambda x: risk_rank.get(str(x), 9))
+    out["_status_rank"] = out["watch_status"].map(lambda x: status_rank.get(str(x), 9))
+    out = out.sort_values(["_risk_rank", "_status_rank", "review_scope", "entry_date", "code"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_risk_rank", "_status_rank"])
+
+
+def _review_axis_for_watch(row: dict[str, Any]) -> str:
+    scope = str(row.get("review_scope") or "").strip()
+    issue = str(row.get("issue_area") or "").strip()
+    text = " ".join(str(row.get(key) or "") for key in ["risk_signal", "evidence_gap", "next_review_action", "object"])
+    if scope in {"formal_action", "live_blocker_evidence"} or issue in {"operation_evidence", "execution_process"}:
+        return "execution_evidence"
+    if scope == "candidate_omission" or "selection" in issue or "候选" in text or "选股" in text:
+        return "selection"
+    if scope == "no_trade_day" or "switch" in issue or "策略" in text or "误杀" in text:
+        return "model_switch"
+    if "exit" in issue or "sell" in issue or "退出" in text or "卖点" in text:
+        return "sell_point"
+    if "buy" in issue or "买点" in text or "追高" in text:
+        return "buy_point"
+    return "natural_trade_consistency"
+
+
+def _daily_review_window_for_axis(axis: str, risk_level: Any) -> tuple[str, str]:
+    if axis == "execution_evidence":
+        return "盘前", "09:15 前"
+    if axis in {"buy_point", "selection", "model_switch"}:
+        return "盘中/盘后", "盘中观察，15:10 后落账"
+    if axis == "sell_point":
+        return "盘中/盘后", "触发退出条件后即时记录，15:10 后复核"
+    if str(risk_level) == "high":
+        return "盘前/盘后", "盘前确认边界，盘后落账"
+    return "盘后", "15:10 后"
+
+
+def _build_live_daily_review_execution_checklist(
+    live_hidden_risk_watchlist: pd.DataFrame,
+    daily_review_checklist_reviews_report: pd.DataFrame,
+) -> pd.DataFrame:
+    if live_hidden_risk_watchlist.empty:
+        return pd.DataFrame([])
+
+    axis_labels = {
+        "execution_evidence": "执行证据",
+        "selection": "选股模式",
+        "model_switch": "策略切换",
+        "sell_point": "卖点/退出",
+        "buy_point": "买点",
+        "natural_trade_consistency": "自然交易一致性",
+    }
+    pass_condition = {
+        "execution_evidence": "证据补齐并重跑审计后，阻断消失或明确降级为观察；未消失前不允许真实买入。",
+        "selection": "候选被挡有清晰合同理由，且后续走势没有证明核心规则误杀；否则进入选股模式复盘。",
+        "model_switch": "无票或切换结果符合市场状态和合同边界；若出现可解释的漏切换，进入策略切换复盘。",
+        "sell_point": "退出判断基于刷新价格和既定止损/止盈/前低保护；若价格过期或规则冲突，进入卖点修正。",
+        "buy_point": "买点符合 30m 确认、热度边界和追高约束；若纸面观察显示过早/过急，进入买点调优。",
+        "natural_trade_consistency": "行为符合先事实、再决策、后调优；不因单日无票或收益压力放宽规则。",
+    }
+    fail_condition = {
+        "execution_evidence": "同步失败、审计仍阻断、证据无法落账或真实持仓/价格不可信。",
+        "selection": "被挡候选后续明显优于正式候选，且原阻断理由不充分。",
+        "model_switch": "自然空仓被误判、策略切换迟钝，或补位逻辑与主策略角色冲突。",
+        "sell_point": "退出价格过期、卖点合同缺口、止损止盈与前低保护冲突。",
+        "buy_point": "买点追高、确认不足、过早入场或热度约束未被正确执行。",
+        "natural_trade_consistency": "复盘结论依赖收益倒推，而不是合同、证据和自然交易边界。",
+    }
+
+    rows: list[dict[str, Any]] = []
+    review_map: dict[str, dict[str, Any]] = {}
+    for row in daily_review_checklist_reviews_report.to_dict("records") if not daily_review_checklist_reviews_report.empty else []:
+        key = str(row.get("review_key") or row.get("key") or "").strip()
+        if not key:
+            continue
+        review_map[key] = row
+        axis_key = _daily_review_checklist_review_key(row)
+        if axis_key:
+            review_map[axis_key] = row
+    for item in live_hidden_risk_watchlist.to_dict("records"):
+        axis = _review_axis_for_watch(item)
+        window, checkpoint = _daily_review_window_for_axis(axis, item.get("risk_level"))
+        target = str(item.get("next_review_action") or "").strip()
+        review_key = _daily_review_checklist_review_key({**item, "review_axis": axis})
+        review = review_map.get(review_key, {})
+        if not target:
+            target = "补齐证据并在盘后写入复盘结论。"
+        rows.append(
+            {
+                "priority": 0,
+                "review_window": window,
+                "checkpoint_time": checkpoint,
+                "review_axis": axis,
+                "review_scope": item.get("review_scope"),
+                "object": item.get("object"),
+                "code": item.get("code"),
+                "name": item.get("name"),
+                "entry_date": item.get("entry_date"),
+                "risk_level": item.get("risk_level"),
+                "watch_status": item.get("watch_status"),
+                "review_status": review.get("review_status") or item.get("watch_status") or "pending_review",
+                "review_result": review.get("review_result"),
+                "review_result_label": review.get("review_result_label"),
+                "review_note": review.get("review_note"),
+                "updated_at": review.get("updated_at"),
+                "evidence_to_collect": item.get("evidence_gap") or item.get("risk_signal"),
+                "pass_condition": pass_condition.get(axis),
+                "fail_condition": fail_condition.get(axis),
+                "target_action": f"{axis_labels.get(axis, axis)}：{target}",
+                "natural_trade_boundary": item.get("natural_trade_boundary"),
+                "source": item.get("source"),
+                "review_key": review_key,
+                "ticket_key": item.get("ticket_key"),
+                "duplicate_source_count": 1,
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    window_rank = {"盘前": 0, "盘前/盘后": 1, "盘中/盘后": 2, "盘后": 3}
+    risk_rank = {"high": 0, "medium": 1, "low": 2}
+    out["_window_rank"] = out["review_window"].map(lambda x: window_rank.get(str(x), 9))
+    out["_risk_rank"] = out["risk_level"].map(lambda x: risk_rank.get(str(x), 9))
+    out = out.sort_values(["_window_rank", "_risk_rank", "review_axis", "priority"], kind="stable").reset_index(drop=True)
+    out["duplicate_source_count"] = out.groupby("review_key")["review_key"].transform("size")
+    out = out.drop_duplicates(["review_key"], keep="first").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_window_rank", "_risk_rank"])
+
+
+def _build_live_daily_review_action_layers(live_daily_review_execution_checklist: pd.DataFrame) -> pd.DataFrame:
+    if live_daily_review_execution_checklist.empty:
+        return pd.DataFrame([])
+
+    def status_count(df: pd.DataFrame, status: str) -> int:
+        return int((df.get("review_status", pd.Series(dtype=str)).astype(str) == status).sum()) if not df.empty else 0
+
+    def pending_count(df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        statuses = df.get("review_status", pd.Series(dtype=str)).astype(str)
+        return int(statuses.isin({"pending", "pending_review", "pending_observation", "pending_evidence", "watch"}).sum())
+
+    def axis_text(df: pd.DataFrame) -> str:
+        axes = [x for x in df.get("review_axis", pd.Series(dtype=str)).astype(str).dropna().unique().tolist() if x]
+        return " / ".join(axes) if axes else "--"
+
+    def first_non_empty(df: pd.DataFrame, column: str) -> str:
+        if df.empty or column not in df.columns:
+            return "--"
+        for value in df[column].tolist():
+            text = str(value or "").strip()
+            if text and text.lower() != "nan":
+                return text
+        return "--"
+
+    def add_layer(
+        rows: list[dict[str, Any]],
+        priority: int,
+        action_layer: str,
+        layer_label: str,
+        df: pd.DataFrame,
+        review_window: str,
+        checkpoint_time: str,
+        buy_permission_effect: str,
+        operator_instruction: str,
+    ) -> None:
+        if df.empty:
+            return
+        rows.append(
+            {
+                "priority": priority,
+                "action_layer": action_layer,
+                "layer_label": layer_label,
+                "review_window": review_window,
+                "checkpoint_time": checkpoint_time,
+                "item_count": len(df),
+                "pending_count": pending_count(df),
+                "validated_count": status_count(df, "validated"),
+                "issue_found_count": status_count(df, "issue_found"),
+                "continue_watch_count": status_count(df, "continue_watch"),
+                "high_risk_count": int((df.get("risk_level", pd.Series(dtype=str)).astype(str) == "high").sum()),
+                "review_axes": axis_text(df),
+                "first_action": first_non_empty(df, "target_action"),
+                "evidence_focus": first_non_empty(df, "evidence_to_collect"),
+                "pass_condition": first_non_empty(df, "pass_condition"),
+                "fail_condition": first_non_empty(df, "fail_condition"),
+                "buy_permission_effect": buy_permission_effect,
+                "operator_instruction": operator_instruction,
+            }
+        )
+
+    rows: list[dict[str, Any]] = []
+    axes = live_daily_review_execution_checklist.get("review_axis", pd.Series(dtype=str)).astype(str)
+    statuses = live_daily_review_execution_checklist.get("review_status", pd.Series(dtype=str)).astype(str)
+
+    premarket_df = live_daily_review_execution_checklist[axes == "execution_evidence"].copy()
+    strategy_df = live_daily_review_execution_checklist[axes.isin({"buy_point", "sell_point", "selection", "model_switch", "natural_trade_consistency"})].copy()
+    issue_df = live_daily_review_execution_checklist[statuses.isin({"issue_found", "continue_watch"})].copy()
+
+    add_layer(
+        rows,
+        1,
+        "premarket_blocker_clear",
+        "盘前阻断清理",
+        premarket_df,
+        "盘前",
+        "09:15 前",
+        "未清理前禁止真实买入；清理后仍需重跑审计。",
+        "先同步真实持仓/价格、补齐执行证据，再重跑实战前审计。",
+    )
+    add_layer(
+        rows,
+        2,
+        "intraday_strategy_watch",
+        "盘中/盘后策略观察",
+        strategy_df,
+        "盘中/盘后",
+        "盘中观察，15:10 后落账",
+        "只产生学习证据，不直接放宽买入规则。",
+        "围绕买点、卖点、选股和策略切换逐项记录证据，避免按收益倒推调参。",
+    )
+    add_layer(
+        rows,
+        3,
+        "after_close_learning_attribution",
+        "盘后学习归因",
+        issue_df,
+        "盘后",
+        "15:10 后",
+        "发现隐患后保持观察或阻断，必须先归因再改合同。",
+        "把 issue_found/continue_watch 样本沉淀到学习队列，区分数据缺口、流程缺口和策略逻辑缺口。",
+    )
+
+    if not rows:
+        return pd.DataFrame([])
+    return pd.DataFrame(rows)
+
+
+def _build_formal_action_reviews_report() -> pd.DataFrame:
+    review_map = _read_formal_action_review_map()
+    rows: list[dict[str, Any]] = []
+    for key, row in review_map.items():
+        rows.append(
+            {
+                "priority": 0,
+                "review_key": row.get("review_key") or key,
+                "object": row.get("object"),
+                "action": row.get("action"),
+                "source": row.get("source"),
+                "review_status": row.get("review_status"),
+                "review_result": row.get("review_result"),
+                "review_result_label": row.get("review_result_label"),
+                "issue_area": row.get("issue_area"),
+                "evidence": row.get("evidence"),
+                "natural_decision": row.get("natural_decision"),
+                "optimization_suggestion": row.get("optimization_suggestion"),
+                "review_note": row.get("review_note"),
+                "source": row.get("source"),
+                "updated_at": row.get("updated_at"),
+            }
+        )
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    status_rank = {"issue_found": 0, "pending": 1, "continue_watch": 2, "validated": 3}
+    out["_status_rank"] = out["review_status"].map(lambda x: status_rank.get(str(x), 9))
+    out = out.sort_values(["_status_rank", "updated_at", "object"], ascending=[True, False, True], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_status_rank"])
+
+
+def _build_daily_review_checklist_reviews_report() -> pd.DataFrame:
+    review_map = _read_daily_review_checklist_review_map()
+    rows: list[dict[str, Any]] = []
+    for key, row in review_map.items():
+        rows.append(
+            {
+                "priority": 0,
+                "review_key": row.get("review_key") or key,
+                "ticket_key": row.get("ticket_key"),
+                "review_axis": row.get("review_axis"),
+                "review_scope": row.get("review_scope"),
+                "object": row.get("object"),
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "entry_date": row.get("entry_date"),
+                "review_status": row.get("review_status"),
+                "review_result": row.get("review_result"),
+                "review_result_label": row.get("review_result_label"),
+                "issue_area": row.get("issue_area"),
+                "evidence": row.get("evidence"),
+                "natural_decision": row.get("natural_decision"),
+                "optimization_suggestion": row.get("optimization_suggestion"),
+                "review_note": row.get("review_note"),
+                "source": row.get("source"),
+                "updated_at": row.get("updated_at"),
+            }
+        )
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    status_rank = {"issue_found": 0, "pending_review": 1, "continue_watch": 2, "validated": 3}
+    out["_status_rank"] = out["review_status"].map(lambda x: status_rank.get(str(x), 9))
+    out = out.sort_values(["_status_rank", "review_axis", "entry_date", "review_key"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_status_rank"])
+
+
+def _build_live_premarket_action_attempts_report() -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for row in _read_premarket_action_attempts():
+        rows.append(
+            {
+                "priority": 0,
+                "attempted_at": row.get("attempted_at"),
+                "action_group": row.get("action_group"),
+                "action_label": row.get("action_label"),
+                "source": row.get("source"),
+                "ok": row.get("ok"),
+                "sync_ok": row.get("sync_ok"),
+                "review_ok": row.get("review_ok"),
+                "sync_mode": row.get("sync_mode"),
+                "sync_message": row.get("sync_message"),
+                "holdings_count": row.get("holdings_count"),
+                "review_key": row.get("review_key"),
+                "review_result": row.get("review_result"),
+                "review_status": row.get("review_status"),
+                "review_axis": row.get("review_axis"),
+                "review_scope": row.get("review_scope"),
+                "issue_area": row.get("issue_area"),
+                "review_returncode": row.get("review_returncode"),
+                "live_admission_status": row.get("live_admission_status"),
+                "live_admission_buy_allowed": row.get("live_admission_buy_allowed"),
+                "live_admission_blocking_command_count": row.get("live_admission_blocking_command_count"),
+                "live_premarket_next_action": row.get("live_premarket_next_action"),
+                "formal_buy_signal": row.get("formal_buy_signal"),
+                "auto_order_allowed": row.get("auto_order_allowed"),
+                "order_path_enabled": row.get("order_path_enabled"),
+                "evidence_boundary": "动作尝试只记录同步与复审事实；不替代 gate，不开启真实买入或自动下单。",
+            }
+        )
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    out = out.sort_values(["attempted_at"], ascending=[False], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out
+
+
+def _build_first_live_decision_card(
+    summary: dict[str, Any],
+    formal_launch_action_queue: pd.DataFrame,
+    daily_live_review_board: pd.DataFrame,
+    strategy_learning_backlog: pd.DataFrame,
+) -> pd.DataFrame:
+    ticket_count = int(summary.get("next_trade_ticket_count") or 0)
+    formal_pending = int(summary.get("pretrade_formal_action_pending_count") or 0)
+    board_pending = int(summary.get("daily_live_review_board_pending_count") or 0)
+    issue_found = int(summary.get("daily_live_review_board_issue_found_count") or 0)
+    formal_status = str(summary.get("formal_launch_status") or "").strip()
+    formal_ready = _truthy(summary.get("formal_launch_ready"))
+    block_count = int(summary.get("formal_launch_block_count") or 0) + int(summary.get("gate_block_count") or 0)
+
+    if block_count or issue_found:
+        decision_status = "blocked_review_required"
+        decision_label = "阻断/隐患复盘"
+        execution_posture = "不买入；先修复硬阻断或已发现隐患"
+        risk_tone = "block"
+        primary_reason = "存在硬阻断或复盘看板已发现隐患，不能进入真实买入或纸面执行放大。"
+    elif ticket_count == 0 and formal_pending:
+        decision_status = "no_buy_observe_pending"
+        decision_label = "无票观察待处理"
+        execution_posture = "不买入；先处理正式动作，再做无票日复盘"
+        risk_tone = "watch"
+        primary_reason = "下一交易日没有正式买入票，但真实持仓/价格刷新等正式动作仍未清理。"
+    elif ticket_count == 0:
+        decision_status = "no_buy_observe_ready"
+        decision_label = "无票观察"
+        execution_posture = "不买入；按无票日与候选遗漏复盘观察"
+        risk_tone = "observe"
+        primary_reason = "下一交易日没有正式买入票；这是自然空仓/观察日，不应为了凑槽位强行买入。"
+    elif formal_ready:
+        decision_status = "manual_live_ready"
+        decision_label = "人工实盘待确认"
+        execution_posture = "允许人工最终确认；自动下单仍锁定"
+        risk_tone = "ready"
+        primary_reason = "票据、正式动作和组合层审计已满足人工实盘确认条件，但自动下单未开启。"
+    elif ticket_count and formal_pending:
+        decision_status = "ticket_review_or_formal_action_pending"
+        decision_label = "有票但未放行"
+        execution_posture = "不进入真实买入；逐票复盘或纸面观察"
+        risk_tone = "watch"
+        primary_reason = "存在正式买入票，但逐票复盘、持仓刷新或正式动作尚未清理。"
+    else:
+        decision_status = "paper_or_manual_review_pending"
+        decision_label = "复盘确认中"
+        execution_posture = "先纸面/人工复核，不直接下单"
+        risk_tone = "watch"
+        primary_reason = str(summary.get("formal_launch_next_step") or "仍需补齐人工复盘证据。")
+
+    action_rows = formal_launch_action_queue.to_dict("records") if not formal_launch_action_queue.empty else []
+    pending_actions = [
+        row
+        for row in action_rows
+        if str(row.get("action_status") or "pending").strip() in {"pending", "", "continue_watch", "issue_found"}
+    ]
+    top_actions = pending_actions[:5] if pending_actions else action_rows[:5]
+    action_texts = [
+        f"{row.get('object') or '--'}：{row.get('action') or '--'}"
+        for row in top_actions
+    ]
+    first_required_action = action_texts[0] if action_texts else str(summary.get("formal_launch_next_step") or "重跑实战前审计并查看每日复盘看板")
+
+    if not strategy_learning_backlog.empty:
+        focus_rows = strategy_learning_backlog.head(3).to_dict("records")
+        review_focus = "；".join(
+            [
+                f"{row.get('review_scope') or '--'}:{row.get('issue_area') or '--'}"
+                for row in focus_rows
+            ]
+        )
+    elif not daily_live_review_board.empty:
+        focus_rows = daily_live_review_board.head(3).to_dict("records")
+        review_focus = "；".join(
+            [
+                f"{row.get('stage') or '--'}:{row.get('object') or '--'}"
+                for row in focus_rows
+            ]
+        )
+    else:
+        review_focus = "暂无复盘队列；等待下一轮审计或交易后样本。"
+
+    return pd.DataFrame(
+        [
+            {
+                "generated_at": summary.get("generated_at"),
+                "entry_date": summary.get("entry_date"),
+                "next_trade_entry_date": summary.get("next_trade_entry_date"),
+                "decision_status": decision_status,
+                "decision_label": decision_label,
+                "execution_posture": execution_posture,
+                "live_buy_allowed": bool(decision_status == "manual_live_ready"),
+                "paper_execution_allowed": bool(ticket_count > 0 and decision_status not in {"blocked_review_required", "no_buy_observe_pending", "no_buy_observe_ready"}),
+                "auto_order_allowed": False,
+                "primary_reason": primary_reason,
+                "risk_tone": risk_tone,
+                "formal_launch_status": formal_status,
+                "ticket_count": ticket_count,
+                "formal_pending_count": formal_pending,
+                "board_pending_count": board_pending,
+                "issue_found_count": issue_found,
+                "first_required_action": first_required_action,
+                "top_action_list": "；".join(action_texts) if action_texts else "--",
+                "review_focus": review_focus,
+                "locked_modes": "自动下单锁定；无票日禁止凑槽；index_mom60>5% 机构主升只观察；真实买入必须受真实账户持仓/现金约束",
+                "next_review_trigger": "盘前重跑审计、正式动作有证据后重跑、盘后补充无票/纸面/候选遗漏复盘",
+            }
+        ]
+    )
+
+
+def _task_window_for_scope(scope: str, formal_required: bool) -> str:
+    if scope == "formal_action" or formal_required:
+        return "盘前"
+    if scope in {"day1_after_close", "no_trade_day"}:
+        return "盘后"
+    if scope in {"candidate_omission", "day1_paper_pack"}:
+        return "盘中/盘后"
+    return "盘前/盘后"
+
+
+def _task_type_for_scope(scope: str) -> str:
+    return {
+        "formal_action": "正式动作",
+        "no_trade_day": "无票复盘",
+        "candidate_omission": "候选遗漏",
+        "day1_paper_pack": "纸面执行准备",
+        "day1_after_close": "盘后归因",
+    }.get(scope, "复盘任务")
+
+
+def _review_method_for_scope(scope: str) -> str:
+    return {
+        "formal_action": "记录已处理/卡住证据后重跑实战前审计",
+        "no_trade_day": "选择空仓合理、可能误杀、数据缺口、流程缺口或继续观察",
+        "candidate_omission": "选择挡得合理、可能误杀、信号失效或继续观察",
+        "day1_paper_pack": "先记录纸面执行，再等待盘后归因",
+        "day1_after_close": "归因到买点、选股、策略切换、卖点/风控或继续观察",
+    }.get(scope, "按来源表格补充复盘证据")
+
+
+def _build_live_review_task_queue(
+    first_live_decision_card: pd.DataFrame,
+    daily_live_review_board: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    decision = first_live_decision_card.iloc[0].to_dict() if not first_live_decision_card.empty else {}
+    if decision:
+        rows.append(
+            {
+                "priority": 0,
+                "window": "盘前",
+                "task_type": "首日决策确认",
+                "review_scope": "first_live_decision",
+                "object": decision.get("decision_label"),
+                "code": "",
+                "name": "",
+                "entry_date": decision.get("next_trade_entry_date"),
+                "task_status": decision.get("decision_status"),
+                "formal_trade_required": False,
+                "action": decision.get("first_required_action"),
+                "acceptance": "确认真实买入、纸面执行、自动下单三类权限与决策卡一致",
+                "fallback": decision.get("execution_posture"),
+                "review_method": "先读决策卡，再按本任务队列逐项处理",
+                "source": "first_live_decision_card",
+                "review_key": "",
+                "ticket_key": "",
+            }
+        )
+
+    board_rows = daily_live_review_board.to_dict("records") if not daily_live_review_board.empty else []
+    for row in board_rows:
+        scope = str(row.get("review_scope") or "").strip()
+        formal_required = _truthy(row.get("formal_trade_required"))
+        status = str(row.get("review_status") or "").strip()
+        if status in {"validated", "pass", "ready"}:
+            continue
+        action = row.get("required_action") or row.get("optimization_focus") or "补充复盘证据"
+        if scope == "candidate_omission":
+            acceptance = "候选走势已归因：挡得合理、可能误杀、信号失效或继续观察"
+            fallback = "证据不足时继续观察，不放宽买点或选股规则"
+        elif scope == "no_trade_day":
+            acceptance = "无票日已归因：自然空仓、误杀、数据缺口、流程缺口或继续观察"
+            fallback = "未复盘前不把无票当策略失败，也不为补二槽强行买入"
+        elif scope == "formal_action":
+            acceptance = "正式动作已有证据并重跑审计；底层 gate/action 真实清理才算完成"
+            fallback = "若卡住，记录流程隐患，不归因为交易模型收益问题"
+        elif scope == "day1_after_close":
+            acceptance = "纸面执行或盘后走势已归因到买点、选股、策略切换或卖点合同"
+            fallback = "未归因前不进入策略学习结论"
+        else:
+            acceptance = "补齐证据并刷新审计报告"
+            fallback = "证据不足则保持观察"
+        rows.append(
+            {
+                "priority": 0,
+                "window": _task_window_for_scope(scope, formal_required),
+                "task_type": _task_type_for_scope(scope),
+                "review_scope": scope,
+                "object": row.get("object"),
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "entry_date": row.get("entry_date"),
+                "task_status": status,
+                "formal_trade_required": formal_required,
+                "action": action,
+                "acceptance": acceptance,
+                "fallback": fallback,
+                "review_method": _review_method_for_scope(scope),
+                "source": row.get("source"),
+                "review_key": row.get("review_key"),
+                "ticket_key": row.get("ticket_key"),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    window_rank = {"盘前": 0, "盘中/盘后": 1, "盘后": 2, "盘前/盘后": 3}
+    status_rank = {"blocked_review_required": 0, "issue_found": 0, "pending": 1, "pending_review": 1, "pending_observation": 2, "continue_watch": 3}
+    out["_decision_rank"] = out["review_scope"].map(lambda x: 0 if str(x) == "first_live_decision" else 1)
+    out["_window_rank"] = out["window"].map(lambda x: window_rank.get(str(x), 9))
+    out["_formal_rank"] = out["formal_trade_required"].map(lambda x: 0 if _truthy(x) else 1)
+    out["_status_rank"] = out["task_status"].map(lambda x: status_rank.get(str(x), 5))
+    out = out.sort_values(["_decision_rank", "_window_rank", "_formal_rank", "_status_rank", "task_type", "code"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_decision_rank", "_window_rank", "_formal_rank", "_status_rank"])
+
+
+def _build_review_coverage_dashboard(live_review_task_queue: pd.DataFrame) -> pd.DataFrame:
+    if live_review_task_queue.empty:
+        return pd.DataFrame([])
+
+    covered_statuses = {"validated", "pass", "ready", "issue_found", "no_buy_observe_ready", "manual_live_ready"}
+    pending_statuses = {"pending", "pending_review", "pending_observation", "pending_after_close_review", "pending_paper_execution"}
+
+    def _is_pending_review_status(status: str) -> bool:
+        normalized = str(status or "").strip()
+        return normalized in pending_statuses or normalized.startswith("pending_") or normalized.endswith("_pending")
+    rows: list[dict[str, Any]] = []
+    grouped = live_review_task_queue.groupby(["review_scope", "task_type"], dropna=False, sort=False)
+    for (scope, task_type), group in grouped:
+        statuses = group.get("task_status", pd.Series(dtype=str)).astype(str)
+        total = int(len(group))
+        covered = int(statuses.isin(covered_statuses).sum())
+        pending = int(statuses.map(_is_pending_review_status).sum())
+        issue_found = int((statuses == "issue_found").sum())
+        continue_watch = int((statuses == "continue_watch").sum())
+        formal_required = int(group.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy).sum())
+        coverage_pct = round(covered / total, 4) if total else 0.0
+        if issue_found:
+            coverage_status = "issue_found"
+            next_action = "优先复盘隐患样本，归因到买点、选股、策略切换、卖点合同或执行流程"
+        elif pending:
+            coverage_status = "pending_review"
+            next_action = "继续处理待复盘任务，补齐证据后重跑审计"
+        elif continue_watch:
+            coverage_status = "continue_watch"
+            next_action = "保留观察，不因单日收益倒推改规则"
+        else:
+            coverage_status = "covered"
+            next_action = "保持当前规则，等待下一交易日或盘后新样本"
+        rows.append(
+            {
+                "priority": 0,
+                "review_scope": scope,
+                "task_type": task_type,
+                "total_count": total,
+                "covered_count": covered,
+                "pending_count": pending,
+                "issue_found_count": issue_found,
+                "continue_watch_count": continue_watch,
+                "formal_required_count": formal_required,
+                "coverage_pct": coverage_pct,
+                "coverage_status": coverage_status,
+                "next_action": next_action,
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    status_rank = {"issue_found": 0, "pending_review": 1, "continue_watch": 2, "covered": 3}
+    out["_status_rank"] = out["coverage_status"].map(lambda x: status_rank.get(str(x), 9))
+    out["_formal_rank"] = out["formal_required_count"].map(lambda x: 0 if int(x or 0) else 1)
+    out = out.sort_values(["_status_rank", "_formal_rank", "review_scope"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_status_rank", "_formal_rank"])
+
+
+def _rubric_for_review_scope(scope: str) -> dict[str, str]:
+    rules = {
+        "first_live_decision": {
+            "review_axes": "execution_process, model_switch",
+            "evidence_required": "核对首日决策卡、正式放行状态、真实持仓刷新状态、下一交易日票据数量与自动下单锁定状态。",
+            "decision_rule": "先判定是否允许真实买入，再判定是否只做纸面/观察；无票日不补票，不为填满二槽强行交易。",
+            "optimization_boundary": "首日姿态只约束执行，不因当天无票或有票数量直接修改选股阈值。",
+            "promotion_rule": "连续多个交易日出现同类执行阻塞，才进入流程修复；只有信号证据完整且重复遗漏，才进入策略学习。",
+        },
+        "formal_action": {
+            "review_axes": "execution_process, sell_exit",
+            "evidence_required": "保留真实持仓、最新价、退出判断、人工处理结果与重跑审计后的状态变化。",
+            "decision_rule": "正式必处理项优先于新开仓；真实持仓退出必须先刷新价格，不能用过期价做卖点或买点判断。",
+            "optimization_boundary": "流程卡住归为执行问题，不把未刷新、未同步、未确认误归因为交易模型收益问题。",
+            "promotion_rule": "同类正式动作三次以上阻塞，升级为运行合同修复；若刷新后卖点合同仍不自然，再进入卖点优化。",
+        },
+        "no_trade_day": {
+            "review_axes": "selection, model_switch",
+            "evidence_required": "记录当天候选为空/无正式票的原因、市场状态、路由候选、G2补位可用性、真实账户约束与人工观察结果。",
+            "decision_rule": "先判断自然空仓还是错杀机会；错杀必须能说明应由哪个路由、哪条证据链产生票。",
+            "optimization_boundary": "无票日不是策略失败的直接证据，不为提高交易频率放宽核心准入。",
+            "promotion_rule": "连续错杀且事后走势、信号新鲜度、风控门槛都支持时，才进入选股/策略切换规则修订。",
+        },
+        "candidate_omission": {
+            "review_axes": "selection, buy_point, model_switch",
+            "evidence_required": "跟踪候选后续走势、当日30m确认、主升分/路由分、板块暴露、index_mom60、是否被二槽或同板块规则过滤。",
+            "decision_rule": "先判断过滤是否合理，再判断是否错过买点；被高热度或硬 gate 阻断的票只能观察，不能倒推买入。",
+            "optimization_boundary": "单只候选走强不等于选股遗漏；必须证明当时已有可执行买点和合规仓位。",
+            "promotion_rule": "同类候选多次被同一规则过滤且后续验证强，才进入选股模式或策略切换候选优化。",
+        },
+        "day1_paper_pack": {
+            "review_axes": "buy_point, selection, model_switch, sell_exit",
+            "evidence_required": "记录纸面买入价、信号时间、30m确认、路由来源、仓位约束、盘中最大回撤、第一止盈/止损触发情况。",
+            "decision_rule": "Day1 先看买点是否自然、选股是否属于主路由、策略切换是否顺畅，再看收益。",
+            "optimization_boundary": "纸面首日收益不能直接决定规则优劣；先判定行为是否符合合同。",
+            "promotion_rule": "盘后归因稳定落到同一轴，且跨样本重复，才进入策略学习 backlog。",
+        },
+        "day1_after_close": {
+            "review_axes": "buy_point, selection, model_switch, sell_exit",
+            "evidence_required": "盘后补齐收盘价、浮盈亏、最大回撤、触发过的卖点合同、未触发但应关注的风险点。",
+            "decision_rule": "归因到买点、选股、策略切换或卖点合同；继续观察样本不调参。",
+            "optimization_boundary": "不以收盘涨跌单独定义成功/失败，必须结合入场位置、风险暴露和退出可执行性。",
+            "promotion_rule": "同类归因至少形成可复核样本簇后，再进入参数或合同修订。",
+        },
+    }
+    return rules.get(
+        str(scope or "").strip(),
+        {
+            "review_axes": "execution_process",
+            "evidence_required": "补齐来源表、任务状态、人工判断和重跑审计结果。",
+            "decision_rule": "先判断证据是否完整，再判断是否进入策略学习。",
+            "optimization_boundary": "证据不完整时只保留观察，不做收益导向调参。",
+            "promotion_rule": "重复出现且可复核后再升级。",
+        },
+    )
+
+
+def _build_live_review_evidence_rubric(live_review_task_queue: pd.DataFrame) -> pd.DataFrame:
+    if live_review_task_queue.empty:
+        scopes = [
+            ("first_live_decision", "首日决策确认", 0, 0, 0),
+            ("formal_action", "正式动作", 0, 0, 0),
+            ("no_trade_day", "无票日复盘", 0, 0, 0),
+            ("candidate_omission", "候选遗漏复盘", 0, 0, 0),
+            ("day1_after_close", "盘后归因", 0, 0, 0),
+        ]
+    else:
+        pending_statuses = {"pending", "pending_review", "pending_observation", "pending_after_close_review", "pending_paper_execution"}
+
+        def is_pending(status: Any) -> bool:
+            normalized = str(status or "").strip()
+            return normalized in pending_statuses or normalized.startswith("pending_") or normalized.endswith("_pending")
+
+        scopes = []
+        grouped = live_review_task_queue.groupby(["review_scope", "task_type"], dropna=False, sort=False)
+        for (scope, task_type), group in grouped:
+            statuses = group.get("task_status", pd.Series(dtype=str))
+            scopes.append(
+                (
+                    str(scope or ""),
+                    str(task_type or ""),
+                    int(len(group)),
+                    int(group.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy).sum()),
+                    int(statuses.map(is_pending).sum()),
+                )
+            )
+
+    rows: list[dict[str, Any]] = []
+    for scope, task_type, task_count, formal_count, pending_count in scopes:
+        rule = _rubric_for_review_scope(scope)
+        rows.append(
+            {
+                "priority": 0,
+                "review_scope": scope,
+                "task_type": task_type,
+                "review_axes": rule["review_axes"],
+                "task_count": task_count,
+                "formal_required_count": formal_count,
+                "pending_count": pending_count,
+                "evidence_required": rule["evidence_required"],
+                "decision_rule": rule["decision_rule"],
+                "optimization_boundary": rule["optimization_boundary"],
+                "promotion_rule": rule["promotion_rule"],
+                "next_action": "按证据要求完成复盘后重跑审计；只有重复、可复核的同类问题才进入策略优化。",
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    out["_formal_rank"] = out["formal_required_count"].map(lambda x: 0 if int(x or 0) else 1)
+    out["_pending_rank"] = out["pending_count"].map(lambda x: 0 if int(x or 0) else 1)
+    out = out.sort_values(["_formal_rank", "_pending_rank", "priority", "review_scope"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_formal_rank", "_pending_rank"])
+
+
+def _build_live_premarket_command_sheet(
+    first_live_decision_card: pd.DataFrame,
+    live_review_task_queue: pd.DataFrame,
+    live_review_evidence_rubric: pd.DataFrame,
+) -> pd.DataFrame:
+    if live_review_task_queue.empty:
+        return pd.DataFrame([])
+
+    rubric_map = {}
+    if not live_review_evidence_rubric.empty:
+        for item in live_review_evidence_rubric.to_dict("records"):
+            rubric_map[str(item.get("review_scope") or "")] = item
+
+    decision = first_live_decision_card.iloc[0].to_dict() if not first_live_decision_card.empty else {}
+    decision_status = str(decision.get("decision_status") or "").strip()
+    live_buy_allowed = _truthy(decision.get("live_buy_allowed"))
+    rows: list[dict[str, Any]] = []
+
+    def gate_for_task(row: dict[str, Any]) -> tuple[str, bool]:
+        scope = str(row.get("review_scope") or "").strip()
+        status = str(row.get("task_status") or "").strip()
+        formal_required = _truthy(row.get("formal_trade_required"))
+        if scope == "first_live_decision":
+            if live_buy_allowed:
+                return "live_buy_possible_manual_confirm", False
+            if "no_buy" in status:
+                return "no_buy_observe", False
+            return "live_buy_blocked_by_decision", True
+        if formal_required:
+            return "blocks_live_buy_until_done", True
+        if status == "issue_found":
+            return "review_before_learning", False
+        return "observe_or_after_close_review", False
+
+    def unlock_status_for_task(row: dict[str, Any], blocks_live_buy: bool) -> str:
+        status = str(row.get("task_status") or "").strip()
+        if status in {"validated", "pass", "ready"}:
+            return "unlocked"
+        if status == "issue_found":
+            return "blocked_issue_found" if blocks_live_buy else "issue_review_required"
+        if status == "continue_watch":
+            return "watch_more"
+        if blocks_live_buy:
+            return "waiting_resolution"
+        return "observation_open"
+
+    def post_action_check_for_task(row: dict[str, Any], blocks_live_buy: bool) -> str:
+        scope = str(row.get("review_scope") or "").strip()
+        if scope == "formal_action":
+            return "保存处理证据后重跑审计；若底层事实已清理，该正式动作应从盘前指挥单消失，阻止真实买入数下降。"
+        if scope == "first_live_decision":
+            return "重跑审计并确认 live_buy_allowed、paper_execution_allowed、auto_order_allowed 三类权限仍与合同一致。"
+        if scope == "no_trade_day":
+            return "记录无票日归因后重跑审计；自然空仓不触发补票，误杀样本进入策略学习队列。"
+        if scope == "candidate_omission":
+            return "记录候选后续表现后重跑审计；只有重复可复核的遗漏才进入选股或买点优化。"
+        if blocks_live_buy:
+            return "处理后重跑审计；阻断仍存在则继续保留在指挥单。"
+        return "记录观察证据后重跑审计；不把单日盈亏作为调参依据。"
+
+    task_rows = live_review_task_queue.to_dict("records")
+    for task in task_rows:
+        scope = str(task.get("review_scope") or "").strip()
+        command_window = str(task.get("window") or "").strip()
+        if command_window not in {"盘前", "盘前/盘后"} and not _truthy(task.get("formal_trade_required")) and scope != "first_live_decision":
+            continue
+        rubric = rubric_map.get(scope, {})
+        decision_gate, blocks_live_buy = gate_for_task(task)
+        current_status = str(task.get("task_status") or "").strip()
+        rows.append(
+            {
+                "priority": 0,
+                "command_window": command_window or "盘前",
+                "command_type": task.get("task_type") or "实战复盘动作",
+                "decision_gate": decision_gate,
+                "review_scope": scope,
+                "object": task.get("object"),
+                "code": task.get("code"),
+                "name": task.get("name"),
+                "entry_date": task.get("entry_date"),
+                "current_status": current_status,
+                "ledger_key": task.get("review_key") or task.get("ticket_key"),
+                "formal_trade_required": _truthy(task.get("formal_trade_required")),
+                "blocks_live_buy": blocks_live_buy,
+                "unlock_status": unlock_status_for_task(task, blocks_live_buy),
+                "action": task.get("action"),
+                "acceptance": task.get("acceptance"),
+                "evidence_required": rubric.get("evidence_required") or task.get("review_method"),
+                "optimization_boundary": rubric.get("optimization_boundary") or "先补证据再归因，不按单日盈亏倒推调参。",
+                "post_action_check": post_action_check_for_task(task, blocks_live_buy),
+                "fallback": task.get("fallback"),
+                "source": task.get("source"),
+                "review_key": task.get("review_key"),
+                "ticket_key": task.get("ticket_key"),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame([])
+
+    out = pd.DataFrame(rows)
+    window_rank = {"盘前": 0, "盘前/盘后": 1, "盘中/盘后": 2, "盘后": 3}
+    gate_rank = {
+        "live_buy_blocked_by_decision": 0,
+        "blocks_live_buy_until_done": 1,
+        "no_buy_observe": 2,
+        "live_buy_possible_manual_confirm": 3,
+        "review_before_learning": 4,
+        "observe_or_after_close_review": 5,
+    }
+    out["_block_rank"] = out["blocks_live_buy"].map(lambda x: 0 if _truthy(x) else 1)
+    out["_window_rank"] = out["command_window"].map(lambda x: window_rank.get(str(x), 9))
+    out["_gate_rank"] = out["decision_gate"].map(lambda x: gate_rank.get(str(x), 9))
+    out["_formal_rank"] = out["formal_trade_required"].map(lambda x: 0 if _truthy(x) else 1)
+    out = out.sort_values(["_block_rank", "_window_rank", "_gate_rank", "_formal_rank", "review_scope", "code"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_block_rank", "_window_rank", "_gate_rank", "_formal_rank"])
+
+
+def _build_live_admission_snapshot(
+    summary: dict[str, Any],
+    first_live_decision_card: pd.DataFrame,
+    live_premarket_command_sheet: pd.DataFrame,
+) -> pd.DataFrame:
+    decision = first_live_decision_card.iloc[0].to_dict() if not first_live_decision_card.empty else {}
+    command_rows = live_premarket_command_sheet.to_dict("records") if not live_premarket_command_sheet.empty else []
+    blocking_rows = [row for row in command_rows if _truthy(row.get("blocks_live_buy"))]
+    formal_rows = [row for row in command_rows if _truthy(row.get("formal_trade_required"))]
+    first_block = blocking_rows[0] if blocking_rows else {}
+
+    decision_status = str(decision.get("decision_status") or "").strip()
+    ticket_count = int(summary.get("next_trade_ticket_count") or decision.get("ticket_count") or 0)
+    paper_allowed_by_decision = _truthy(decision.get("paper_execution_allowed"))
+    live_allowed_by_decision = _truthy(decision.get("live_buy_allowed"))
+    auto_allowed_by_decision = _truthy(decision.get("auto_order_allowed"))
+
+    if not decision:
+        admission_status = "unknown"
+        admission_label = "审计未生成"
+        live_buy_allowed = False
+        paper_execution_allowed = False
+        risk_tone = "block"
+        primary_reason = "未生成首日决策卡，不能判断真实买入准入。"
+        next_step = "先重跑 G3 实战前审计，生成首日决策卡和盘前指挥单。"
+    elif blocking_rows:
+        admission_status = "blocked_by_premarket_commands"
+        admission_label = "盘前动作未清"
+        live_buy_allowed = False
+        paper_execution_allowed = paper_allowed_by_decision and not formal_rows
+        risk_tone = "block"
+        primary_reason = (
+            f"仍有 {len(blocking_rows)} 项盘前动作阻止真实买入；第一项是 "
+            f"{first_block.get('review_scope') or '--'}：{first_block.get('action') or '--'}。"
+        )
+        next_step = "按盘前指挥单 priority 从小到大处理；处理后重跑审计，确认阻止真实买入数降为 0。"
+    elif decision_status == "manual_live_ready" and live_allowed_by_decision:
+        admission_status = "manual_live_ready"
+        admission_label = "人工实盘可确认"
+        live_buy_allowed = True
+        paper_execution_allowed = bool(ticket_count > 0)
+        risk_tone = "ready"
+        primary_reason = decision.get("primary_reason") or "正式放行条件已满足，可进入人工最终确认。"
+        next_step = "只允许人工最终确认；自动下单保持锁定，真实仓位仍受账户现金和持仓约束。"
+    elif "no_buy" in decision_status or ticket_count == 0:
+        admission_status = decision_status or "no_buy_observe_ready"
+        admission_label = decision.get("decision_label") or "无票观察"
+        live_buy_allowed = False
+        paper_execution_allowed = False
+        risk_tone = decision.get("risk_tone") or "observe"
+        primary_reason = decision.get("primary_reason") or "下一交易日没有正式买入票；这是观察日，不为填仓位强行交易。"
+        next_step = decision.get("execution_posture") or "不买入；盘后复盘无票日和候选遗漏。"
+    else:
+        admission_status = decision_status or "review_pending"
+        admission_label = decision.get("decision_label") or "复盘确认中"
+        live_buy_allowed = False
+        paper_execution_allowed = paper_allowed_by_decision
+        risk_tone = decision.get("risk_tone") or "watch"
+        primary_reason = decision.get("primary_reason") or "仍需补齐复盘证据或人工确认。"
+        next_step = decision.get("execution_posture") or "先纸面或人工复核，不直接真实下单。"
+
+    verification_rule = (
+        "处理正式动作后必须重跑审计；只有 live_premarket_blocking_command_count=0 且 "
+        "first_live_decision_status=manual_live_ready 时，真实买入才进入人工最终确认。"
+    )
+    if admission_status.startswith("no_buy"):
+        verification_rule = "无票日不要求补票；盘后只复盘自然空仓、候选遗漏和策略切换，不按单日收益倒推放宽规则。"
+
+    return pd.DataFrame(
+        [
+            {
+                "generated_at": summary.get("generated_at"),
+                "next_trade_entry_date": summary.get("next_trade_entry_date") or decision.get("next_trade_entry_date"),
+                "admission_status": admission_status,
+                "admission_label": admission_label,
+                "live_buy_allowed": bool(live_buy_allowed),
+                "paper_execution_allowed": bool(paper_execution_allowed),
+                "auto_order_allowed": bool(auto_allowed_by_decision and live_buy_allowed),
+                "ticket_count": ticket_count,
+                "blocking_command_count": len(blocking_rows),
+                "formal_command_count": len(formal_rows),
+                "first_blocking_key": first_block.get("ledger_key") or first_block.get("review_key") or "",
+                "first_blocking_scope": first_block.get("review_scope") or "",
+                "first_required_action": first_block.get("action") or decision.get("first_required_action") or "",
+                "execution_posture": decision.get("execution_posture") or next_step,
+                "primary_reason": primary_reason,
+                "next_step": next_step,
+                "verification_rule": verification_rule,
+                "risk_tone": risk_tone,
+            }
+        ]
+    )
+
+
+def _build_live_blocker_resolution_plan(live_premarket_command_sheet: pd.DataFrame) -> pd.DataFrame:
+    if live_premarket_command_sheet.empty:
+        return pd.DataFrame([])
+
+    rows: list[dict[str, Any]] = []
+    for item in live_premarket_command_sheet.to_dict("records"):
+        if not _truthy(item.get("blocks_live_buy")):
+            continue
+        scope = str(item.get("review_scope") or "").strip()
+        source = str(item.get("source") or "").strip()
+        obj = str(item.get("object") or "").strip()
+        action = str(item.get("action") or "").strip()
+        text = f"{scope} {source} {obj} {action}"
+
+        if "holding" in text or "持仓" in text or "最新价" in text or "价格" in text:
+            resolution_type = "broker_holding_price_refresh"
+            execution_owner = "human_trigger_system_refresh"
+            can_auto_trigger = True
+            requires_manual_confirmation = True
+            recommended_ui_action = "点击“同步真实持仓并复审”"
+            recommended_api_action = "POST /gen3-state-alpha/broker/holdings/sync-ths-and-review"
+            evidence_required = "真实持仓、最新价、退出判断和复审后的盘前指挥单变化"
+            completion_check = "刷新并重跑审计后，对应持仓/价格阻断从 live_premarket_command_sheet 消失"
+            fallback = "若同花顺窗口不可用或刷新失败，保持禁止真实买入，只记录卡点证据"
+        elif source == "formal_launch_checklist" or "审计" in text or "重跑" in text:
+            resolution_type = "rerun_readiness_audit"
+            execution_owner = "system_rerun_after_previous_actions"
+            can_auto_trigger = True
+            requires_manual_confirmation = False
+            recommended_ui_action = "完成前置动作后点击“重跑审计”"
+            recommended_api_action = "POST /gen3-state-alpha/realtime-readiness-review/run"
+            evidence_required = "重跑后的 summary、准入快照、阻断数量和第一动作变化"
+            completion_check = "live_admission_status 不再停留在 blocked_by_premarket_commands，或阻断数下降"
+            fallback = "若重跑后仍阻断，按新的第一阻断动作继续处理，不跳过 gate"
+        elif scope == "no_trade_day":
+            resolution_type = "no_trade_context_review"
+            execution_owner = "human_review"
+            can_auto_trigger = False
+            requires_manual_confirmation = True
+            recommended_ui_action = "在盘前指挥单中记录无票日归因"
+            recommended_api_action = "POST /gen3-state-alpha/no-trade-day-review-and-run"
+            evidence_required = "自然空仓、误杀、数据缺口或流程缺口的人工归因"
+            completion_check = "无票日复盘落账；自然空仓不触发补票，问题样本进入学习队列"
+            fallback = "证据不足时继续观察，不为补满二槽降低买点和选股门槛"
+        else:
+            resolution_type = "manual_formal_action_review"
+            execution_owner = "human_review"
+            can_auto_trigger = False
+            requires_manual_confirmation = True
+            recommended_ui_action = "在盘前指挥单记录已处理或卡住"
+            recommended_api_action = "POST /gen3-state-alpha/formal-action-review-and-run"
+            evidence_required = "处理证据、卡点说明和重跑审计结果"
+            completion_check = "保存证据并重跑审计后，该阻断消失或变成明确继续观察"
+            fallback = "无法确认时禁止真实买入，不把流程卡点误归因为策略收益问题"
+
+        rows.append(
+            {
+                "priority": 0,
+                "blocking_key": item.get("ledger_key") or item.get("review_key") or item.get("ticket_key") or "",
+                "review_scope": scope,
+                "object": item.get("object"),
+                "entry_date": item.get("entry_date"),
+                "action": item.get("action"),
+                "source": source,
+                "current_status": item.get("current_status"),
+                "resolution_type": resolution_type,
+                "execution_owner": execution_owner,
+                "can_auto_trigger": bool(can_auto_trigger),
+                "requires_manual_confirmation": bool(requires_manual_confirmation),
+                "blocks_live_buy": True,
+                "recommended_ui_action": recommended_ui_action,
+                "recommended_api_action": recommended_api_action,
+                "evidence_required": evidence_required,
+                "completion_check": completion_check,
+                "fallback": fallback,
+                "natural_trade_boundary": "先清执行证据，再判断交易逻辑；无票日不补票，不按单日收益倒推放宽规则。",
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    type_rank = {
+        "broker_holding_price_refresh": 0,
+        "rerun_readiness_audit": 1,
+        "manual_formal_action_review": 2,
+        "no_trade_context_review": 3,
+    }
+    out["_type_rank"] = out["resolution_type"].map(lambda x: type_rank.get(str(x), 9))
+    out = out.sort_values(["_type_rank", "source", "object"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_type_rank"])
+
+
+def _build_live_blocker_evidence_ledger(
+    live_blocker_resolution_plan: pd.DataFrame,
+    formal_action_reviews_report: pd.DataFrame,
+    no_trade_day_review: pd.DataFrame,
+) -> pd.DataFrame:
+    if live_blocker_resolution_plan.empty and formal_action_reviews_report.empty:
+        return pd.DataFrame([])
+
+    formal_map = {
+        str(row.get("review_key") or "").strip(): row
+        for row in formal_action_reviews_report.to_dict("records")
+        if str(row.get("review_key") or "").strip()
+    } if not formal_action_reviews_report.empty else {}
+    no_trade_map = {
+        str(row.get("review_key") or "").strip(): row
+        for row in no_trade_day_review.to_dict("records")
+        if str(row.get("review_key") or "").strip()
+    } if not no_trade_day_review.empty else {}
+
+    rows: list[dict[str, Any]] = []
+    active_keys: set[str] = set()
+    for item in live_blocker_resolution_plan.to_dict("records"):
+        key = str(item.get("blocking_key") or "").strip()
+        if key:
+            active_keys.add(key)
+        scope = str(item.get("review_scope") or "").strip()
+        review = no_trade_map.get(key) if scope == "no_trade_day" else formal_map.get(key)
+        review = review or {}
+        review_status = str(review.get("review_status") or "").strip()
+
+        if review_status == "validated":
+            evidence_status = "validated"
+            next_action = "证据已落账；重跑审计确认该阻断是否真实消失。"
+        elif review_status == "issue_found":
+            evidence_status = "issue_found"
+            next_action = "已发现流程或判断隐患；保持禁止真实买入，并进入策略/执行学习队列。"
+        elif review_status == "continue_watch":
+            evidence_status = "continue_watch"
+            next_action = "证据仍不足；继续观察，不为了补票或收益放宽规则。"
+        else:
+            evidence_status = "pending_evidence"
+            next_action = item.get("recommended_ui_action") or "补充处理证据后重跑审计。"
+
+        rows.append(
+            {
+                "priority": 0,
+                "review_key": key,
+                "blocking_key": key,
+                "review_scope": scope,
+                "object": item.get("object"),
+                "source": item.get("source"),
+                "action": item.get("action"),
+                "resolution_type": item.get("resolution_type"),
+                "evidence_status": evidence_status,
+                "review_result": review.get("review_result"),
+                "review_result_label": review.get("review_result_label"),
+                "issue_area": review.get("issue_area"),
+                "evidence": review.get("evidence"),
+                "evidence_required": item.get("evidence_required"),
+                "review_note": review.get("review_note"),
+                "updated_at": review.get("updated_at"),
+                "recommended_ui_action": item.get("recommended_ui_action"),
+                "next_action": next_action,
+                "completion_check": item.get("completion_check"),
+                "natural_trade_boundary": item.get("natural_trade_boundary"),
+            }
+        )
+
+    for key, review in formal_map.items():
+        if key in active_keys:
+            continue
+        review_status = str(review.get("review_status") or "").strip()
+        if review_status not in {"validated", "issue_found", "continue_watch"}:
+            continue
+        if review_status == "validated":
+            evidence_status = "validated"
+            next_action = "该阻断已有处理证据且已从当前盘前阻断中消失；保留记录用于盘后复盘。"
+        elif review_status == "issue_found":
+            evidence_status = "issue_found"
+            next_action = "已发现流程或判断隐患；保持禁止真实买入，并进入策略/执行学习队列。"
+        else:
+            evidence_status = "continue_watch"
+            next_action = "证据不足但已有观察记录；不为了补票或收益放宽规则。"
+        rows.append(
+            {
+                "priority": 0,
+                "review_key": key,
+                "blocking_key": key,
+                "review_scope": "formal_action",
+                "object": review.get("object"),
+                "source": review.get("source") or "formal_action_reviews",
+                "action": review.get("action"),
+                "resolution_type": "resolved_formal_action_review",
+                "evidence_status": evidence_status,
+                "review_result": review.get("review_result"),
+                "review_result_label": review.get("review_result_label"),
+                "issue_area": review.get("issue_area"),
+                "evidence": review.get("evidence"),
+                "evidence_required": review.get("evidence") or review.get("review_note"),
+                "review_note": review.get("review_note"),
+                "updated_at": review.get("updated_at"),
+                "recommended_ui_action": "已关闭；如状态异常，重新运行实战前审计。",
+                "next_action": next_action,
+                "completion_check": "复核当前盘前指挥单中不再出现该阻断；若再次出现，继续补证据而不跳过 gate。",
+                "natural_trade_boundary": "保留已关闭证据用于追溯；不把流程清理结果误当成策略收益优化结论。",
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    status_rank = {"issue_found": 0, "pending_evidence": 1, "continue_watch": 2, "validated": 3}
+    out["_status_rank"] = out["evidence_status"].map(lambda x: status_rank.get(str(x), 9))
+    out = out.sort_values(["_status_rank", "priority", "review_scope", "object"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_status_rank"])
+
+
+def _build_live_premarket_action_sequence(
+    live_blocker_resolution_plan: pd.DataFrame,
+    live_blocker_evidence_ledger: pd.DataFrame,
+) -> pd.DataFrame:
+    if live_blocker_resolution_plan.empty:
+        return pd.DataFrame([])
+
+    evidence_by_key = {}
+    if not live_blocker_evidence_ledger.empty:
+        for row in live_blocker_evidence_ledger.to_dict("records"):
+            key = str(row.get("blocking_key") or "").strip()
+            if key:
+                evidence_by_key[key] = str(row.get("evidence_status") or "").strip()
+
+    group_map = {
+        "broker_holding_price_refresh": "sync_broker_holding_price",
+        "rerun_readiness_audit": "rerun_readiness_audit",
+        "no_trade_context_review": "review_no_trade_context",
+        "manual_formal_action_review": "manual_formal_action_review",
+    }
+    group_rank = {
+        "sync_broker_holding_price": 1,
+        "rerun_readiness_audit": 2,
+        "review_no_trade_context": 3,
+        "manual_formal_action_review": 4,
+    }
+    group_label = {
+        "sync_broker_holding_price": "同步真实持仓/价格并复审",
+        "rerun_readiness_audit": "重跑实战前审计",
+        "review_no_trade_context": "记录无票日归因",
+        "manual_formal_action_review": "人工确认正式动作",
+    }
+    expected_effect = {
+        "sync_broker_holding_price": "刷新并复审后，持仓/价格阻断应消失或明显下降。",
+        "rerun_readiness_audit": "把已处理事实重新写入准入快照，确认是否仍禁止真实买入。",
+        "review_no_trade_context": "区分自然空仓、误杀、数据缺口和流程缺口，不为补满仓位强行交易。",
+        "manual_formal_action_review": "补齐人工证据，避免把流程卡点误判为策略买卖点问题。",
+    }
+    stop_if_fail = {
+        "sync_broker_holding_price": "如果同步失败或窗口不可用，禁止真实买入，只记录卡点证据。",
+        "rerun_readiness_audit": "如果重跑后仍阻断，回到新的第一阻断动作继续处理，不跳过 gate。",
+        "review_no_trade_context": "如果证据不足，继续观察，不放宽买点或选股门槛。",
+        "manual_formal_action_review": "如果无法确认，保持 not_formal_ready。",
+    }
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in live_blocker_resolution_plan.to_dict("records"):
+        resolution_type = str(item.get("resolution_type") or "").strip()
+        action_group = group_map.get(resolution_type, "manual_formal_action_review")
+        grouped.setdefault(action_group, []).append(item)
+
+    rows: list[dict[str, Any]] = []
+    has_refresh_pending = False
+    has_audit_pending = False
+
+    def _date_from_key(key: str) -> str:
+        first = str(key or "").split("|", 1)[0].strip()
+        if len(first) == 10 and first[4:5] == "-" and first[7:8] == "-":
+            return first
+        return ""
+
+    for action_group in sorted(grouped, key=lambda x: group_rank.get(x, 99)):
+        items = grouped[action_group]
+        keys = [str(item.get("blocking_key") or "").strip() for item in items if str(item.get("blocking_key") or "").strip()]
+        statuses = [evidence_by_key.get(key, "pending_evidence") for key in keys]
+        pending_statuses = {status for status in statuses if status not in {"validated"}}
+        primary = items[0]
+        entry_dates = [str(item.get("entry_date") or "").strip() for item in items if str(item.get("entry_date") or "").strip()]
+        if not entry_dates:
+            entry_dates = [_date_from_key(key) for key in keys if _date_from_key(key)]
+
+        if action_group == "sync_broker_holding_price":
+            can_execute_now = True
+            has_refresh_pending = bool(pending_statuses)
+        elif action_group == "rerun_readiness_audit":
+            can_execute_now = not has_refresh_pending
+            has_audit_pending = bool(pending_statuses)
+        elif action_group == "review_no_trade_context":
+            can_execute_now = not has_refresh_pending and not has_audit_pending
+        else:
+            can_execute_now = not has_refresh_pending
+
+        rows.append(
+            {
+                "step": 0,
+                "action_group": action_group,
+                "action_label": group_label.get(action_group, action_group),
+                "blocker_count": len(items),
+                "primary_blocking_key": keys[0] if keys else "",
+                "review_scope": " / ".join(sorted({str(item.get("review_scope") or "").strip() for item in items if str(item.get("review_scope") or "").strip()})),
+                "object": " / ".join([str(item.get("object") or "").strip() for item in items if str(item.get("object") or "").strip()][:3]),
+                "entry_date": entry_dates[0] if entry_dates else "",
+                "source": " / ".join(sorted({str(item.get("source") or "").strip() for item in items if str(item.get("source") or "").strip()})),
+                "action": primary.get("action"),
+                "resolution_types": " / ".join(sorted({str(item.get("resolution_type") or "").strip() for item in items if str(item.get("resolution_type") or "").strip()})),
+                "evidence_statuses": " / ".join(sorted({status for status in statuses if status})) or "pending_evidence",
+                "can_execute_now": bool(can_execute_now),
+                "requires_manual_confirmation": any(_truthy(item.get("requires_manual_confirmation")) for item in items),
+                "recommended_ui_action": primary.get("recommended_ui_action"),
+                "recommended_api_action": primary.get("recommended_api_action"),
+                "expected_effect": expected_effect.get(action_group, ""),
+                "stop_if_fail": stop_if_fail.get(action_group, ""),
+                "completion_check": primary.get("completion_check"),
+                "natural_trade_boundary": primary.get("natural_trade_boundary"),
+            }
+        )
+
+    out = pd.DataFrame(rows).sort_values("action_group", key=lambda s: s.map(lambda x: group_rank.get(str(x), 99)), kind="stable")
+    out = out.reset_index(drop=True)
+    out["step"] = range(1, len(out) + 1)
+    return out
+
+
+def _build_live_premarket_execution_recheck(
+    summary: dict[str, Any],
+    live_admission_snapshot: pd.DataFrame,
+    live_premarket_action_sequence: pd.DataFrame,
+    live_blocker_evidence_ledger: pd.DataFrame,
+) -> pd.DataFrame:
+    admission = live_admission_snapshot.iloc[0].to_dict() if not live_admission_snapshot.empty else {}
+    sequence_rows = live_premarket_action_sequence.to_dict("records") if not live_premarket_action_sequence.empty else []
+    evidence_status = (
+        live_blocker_evidence_ledger.get("evidence_status", pd.Series(dtype=str)).astype(str)
+        if not live_blocker_evidence_ledger.empty
+        else pd.Series(dtype=str)
+    )
+    pending_evidence_count = int((evidence_status == "pending_evidence").sum())
+    validated_evidence_count = int((evidence_status == "validated").sum())
+    issue_evidence_count = int((evidence_status == "issue_found").sum())
+    ready_rows = [row for row in sequence_rows if _truthy(row.get("can_execute_now"))]
+    current = ready_rows[0] if ready_rows else (sequence_rows[0] if sequence_rows else {})
+    live_buy_allowed = _truthy(admission.get("live_buy_allowed"))
+    blocking_count = int(_safe_float(admission.get("blocking_command_count"), 0) or 0)
+
+    if live_buy_allowed and blocking_count == 0:
+        recheck_status = "ready_for_manual_live_review"
+        recheck_label = "可进入人工实盘复核"
+        next_operator_action = "复核候选、真实仓位和现金约束后，人工决定是否实盘执行。"
+    elif issue_evidence_count:
+        recheck_status = "issue_found_hold_live"
+        recheck_label = "发现隐患，禁止实盘"
+        next_operator_action = "先处理已发现隐患；不要把流程或数据缺口当成策略收益优化问题。"
+    elif current:
+        recheck_status = "next_action_required"
+        recheck_label = "继续处理下一动作"
+        next_operator_action = current.get("action_label") or current.get("recommended_ui_action") or "继续按盘前顺序处理。"
+    else:
+        recheck_status = "observe_no_blocker"
+        recheck_label = "无阻断，保持观察"
+        next_operator_action = "没有正式票时保持自然空仓观察；不为补满仓位放宽规则。"
+
+    return pd.DataFrame(
+        [
+            {
+                "generated_at": summary.get("generated_at"),
+                "recheck_status": recheck_status,
+                "recheck_label": recheck_label,
+                "live_buy_allowed": bool(live_buy_allowed),
+                "blocking_command_count": blocking_count,
+                "sequence_step_count": len(sequence_rows),
+                "ready_step_count": len(ready_rows),
+                "pending_evidence_count": pending_evidence_count,
+                "validated_evidence_count": validated_evidence_count,
+                "issue_evidence_count": issue_evidence_count,
+                "current_step": current.get("step"),
+                "current_action_group": current.get("action_group"),
+                "current_action_label": current.get("action_label"),
+                "current_can_execute_now": bool(_truthy(current.get("can_execute_now"))) if current else False,
+                "next_operator_action": next_operator_action,
+                "recheck_rule": "每次处理盘前动作后必须重跑审计；只有 admission 放行且阻断数为 0，才允许进入人工实盘复核。",
+                "natural_trade_boundary": "先验证事实，再评价策略；无票日允许自然空仓，不用收益压力反推放宽买点、选股或策略切换规则。",
+            }
+        ]
+    )
+
+
+def _build_live_manual_launch_acceptance(
+    summary: dict[str, Any],
+    live_admission_snapshot: pd.DataFrame,
+    live_premarket_execution_recheck: pd.DataFrame,
+    live_daily_review_action_layers: pd.DataFrame,
+) -> pd.DataFrame:
+    admission = live_admission_snapshot.iloc[0].to_dict() if not live_admission_snapshot.empty else {}
+    recheck = live_premarket_execution_recheck.iloc[0].to_dict() if not live_premarket_execution_recheck.empty else {}
+    layers = live_daily_review_action_layers.to_dict("records") if not live_daily_review_action_layers.empty else []
+    layer_by_key = {str(row.get("action_layer") or ""): row for row in layers}
+    premarket_layer = layer_by_key.get("premarket_blocker_clear", {})
+    strategy_layer = layer_by_key.get("intraday_strategy_watch", {})
+    learning_layer = layer_by_key.get("after_close_learning_attribution", {})
+
+    def add(
+        rows: list[dict[str, Any]],
+        item: str,
+        label: str,
+        passed: bool,
+        hard: bool,
+        current_value: Any,
+        required_value: Any,
+        evidence: Any,
+        next_action: Any,
+        boundary: Any,
+    ) -> None:
+        rows.append(
+            {
+                "priority": len(rows) + 1,
+                "acceptance_item": item,
+                "acceptance_label": label,
+                "status": "pass" if passed else "block" if hard else "watch",
+                "status_label": "通过" if passed else "阻断" if hard else "观察",
+                "is_hard_blocker": bool(hard and not passed),
+                "must_pass_before_live": bool(hard),
+                "current_value": current_value,
+                "required_value": required_value,
+                "evidence": evidence or "--",
+                "next_action": next_action or "--",
+                "natural_trade_boundary": boundary or "--",
+            }
+        )
+
+    rows: list[dict[str, Any]] = []
+    admission_allowed = _truthy(admission.get("live_buy_allowed"))
+    blocking_count = int(_safe_float(admission.get("blocking_command_count"), 0) or 0)
+    pending_evidence = int(_safe_float(recheck.get("pending_evidence_count"), 0) or 0)
+    issue_evidence = int(_safe_float(recheck.get("issue_evidence_count"), 0) or 0)
+    premarket_pending = int(_safe_float(premarket_layer.get("pending_count"), 0) or 0)
+    strategy_pending = int(_safe_float(strategy_layer.get("pending_count"), 0) or 0)
+    learning_pending = int(_safe_float(learning_layer.get("pending_count"), 0) or 0)
+    ticket_count = int(_safe_float(admission.get("ticket_count"), summary.get("next_trade_ticket_count") or 0) or 0)
+
+    add(
+        rows,
+        "admission_live_buy_allowed",
+        "准入快照允许真实买入",
+        admission_allowed,
+        True,
+        admission.get("admission_status"),
+        "manual_live_ready + live_buy_allowed=true",
+        admission.get("primary_reason"),
+        admission.get("next_step"),
+        "准入只来自审计快照，不来自人工愿望或收益压力。",
+    )
+    add(
+        rows,
+        "premarket_blockers_cleared",
+        "盘前硬阻断已清零",
+        blocking_count == 0,
+        True,
+        blocking_count,
+        0,
+        admission.get("first_required_action"),
+        "按盘前动作顺序处理并重跑审计。",
+        "真实持仓/价格/执行证据未清前，不讨论买点优化。",
+    )
+    add(
+        rows,
+        "premarket_evidence_closed",
+        "盘前证据闭环完成",
+        pending_evidence == 0 and issue_evidence == 0,
+        True,
+        f"pending={pending_evidence}; issue={issue_evidence}",
+        "pending=0; issue=0",
+        recheck.get("current_action_label"),
+        recheck.get("next_operator_action"),
+        "有证据不等于放行；证据必须让审计阻断真实消失。",
+    )
+    add(
+        rows,
+        "premarket_action_layer_done",
+        "盘前行动层已完成",
+        premarket_pending == 0,
+        True,
+        premarket_pending,
+        0,
+        premarket_layer.get("first_action"),
+        premarket_layer.get("operator_instruction"),
+        premarket_layer.get("buy_permission_effect"),
+    )
+    add(
+        rows,
+        "ticket_context",
+        "下一交易日票据上下文明确",
+        ticket_count > 0 or str(admission.get("admission_status") or "").startswith("no_buy") or not admission_allowed,
+        False,
+        ticket_count,
+        "有票则逐票复核；无票则自然空仓复盘",
+        admission.get("execution_posture"),
+        "有票只进入人工最终复核；无票不为补仓放宽规则。",
+        "允许自然空仓，不用收益压力反推补票。",
+    )
+    add(
+        rows,
+        "strategy_watch_layer",
+        "盘中/盘后策略观察已安排",
+        strategy_pending == 0,
+        False,
+        strategy_pending,
+        "可盘中/盘后落账，不作为盘前硬阻断",
+        strategy_layer.get("first_action"),
+        strategy_layer.get("operator_instruction"),
+        strategy_layer.get("buy_permission_effect"),
+    )
+    add(
+        rows,
+        "learning_attribution_layer",
+        "盘后学习归因有入口",
+        learning_pending == 0,
+        False,
+        learning_pending,
+        "仅对已发现隐患/继续观察样本归因",
+        learning_layer.get("first_action"),
+        learning_layer.get("operator_instruction") or "没有 issue_found/continue_watch 样本时不凭空生成优化结论。",
+        "先归因，再改合同；不按单日收益倒推参数。",
+    )
+    out = pd.DataFrame(rows)
+    out["_hard_rank"] = out["must_pass_before_live"].map(lambda x: 0 if _truthy(x) else 1)
+    out["_status_rank"] = out["status"].map({"block": 0, "watch": 1, "pass": 2}).fillna(9)
+    out = out.sort_values(["_hard_rank", "_status_rank", "priority"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_hard_rank", "_status_rank"])
+
+
+def _build_live_day1_review_journal(
+    live_premarket_action_sequence: pd.DataFrame,
+    live_blocker_evidence_ledger: pd.DataFrame,
+    live_manual_launch_acceptance: pd.DataFrame,
+    live_daily_review_execution_checklist: pd.DataFrame,
+    day1_paper_review_pack: pd.DataFrame,
+    day1_after_close_review_queue: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    def add(
+        window: str,
+        checkpoint_time: str,
+        journal_type: str,
+        source_table: str,
+        row: dict[str, Any],
+        *,
+        review_axis: str = "",
+        status: str = "",
+        is_blocking: bool = False,
+        required_before_live: bool = False,
+        action: Any = "",
+        evidence_to_record: Any = "",
+        pass_condition: Any = "",
+        fail_condition: Any = "",
+        next_action: Any = "",
+        boundary: Any = "",
+        review_key: Any = "",
+        ticket_key: Any = "",
+    ) -> None:
+        rows.append(
+            {
+                "priority": 0,
+                "journal_window": window,
+                "checkpoint_time": checkpoint_time,
+                "journal_type": journal_type,
+                "source_table": source_table,
+                "object": row.get("object") or row.get("acceptance_label") or row.get("action_label") or row.get("code") or "",
+                "code": row.get("code") or "",
+                "name": row.get("name") or "",
+                "entry_date": row.get("entry_date") or "",
+                "review_axis": review_axis or row.get("review_axis") or "",
+                "status": status or row.get("status") or row.get("evidence_status") or row.get("review_status") or row.get("after_close_status") or row.get("launch_posture") or "",
+                "is_blocking": bool(is_blocking),
+                "required_before_live": bool(required_before_live),
+                "action": action or row.get("action") or row.get("target_action") or row.get("next_action") or "",
+                "evidence_to_record": evidence_to_record or row.get("evidence_to_collect") or row.get("evidence_required") or row.get("evidence") or "",
+                "pass_condition": pass_condition or row.get("pass_condition") or row.get("required_value") or "",
+                "fail_condition": fail_condition or row.get("fail_condition") or "",
+                "next_action": next_action or row.get("next_action") or row.get("operator_instruction") or "",
+                "natural_trade_boundary": boundary or row.get("natural_trade_boundary") or "",
+                "review_key": review_key or row.get("review_key") or row.get("blocking_key") or row.get("primary_blocking_key") or row.get("acceptance_item") or "",
+                "ticket_key": ticket_key or row.get("ticket_key") or "",
+            }
+        )
+
+    for row in live_premarket_action_sequence.to_dict("records") if not live_premarket_action_sequence.empty else []:
+        add(
+            "盘前",
+            "09:00-09:25",
+            "盘前清障顺序",
+            "live_premarket_action_sequence",
+            row,
+            review_axis="execution_evidence",
+            status="ready" if _truthy(row.get("can_execute_now")) else "waiting_previous_step",
+            is_blocking=True,
+            required_before_live=True,
+            action=row.get("action_label") or row.get("recommended_ui_action"),
+            evidence_to_record=row.get("expected_effect"),
+            pass_condition=row.get("completion_check"),
+            fail_condition=row.get("stop_if_fail"),
+            next_action=row.get("recommended_ui_action") or row.get("action_label"),
+        )
+
+    for row in live_blocker_evidence_ledger.to_dict("records") if not live_blocker_evidence_ledger.empty else []:
+        add(
+            "盘前",
+            "09:00-09:30",
+            "阻断证据闭环",
+            "live_blocker_evidence_ledger",
+            row,
+            review_axis="execution_evidence",
+            status=row.get("evidence_status"),
+            is_blocking=str(row.get("evidence_status") or "") in {"pending_evidence", "issue_found"},
+            required_before_live=str(row.get("evidence_status") or "") in {"pending_evidence", "issue_found"},
+            evidence_to_record=row.get("evidence_required") or row.get("review_note"),
+            pass_condition=row.get("completion_check"),
+            fail_condition=row.get("next_action"),
+        )
+
+    for row in live_manual_launch_acceptance.to_dict("records") if not live_manual_launch_acceptance.empty else []:
+        add(
+            "盘前",
+            "09:25-09:30",
+            "人工实战验收",
+            "live_manual_launch_acceptance",
+            row,
+            review_axis="execution_evidence",
+            status=row.get("status"),
+            is_blocking=_truthy(row.get("is_hard_blocker")),
+            required_before_live=_truthy(row.get("must_pass_before_live")),
+            action=row.get("next_action"),
+            evidence_to_record=row.get("evidence"),
+            pass_condition=row.get("required_value"),
+            fail_condition=row.get("natural_trade_boundary"),
+            review_key=row.get("acceptance_item"),
+        )
+
+    for row in live_daily_review_execution_checklist.to_dict("records") if not live_daily_review_execution_checklist.empty else []:
+        add(
+            str(row.get("review_window") or "盘中/盘后"),
+            str(row.get("checkpoint_time") or ""),
+            "逐项复盘检查",
+            "live_daily_review_execution_checklist",
+            row,
+            status=row.get("review_status"),
+            is_blocking=str(row.get("review_status") or "") in {"issue_found", "blocked", "data_gap", "process_gap"},
+            required_before_live=str(row.get("review_window") or "") in {"盘前", "盘前/盘后"} and str(row.get("review_status") or "") not in {"validated"},
+            action=row.get("target_action"),
+            evidence_to_record=row.get("evidence_to_collect"),
+        )
+
+    for row in day1_paper_review_pack.to_dict("records") if not day1_paper_review_pack.empty else []:
+        add(
+            "盘中/盘后",
+            "交易时段/收盘后",
+            "Day1纸面跟踪",
+            "day1_paper_review_pack",
+            row,
+            review_axis="buy_point/selection/model_switch/sell_point",
+            status=row.get("launch_posture"),
+            is_blocking=False,
+            required_before_live=False,
+            action=row.get("next_action"),
+            evidence_to_record=row.get("hidden_risk_focus"),
+            pass_condition=row.get("buy_point_review"),
+            fail_condition=row.get("selection_review"),
+            boundary=row.get("exit_contract_review"),
+            review_key=row.get("ticket_key") or row.get("code"),
+            ticket_key=row.get("ticket_key"),
+        )
+
+    for row in day1_after_close_review_queue.to_dict("records") if not day1_after_close_review_queue.empty else []:
+        add(
+            "盘后",
+            "15:10后",
+            "Day1盘后归因",
+            "day1_after_close_review_queue",
+            row,
+            review_axis=row.get("issue_area") or "after_close_attribution",
+            status=row.get("after_close_status"),
+            is_blocking=str(row.get("after_close_status") or "") == "issue_found",
+            required_before_live=False,
+            action=row.get("next_action"),
+            evidence_to_record=row.get("hidden_risk_focus"),
+            pass_condition="只归因，不按单日收益倒推改合同。",
+            fail_condition="若发现流程/数据/逻辑缺口，进入学习队列，下一日不放宽准入。",
+            review_key=row.get("ticket_key") or row.get("code"),
+            ticket_key=row.get("ticket_key"),
+        )
+
+    if not rows:
+        return pd.DataFrame([])
+    out = pd.DataFrame(rows)
+    window_rank = {"盘前": 0, "盘前/盘后": 1, "盘中": 2, "盘中/盘后": 3, "盘后": 4}
+    type_rank = {
+        "盘前清障顺序": 0,
+        "阻断证据闭环": 1,
+        "人工实战验收": 2,
+        "逐项复盘检查": 3,
+        "Day1纸面跟踪": 4,
+        "Day1盘后归因": 5,
+    }
+    out["_window_rank"] = out["journal_window"].map(lambda x: window_rank.get(str(x), 9))
+    out["_type_rank"] = out["journal_type"].map(lambda x: type_rank.get(str(x), 9))
+    out["_block_rank"] = out["is_blocking"].map(lambda x: 0 if _truthy(x) else 1)
+    out = out.sort_values(["_window_rank", "_type_rank", "_block_rank", "checkpoint_time", "object"], kind="stable").reset_index(drop=True)
+    out["priority"] = range(1, len(out) + 1)
+    return out.drop(columns=["_window_rank", "_type_rank", "_block_rank"])
 
 
 def _build_premarket_execution_playbook(
@@ -1423,6 +4657,7 @@ def _ticket_issues(row: dict[str, Any], open_codes: set[str]) -> tuple[list[str]
     take = _safe_float(row.get("take_profit_1"))
     score = _safe_float(row.get("score"))
     wave_score = _safe_float(row.get("wave_style_score"))
+    contract_block = _institutional_mom60_contract_block(row)
 
     if not code:
         blockers.append("缺少股票代码")
@@ -1436,6 +4671,9 @@ def _ticket_issues(row: dict[str, Any], open_codes: set[str]) -> tuple[list[str]
         blockers.append("自然纪律 N1/Nx 标记为跳过")
     if code in open_codes:
         blockers.append("真实/影子持仓中已有同票，禁止伪装成独立二槽")
+
+    if contract_block:
+        blockers.append(contract_block)
 
     if pos is None or pos <= 0:
         blockers.append("缺少正式合同仓位")
@@ -1593,7 +4831,7 @@ def _review_candidates(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
-def _gate_rows(current: dict[str, Any], broker: dict[str, Any], ptrade: dict[str, Any], ticket_review: pd.DataFrame, holding_review: pd.DataFrame) -> pd.DataFrame:
+def _gate_rows(current: dict[str, Any], broker: dict[str, Any], ticket_review: pd.DataFrame, holding_review: pd.DataFrame) -> pd.DataFrame:
     summary = current.get("summary") or {}
     capital = broker.get("capital") or {}
     gates: list[dict[str, Any]] = []
@@ -1617,14 +4855,20 @@ def _gate_rows(current: dict[str, Any], broker: dict[str, Any], ptrade: dict[str
     add("broker_capital_present", _safe_float(capital.get("total_capital")) is not None and _safe_float(capital.get("available_cash")) is not None, "block", f"total_capital={_money(capital.get('total_capital'))}, available_cash={_money(capital.get('available_cash'))}")
     add("broker_holdings_fresh", not bool(capital.get("holdings_stale")), "warn", f"holdings_stale={capital.get('holdings_stale')}")
     add("shadow_only_locked", current.get("formal_buy_signal") is False and current.get("auto_order_allowed") is False and current.get("order_path_enabled") is False, "warn", "正式自动买入仍锁定；适合人工/纸面实战，不适合自动实盘")
-    ptrade_gates = ptrade.get("gates") if isinstance(ptrade.get("gates"), dict) else {}
-    add("ptrade_dry_run_ready", bool(ptrade_gates.get("dry_run_ready") or ptrade_gates.get("local_submit_ready")), "warn", f"ptrade_gates={ptrade_gates}")
-    add("ptrade_live_submit_locked", not bool(ptrade_gates.get("live_submit_ready")), "warn", "live_submit_ready 应保持 false，除非人工确认切实开启真实下单")
     return pd.DataFrame(gates)
 
 
 def _hazard_register(ticket_review: pd.DataFrame, holding_review: pd.DataFrame, candidate_review: pd.DataFrame, gate_rows: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
+    if "risk_level" not in ticket_review.columns:
+        ticket_review = ticket_review.copy()
+        ticket_review["risk_level"] = pd.Series(dtype=str)
+    if "risk_level" not in holding_review.columns:
+        holding_review = holding_review.copy()
+        holding_review["risk_level"] = pd.Series(dtype=str)
+    if "issues" not in candidate_review.columns:
+        candidate_review = candidate_review.copy()
+        candidate_review["issues"] = pd.Series(dtype=str)
     for _, row in gate_rows[~gate_rows["ok"]].iterrows():
         rows.append({"scope": "gate", "severity": row["severity"], "object": row["gate"], "hazard": row["message"], "action": "先处理该 Gate 后再进入实战执行"})
     for _, row in ticket_review[ticket_review["risk_level"].isin(["block", "warn", "watch"])].iterrows():
@@ -1643,11 +4887,6 @@ def run() -> dict[str, Any]:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     current = asyncio.run(get_gen3_state_alpha_current(limit=200, refresh=False, entry_date=None))
     broker = _broker_snapshot()
-    try:
-        ptrade = run_ptrade_audit()
-    except Exception as exc:
-        ptrade = {"ok": False, "error": str(exc), "gates": {}}
-
     real_holdings = broker.get("holdings") if isinstance(broker.get("holdings"), list) else []
     shadow_holdings = current.get("shadow_ledger") if isinstance(current.get("shadow_ledger"), list) else []
     open_codes = {str(x.get("code") or "").strip() for x in [*real_holdings, *shadow_holdings] if str(x.get("code") or "").strip()}
@@ -1663,9 +4902,10 @@ def run() -> dict[str, Any]:
     candidate_checklist = _build_candidate_omission_checklist(source_candidates, next_trade_tickets)
     natural_consistency = _build_natural_trade_consistency_review(ticket_checklist, candidate_checklist, holding_refresh_evidence)
     natural_execution_matrix = _build_natural_execution_decision_matrix(natural_consistency, ticket_checklist)
-    gates = _gate_rows(current, broker, ptrade, ticket_review, holding_review)
+    gates = _gate_rows(current, broker, ticket_review, holding_review)
     hazards = _hazard_register(ticket_review, holding_review, candidate_review, gates)
     action_checklist = _build_pretrade_action_checklist(gates, ticket_checklist, holding_checklist, candidate_checklist, natural_execution_matrix)
+    no_trade_day_review = _build_no_trade_day_review(current, next_trade_tickets, candidate_checklist, gates, holding_refresh_evidence)
 
     for name, df in [
         ("next_trade_ticket_review.csv", ticket_review),
@@ -1680,8 +4920,9 @@ def run() -> dict[str, Any]:
         ("readiness_gates.csv", gates),
         ("hazard_register.csv", hazards),
         ("pretrade_action_checklist.csv", action_checklist),
+        ("no_trade_day_review.csv", no_trade_day_review),
     ]:
-        df.to_csv(OUT_DIR / name, index=False, encoding="utf-8-sig")
+        _write_report_csv(name, df)
 
     block_count = int((gates["status"] == "block").sum()) if not gates.empty else 0
     warn_count = int((gates["status"] == "warn").sum()) if not gates.empty else 0
@@ -1708,6 +4949,47 @@ def run() -> dict[str, Any]:
     holding_observation_refresh_count = int((~holding_refresh_evidence.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy)).sum()) if not holding_refresh_evidence.empty else 0
     candidate_checklist_warn_count = int(candidate_checklist.get("checklist_level", pd.Series(dtype=str)).isin(["warn", "watch"]).sum()) if not candidate_checklist.empty else 0
     candidate_checklist_block_count = int((candidate_checklist.get("checklist_level", pd.Series(dtype=str)) == "block").sum()) if not candidate_checklist.empty else 0
+    candidate_omission_pending_count = (
+        int((candidate_checklist.get("omission_watch_status", pd.Series(dtype=str)).astype(str) == "pending_observation").sum())
+        if not candidate_checklist.empty
+        else 0
+    )
+    candidate_omission_issue_found_count = (
+        int((candidate_checklist.get("omission_watch_status", pd.Series(dtype=str)).astype(str) == "issue_found").sum())
+        if not candidate_checklist.empty
+        else 0
+    )
+    candidate_omission_validated_count = (
+        int((candidate_checklist.get("omission_watch_status", pd.Series(dtype=str)).astype(str) == "validated").sum())
+        if not candidate_checklist.empty
+        else 0
+    )
+    candidate_omission_continue_watch_count = (
+        int((candidate_checklist.get("omission_watch_status", pd.Series(dtype=str)).astype(str) == "continue_watch").sum())
+        if not candidate_checklist.empty
+        else 0
+    )
+    no_trade_day_review_count = len(no_trade_day_review)
+    no_trade_day_formal_required_count = (
+        int(no_trade_day_review.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy).sum())
+        if not no_trade_day_review.empty
+        else 0
+    )
+    no_trade_day_pending_review_count = (
+        int((no_trade_day_review.get("review_status", pd.Series(dtype=str)).astype(str) == "pending_review").sum())
+        if not no_trade_day_review.empty
+        else 0
+    )
+    no_trade_day_issue_found_count = (
+        int((no_trade_day_review.get("review_status", pd.Series(dtype=str)).astype(str) == "issue_found").sum())
+        if not no_trade_day_review.empty
+        else 0
+    )
+    no_trade_day_validated_count = (
+        int((no_trade_day_review.get("review_status", pd.Series(dtype=str)).astype(str) == "validated").sum())
+        if not no_trade_day_review.empty
+        else 0
+    )
     natural_consistency_min_score = int(natural_consistency.get("consistency_score", pd.Series(dtype=int)).min()) if not natural_consistency.empty else None
     natural_consistency_strained_count = int(natural_consistency.get("consistency_grade", pd.Series(dtype=str)).isin(["strained", "incoherent"]).sum()) if not natural_consistency.empty else 0
     natural_execution_block_count = int((natural_execution_matrix.get("decision_level", pd.Series(dtype=str)) == "block").sum()) if not natural_execution_matrix.empty else 0
@@ -1767,6 +5049,15 @@ def run() -> dict[str, Any]:
         "holding_observation_refresh_count": holding_observation_refresh_count,
         "candidate_checklist_block_count": candidate_checklist_block_count,
         "candidate_checklist_warn_watch_count": candidate_checklist_warn_count,
+        "candidate_omission_pending_count": candidate_omission_pending_count,
+        "candidate_omission_issue_found_count": candidate_omission_issue_found_count,
+        "candidate_omission_validated_count": candidate_omission_validated_count,
+        "candidate_omission_continue_watch_count": candidate_omission_continue_watch_count,
+        "no_trade_day_review_count": no_trade_day_review_count,
+        "no_trade_day_formal_required_count": no_trade_day_formal_required_count,
+        "no_trade_day_pending_review_count": no_trade_day_pending_review_count,
+        "no_trade_day_issue_found_count": no_trade_day_issue_found_count,
+        "no_trade_day_validated_count": no_trade_day_validated_count,
         "natural_consistency_min_score": natural_consistency_min_score,
         "natural_consistency_strained_count": natural_consistency_strained_count,
         "natural_execution_block_count": natural_execution_block_count,
@@ -1780,7 +5071,17 @@ def run() -> dict[str, Any]:
     formal_launch_checklist = _build_formal_launch_checklist(summary)
     formal_launch_missing_count = int((formal_launch_checklist["status"] != "pass").sum()) if not formal_launch_checklist.empty else 0
     formal_launch_block_count = int((formal_launch_checklist["status"] == "block").sum()) if not formal_launch_checklist.empty else 0
-    if formal_launch_block_count:
+    if summary["next_trade_ticket_count"] == 0:
+        if formal_launch_block_count:
+            formal_launch_status = "no_trade_observe_blocked"
+            formal_launch_next_step = "不买入；先处理硬阻断，再保留无票日观察复盘"
+        elif summary["pretrade_formal_action_pending_count"]:
+            formal_launch_status = "no_trade_observe_pending"
+            formal_launch_next_step = "不买入；先处理真实持仓/价格刷新等正式必处理项，再保留候选观察"
+        else:
+            formal_launch_status = "no_trade_observe_ready"
+            formal_launch_next_step = "不买入；按无票日复盘观察候选是否盘后误杀"
+    elif formal_launch_block_count:
         formal_launch_status = "blocked"
         formal_launch_next_step = "先处理硬阻断，再回到逐票复盘"
     elif formal_launch_missing_count:
@@ -1798,19 +5099,33 @@ def run() -> dict[str, Any]:
             "formal_launch_next_step": formal_launch_next_step,
         }
     )
-    formal_launch_checklist.to_csv(OUT_DIR / "formal_launch_checklist.csv", index=False, encoding="utf-8-sig")
-    execution_mode_matrix = _build_execution_mode_matrix(summary, current, broker, ptrade, gates)
-    execution_mode_matrix.to_csv(OUT_DIR / "execution_mode_matrix.csv", index=False, encoding="utf-8-sig")
+    _write_report_csv("formal_launch_checklist.csv", formal_launch_checklist)
+    execution_mode_matrix = _build_execution_mode_matrix(summary, current, broker, gates)
+    _write_report_csv("execution_mode_matrix.csv", execution_mode_matrix)
     summary["execution_mode_ready_count"] = int(execution_mode_matrix.get("allowed_now", pd.Series(dtype=bool)).map(_truthy).sum()) if not execution_mode_matrix.empty else 0
     summary["execution_mode_locked_count"] = int((execution_mode_matrix.get("status", pd.Series(dtype=str)).astype(str) == "locked").sum()) if not execution_mode_matrix.empty else 0
     formal_launch_action_queue = _build_formal_launch_action_queue(action_checklist, ticket_checklist, formal_launch_checklist)
-    formal_launch_action_queue.to_csv(OUT_DIR / "formal_launch_action_queue.csv", index=False, encoding="utf-8-sig")
+    _write_report_csv("formal_launch_action_queue.csv", formal_launch_action_queue)
     summary["formal_launch_action_queue_count"] = len(formal_launch_action_queue)
+    formal_action_reviews_report = _build_formal_action_reviews_report()
+    _write_report_csv("formal_action_reviews.csv", formal_action_reviews_report)
+    formal_action_review_status = formal_action_reviews_report.get("review_status", pd.Series(dtype=str)).astype(str) if not formal_action_reviews_report.empty else pd.Series(dtype=str)
+    summary["formal_action_review_count"] = len(formal_action_reviews_report)
+    summary["formal_action_review_validated_count"] = int((formal_action_review_status == "validated").sum())
+    summary["formal_action_review_issue_found_count"] = int((formal_action_review_status == "issue_found").sum())
+    summary["formal_action_review_continue_watch_count"] = int((formal_action_review_status == "continue_watch").sum())
+    daily_review_checklist_reviews_report = _build_daily_review_checklist_reviews_report()
+    _write_report_csv("daily_review_checklist_reviews.csv", daily_review_checklist_reviews_report)
+    daily_checklist_review_status = daily_review_checklist_reviews_report.get("review_status", pd.Series(dtype=str)).astype(str) if not daily_review_checklist_reviews_report.empty else pd.Series(dtype=str)
+    summary["daily_review_checklist_review_count"] = len(daily_review_checklist_reviews_report)
+    summary["daily_review_checklist_validated_count"] = int((daily_checklist_review_status == "validated").sum())
+    summary["daily_review_checklist_issue_found_count"] = int((daily_checklist_review_status == "issue_found").sum())
+    summary["daily_review_checklist_continue_watch_count"] = int((daily_checklist_review_status == "continue_watch").sum())
     pretrade_review_evidence = _build_pretrade_review_evidence(ticket_review, ticket_checklist)
-    pretrade_review_evidence.to_csv(OUT_DIR / "pretrade_review_evidence.csv", index=False, encoding="utf-8-sig")
+    _write_report_csv("pretrade_review_evidence.csv", pretrade_review_evidence)
     summary["pretrade_review_evidence_count"] = len(pretrade_review_evidence)
     paper_watch_followup = _build_paper_watch_followup(ticket_review, pretrade_review_evidence)
-    paper_watch_followup.to_csv(OUT_DIR / "paper_watch_followup.csv", index=False, encoding="utf-8-sig")
+    _write_report_csv("paper_watch_followup.csv", paper_watch_followup)
     summary["paper_watch_followup_count"] = len(paper_watch_followup)
     summary["paper_watch_followup_pending_count"] = (
         int((paper_watch_followup.get("followup_status", pd.Series(dtype=str)).astype(str) == "pending_observation").sum())
@@ -1823,9 +5138,631 @@ def run() -> dict[str, Any]:
         else 0
     )
     premarket_playbook = _build_premarket_execution_playbook(summary, formal_launch_action_queue, ticket_checklist)
-    premarket_playbook.to_csv(OUT_DIR / "premarket_execution_playbook.csv", index=False, encoding="utf-8-sig")
+    _write_report_csv("premarket_execution_playbook.csv", premarket_playbook)
     summary["premarket_playbook_step_count"] = len(premarket_playbook)
+    day1_paper_review_pack = _build_day1_paper_review_pack(
+        ticket_review,
+        pretrade_review_evidence,
+        natural_consistency,
+        natural_execution_matrix,
+        ticket_checklist,
+    )
+    _write_report_csv("day1_paper_review_pack.csv", day1_paper_review_pack)
+    summary["day1_paper_review_ticket_count"] = len(day1_paper_review_pack)
+    summary["day1_paper_review_pending_count"] = (
+        int(day1_paper_review_pack.get("launch_posture", pd.Series(dtype=str)).astype(str).isin({"paper_watch", "unreviewed_to_paper_watch", "wait_refresh"}).sum())
+        if not day1_paper_review_pack.empty
+        else 0
+    )
+    day1_after_close_review_queue = _build_day1_after_close_review_queue(day1_paper_review_pack, paper_watch_followup)
+    _write_report_csv("day1_after_close_review_queue.csv", day1_after_close_review_queue)
+    summary["day1_after_close_review_count"] = len(day1_after_close_review_queue)
+    summary["day1_after_close_pending_execution_count"] = (
+        int((day1_after_close_review_queue.get("after_close_status", pd.Series(dtype=str)).astype(str) == "pending_paper_execution").sum())
+        if not day1_after_close_review_queue.empty
+        else 0
+    )
+    summary["day1_after_close_pending_review_count"] = (
+        int((day1_after_close_review_queue.get("after_close_status", pd.Series(dtype=str)).astype(str) == "pending_after_close_review").sum())
+        if not day1_after_close_review_queue.empty
+        else 0
+    )
+    summary["day1_after_close_issue_found_count"] = (
+        int((day1_after_close_review_queue.get("after_close_status", pd.Series(dtype=str)).astype(str) == "issue_found").sum())
+        if not day1_after_close_review_queue.empty
+        else 0
+    )
+    daily_live_review_board = _build_daily_live_review_board(
+        formal_launch_action_queue,
+        no_trade_day_review,
+        candidate_checklist,
+        day1_paper_review_pack,
+        day1_after_close_review_queue,
+    )
+    _write_report_csv("daily_live_review_board.csv", daily_live_review_board)
+    board_status = daily_live_review_board.get("review_status", pd.Series(dtype=str)).astype(str) if not daily_live_review_board.empty else pd.Series(dtype=str)
+    summary["daily_live_review_board_count"] = len(daily_live_review_board)
+    summary["daily_live_review_board_pending_count"] = int(
+        board_status.isin({"pending", "pending_review", "pending_observation", "pending_after_close_review", "pending_paper_execution"}).sum()
+    )
+    summary["daily_live_review_board_formal_required_count"] = (
+        int(daily_live_review_board.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy).sum())
+        if not daily_live_review_board.empty
+        else 0
+    )
+    summary["daily_live_review_board_issue_found_count"] = int(board_status.isin({"block", "issue_found"}).sum())
+    strategy_learning_backlog = _build_strategy_learning_backlog(
+        no_trade_day_review,
+        candidate_checklist,
+        paper_watch_followup,
+        day1_after_close_review_queue,
+        formal_action_reviews_report,
+        daily_review_checklist_reviews_report,
+    )
+    _write_report_csv("strategy_learning_backlog.csv", strategy_learning_backlog)
+    learning_status = strategy_learning_backlog.get("learning_status", pd.Series(dtype=str)).astype(str) if not strategy_learning_backlog.empty else pd.Series(dtype=str)
+    summary["strategy_learning_backlog_count"] = len(strategy_learning_backlog)
+    summary["strategy_learning_needs_review_count"] = int((learning_status == "needs_review").sum())
+    summary["strategy_learning_watch_more_count"] = int((learning_status == "watch_more").sum())
+    first_live_decision_card = _build_first_live_decision_card(
+        summary,
+        formal_launch_action_queue,
+        daily_live_review_board,
+        strategy_learning_backlog,
+    )
+    _write_report_csv("first_live_decision_card.csv", first_live_decision_card)
+    first_live_decision = first_live_decision_card.iloc[0].to_dict() if not first_live_decision_card.empty else {}
+    summary["first_live_decision_status"] = first_live_decision.get("decision_status")
+    summary["first_live_decision_label"] = first_live_decision.get("decision_label")
+    summary["first_live_execution_posture"] = first_live_decision.get("execution_posture")
+    summary["first_live_primary_reason"] = first_live_decision.get("primary_reason")
+    summary["first_live_first_required_action"] = first_live_decision.get("first_required_action")
+    live_review_task_queue = _build_live_review_task_queue(first_live_decision_card, daily_live_review_board)
+    _write_report_csv("live_review_task_queue.csv", live_review_task_queue)
+    task_windows = live_review_task_queue.get("window", pd.Series(dtype=str)).astype(str) if not live_review_task_queue.empty else pd.Series(dtype=str)
+    summary["live_review_task_count"] = len(live_review_task_queue)
+    summary["live_review_premarket_task_count"] = int((task_windows == "盘前").sum())
+    summary["live_review_intraday_after_task_count"] = int((task_windows == "盘中/盘后").sum())
+    summary["live_review_after_close_task_count"] = int((task_windows == "盘后").sum())
+    summary["live_review_formal_required_task_count"] = (
+        int(live_review_task_queue.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy).sum())
+        if not live_review_task_queue.empty
+        else 0
+    )
+    review_coverage_dashboard = _build_review_coverage_dashboard(live_review_task_queue)
+    _write_report_csv("review_coverage_dashboard.csv", review_coverage_dashboard)
+    coverage_status = review_coverage_dashboard.get("coverage_status", pd.Series(dtype=str)).astype(str) if not review_coverage_dashboard.empty else pd.Series(dtype=str)
+    summary["review_coverage_scope_count"] = len(review_coverage_dashboard)
+    summary["review_coverage_pending_scope_count"] = int((coverage_status == "pending_review").sum())
+    summary["review_coverage_issue_scope_count"] = int((coverage_status == "issue_found").sum())
+    summary["review_coverage_continue_watch_scope_count"] = int((coverage_status == "continue_watch").sum())
+    live_review_evidence_rubric = _build_live_review_evidence_rubric(live_review_task_queue)
+    _write_report_csv("live_review_evidence_rubric.csv", live_review_evidence_rubric)
+    summary["live_review_rubric_scope_count"] = len(live_review_evidence_rubric)
+    summary["live_review_rubric_pending_scope_count"] = (
+        int((live_review_evidence_rubric.get("pending_count", pd.Series(dtype=int)).fillna(0).astype(int) > 0).sum())
+        if not live_review_evidence_rubric.empty
+        else 0
+    )
+    summary["live_review_rubric_formal_scope_count"] = (
+        int((live_review_evidence_rubric.get("formal_required_count", pd.Series(dtype=int)).fillna(0).astype(int) > 0).sum())
+        if not live_review_evidence_rubric.empty
+        else 0
+    )
+    live_premarket_command_sheet = _build_live_premarket_command_sheet(
+        first_live_decision_card,
+        live_review_task_queue,
+        live_review_evidence_rubric,
+    )
+    _write_report_csv("live_premarket_command_sheet.csv", live_premarket_command_sheet)
+    summary["live_premarket_command_count"] = len(live_premarket_command_sheet)
+    summary["live_premarket_blocking_command_count"] = (
+        int(live_premarket_command_sheet.get("blocks_live_buy", pd.Series(dtype=bool)).map(_truthy).sum())
+        if not live_premarket_command_sheet.empty
+        else 0
+    )
+    summary["live_premarket_formal_command_count"] = (
+        int(live_premarket_command_sheet.get("formal_trade_required", pd.Series(dtype=bool)).map(_truthy).sum())
+        if not live_premarket_command_sheet.empty
+        else 0
+    )
+    live_blocker_resolution_plan = _build_live_blocker_resolution_plan(live_premarket_command_sheet)
+    _write_report_csv("live_blocker_resolution_plan.csv", live_blocker_resolution_plan)
+    resolution_types = live_blocker_resolution_plan.get("resolution_type", pd.Series(dtype=str)).astype(str) if not live_blocker_resolution_plan.empty else pd.Series(dtype=str)
+    summary["live_blocker_resolution_count"] = len(live_blocker_resolution_plan)
+    summary["live_blocker_refresh_count"] = int((resolution_types == "broker_holding_price_refresh").sum())
+    summary["live_blocker_rerun_audit_count"] = int((resolution_types == "rerun_readiness_audit").sum())
+    summary["live_blocker_manual_review_count"] = int(resolution_types.isin({"manual_formal_action_review", "no_trade_context_review"}).sum())
+    live_blocker_evidence_ledger = _build_live_blocker_evidence_ledger(
+        live_blocker_resolution_plan,
+        formal_action_reviews_report,
+        no_trade_day_review,
+    )
+    _write_report_csv("live_blocker_evidence_ledger.csv", live_blocker_evidence_ledger)
+    blocker_evidence_status = live_blocker_evidence_ledger.get("evidence_status", pd.Series(dtype=str)).astype(str) if not live_blocker_evidence_ledger.empty else pd.Series(dtype=str)
+    summary["live_blocker_evidence_count"] = len(live_blocker_evidence_ledger)
+    summary["live_blocker_pending_evidence_count"] = int((blocker_evidence_status == "pending_evidence").sum())
+    summary["live_blocker_validated_evidence_count"] = int((blocker_evidence_status == "validated").sum())
+    summary["live_blocker_issue_evidence_count"] = int((blocker_evidence_status == "issue_found").sum())
+    live_hidden_risk_watchlist = _build_live_hidden_risk_watchlist(
+        daily_live_review_board,
+        live_blocker_evidence_ledger,
+        strategy_learning_backlog,
+    )
+    _write_report_csv("live_hidden_risk_watchlist.csv", live_hidden_risk_watchlist)
+    watch_status = live_hidden_risk_watchlist.get("watch_status", pd.Series(dtype=str)).astype(str) if not live_hidden_risk_watchlist.empty else pd.Series(dtype=str)
+    watch_risk_level = live_hidden_risk_watchlist.get("risk_level", pd.Series(dtype=str)).astype(str) if not live_hidden_risk_watchlist.empty else pd.Series(dtype=str)
+    summary["live_hidden_risk_watch_count"] = len(live_hidden_risk_watchlist)
+    summary["live_hidden_risk_high_count"] = int((watch_risk_level == "high").sum())
+    summary["live_hidden_risk_pending_evidence_count"] = int((watch_status == "pending_evidence").sum())
+    summary["live_hidden_risk_issue_found_count"] = int((watch_status == "issue_found").sum())
+    live_daily_review_execution_checklist = _build_live_daily_review_execution_checklist(
+        live_hidden_risk_watchlist,
+        daily_review_checklist_reviews_report,
+    )
+    _write_report_csv("live_daily_review_execution_checklist.csv", live_daily_review_execution_checklist)
+    review_axes = live_daily_review_execution_checklist.get("review_axis", pd.Series(dtype=str)).astype(str) if not live_daily_review_execution_checklist.empty else pd.Series(dtype=str)
+    review_windows = live_daily_review_execution_checklist.get("review_window", pd.Series(dtype=str)).astype(str) if not live_daily_review_execution_checklist.empty else pd.Series(dtype=str)
+    daily_review_status = live_daily_review_execution_checklist.get("review_status", pd.Series(dtype=str)).astype(str) if not live_daily_review_execution_checklist.empty else pd.Series(dtype=str)
+    duplicate_source_counts = live_daily_review_execution_checklist.get("duplicate_source_count", pd.Series(dtype=int)).fillna(1).astype(int) if not live_daily_review_execution_checklist.empty else pd.Series(dtype=int)
+    summary["live_daily_review_check_count"] = len(live_daily_review_execution_checklist)
+    summary["live_daily_review_source_signal_count"] = int(duplicate_source_counts.sum()) if not duplicate_source_counts.empty else 0
+    summary["live_daily_review_duplicate_source_count"] = max(0, int(duplicate_source_counts.sum()) - len(live_daily_review_execution_checklist)) if not duplicate_source_counts.empty else 0
+    summary["live_daily_review_execution_evidence_count"] = int((review_axes == "execution_evidence").sum())
+    summary["live_daily_review_strategy_logic_count"] = int(review_axes.isin({"buy_point", "sell_point", "selection", "model_switch"}).sum())
+    summary["live_daily_review_validated_count"] = int((daily_review_status == "validated").sum())
+    summary["live_daily_review_issue_found_count"] = int((daily_review_status == "issue_found").sum())
+    summary["live_daily_review_continue_watch_count"] = int((daily_review_status == "continue_watch").sum())
+    live_daily_review_action_layers = _build_live_daily_review_action_layers(live_daily_review_execution_checklist)
+    _write_report_csv("live_daily_review_action_layers.csv", live_daily_review_action_layers)
+    summary["live_daily_review_action_layer_count"] = len(live_daily_review_action_layers)
+    summary["live_daily_review_action_layer_pending_count"] = (
+        int((live_daily_review_action_layers.get("pending_count", pd.Series(dtype=int)).fillna(0).astype(int) > 0).sum())
+        if not live_daily_review_action_layers.empty
+        else 0
+    )
+    summary["live_daily_review_premarket_count"] = int(review_windows.isin({"盘前", "盘前/盘后"}).sum())
+    live_premarket_action_sequence = _build_live_premarket_action_sequence(
+        live_blocker_resolution_plan,
+        live_blocker_evidence_ledger,
+    )
+    _write_report_csv("live_premarket_action_sequence.csv", live_premarket_action_sequence)
+    summary["live_premarket_sequence_step_count"] = len(live_premarket_action_sequence)
+    summary["live_premarket_sequence_ready_step_count"] = (
+        int(live_premarket_action_sequence.get("can_execute_now", pd.Series(dtype=bool)).map(_truthy).sum())
+        if not live_premarket_action_sequence.empty
+        else 0
+    )
+    ready_sequence = (
+        live_premarket_action_sequence[live_premarket_action_sequence.get("can_execute_now", pd.Series(dtype=bool)).map(_truthy)]
+        if not live_premarket_action_sequence.empty
+        else pd.DataFrame([])
+    )
+    summary["live_premarket_next_action"] = (
+        ready_sequence.iloc[0].get("action_label")
+        if not ready_sequence.empty
+        else (live_premarket_action_sequence.iloc[0].get("action_label") if not live_premarket_action_sequence.empty else "")
+    )
+    live_admission_snapshot = _build_live_admission_snapshot(
+        summary,
+        first_live_decision_card,
+        live_premarket_command_sheet,
+    )
+    _write_report_csv("live_admission_snapshot.csv", live_admission_snapshot)
+    live_admission = live_admission_snapshot.iloc[0].to_dict() if not live_admission_snapshot.empty else {}
+    summary["live_admission_status"] = live_admission.get("admission_status")
+    summary["live_admission_label"] = live_admission.get("admission_label")
+    summary["live_admission_buy_allowed"] = live_admission.get("live_buy_allowed")
+    summary["live_admission_blocking_command_count"] = live_admission.get("blocking_command_count")
+    summary["live_admission_next_step"] = live_admission.get("next_step")
+    live_premarket_execution_recheck = _build_live_premarket_execution_recheck(
+        summary,
+        live_admission_snapshot,
+        live_premarket_action_sequence,
+        live_blocker_evidence_ledger,
+    )
+    _write_report_csv("live_premarket_execution_recheck.csv", live_premarket_execution_recheck)
+    live_recheck = live_premarket_execution_recheck.iloc[0].to_dict() if not live_premarket_execution_recheck.empty else {}
+    summary["live_premarket_recheck_status"] = live_recheck.get("recheck_status")
+    summary["live_premarket_recheck_label"] = live_recheck.get("recheck_label")
+    summary["live_premarket_recheck_next_action"] = live_recheck.get("next_operator_action")
+    live_premarket_action_attempts = _build_live_premarket_action_attempts_report()
+    _write_report_csv("live_premarket_action_attempts.csv", live_premarket_action_attempts)
+    attempt_status = live_premarket_action_attempts.get("ok", pd.Series(dtype=bool)).map(_truthy) if not live_premarket_action_attempts.empty else pd.Series(dtype=bool)
+    latest_attempt = live_premarket_action_attempts.iloc[0].to_dict() if not live_premarket_action_attempts.empty else {}
+    summary["live_premarket_action_attempt_count"] = len(live_premarket_action_attempts)
+    summary["live_premarket_action_attempt_success_count"] = int(attempt_status.sum()) if not attempt_status.empty else 0
+    summary["live_premarket_latest_attempt_at"] = latest_attempt.get("attempted_at")
+    summary["live_premarket_latest_attempt_blocking_count"] = latest_attempt.get("live_admission_blocking_command_count")
+    live_manual_launch_acceptance = _build_live_manual_launch_acceptance(
+        summary,
+        live_admission_snapshot,
+        live_premarket_execution_recheck,
+        live_daily_review_action_layers,
+    )
+    _write_report_csv("live_manual_launch_acceptance.csv", live_manual_launch_acceptance)
+    acceptance_status = live_manual_launch_acceptance.get("status", pd.Series(dtype=str)).astype(str) if not live_manual_launch_acceptance.empty else pd.Series(dtype=str)
+    acceptance_hard = live_manual_launch_acceptance.get("is_hard_blocker", pd.Series(dtype=bool)).map(_truthy) if not live_manual_launch_acceptance.empty else pd.Series(dtype=bool)
+    summary["live_manual_launch_acceptance_count"] = len(live_manual_launch_acceptance)
+    summary["live_manual_launch_hard_blocker_count"] = int(acceptance_hard.sum()) if not acceptance_hard.empty else 0
+    summary["live_manual_launch_watch_count"] = int((acceptance_status == "watch").sum())
+    summary["live_manual_launch_ready"] = summary["live_manual_launch_hard_blocker_count"] == 0 and _truthy(summary.get("live_admission_buy_allowed"))
+    live_day1_review_journal = _build_live_day1_review_journal(
+        live_premarket_action_sequence,
+        live_blocker_evidence_ledger,
+        live_manual_launch_acceptance,
+        live_daily_review_execution_checklist,
+        day1_paper_review_pack,
+        day1_after_close_review_queue,
+    )
+    _write_report_csv("live_day1_review_journal.csv", live_day1_review_journal)
+    journal_status = live_day1_review_journal.get("status", pd.Series(dtype=str)).astype(str) if not live_day1_review_journal.empty else pd.Series(dtype=str)
+    journal_windows = live_day1_review_journal.get("journal_window", pd.Series(dtype=str)).astype(str) if not live_day1_review_journal.empty else pd.Series(dtype=str)
+    summary["live_day1_review_journal_count"] = len(live_day1_review_journal)
+    summary["live_day1_review_journal_blocking_count"] = (
+        int(live_day1_review_journal.get("is_blocking", pd.Series(dtype=bool)).map(_truthy).sum())
+        if not live_day1_review_journal.empty
+        else 0
+    )
+    summary["live_day1_review_journal_premarket_count"] = int((journal_windows == "盘前").sum())
+    summary["live_day1_review_journal_after_close_count"] = int((journal_windows == "盘后").sum())
+    summary["live_day1_review_journal_issue_count"] = int(journal_status.isin({"issue_found", "block", "blocked", "data_gap", "process_gap"}).sum())
     (OUT_DIR / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    (OUT_DIR / "LIVE_ADMISSION_SNAPSHOT_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实盘准入快照",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 下一交易日：{summary.get('next_trade_entry_date') or '--'}",
+                f"- 准入结论：{live_admission.get('admission_label') or '--'} (`{live_admission.get('admission_status') or '--'}`)",
+                f"- 真实买入允许：{live_admission.get('live_buy_allowed')}",
+                f"- 纸面执行允许：{live_admission.get('paper_execution_allowed')}",
+                f"- 自动下单允许：{live_admission.get('auto_order_allowed')}",
+                f"- 阻止真实买入动作：{live_admission.get('blocking_command_count')}",
+                f"- 第一动作：{live_admission.get('first_required_action') or '--'}",
+                f"- 下一步：{live_admission.get('next_step') or '--'}",
+                f"- 复核规则：{live_admission.get('verification_rule') or '--'}",
+                "",
+                "这张快照只回答盘前总闸门：今天是否能真实买入、为什么不能、处理后如何验证。无票日不是失败，不为填满仓位强行交易。",
+                "",
+                _md_table(live_admission_snapshot),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_BLOCKER_RESOLUTION_PLAN_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实盘阻断处理路线图",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 阻断处理项：{summary['live_blocker_resolution_count']}",
+                f"- 持仓/价格刷新：{summary['live_blocker_refresh_count']}",
+                f"- 重跑审计：{summary['live_blocker_rerun_audit_count']}",
+                f"- 人工复盘/确认：{summary['live_blocker_manual_review_count']}",
+                "",
+                "路线图只负责拆解盘前动作，不直接下单。先处理真实持仓/价格与重跑审计，再做无票日归因；证据未闭环前禁止真实买入。",
+                "",
+                _md_table(live_blocker_resolution_plan),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_BLOCKER_EVIDENCE_LEDGER_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实盘阻断证据闭环表",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 阻断证据项：{summary['live_blocker_evidence_count']}",
+                f"- 待证据：{summary['live_blocker_pending_evidence_count']}",
+                f"- 已验证：{summary['live_blocker_validated_evidence_count']}",
+                f"- 已发现隐患：{summary['live_blocker_issue_evidence_count']}",
+                "",
+                "这张表检查盘前阻断处理是否真正留下证据。证据落账不等于自动放行；仍必须重跑审计，确认底层阻断真实消失。",
+                "",
+                _md_table(live_blocker_evidence_ledger),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_PREMARKET_ACTION_SEQUENCE_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 盘前执行顺序",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 执行步骤：{summary['live_premarket_sequence_step_count']} 步",
+                f"- 当前可执行：{summary['live_premarket_sequence_ready_step_count']} 步",
+                f"- 下一动作：{summary.get('live_premarket_next_action') or '--'}",
+                "",
+                "这张表把重复阻断合并成自然交易顺序：先刷新真实持仓/价格，再重跑审计，最后记录无票日归因。未完成前置事实前，不用无票归因反推放宽买点或选股规则。",
+                "",
+                _md_table(live_premarket_action_sequence),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_PREMARKET_EXECUTION_RECHECK_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 盘前执行后复查",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 复查结论：{live_recheck.get('recheck_label') or '--'} (`{live_recheck.get('recheck_status') or '--'}`)",
+                f"- 真实买入允许：{live_recheck.get('live_buy_allowed')}",
+                f"- 仍阻断真实买入动作：{live_recheck.get('blocking_command_count')}",
+                f"- 当前步骤：{live_recheck.get('current_action_label') or '--'}",
+                f"- 下一动作：{live_recheck.get('next_operator_action') or '--'}",
+                "",
+                "这张表用于每次点击同步、重跑审计或记录归因后复查：动作有证据不等于可以买；必须重新审计确认准入快照真实放行。",
+                "",
+                _md_table(live_premarket_execution_recheck),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_MANUAL_LAUNCH_ACCEPTANCE_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 人工实战验收单",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 验收项：{summary.get('live_manual_launch_acceptance_count', 0)}",
+                f"- 硬阻断：{summary.get('live_manual_launch_hard_blocker_count', 0)}",
+                f"- 观察项：{summary.get('live_manual_launch_watch_count', 0)}",
+                f"- 人工实战复核就绪：{summary.get('live_manual_launch_ready')}",
+                "",
+                "这张表只回答一个问题：盘前动作处理后，是否可以进入人工实战最终复核。它不触发自动下单；硬阻断未清零前，策略观察和收益压力都不能替代准入。",
+                "",
+                _md_table(live_manual_launch_acceptance),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_DAY1_REVIEW_JOURNAL_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 Day1 实战复盘日志",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 日志项：{summary.get('live_day1_review_journal_count', 0)}",
+                f"- 当前阻断/隐患项：{summary.get('live_day1_review_journal_blocking_count', 0)}",
+                f"- 盘前项：{summary.get('live_day1_review_journal_premarket_count', 0)}",
+                f"- 盘后项：{summary.get('live_day1_review_journal_after_close_count', 0)}",
+                f"- 已发现问题项：{summary.get('live_day1_review_journal_issue_count', 0)}",
+                "",
+                "这张表把第一天实战要做的事按时间线合并：先清盘前阻断，再看人工验收，盘中只记录观察证据，盘后再做买点、卖点、选股和策略切换归因。它不放宽买入规则，也不触发下单。",
+                "",
+                _md_table(live_day1_review_journal),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_HIDDEN_RISK_WATCHLIST_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实战隐患观察登记表",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 观察样本：{summary['live_hidden_risk_watch_count']} 条",
+                f"- 高风险：{summary['live_hidden_risk_high_count']} 条",
+                f"- 待证据：{summary['live_hidden_risk_pending_evidence_count']} 条",
+                f"- 已发现隐患：{summary['live_hidden_risk_issue_found_count']} 条",
+                "",
+                "这张表承接尚未闭环的复盘样本：正式阻断、无票日、候选遗漏、纸面观察和已发现问题。它只用于复盘与学习，不直接放行买入。",
+                "",
+                _md_table(live_hidden_risk_watchlist),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_DAILY_REVIEW_EXECUTION_CHECKLIST_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实战逐项复盘执行清单",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 复盘检查项：{summary['live_daily_review_check_count']} 条",
+                f"- 来源信号/重复合并：{summary.get('live_daily_review_source_signal_count', 0)} / {summary.get('live_daily_review_duplicate_source_count', 0)}",
+                f"- 行动层/仍有待处理层：{summary.get('live_daily_review_action_layer_count', 0)} / {summary.get('live_daily_review_action_layer_pending_count', 0)}",
+                f"- 已验证/发现隐患/继续观察：{summary.get('live_daily_review_validated_count', 0)} / {summary.get('live_daily_review_issue_found_count', 0)} / {summary.get('live_daily_review_continue_watch_count', 0)}",
+                f"- 执行证据项：{summary['live_daily_review_execution_evidence_count']} 条",
+                f"- 策略逻辑项：{summary['live_daily_review_strategy_logic_count']} 条",
+                f"- 盘前必须看：{summary['live_daily_review_premarket_count']} 条",
+                "",
+                "这张表把隐患观察样本转成当天可执行的复盘动作，覆盖买点、卖点、选股、策略切换和执行证据。它不改变交易合同，只决定今天要收集什么证据、什么条件进入调优。",
+                "",
+                "## 行动层",
+                "",
+                _md_table(live_daily_review_action_layers),
+                "",
+                "## 逐项明细",
+                "",
+                _md_table(live_daily_review_execution_checklist),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "FIRST_LIVE_DECISION_CARD_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 首日实战决策卡",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 下一交易日：{summary.get('next_trade_entry_date') or '--'}",
+                f"- 决策：{first_live_decision.get('decision_label') or '--'} (`{first_live_decision.get('decision_status') or '--'}`)",
+                f"- 执行动作：{first_live_decision.get('execution_posture') or '--'}",
+                f"- 主因：{first_live_decision.get('primary_reason') or '--'}",
+                f"- 第一动作：{first_live_decision.get('first_required_action') or '--'}",
+                f"- 复盘焦点：{first_live_decision.get('review_focus') or '--'}",
+                f"- 锁定模式：{first_live_decision.get('locked_modes') or '--'}",
+                "",
+                _md_table(first_live_decision_card),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_REVIEW_TASK_QUEUE_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实战复盘任务队列",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 任务总数：{summary['live_review_task_count']} 项",
+                f"- 盘前/盘中盘后/盘后：{summary['live_review_premarket_task_count']} / {summary['live_review_intraday_after_task_count']} / {summary['live_review_after_close_task_count']}",
+                f"- 正式必处理：{summary['live_review_formal_required_task_count']} 项",
+                "",
+                "按 priority 从小到大执行。正式动作只记录证据，不替代底层 gate 清理；候选遗漏和无票日复盘只做行为归因，不按单日收益倒推调参。",
+                "",
+                _md_table(live_review_task_queue),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "REVIEW_COVERAGE_DASHBOARD_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 复盘覆盖率看板",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 复盘范围：{summary['review_coverage_scope_count']} 类",
+                f"- 待复盘范围：{summary['review_coverage_pending_scope_count']} 类",
+                f"- 发现隐患范围：{summary['review_coverage_issue_scope_count']} 类",
+                f"- 继续观察范围：{summary['review_coverage_continue_watch_scope_count']} 类",
+                "",
+                "覆盖率只表示复盘证据是否落地，不代表收益优化完成；发现隐患后必须先做行为归因，再决定是否调整规则。",
+                "",
+                _md_table(review_coverage_dashboard),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_REVIEW_EVIDENCE_RUBRIC_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实战复盘证据矩阵",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 复盘规则范围：{summary['live_review_rubric_scope_count']} 类",
+                f"- 仍有待复盘任务的范围：{summary['live_review_rubric_pending_scope_count']} 类",
+                f"- 正式实战前必须处理的范围：{summary['live_review_rubric_formal_scope_count']} 类",
+                "",
+                "矩阵用于约束逐项复盘：先补证据，再做行为归因；只有重复、可复核、同类的问题才进入策略优化，不按单日盈亏倒推规则。",
+                "",
+                _md_table(live_review_evidence_rubric),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "LIVE_PREMARKET_COMMAND_SHEET_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 实战盘前指挥单",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 下一交易日：{summary.get('next_trade_entry_date') or '--'}",
+                f"- 指挥动作：{summary['live_premarket_command_count']} 项",
+                f"- 阻止真实买入的动作：{summary['live_premarket_blocking_command_count']} 项",
+                f"- 正式必处理动作：{summary['live_premarket_formal_command_count']} 项",
+                "",
+                "按 priority 从小到大执行。`blocks_live_buy=True` 的动作未完成前，不进入真实买入；观察项只进入复盘，不为填仓位强行交易。",
+                "",
+                _md_table(live_premarket_command_sheet),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "STRATEGY_LEARNING_BACKLOG_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 策略学习隐患队列",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 待学习样本：{summary['strategy_learning_backlog_count']} 条",
+                f"- 需调优复盘：{summary['strategy_learning_needs_review_count']} 条",
+                f"- 继续观察：{summary['strategy_learning_watch_more_count']} 条",
+                "",
+                "这张表只收集人工复盘后的问题样本，用于后续优化买点、选股模式、策略切换和卖点合同；未复盘样本不会被自动当成问题。",
+                "",
+                _md_table(strategy_learning_backlog),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "DAILY_LIVE_REVIEW_BOARD_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 每日实战复盘看板",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 下一交易日：{summary.get('next_trade_entry_date') or '--'}",
+                f"- 复盘事项：{summary['daily_live_review_board_count']} 项",
+                f"- 待处理/待复盘：{summary['daily_live_review_board_pending_count']} 项",
+                f"- 正式实战前必须处理：{summary['daily_live_review_board_formal_required_count']} 项",
+                f"- 已发现隐患/阻断：{summary['daily_live_review_board_issue_found_count']} 项",
+                "",
+                "使用方法：按 priority 从小到大处理。先处理正式实战前必须处理项，再记录无票日、候选遗漏和 Day1 纸面/盘后观察；不要用单日收益倒推改规则。",
+                "",
+                _md_table(daily_live_review_board),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "DAY1_PAPER_REVIEW_PACK_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 第1天纸面实战复盘包",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 下一交易日：{summary.get('next_trade_entry_date') or '--'}",
+                f"- 复盘票据：{summary['day1_paper_review_ticket_count']} 张",
+                f"- 待纸面/待刷新：{summary['day1_paper_review_pending_count']} 张",
+                "",
+                "这份复盘包只用于学习和验证交易逻辑，不代表正式买入放行。盘后反馈必须归因到买点、选股、策略切换、卖点合同或信号有效性，不按单日收益倒推调参。",
+                "",
+                _md_table(day1_paper_review_pack),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (OUT_DIR / "DAY1_AFTER_CLOSE_REVIEW_QUEUE_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 Day1 盘后逐票复盘队列",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 队列票据：{summary['day1_after_close_review_count']} 张",
+                f"- 待写纸面执行：{summary['day1_after_close_pending_execution_count']} 张",
+                f"- 待盘后复盘：{summary['day1_after_close_pending_review_count']} 张",
+                f"- 已发现隐患：{summary['day1_after_close_issue_found_count']} 张",
+                "",
+                "盘后复盘只做行为归因：买点、选股、策略切换、卖点合同、信号有效性。不要用单日收益倒推参数。",
+                "",
+                _md_table(day1_after_close_review_queue),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (OUT_DIR / "TICKET_REVIEW_BRIEF_CN.md").write_text(
         "\n".join(
             [
@@ -1873,6 +5810,24 @@ def run() -> dict[str, Any]:
         ),
         encoding="utf-8",
     )
+    (OUT_DIR / "NO_TRADE_DAY_REVIEW_CN.md").write_text(
+        "\n".join(
+            [
+                "# G3 无票日实战复盘",
+                "",
+                f"- 生成时间：{summary['generated_at']}",
+                f"- 下一交易日：{summary.get('next_trade_entry_date') or '--'}",
+                f"- 无票日复盘项：{summary['no_trade_day_review_count']}",
+                f"- 正式实战前必须处理：{summary['no_trade_day_formal_required_count']}",
+                "",
+                "无票日也要复盘：判断是自然空仓、候选确认缺口、数据/执行缺口，还是策略规则误伤；不要为了补满二槽而降低买点和盘中确认标准。",
+                "",
+                _md_table(no_trade_day_review),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (OUT_DIR / "PRETRADE_ACTION_CHECKLIST_CN.md").write_text(
         "\n".join(
             [
@@ -1889,6 +5844,10 @@ def run() -> dict[str, Any]:
                 f"- 逐票复盘证据：{summary['pretrade_review_evidence_count']} 条",
                 f"- 纸面观察后评估：{summary['paper_watch_followup_count']} 条；待观察 {summary['paper_watch_followup_pending_count']}；发现隐患 {summary['paper_watch_issue_found_count']}",
                 f"- 盘前执行剧本：{summary['premarket_playbook_step_count']} 步",
+                f"- 每日实战复盘看板：{summary['daily_live_review_board_count']} 项；待处理 {summary['daily_live_review_board_pending_count']}；正式必处理 {summary['daily_live_review_board_formal_required_count']}；隐患/阻断 {summary['daily_live_review_board_issue_found_count']}",
+                f"- 策略学习隐患队列：{summary['strategy_learning_backlog_count']} 条；需调优复盘 {summary['strategy_learning_needs_review_count']}；继续观察 {summary['strategy_learning_watch_more_count']}",
+                f"- Day1 纸面复盘包：{summary['day1_paper_review_ticket_count']} 张；待纸面/待刷新 {summary['day1_paper_review_pending_count']}",
+                f"- Day1 盘后复盘队列：{summary['day1_after_close_review_count']} 张；待写执行 {summary['day1_after_close_pending_execution_count']}；待复盘 {summary['day1_after_close_pending_review_count']}；发现隐患 {summary['day1_after_close_issue_found_count']}",
                 "",
                 _action_checklist_markdown(action_checklist),
                 "",
@@ -1918,17 +5877,38 @@ def run() -> dict[str, Any]:
         f"- 持仓退出底稿阻断/关注：{summary['holding_checklist_block_count']} / {summary['holding_checklist_warn_watch_count']}",
         f"- 持仓刷新正式待处理/观察：{summary['holding_formal_refresh_pending_count']} / {summary['holding_observation_refresh_count']}",
         f"- 候选遗漏底稿阻断/关注：{summary['candidate_checklist_block_count']} / {summary['candidate_checklist_warn_watch_count']}",
+        f"- 无票日复盘项/正式必处理：{summary['no_trade_day_review_count']} / {summary['no_trade_day_formal_required_count']}",
         f"- 自然交易一致性最低分/偏拧票数：{summary['natural_consistency_min_score']} / {summary['natural_consistency_strained_count']}",
         f"- 自然执行决策阻断/关注：{summary['natural_execution_block_count']} / {summary['natural_execution_warn_watch_count']}",
         f"- 实战前动作清单待处理/正式必处理/观察/阻断：{summary['pretrade_action_pending_count']} / {summary['pretrade_formal_action_pending_count']} / {summary['pretrade_observation_action_pending_count']} / {summary['pretrade_action_block_count']}",
         f"- 正式实盘放行：`{summary['formal_launch_status']}`；缺口 {summary['formal_launch_missing_count']}；下一步：{summary['formal_launch_next_step']}",
+        f"- 首日实战决策：{summary.get('first_live_decision_label') or '--'} (`{summary.get('first_live_decision_status') or '--'}`)；动作：{summary.get('first_live_execution_posture') or '--'}",
+        f"- 首日主因：{summary.get('first_live_primary_reason') or '--'}",
+        f"- 首日第一动作：{summary.get('first_live_first_required_action') or '--'}",
+        f"- 实战复盘任务队列：{summary.get('live_review_task_count', 0)} 项；盘前 {summary.get('live_review_premarket_task_count', 0)}；盘中/盘后 {summary.get('live_review_intraday_after_task_count', 0)}；盘后 {summary.get('live_review_after_close_task_count', 0)}；正式必处理 {summary.get('live_review_formal_required_task_count', 0)}",
         f"- 执行入口可用/锁定：{summary['execution_mode_ready_count']} / {summary['execution_mode_locked_count']}",
         f"- 放行优先队列：{summary['formal_launch_action_queue_count']} 项",
         f"- 逐票复盘证据：{summary['pretrade_review_evidence_count']} 条",
         f"- 纸面观察后评估：{summary['paper_watch_followup_count']} 条；待观察 {summary['paper_watch_followup_pending_count']}；发现隐患 {summary['paper_watch_issue_found_count']}",
         f"- 盘前执行剧本：{summary['premarket_playbook_step_count']} 步",
+        f"- 每日实战复盘看板：{summary['daily_live_review_board_count']} 项；待处理 {summary['daily_live_review_board_pending_count']}；正式必处理 {summary['daily_live_review_board_formal_required_count']}；隐患/阻断 {summary['daily_live_review_board_issue_found_count']}",
+        f"- 实战逐项复盘执行清单：{summary.get('live_daily_review_check_count', 0)} 个处理项；来源信号 {summary.get('live_daily_review_source_signal_count', 0)}；重复来源已合并 {summary.get('live_daily_review_duplicate_source_count', 0)}；行动层 {summary.get('live_daily_review_action_layer_count', 0)}；仍有待处理层 {summary.get('live_daily_review_action_layer_pending_count', 0)}；已验证 {summary.get('live_daily_review_validated_count', 0)}；发现隐患 {summary.get('live_daily_review_issue_found_count', 0)}；继续观察 {summary.get('live_daily_review_continue_watch_count', 0)}",
+        f"- 人工实战验收：就绪 {summary.get('live_manual_launch_ready')}；硬阻断 {summary.get('live_manual_launch_hard_blocker_count', 0)}；观察项 {summary.get('live_manual_launch_watch_count', 0)}",
+        f"- 策略学习隐患队列：{summary['strategy_learning_backlog_count']} 条；需调优复盘 {summary['strategy_learning_needs_review_count']}；继续观察 {summary['strategy_learning_watch_more_count']}",
+        f"- Day1 纸面复盘包：{summary['day1_paper_review_ticket_count']} 张；待纸面/待刷新 {summary['day1_paper_review_pending_count']}",
+        f"- Day1 盘后复盘队列：{summary['day1_after_close_review_count']} 张；待写执行 {summary['day1_after_close_pending_execution_count']}；待复盘 {summary['day1_after_close_pending_review_count']}；发现隐患 {summary['day1_after_close_issue_found_count']}",
         "",
         "解释：本报告是实战前只读审计，不触发刷新、不下单。`manual_shadow_ready` 只代表可进入人工/纸面实战复盘；正式自动下单仍必须另行确认。",
+        "",
+        "## 首日实战决策卡",
+        "",
+        _md_table(first_live_decision_card),
+        "",
+        "## 实战复盘任务队列",
+        "",
+        "按这张表执行日内动作和盘后复盘，所有任务都回到看板/台账记录证据。",
+        "",
+        _md_table(live_review_task_queue),
         "",
         "## 实战 Gate",
         "",
@@ -1963,6 +5943,36 @@ def run() -> dict[str, Any]:
         "## 盘前执行剧本",
         "",
         _md_table(premarket_playbook),
+        "",
+        "## 每日实战复盘看板",
+        "",
+        "这张表是实战处理顺序：先处理正式必处理项，再逐项复盘无票日、候选遗漏和 Day1 纸面/盘后观察。",
+        "",
+        _md_table(daily_live_review_board),
+        "",
+        "## 策略学习隐患队列",
+        "",
+        "这里只收集已经人工复盘出问题或仍需观察的样本；它是后续优化入口，不把未复盘事项自动当成策略缺陷。",
+        "",
+        _md_table(strategy_learning_backlog),
+        "",
+        "## 无票日实战复盘",
+        "",
+        "无票日不是空白日：这里记录为什么不买、哪些候选只观察、哪些正式动作必须先处理。",
+        "",
+        _md_table(no_trade_day_review),
+        "",
+        "## Day1 纸面实战复盘包",
+        "",
+        "这张表把下一交易日票据拆成买点、选股、策略切换、卖点合同和组合暴露五类观察任务；它是学习闭环，不是正式买入放行。",
+        "",
+        _md_table(day1_paper_review_pack),
+        "",
+        "## Day1 盘后逐票复盘队列",
+        "",
+        "这张表把纸面执行和盘后归因接起来：未写纸面执行的先补执行，已执行但未归因的必须盘后记录观察结果。",
+        "",
+        _md_table(day1_after_close_review_queue),
         "",
         "## 自然交易一致性审计",
         "",

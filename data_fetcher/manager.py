@@ -4,12 +4,12 @@
 统一管理多个数据源，支持故障转移和负载均衡
 """
 
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from .base_fetcher import BaseDataSource
 from .sources import (
-    TdxQuantDataSource,
+    QmtMiniDataSource,
 )
 from core.base import Singleton
 from utils.exceptions import DataSourceException
@@ -31,14 +31,23 @@ class DataSourceManager(metaclass=Singleton):
     """
     
     # 数据源类注册表
-    SOURCE_CLASSES: Dict[str, Type[BaseDataSource]] = {
-        "tdxquant": TdxQuantDataSource,
+    SOURCE_CLASSES: Dict[str, Any] = {
+        "qmt_xtquant": QmtMiniDataSource,
     }
     
     def __init__(self):
         """初始化数据源管理器"""
         self._sources: Dict[str, BaseDataSource] = {}
         self._initialized = False
+
+    def _load_source_class(self, source_class: Any):
+        if isinstance(source_class, str):
+            module_name, class_name = source_class.split(":", 1)
+            import importlib
+
+            module = importlib.import_module(module_name)
+            return getattr(module, class_name)
+        return source_class
     
     def _ensure_initialized(self):
         """确保数据源已初始化"""
@@ -52,6 +61,7 @@ class DataSourceManager(metaclass=Singleton):
             source_config = sources_config.get(name, {})
             if source_config.get("enabled", True):
                 try:
+                    source_class = self._load_source_class(source_class)
                     self._sources[name] = source_class(name, source_config)
                     logger.info(f"已加载数据源: {name}")
                 except Exception as e:
@@ -70,6 +80,8 @@ class DataSourceManager(metaclass=Singleton):
             数据源实例
         """
         self._ensure_initialized()
+        if name in {"qmt", "qmtmini", "xtquant"}:
+            name = "qmt_xtquant"
         return self._sources.get(name)
     
     def get_available_sources(self) -> List[BaseDataSource]:
@@ -247,7 +259,8 @@ class DataSourceManager(metaclass=Singleton):
             所有股票列表
         """
         # 使用tdxquant数据源获取所有股票
-        source = self.get_source(source_name or "tdxquant")
+        preferred = str(config.get("data_sync.preferred_source", "qmt_xtquant") or "qmt_xtquant").strip().lower()
+        source = self.get_source(source_name or preferred)
         if source and hasattr(source, "get_all_stocks"):
             return source.get_all_stocks()
 
@@ -275,7 +288,8 @@ class DataSourceManager(metaclass=Singleton):
             所有指数列表
         """
         # 使用tdxquant数据源获取所有指数
-        source = self.get_source(source_name or "tdxquant")
+        preferred = str(config.get("data_sync.preferred_source", "qmt_xtquant") or "qmt_xtquant").strip().lower()
+        source = self.get_source(source_name or preferred)
         if source and hasattr(source, "get_all_indices"):
             return source.get_all_indices()
 
@@ -344,8 +358,11 @@ class DataSourceManager(metaclass=Singleton):
         # 先从缓存获取
         cached_data = cache_service.get_stock_history_cache(stock_code, period, start_date, end_date)
         if cached_data is not None:
-            logger.debug(f"从缓存获取 {stock_code} {period} 历史数据")
-            return cached_data
+            if isinstance(cached_data, pd.DataFrame) and cached_data.empty:
+                logger.debug(f"忽略空历史缓存 {stock_code} {period}")
+            else:
+                logger.debug(f"从缓存获取 {stock_code} {period} 历史数据")
+                return cached_data
         
         # 从数据源获取
         data = self.call_with_failover(
@@ -358,7 +375,7 @@ class DataSourceManager(metaclass=Singleton):
         )
         
         # 存入缓存
-        if data is not None:
+        if data is not None and not (isinstance(data, pd.DataFrame) and data.empty):
             cache_service.set_stock_history_cache(stock_code, period, start_date, end_date, data)
         
         return data

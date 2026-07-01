@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sys
@@ -36,7 +37,7 @@ INITIAL_CAPITAL = 1_000_000.0
 MAX_SLOTS = 2
 SLOT_PCT = 0.50
 START_DATE = pd.Timestamp("2020-01-01")
-END_FLOOR = pd.Timestamp("2026-06-18")
+END_FLOOR = pd.Timestamp.today().normalize()
 
 
 WINDOWS = {
@@ -698,13 +699,25 @@ def write_report(summary: pd.DataFrame, windows: pd.DataFrame, router_decisions:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Backtest G2/G3 market-style router.")
+    parser.add_argument(
+        "--end-date",
+        default=END_FLOOR.strftime("%Y-%m-%d"),
+        help="Minimum calendar end date for daily decisions and equity curve.",
+    )
+    args = parser.parse_args()
+    end_floor = pd.to_datetime(args.end_date, errors="coerce")
+    if pd.isna(end_floor):
+        raise ValueError(f"invalid --end-date: {args.end_date}")
+    end_floor = pd.Timestamp(end_floor).normalize()
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     g2 = load_g2_lots()
     g3 = load_g3_final_lots()
     lots = pd.concat([g2, g3], ignore_index=True, sort=False)
     market_context = load_market_context()
     lots = attach_previous_context(lots, market_context)
-    end = max(END_FLOOR, pd.to_datetime(lots["policy_exit_date"], errors="coerce").max())
+    end = max(end_floor, pd.to_datetime(lots["policy_exit_date"], errors="coerce").max())
     calendar = _trade_calendar(START_DATE, end)
     if not calendar:
         raise RuntimeError("empty trade calendar")

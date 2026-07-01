@@ -103,7 +103,7 @@
           <div>
             <span>G2补位候选</span>
             <strong>{{ fmt(routeCandidateCount('g2_gap_supplement'), 0) }}</strong>
-            <small>只补空档，不反客为主</small>
+            <small>已退出实盘，仅观察</small>
           </div>
           <div>
             <span>阻断最多</span>
@@ -111,6 +111,67 @@
             <small>{{ topBlockReason.count }} 条</small>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section class="panel strategy-detail-panel">
+      <div class="panel-head">
+        <div>
+          <h2>交易策略详情</h2>
+          <p>把每个正式交易策略的职责、来源、入场合同、退出边界和诊断重点讲清楚；风控合同仍保留在独立页面，本页只做有效性解释和证据对照。</p>
+        </div>
+      </div>
+      <div class="strategy-detail-grid">
+        <article v-for="item in strategyDetails" :key="item.key" class="strategy-detail-card" :class="item.tone">
+          <div class="strategy-detail-head">
+            <div>
+              <span class="strategy-role">{{ item.role }}</span>
+              <h3>{{ item.label }}</h3>
+            </div>
+            <el-tag size="small" :type="item.tagType">{{ item.badge }}</el-tag>
+          </div>
+          <p class="strategy-summary">{{ item.summary }}</p>
+          <div class="strategy-stats">
+            <div>
+              <span>候选</span>
+              <strong>{{ fmt(item.candidateCount, 0) }}</strong>
+            </div>
+            <div>
+              <span>交易</span>
+              <strong>{{ fmt(item.tradeCount, 0) }}</strong>
+            </div>
+            <div>
+              <span>胜率</span>
+              <strong>{{ pct(item.winRate) }}</strong>
+            </div>
+            <div>
+              <span>均笔</span>
+              <strong>{{ pct(item.avgReturn) }}</strong>
+            </div>
+            <div>
+              <span>最差</span>
+              <strong>{{ pct(item.worstTrade) }}</strong>
+            </div>
+          </div>
+          <dl class="strategy-contract-list">
+            <div>
+              <dt>来源路线</dt>
+              <dd>{{ item.sources }}</dd>
+            </div>
+            <div>
+              <dt>入场合同</dt>
+              <dd>{{ item.entry }}</dd>
+            </div>
+            <div>
+              <dt>仓位/退出</dt>
+              <dd>{{ item.exit }}</dd>
+            </div>
+            <div>
+              <dt>诊断重点</dt>
+              <dd>{{ item.diagnosis }}</dd>
+            </div>
+          </dl>
+        </article>
       </div>
     </section>
 
@@ -147,7 +208,7 @@
         <el-table-column label="均笔" width="90" align="right">
           <template #default="{ row }">{{ pct(row.route_health_avg_ret || row.avg_trade_return) }}</template>
         </el-table-column>
-        <el-table-column label="最差" width="90" align="right">
+        <el-table-column label="最差单笔" width="100" align="right">
           <template #default="{ row }">{{ pct(row.route_health_worst_ret || row.worst_trade) }}</template>
         </el-table-column>
         <el-table-column prop="top_block_reason" label="阻断/说明" min-width="260" show-overflow-tooltip />
@@ -158,8 +219,8 @@
       <div class="panel">
         <div class="panel-head">
           <div>
-            <h2>历史策略收益归因</h2>
-            <p>按正式交易策略确认收益来源，来源路线只用于追溯。</p>
+            <h2>历史已平仓策略收益归因</h2>
+            <p>按正式交易策略统计已平仓样本；最差单笔允许为负，代表历史止损或退出尾部，不代表当前候选票的预期收益。</p>
           </div>
         </div>
         <el-table :data="routeMetrics" stripe size="small" empty-text="暂无历史策略归因">
@@ -180,7 +241,7 @@
           <el-table-column label="均笔" width="86" align="right">
             <template #default="{ row }">{{ pct(row.avg_trade_return) }}</template>
           </el-table-column>
-          <el-table-column label="最差" width="86" align="right">
+          <el-table-column label="最差单笔" width="100" align="right">
             <template #default="{ row }">{{ pct(row.worst_trade) }}</template>
           </el-table-column>
           <el-table-column label="盈亏" width="110" align="right">
@@ -497,7 +558,7 @@ const effectivenessWarnings = computed(() => {
   const mainwaveCount = routeCandidateCount('institutional_mainwave')
   const g2Count = routeCandidateCount('g2_gap_supplement')
   if (g2Count > 0 && mainwaveCount === 0) {
-    items.push({ key: 'g2_supplement_only', level: 'warning', title: '补位路线独立出现', detail: 'G2补位只应该填空档，不能长期替代机构主升。' })
+    items.push({ key: 'g2_supplement_retired_observe', level: 'warning', title: 'G2补位仅观察', detail: '量能续强补位已退出实盘交易；候选只用于源质量和历史归因复盘。' })
   }
   return items
 })
@@ -524,6 +585,132 @@ const visibleCandidates = computed(() => {
   if (routeFilter.value === 'all') return allCandidates.value
   return allCandidates.value.filter((row) => (row.route || row.mode) === routeFilter.value)
 })
+const strategyDetails = computed(() => {
+  const definitions = [
+    {
+      key: 'institutional_score120_mainwave',
+      label: '机构主升 Score120',
+      role: '主收益引擎',
+      badge: '进攻',
+      tagType: 'success',
+      tone: 'mainwave',
+      routes: ['institutional_mainwave', 'score120_core'],
+      aliases: ['institutional_score120_mainwave', 'institutional_score120_core', 'mainwave_breakout_offense'],
+      summary: '只在机构主线扩散和分数确认同时成立时出手，承担 G3 的主要进攻收益。',
+      sources: 'institutional_mainwave；旧 score120 只保留为证据来源。',
+      entry: 'score>=120、sector_diffusion>=65、30m close>=MA20、index_mom60<=5%。index_mom60>5% 只观察，不进入影子盘或买入候选。',
+      exit: '默认单槽 50%；12% 硬止损、12% 先减半、剩余仓以前低或 30m 转弱退出。',
+      diagnosis: '重点看主升分数口径是否统一、指数 60 日动量是否过热、连续两笔机构主升亏损后的动态冷却是否触发。'
+    },
+    {
+      key: 'range_weak_repair',
+      label: '震荡弱势修复',
+      role: '弱势修复',
+      badge: '修复',
+      tagType: 'warning',
+      tone: 'repair',
+      routes: ['old_g3_route_v3', 'panic_repair', 'range_gap'],
+      aliases: ['range_weak_repair', 'repair_range_weak'],
+      summary: '处理非主升、非下跌主杀环境里的震荡或弱反弹修复，不和机构主升混排评分。',
+      sources: 'old_g3_route_v3、panic_repair range 来源；用 source_strategy_label 保留来源分层。',
+      entry: 'market_style 以 standard_range / weak_rebound 为主；日线出现中短期回撤后的收盘修复、下影或反包，震荡恐慌来源优先要求 30m 修复确认。',
+      exit: '基础首仓 20%，最高 25%；-6% 结构止损、-10% 硬止损、+8% 先减半，剩余仓以前低或 30m 转弱退出。',
+      diagnosis: '重点看候选是否真是弱势修复而不是追高，压力释放过滤是否过松，30m 修复确认是否缺失。'
+    },
+    {
+      key: 'panic_capitulation_repair',
+      label: '恐慌出清修复',
+      role: '压力释放',
+      badge: '防守',
+      tagType: 'warning',
+      tone: 'panic',
+      routes: ['panic_repair', 'old_g3_route_v3', 'down_panic'],
+      aliases: ['panic_capitulation_repair', 'panic_repair_downtrend'],
+      summary: '在恐慌扩散或下跌压力释放后做修复介入，保留独立风控，不再拆成多个下跌修复策略。',
+      sources: 'old_g3 down_panic、panic_repair standard_downtrend；来源不同，交易策略合并。',
+      entry: '日线先出现恐慌出清或压力释放；有盘中数据时优先要求 30m 修复确认，无确认时先作为观察票据。',
+      exit: '基础首仓 20%，压力态可降到 12.5%；-5% 结构止损、-8% 硬止损、+8% 先减半，剩余仓以前低或 30m 转弱退出。',
+      diagnosis: '重点看恐慌是否真的释放、下跌压力态是否降仓、修复票是否被误当成主升进攻票。'
+    },
+    {
+      key: 'volume_runup_supplement',
+      label: '量能续强补位',
+      role: '退役观察',
+      badge: '观察',
+      tagType: 'info',
+      tone: 'supplement',
+      routes: ['g2_gap_supplement'],
+      aliases: ['volume_runup_supplement', 'g2_gap_supplement'],
+      summary: '历史回放显示负贡献且未改善组合回撤，已退出实盘买入路线，仅保留观察和归因。',
+      sources: 'g2_gap_supplement；来自 G2 量能续强和板块加分信号，不触碰 G2 runtime。',
+      entry: '不再进入影子票据、纸面交易或正式买入候选；源新鲜时也只进入观察池。',
+      exit: '无实盘仓位合同；历史持仓仍按原退出合同复盘。',
+      diagnosis: '重点看源质量、子来源归因和是否存在未来可重新验证的严格版本；默认不再为填空槽而交易。'
+    },
+    {
+      key: 'old_g3_strong_breakout',
+      label: '强势突破',
+      role: '结构突破',
+      badge: '证据',
+      tagType: 'info',
+      tone: 'breakout',
+      routes: ['old_g3_route_v3', 'strong_main'],
+      aliases: ['old_g3_strong_breakout', 'strong_breakout', 'mainwave_breakout_offense'],
+      summary: '保留旧 G3 跨周期结构链路里的强势突破，不等同于机构主升 Score120。',
+      sources: 'old_g3_route_v3 strong_main；作为正式五策略主体之一保留归因和诊断。',
+      entry: '跨周期结构确认后才纳入，重点看突破是否具备趋势延续和市场适配；不和机构主升使用同一套分数直接比较。',
+      exit: '默认单槽 50%；沿用 G3 统一退出合同，12% 硬止损、12% 先减半，剩余仓以前低或 30m 转弱退出。',
+      diagnosis: '重点看强势突破是否被旧信号噪声放大、是否与机构主升重复计分、是否只在单一市场风格有效。'
+    }
+  ]
+
+  return definitions.map((item) => {
+    const metric = findStrategyMetric(item)
+    const recoveryMetric = findRecoveryStrategyMetric(item)
+    const m30Metric = findM30StrategyMetric(item)
+    return {
+      ...item,
+      candidateCount: strategyCandidateCount(item),
+      tradeCount: metric?.trade_count ?? recoveryMetric?.closed ?? recoveryMetric?.trade_count,
+      winRate: metric?.win_rate ?? recoveryMetric?.win_rate_native_bridge_five_strategy ?? recoveryMetric?.win_rate,
+      avgReturn: metric?.avg_trade_return ?? recoveryMetric?.avg_ret_native_bridge_five_strategy ?? recoveryMetric?.avg_ret,
+      worstTrade: metric?.worst_trade ?? recoveryMetric?.worst_trade,
+      diagnosis: m30Metric?.m30_data_ok_rate != null
+        ? `${item.diagnosis} 30m 数据覆盖率 ${pct(m30Metric.m30_data_ok_rate)}，用于判断该策略是否具备实盘复现条件。`
+        : item.diagnosis
+    }
+  })
+})
+
+function matchesStrategy(row, item) {
+  if (!row) return false
+  const values = [
+    row.trade_strategy,
+    row.route_strategy,
+    row.strategy,
+    row.route,
+    row.mode,
+    row.route_parent,
+    row.source_route
+  ].map((value) => String(value || '').trim()).filter(Boolean)
+  return values.some((value) => item.aliases.includes(value) || item.routes.includes(value))
+}
+
+function strategyCandidateCount(item) {
+  return allCandidates.value.filter((row) => matchesStrategy(row, item)).length
+}
+
+function findStrategyMetric(item) {
+  return routeMetrics.value.find((row) => matchesStrategy(row, item)) || null
+}
+
+function findRecoveryStrategyMetric(item) {
+  return recoveryStrategies.value.find((row) => matchesStrategy(row, item)) || null
+}
+
+function findM30StrategyMetric(item) {
+  return recoveryM30Strategies.value.find((row) => matchesStrategy(row, item)) || null
+}
 
 function truthy(value) {
   if (typeof value === 'boolean') return value
@@ -841,6 +1028,126 @@ h2 {
   white-space: nowrap;
 }
 
+.strategy-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.strategy-detail-card {
+  border: 1px solid #e4e9f1;
+  border-left: 4px solid #98a2b3;
+  border-radius: 8px;
+  background: #fbfcff;
+  padding: 12px;
+  min-width: 0;
+}
+
+.strategy-detail-card.mainwave {
+  border-left-color: #12b76a;
+}
+
+.strategy-detail-card.repair {
+  border-left-color: #2f80ed;
+}
+
+.strategy-detail-card.panic {
+  border-left-color: #f79009;
+}
+
+.strategy-detail-card.supplement {
+  border-left-color: #667085;
+}
+
+.strategy-detail-card.breakout {
+  border-left-color: #7a5af8;
+}
+
+.strategy-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.strategy-role {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+
+.strategy-detail-head h3 {
+  margin: 0;
+  color: #1f2a44;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.strategy-summary {
+  color: #42526e;
+  line-height: 1.55;
+  margin-bottom: 10px;
+}
+
+.strategy-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.strategy-stats > div {
+  min-height: 54px;
+  border: 1px solid #eef2f6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 7px;
+}
+
+.strategy-stats span {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.strategy-stats strong {
+  display: block;
+  color: #1f2a44;
+  font-size: 15px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-contract-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin: 0;
+}
+
+.strategy-contract-list div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.strategy-contract-list dt {
+  color: #344054;
+  font-weight: 700;
+}
+
+.strategy-contract-list dd {
+  margin: 0;
+  color: #667085;
+  line-height: 1.5;
+  min-width: 0;
+}
+
 .pipeline {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -902,6 +1209,10 @@ h2 {
   .pipeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .strategy-detail-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 980px) {
@@ -919,7 +1230,12 @@ h2 {
 
   .metric-grid,
   .pipeline,
+  .strategy-stats,
   .quality-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .strategy-contract-list div {
     grid-template-columns: 1fr;
   }
 }

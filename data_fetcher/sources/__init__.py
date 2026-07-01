@@ -1,11 +1,24 @@
 """
-数据源模块
-
-包含所有数据源实现
+Data source modules.
 """
 
-from .tdxquant import TdxQuantDataSource
-
 __all__ = [
-    'TdxQuantDataSource',
+    "QmtMiniMarketClient",
+    "QmtMiniDataSource",
+    "QmtMiniTradingClient",
 ]
+
+
+def __getattr__(name):
+    if name in {"QmtMiniMarketClient", "QmtMiniTradingClient"}:
+        from .qmtmini_client import QmtMiniMarketClient, QmtMiniTradingClient
+
+        return {
+            "QmtMiniMarketClient": QmtMiniMarketClient,
+            "QmtMiniTradingClient": QmtMiniTradingClient,
+        }[name]
+    if name == "QmtMiniDataSource":
+        from .qmtmini import QmtMiniDataSource
+
+        return QmtMiniDataSource
+    raise AttributeError(name)

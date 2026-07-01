@@ -1,18 +1,33 @@
 """
-数据获取模块
-
-提供通达信量化平台(tdxquant)的股票数据获取功能
+Data fetching package.
 """
 
-from .base_fetcher import BaseDataSource
-from .sources import (
-    TdxQuantDataSource,
-)
-from .data_cleaner import DataCleaner, clean_dataframe
-
 __all__ = [
-    'BaseDataSource',
-    'TdxQuantDataSource',
-    'DataCleaner',
-    'clean_dataframe',
+    "BaseDataSource",
+    "DataCleaner",
+    "QmtMiniMarketClient",
+    "QmtMiniTradingClient",
+    "clean_dataframe",
 ]
+
+
+def __getattr__(name):
+    if name == "BaseDataSource":
+        from .base_fetcher import BaseDataSource
+
+        return BaseDataSource
+    if name in {"QmtMiniMarketClient", "QmtMiniTradingClient"}:
+        from .sources import QmtMiniMarketClient, QmtMiniTradingClient
+
+        return {
+            "QmtMiniMarketClient": QmtMiniMarketClient,
+            "QmtMiniTradingClient": QmtMiniTradingClient,
+        }[name]
+    if name in {"DataCleaner", "clean_dataframe"}:
+        from .data_cleaner import DataCleaner, clean_dataframe
+
+        return {
+            "DataCleaner": DataCleaner,
+            "clean_dataframe": clean_dataframe,
+        }[name]
+    raise AttributeError(name)

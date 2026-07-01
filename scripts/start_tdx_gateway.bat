@@ -24,9 +24,10 @@ echo ================================
 echo AiStock TDX Gateway
 echo Root: %ROOT_DIR%
 echo URL:  http://127.0.0.1:%PORT%
+echo Bind: 0.0.0.0:%PORT%
 echo ================================
 
 cd /d "%ROOT_DIR%"
 echo [%date% %time%] Starting AiStock TDX Gateway on port %PORT% >> "%LOG_FILE%"
-"%PYTHON_BIN%" -m uvicorn services.tdx_gateway:app --host 127.0.0.1 --port %PORT% >> "%LOG_FILE%" 2>&1
+"%PYTHON_BIN%" -m uvicorn services.tdx_gateway:app --host 0.0.0.0 --port %PORT% >> "%LOG_FILE%" 2>&1
 echo [%date% %time%] AiStock TDX Gateway exited with code %ERRORLEVEL% >> "%LOG_FILE%"

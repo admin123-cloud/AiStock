@@ -40,6 +40,7 @@ from utils.paths import report_path, runtime_path  # noqa: E402
 OUT_DIR = report_path("gen3_state_router_shadow_daily_v1")
 RUNTIME_DIR = runtime_path("gen3_state_router_shadow")
 STATE_ALPHA_RUNTIME_DIR = runtime_path("gen3_state_alpha")
+DAILY_ARCHIVE_DIR = OUT_DIR / "daily_archive"
 MARKET_CONTEXT_ARCHIVE = report_path("gen3_four_path_independent_candidates", "market_context.csv")
 INSTITUTIONAL_REPLAY = report_path("gen3_score120_core_strategy_v1", "g3_route_execution_mandate_candidate_closed_trades.csv")
 CURRENT_WAVE_SCAN_SUMMARY = report_path("current_wave_style_candidate_scan_v1", "summary.json")
@@ -49,11 +50,21 @@ G2_GAP_SUPPLEMENT_LEDGER = report_path("gen2_risk_cool_shadow_ledger", "shadow_l
 G2_V2_COMPLETE_SOURCE = report_path("gen2_v2_complete_strategy", "sources", "g2_v2_complete.parquet")
 G2_VOLUME5_ALPHA191_SOURCE = report_path("gen2_alpha191_light_constraint_matrix", "sources", "volume5_keep80_runup_le100.parquet")
 FINAL_G3_STRATEGY_ID = "g3_final_with_g2_gap_supplement"
-FINAL_G3_STRATEGY_NAME = "G3 Final With G2 Gap Supplement"
+FINAL_G3_STRATEGY_NAME = "G3 Full Formal Policy"
 FINAL_G3_STRATEGY_NAME_CN = "G3最终版"
 FINAL_G3_LEGACY_BASE_PROFILE = "g3_final_top2_mainwave_sector_exempt_v1"
 FINAL_G3_PROFILE = "g3_final_with_g2_gap_supplement"
+FINAL_G3_FORMAL_POLICY = "mainwave_hard_le_5_50"
+FULL_G3_ONLY_MODE = True
+FULL_G3_DISABLED_SOURCE_NAMES = [
+    "panic_current_builder",
+    "old_g3_current_builder_v1",
+    "g2_gap_supplement_current_builder_v1",
+]
 FINAL_G3_PROFILE_NAME = "G3最终版：二槽主升 + G2空档补位"
+FINAL_G3_PROFILE_NAME = "G3 Full Formal Policy: mainwave_hard_le_5_50"
+G2_GAP_SUPPLEMENT_LIVE_ENABLED = False
+G2_GAP_SUPPLEMENT_RETIRE_REASON = "historical_replay_negative_and_no_portfolio_improvement_retired_from_live_trading_2026_06_21"
 
 TRADE_STRATEGY_LABELS = {
     "institutional_score120_mainwave": "机构主升Score120",
@@ -461,7 +472,7 @@ def _build_shadow_tickets(selected: pd.DataFrame, summary: dict[str, Any]) -> pd
             hard_stop = _pct_price(reference_close, -0.12)
             take_profit_1 = _pct_price(reference_close, 0.12)
             take_profit_1_ratio = 0.5
-            exit_contract = "2-slot compound default: 30m hard stop -12%; take +12% sell half; after take-profit, break previous-day low exits remaining; cooldown after repeated hard stops."
+            exit_contract = "institutional mainwave dynamic contract: 2 slots, 50% slot; index_mom60<=5%; after 2 consecutive closed institutional_mainwave losses, pause new buys for at least 3 trading days, reopen only after market recovery signal or max 15 trading-day recheck; 30m hard stop -12%; take +12% sell half; previous-day low exits remaining."
         elif route == "g2_gap_supplement":
             position_pct = 0.50
             max_position_pct = 0.50
@@ -525,6 +536,10 @@ def _build_shadow_tickets(selected: pd.DataFrame, summary: dict[str, Any]) -> pd
                 "source_strategy_label": source_strategy_label,
                 "index_mom60_heat_state": item.get("index_mom60_heat_state", ""),
                 "market_heat_position_scale": market_heat_scale,
+                "mainwave_dynamic_cooldown_active": bool(item.get("mainwave_dynamic_cooldown_active", False)),
+                "mainwave_dynamic_cooldown_reason": item.get("mainwave_dynamic_cooldown_reason", ""),
+                "mainwave_cooldown_elapsed_trading_days": item.get("mainwave_cooldown_elapsed_trading_days", ""),
+                "mainwave_recovery_signal_ok": bool(item.get("mainwave_recovery_signal_ok", False)),
                 "panic_pressure_state": (
                     "downtrend_pressure"
                     if trade_strategy == "panic_capitulation_repair" and str(item.get("market_style") or "") == "standard_downtrend"
@@ -688,11 +703,6 @@ def _account_risk_state(entry_date: str) -> dict[str, Any]:
     elif consecutive_loss >= 0.20:
         action = "pause_new_buy"
         reason = "consecutive_realized_loss_pause_new_buy"
-        ok = False
-        position_scale = 0.0
-    elif recent_hard_stop_count >= 2:
-        action = "pause_new_buy"
-        reason = "hard_stop_cooldown_pause_new_buy"
         ok = False
         position_scale = 0.0
     elif current_dd <= -0.15:
@@ -950,20 +960,34 @@ def _g2_gap_supplement_source(entry_date: str, top_n: int) -> tuple[pd.DataFrame
     out["formal_buy_signal"] = False
     out["order_path_enabled"] = False
     out["shadow_status"] = "g2_gap_supplement_candidate"
-    out["router_eligible"] = bool(meta.get("fresh_for_entry_date"))
+    out["router_eligible"] = bool(meta.get("fresh_for_entry_date")) and G2_GAP_SUPPLEMENT_LIVE_ENABLED
     out["block_reason"] = ""
     out.loc[~out["router_eligible"], "shadow_status"] = "blocked_g2_gap_ledger_fallback_observe"
     out.loc[~out["router_eligible"], "block_reason"] = "g2_gap_supplement_requires_fresh_filtered_signals"
+    if not G2_GAP_SUPPLEMENT_LIVE_ENABLED:
+        out["shadow_status"] = "retired_g2_gap_supplement_observe"
+        out["router_eligible"] = False
+        out["block_reason"] = G2_GAP_SUPPLEMENT_RETIRE_REASON
+        out["retired_from_live_trading"] = True
+        out["retire_reason"] = G2_GAP_SUPPLEMENT_RETIRE_REASON
     out = out.sort_values(
         [c for c in ["day_signal_rank", "v4_rank", "score", "code"] if c in out.columns],
         ascending=[True, True, False, True][: len([c for c in ["day_signal_rank", "v4_rank", "score", "code"] if c in out.columns])],
     ).head(top_n)
     meta.update(
         {
-            "status": "current_rebuilt" if bool(meta.get("fresh_for_entry_date")) else "ledger_fallback_observe",
+            "status": (
+                "retired_from_live_trading_observe"
+                if not G2_GAP_SUPPLEMENT_LIVE_ENABLED
+                else "current_rebuilt"
+                if bool(meta.get("fresh_for_entry_date"))
+                else "ledger_fallback_observe"
+            ),
             "rows": int(len(out)),
             "eligible_rows": int(out["router_eligible"].fillna(False).astype(bool).sum()),
             "blocked_rows": int((~out["router_eligible"].fillna(False).astype(bool)).sum()),
+            "live_enabled": bool(G2_GAP_SUPPLEMENT_LIVE_ENABLED),
+            "retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON if not G2_GAP_SUPPLEMENT_LIVE_ENABLED else "",
         }
     )
     out, meta = _apply_route_health(out, "g2_gap_supplement", entry_date, meta)
@@ -972,7 +996,7 @@ def _g2_gap_supplement_source(entry_date: str, top_n: int) -> tuple[pd.DataFrame
 
 def _route_order(context: pd.DataFrame, available: set[str]) -> tuple[list[str], str]:
     if context.empty:
-        return [m for m in ["panic_repair", "institutional_mainwave", "old_g3_route_v3", "g2_gap_supplement"] if m in available], "missing_market_context_default_priority"
+        return [m for m in ["panic_repair", "institutional_mainwave", "old_g3_route_v3"] if m in available], "missing_market_context_default_priority"
     row = context.iloc[0]
     style = str(row.get("market_style") or "")
     up_rate = _safe_float(row.get("up_rate"))
@@ -985,8 +1009,6 @@ def _route_order(context: pd.DataFrame, available: set[str]) -> tuple[list[str],
         return ["institutional_mainwave"], "机构主升候选存在，优先机构主升"
     if "old_g3_route_v3" in available:
         return ["old_g3_route_v3"], "无机构主升，回到旧G3跨周期路由"
-    if "g2_gap_supplement" in available:
-        return ["g2_gap_supplement"], "G3主路由无可用候选，启用G2补充买点"
     return [], "无可用候选"
 
 
@@ -1089,7 +1111,7 @@ def _select_router_candidates(all_rows: pd.DataFrame, context: pd.DataFrame) -> 
         if len(picked_rows) >= 2:
             break
     supplement_rows = 0
-    if len(picked_rows) < 2 and "g2_gap_supplement" in available:
+    if G2_GAP_SUPPLEMENT_LIVE_ENABLED and len(picked_rows) < 2 and "g2_gap_supplement" in available:
         supplement = eligible[eligible["route"].astype(str).eq("g2_gap_supplement")].copy()
         supplement["_score_sort"] = pd.to_numeric(supplement.get("score"), errors="coerce").fillna(-1e9)
         supplement = supplement.sort_values(["_score_sort", "code"], ascending=[False, True]).copy()
@@ -1225,7 +1247,7 @@ def _strategy_contract() -> dict[str, Any]:
                 "shadow ledger must record planned/fill/exit states without missing trigger timestamps",
                 "30m confirmation freshness must be available before a qualified shadow buy",
                 "route health must be recorded as observation-only diagnostics and must not hard-block qualified shadow buys",
-                "account risk gate must allow new buys: MTM drawdown, consecutive realized loss, and hard-stop cooldown",
+                "account risk gate must allow new buys: MTM drawdown and consecutive realized loss; institutional_mainwave must also pass its dynamic consecutive-loss cooldown",
                 "exit replay must prove structure stop and hard stop are observable before order integration",
             ],
         },
@@ -1235,16 +1257,17 @@ def _strategy_contract() -> dict[str, Any]:
             "position_framework": "2_slots_compound_default",
             "slots": 2,
             "slot_pct": 0.50,
-            "trade_strategy_framework": "5_consolidated_trade_strategies",
-            "trade_strategy_count": 5,
+            "trade_strategy_framework": "4_live_strategies_plus_g2_observation",
+            "trade_strategy_count": 4,
+            "observation_strategy_count": 1,
             "institutional_mainwave_position_pct": 0.50,
             "panic_capitulation_repair_position_pct": 0.25,
             "panic_capitulation_repair_max_position_pct": 0.50,
             "range_weak_repair_position_pct": 0.50,
             "old_g3_route_position_pct": 0.50,
             "max_single_name_position_pct": 0.50,
-            "g2_gap_supplement_position_pct": 0.50,
-            "g2_gap_supplement_role": "fill unused G3 slots only; does not replace panic_repair or institutional_mainwave primary routes",
+            "g2_gap_supplement_position_pct": 0.0,
+            "g2_gap_supplement_role": "retired from live trading; observation and historical attribution only",
             "same_sector_policy": "allow same sector only when both selected candidates are institutional_mainwave; otherwise skip duplicated sector exposure",
         },
         "trade_strategy_policy": [
@@ -1285,9 +1308,11 @@ def _strategy_contract() -> dict[str, Any]:
                 "action": "sell_remaining",
             },
             "cooldown": {
-                "trigger": "hard_stop_30m_count>=2",
-                "lookback_trading_days": 20,
-                "cooldown_trading_days": 3,
+                "policy": "institutional_mainwave_consecutive_loss_dynamic_recovery",
+                "trigger": "consecutive_closed_institutional_mainwave_loss_count>=2",
+                "min_cooldown_trading_days": 3,
+                "release_condition": "index_mom60<=5% and (index_close>=index_ma20 or index_mom20>=0) and a current institutional_mainwave candidate still passes sector diffusion plus 30m confirmation",
+                "max_recheck_trading_days": 15,
                 "scope": "institutional_mainwave_new_buys",
             },
             "risk_limits": {
@@ -1312,7 +1337,7 @@ def _strategy_contract() -> dict[str, Any]:
                 "label": "机构主升浪",
                 "activation": "非恐慌优先场景下，出现机构主升浪确认候选",
                 "source": "institutional_mainwave_current_builder_v1",
-                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m close>=MA20; index_mom60 is observation at 5%-10% and only >10% blocks new open; rolling_240d_institutional_avg_ret is observation only",
+                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m close>=MA20 && index_mom60<=5% && mainwave_dynamic_cooldown_active=false; >5% observation only and no shadow/buy ticket; rolling_240d_institutional_avg_ret is observation only",
                 "regime_gate": "past exited institutional_mainwave trades within 240 calendar days: count>=2, avg_ret>0, big_loss_rate<=34%, worst_ret>=-25%",
                 "failure_exit_audit_target": "historical upper-bound audit supports studying failed exit near -15%; not yet treated as executable stop without path replay",
             },
@@ -1327,11 +1352,12 @@ def _strategy_contract() -> dict[str, Any]:
             {
                 "route": "g2_gap_supplement",
                 "label": "G2补充买点",
-                "activation": "G3主路由未占满2槽，且当天存在新鲜g2_v2_complete过滤买点",
+                "activation": "已退出实盘交易；仅保留源新鲜度、候选质量和历史归因观察",
                 "source": "gen2_risk_cool_shadow_filtered_signals",
-                "router_eligible": "fresh filtered_signals for entry_date and buy_allowed=true; rolling route_health is observation only",
+                "router_eligible": "false; retired_from_live_trading=true",
                 "regime_gate": "past exited g2 supplement trades within 240 calendar days: count>=3, avg_ret>0, big_loss_rate<=34%, worst_ret>=-12%",
-                "role": "slot gap supplement, not primary route replacement",
+                "role": "observation only; not a live/shadow/paper buy route",
+                "retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON,
             },
         ],
         "blocked_observation": [
@@ -1367,6 +1393,36 @@ def _write_outputs(out_dir: Path, runtime_dir: Path, summary: dict[str, Any], al
     if not context.empty:
         context.to_csv(out_dir / "g3_state_router_market_context.csv", index=False, encoding="utf-8-sig")
     (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+
+    archive_date = str(summary.get("entry_date") or "").strip()[:10]
+    if archive_date:
+        archive_dir = out_dir / "daily_archive" / archive_date
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        all_rows.to_csv(archive_dir / "g3_state_router_all_source_candidates.csv", index=False, encoding="utf-8-sig")
+        selected.to_csv(archive_dir / "g3_state_router_selected_candidates.csv", index=False, encoding="utf-8-sig")
+        tickets.to_csv(archive_dir / "g3_state_alpha_shadow_tickets.csv", index=False, encoding="utf-8-sig")
+        diagnostics.to_csv(archive_dir / "g3_state_router_route_diagnostics.csv", index=False, encoding="utf-8-sig")
+        (archive_dir / "g3_state_router_strategy_contract.json").write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2, default=_json_default),
+            encoding="utf-8",
+        )
+        if not context.empty:
+            context.to_csv(archive_dir / "g3_state_router_market_context.csv", index=False, encoding="utf-8-sig")
+        (archive_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    **summary,
+                    "archive_source": "gen3_state_router_shadow_daily_v1",
+                    "archive_date": archive_date,
+                    "archive_generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                ensure_ascii=False,
+                indent=2,
+                default=_json_default,
+            ),
+            encoding="utf-8",
+        )
+
     selected.to_csv(runtime_dir / "latest_candidates.csv", index=False, encoding="utf-8-sig")
     all_rows.to_csv(runtime_dir / "latest_all_source_candidates.csv", index=False, encoding="utf-8-sig")
     diagnostics.to_csv(runtime_dir / "latest_route_diagnostics.csv", index=False, encoding="utf-8-sig")
@@ -1482,11 +1538,26 @@ def main() -> int:
     source_frames: list[pd.DataFrame] = []
     source_meta: list[dict[str, Any]] = []
     builders = [
-        ("panic_current_builder", lambda: _panic_source(entry_date, int(args.top_n), float(args.min_amount20), int(args.max_codes or 0), int(args.period))),
         ("institutional_mainwave_current_builder_v1", lambda: _institutional_current_source(entry_date, decision_date, int(args.top_n), float(args.min_amount20), int(args.period))),
-        ("old_g3_current_builder_v1", lambda: _old_g3_current_source(entry_date, decision_date, int(args.top_n), float(args.min_amount20), int(args.max_codes or 0))),
-        ("g2_gap_supplement_current_builder_v1", lambda: _g2_gap_supplement_source(entry_date, int(args.top_n))),
     ]
+    if not FULL_G3_ONLY_MODE:
+        builders.extend(
+            [
+                ("panic_current_builder", lambda: _panic_source(entry_date, int(args.top_n), float(args.min_amount20), int(args.max_codes or 0), int(args.period))),
+                ("old_g3_current_builder_v1", lambda: _old_g3_current_source(entry_date, decision_date, int(args.top_n), float(args.min_amount20), int(args.max_codes or 0))),
+                ("g2_gap_supplement_current_builder_v1", lambda: _g2_gap_supplement_source(entry_date, int(args.top_n))),
+            ]
+        )
+    else:
+        source_meta.extend(
+            {
+                "source": source_name,
+                "rows": 0,
+                "status": "disabled_full_g3_only_mode",
+                "reason": "switched_back_to_full_g3_formal_policy",
+            }
+            for source_name in FULL_G3_DISABLED_SOURCE_NAMES
+        )
     for name, builder in builders:
         try:
             rows, meta = builder()
@@ -1532,6 +1603,9 @@ def main() -> int:
         "order_path_enabled_rows": 0,
         "market_context": context_meta,
         "sources": source_meta,
+        "strategy_system_mode": "full_g3_only" if FULL_G3_ONLY_MODE else "router_fusion",
+        "full_g3_formal_policy": FINAL_G3_FORMAL_POLICY,
+        "disabled_strategy_sources": FULL_G3_DISABLED_SOURCE_NAMES if FULL_G3_ONLY_MODE else [],
         "shadow_ledger_append": _shadow_ledger_append_decision(),
         "route_diagnostics": route_diagnostics.to_dict("records") if not route_diagnostics.empty else [],
         "eligible_source_rows": int(route_diagnostics["eligible_rows"].sum()) if not route_diagnostics.empty else 0,
@@ -1540,7 +1614,9 @@ def main() -> int:
         "live_order_enabled": False,
         "requires_current_institutional_generator": False,
         "requires_current_old_g3_generator": False,
-        "g2_gap_supplement_enabled": True,
+        "g2_gap_supplement_enabled": bool(G2_GAP_SUPPLEMENT_LIVE_ENABLED),
+        "g2_gap_supplement_live_enabled": bool(G2_GAP_SUPPLEMENT_LIVE_ENABLED),
+        "g2_gap_supplement_retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON,
         "final_profile": FINAL_G3_PROFILE,
         "final_profile_name": FINAL_G3_PROFILE_NAME,
         "legacy_base_profile": FINAL_G3_LEGACY_BASE_PROFILE,
