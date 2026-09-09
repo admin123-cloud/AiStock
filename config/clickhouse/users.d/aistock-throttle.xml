@@ -3,7 +3,9 @@
         <default>
             <max_threads>2</max_threads>
             <max_insert_threads>1</max_insert_threads>
-            <max_memory_usage>10737418240</max_memory_usage>
+            <max_memory_usage>2147483648</max_memory_usage>
+            <max_bytes_before_external_group_by>536870912</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>268435456</max_bytes_before_external_sort>
             <max_execution_time>600</max_execution_time>
         </default>
     </profiles>
