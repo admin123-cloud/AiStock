@@ -4,6 +4,7 @@ services:
     image: clickhouse/clickhouse-server:24.8
     container_name: aistock-clickhouse
     restart: unless-stopped
+    stop_grace_period: 120s
     cpus: "1.5"
     mem_limit: 4g
     memswap_limit: 4g
