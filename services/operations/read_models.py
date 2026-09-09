@@ -41,7 +41,7 @@ def number(value, default=0):
         return default
 
 
-def task_board(root: Path, manifest: dict, *, now: datetime | None = None) -> dict:
+def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live: dict | None = None) -> dict:
     health = read_snapshot(root / 'health/latest.json', now=now)
     host = read_snapshot(root / 'operations/host_tasks.json', now=now)
     fresh_host = host.get('publisher_status') == 'healthy'
@@ -71,12 +71,24 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None) -> di
                      'last_run': state.get('last_run_at'), 'last_success': state.get('last_success_at'),
                      'error': state.get('last_error'), 'business_status': 'unverified',
                      'note': '读取持久化记录；已配置不代表进程在线'})
+    api_state = live if live is not None else read_json(root / 'operations/api_tasks.json')
+    try:
+        age = ((now or datetime.now(BUSINESS_TZ)) - datetime.fromisoformat(api_state['generated_at'])).total_seconds()
+        api_fresh = 0 <= age <= 30 and api_state.get('phase') not in ('stopped', 'not_started')
+    except (KeyError, ValueError, TypeError):
+        api_fresh = False
+    if api_state.get('tasks'):
+        rows = [x for x in rows if x['executor'] != 'API']
+        rows.extend({**x, 'status': x['status'] if api_fresh else 'unknown',
+                     'source_stale': not api_fresh} for x in api_state['tasks'])
     discovered = {row['name'] for row in rows}
     for artifact in manifest.get('artifacts', []):
         if artifact.get('trigger') == 'Windows Task Scheduler' and artifact['owner'] not in discovered:
             rows.append({'name': artifact['owner'], 'executor': 'Windows', 'status': 'not_observed',
                          'artifact': artifact['artifact'], 'window': artifact.get('window'), 'business_status': 'unknown'})
     return {'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'), 'tasks': rows,
+            'api_runtime': {**api_state, 'fresh': api_fresh, 'source': 'live' if live is not None else 'snapshot',
+                            'ready': bool(api_fresh and api_state.get('ready'))},
             'operations_publisher':read_snapshot(root/'operations/latest.json',now=now),
             'host_inventory_status': 'healthy' if fresh_host else 'unknown',
             'host_inventory_at': host.get('generated_at'), 'health': health,
@@ -93,6 +105,14 @@ def mainwave_daily(root: Path, *, now: datetime | None = None) -> dict:
     contract = formal_g3_score88_contract()
     metadata = formal_g3_score88_contract_metadata()
     rows = read_csv(root / 'gen3_state_router_shadow/latest_all_source_candidates.csv')
+    from services.operations.batches import read_mainwave_batch
+    batch_summary, batch_rows, batch = read_mainwave_batch(root)
+    if batch['ok']:
+        summary, rows = batch_summary, batch_rows
+        checks = strategy_data_checks(summary, health)
+    checks.append({'name': 'mainwave_batch_integrity', 'ok': batch['ok'],
+                   'message': '完整批次校验通过' if batch['ok'] else '候选批次未验收，需由生产者重新发布完整批次',
+                   'reason': batch.get('reason', 'atomic_batch_verified')})
     candidates = []
     for item in rows:
         if item.get('route') != 'institutional_mainwave':
@@ -128,6 +148,8 @@ def mainwave_daily(root: Path, *, now: datetime | None = None) -> dict:
             source_exists = {'route','code','entry_date','decision_date'}.issubset(fields)
     except (OSError,ValueError):
         source_exists = False
+    if batch['ok']:
+        source_exists = True
     checks.append({'name':'candidate_batch_consistency', 'ok':coherent and source_exists,
                    'message':'候选日期与摘要一致' if coherent and source_exists else '候选文件缺失或与摘要日期不一致，不能作为当天结论'})
     blocked = not summary or any(not x['ok'] for x in checks)
@@ -146,6 +168,7 @@ def mainwave_daily(root: Path, *, now: datetime | None = None) -> dict:
                 changes.append({'code':code,'name':(new or old).get('name'),
                                 'before':old['stage'] if old else None, 'after':new['stage'] if new else None})
     return {'generated_at': now.isoformat(timespec='seconds'), 'source_generated_at': summary.get('generated_at'),
+            'batch': batch,
             'state': state, 'entry_date': summary.get('entry_date'), 'decision_date': summary.get('decision_date'),
             'stale_batch': stale_batch, 'contract': contract, 'contract_metadata': metadata,
             'checks': checks, 'health': health, 'candidates': candidates, 'history': history,

@@ -272,8 +272,8 @@ def _ensure_emotion_scheduler():
         if _emotion_scheduler is not None:
             return _emotion_scheduler
         try:
-            from apscheduler.schedulers.background import BackgroundScheduler
-            _emotion_scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+            from services.operations.schedulers import ObservedScheduler as BackgroundScheduler
+            _emotion_scheduler = BackgroundScheduler(timezone="Asia/Shanghai", owner="数据维护")
             _emotion_scheduler.start()
         except Exception as e:
             logger.error(f"启动情绪周期调度器失? {e}")
@@ -288,9 +288,9 @@ def _ensure_core_maintenance_scheduler():
     with _core_maintenance_scheduler_lock:
         if _core_maintenance_scheduler is not None:
             return _core_maintenance_scheduler
-        from apscheduler.schedulers.background import BackgroundScheduler
+        from services.operations.schedulers import ObservedScheduler as BackgroundScheduler
 
-        _core_maintenance_scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+        _core_maintenance_scheduler = BackgroundScheduler(timezone="Asia/Shanghai", owner="数据维护")
         _core_maintenance_scheduler.start()
     return _core_maintenance_scheduler
 
@@ -2245,9 +2245,9 @@ def _ensure_strategy_daily_scheduler():
     with _strategy_daily_scheduler_lock:
         if _strategy_daily_scheduler is not None:
             return _strategy_daily_scheduler
-        from apscheduler.schedulers.background import BackgroundScheduler
+        from services.operations.schedulers import ObservedScheduler as BackgroundScheduler
 
-        _strategy_daily_scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+        _strategy_daily_scheduler = BackgroundScheduler(timezone="Asia/Shanghai", owner="数据维护")
         _strategy_daily_scheduler.start()
     return _strategy_daily_scheduler
 
@@ -7049,12 +7049,12 @@ def start_homepage_integrity_scheduler():
     Windows host collector.
     """
     global _homepage_integrity_scheduler
-    from apscheduler.schedulers.background import BackgroundScheduler
+    from services.operations.schedulers import ObservedScheduler as BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
 
     with _homepage_integrity_scheduler_lock:
         if _homepage_integrity_scheduler is None:
-            _homepage_integrity_scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+            _homepage_integrity_scheduler = BackgroundScheduler(timezone="Asia/Shanghai", owner="数据维护")
             _homepage_integrity_scheduler.start()
         scheduler = _homepage_integrity_scheduler
 

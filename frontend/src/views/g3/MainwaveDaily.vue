@@ -1,6 +1,7 @@
 <template>
   <div class="ops-page"><header class="ops-heading"><div><h1>主升每日跟踪</h1><p>先判断数据是否可信，再看候选推进与每日验收。</p></div><el-button :loading="loading" @click="load">刷新跟踪</el-button></header>
     <div v-if="error" class="ops-error" role="alert">{{ error }}；当前结果未更新。</div>
+    <p class="ops-meta">批次校验：{{ data.batch?.ok?'完整批次已验证':'未通过 / 旧产物待重新发布' }} · {{ data.batch?.batch_id || '暂无批次号' }}</p>
     <el-alert :type="tone(data.state)==='danger'?'error':tone(data.state)" :title="headline" :closable="false" show-icon><p>{{ explanation }}</p><p>执行日 {{ data.entry_date || '待确认' }} · 决策日 {{ data.decision_date || '待确认' }} · 信号批次 {{ dateTime(data.source_generated_at) }}</p></el-alert>
     <div class="ops-metrics"><div class="ops-metric"><span>主升候选</span><strong>{{ data.summary?.candidate_count ?? '—' }}</strong></div><div class="ops-metric"><span>数据不可判断</span><strong>{{ data.summary?.data_blocked_count ?? '—' }}</strong></div><div class="ops-metric"><span>30m已确认</span><strong>{{ data.summary?.confirmed_count ?? '—' }}</strong></div><div class="ops-metric"><span>最近观察通过</span><strong>{{ data.summary?.accepted_days ?? '—' }} / {{ data.summary?.observed_days ?? '—' }}</strong></div></div>
     <section v-if="blockedChecks.length" class="ops-panel"><h2>今天先处理这些问题</h2><div v-for="check in blockedChecks" :key="check.name" class="ops-candidate"><strong>{{ check.message }}</strong><p class="ops-meta">{{ check.name }}</p></div></section>

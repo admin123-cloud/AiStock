@@ -175,9 +175,18 @@ def write_snapshot(snapshot: dict[str, Any], path: Path) -> Path:
     """Atomically publish a snapshot so readers never see partial JSON."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    import tempfile
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(snapshot, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary and temporary.exists():
+            temporary.unlink()
     return path
 
 

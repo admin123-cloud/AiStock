@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Body, Query
 from sqlalchemy import text
-from apscheduler.schedulers.background import BackgroundScheduler
+from services.operations.schedulers import ObservedScheduler as BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
@@ -1807,7 +1807,7 @@ def _ensure_v4_monitor_scheduler() -> BackgroundScheduler:
     with _v4_monitor_scheduler_lock:
         if _v4_monitor_scheduler is not None:
             return _v4_monitor_scheduler
-        sched = BackgroundScheduler(timezone="Asia/Shanghai")
+        sched = BackgroundScheduler(timezone="Asia/Shanghai", owner="交易监控")
         sched.start()
         _v4_monitor_scheduler = sched
     return _v4_monitor_scheduler

@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
-from apscheduler.schedulers.background import BackgroundScheduler
+from services.operations.schedulers import ObservedScheduler as BackgroundScheduler
 from fastapi import APIRouter, Body, Query
 
 from scheduler.trading_calendar import TradingCalendar
@@ -3258,6 +3258,15 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
         summary = afterhours_summary
         tickets_path = afterhours_tickets_path
     tickets = _enrich_trade_strategy_records(_read_csv_records(tickets_path, limit=limit))
+    from services.operations.batches import read_mainwave_batch
+    batch_summary, _, batch = read_mainwave_batch(STATE_ALPHA_RUNTIME_DIR.parent, include_runtime=True)
+    if batch['ok']:
+        summary = batch_summary
+        tickets = _enrich_trade_strategy_records(batch['tickets'][:limit])
+        use_afterhours_pair = bool(summary.get("pending_next_session_confirmation"))
+    else:
+        # Legacy files remain available to audit pages, but cannot supply actionable tickets.
+        tickets = []
     broker_snapshot = _broker_snapshot()
     broker_trades = broker_snapshot.get("broker_trades") if isinstance(broker_snapshot.get("broker_trades"), list) else []
     ledger_audit = _attach_exit_advice(
@@ -3268,7 +3277,11 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     )
     ledger = _filter_open_shadow_ledger_records(ledger_audit)
     diagnostics = _read_csv_records(diagnostics_path, limit=50)
+    if batch['ok']:
+        diagnostics = batch['diagnostics'][:50]
     return {
+        "batch_check": {"name": "runtime_batch_integrity", "ok": batch['ok'],
+                        "message": "摘要、票据与诊断来自同一完整批次" if batch['ok'] else "运行批次未验收："+batch.get('reason','unknown')},
         "summary": summary,
         "tickets": tickets,
         "runtime_pair": "afterhours_pending_confirmation" if use_afterhours_pair else "current",
@@ -3321,6 +3334,7 @@ def _build_workflow_status() -> dict[str, Any]:
         },
     ]
     pipeline_checks.extend(business_checks)
+    pipeline_checks.append(runtime.get("batch_check") or {"name":"runtime_batch_integrity", "ok":False, "message":"缺少批次验收"})
     data_checks = strategy_data_checks(summary, read_snapshot(runtime_path("health", "latest.json")))
     pipeline_checks.extend(data_checks)
     blockers = [item for item in pipeline_checks if not item.get("ok") and item.get("blocking", True)]
@@ -3366,6 +3380,26 @@ def _build_workflow_status() -> dict[str, Any]:
 
 
 def _run_refresh_task(
+    task_id: str,
+    entry_date: str | None = None,
+    source: str = "manual",
+    force_alert: bool = False,
+) -> None:
+    from services.operations.schedulers import registry
+    try:
+        with registry.worker():
+            _run_refresh_task_body(task_id, entry_date, source, force_alert)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        _set_refresh_task(task_id, {"task_id": task_id, "status": "failed", "progress": 100,
+                                   "message": error, "finished_at": datetime.now().isoformat()})
+        monitor = _load_monitor_state()
+        monitor["last_error"] = error
+        _save_monitor_state(monitor)
+        logger.exception("G3 refresh task failed")
+
+
+def _run_refresh_task_body(
     task_id: str,
     entry_date: str | None = None,
     source: str = "manual",
@@ -5846,7 +5880,7 @@ def _build_observation_snapshot(
 def _ensure_monitor_scheduler() -> BackgroundScheduler:
     global _monitor_scheduler
     if _monitor_scheduler is None:
-        _monitor_scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+        _monitor_scheduler = BackgroundScheduler(timezone="Asia/Shanghai", owner="G3")
         _monitor_scheduler.start()
     elif not _monitor_scheduler.running:
         _monitor_scheduler.start()

@@ -1,0 +1,54 @@
+name: aistock-core
+services:
+  backend:
+    image: aistock-core-backend:${AISTOCK_RELEASE_VERSION:?set exact release commit}
+    container_name: aistock-backend-dev
+    restart: unless-stopped
+    cpus: "2.0"
+    mem_limit: 9g
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      TZ: Asia/Shanghai
+      AISTOCK_RELEASE_VERSION: ${AISTOCK_RELEASE_VERSION}
+      AISTOCK_CLICKHOUSE_HOST: host.docker.internal
+      AISTOCK_DATA_ROOT: /aistock/data
+      AISTOCK_REPORTS_ROOT: /aistock/reports
+      AISTOCK_ARTIFACTS_ROOT: /aistock/artifacts
+      AISTOCK_LOGS_ROOT: /aistock/logs
+      AISTOCK_HOST_REPO_ROOT: ${AISTOCK_HOST_REPO_ROOT:?set verified host checkout}
+      AISTOCK_STARTUP_SCHEDULERS_ENABLED: "1"
+      AISTOCK_CORE_DATA_MAINTENANCE_SCHEDULER_ENABLED: "0"
+      AISTOCK_QMT_TICK_BRIDGE_URL: http://host.docker.internal:8766/full-tick
+      AISTOCK_QMT_ACCOUNT_BRIDGE_URL: http://host.docker.internal:8766/account-snapshot
+      AISTOCK_TDX_GATEWAY_URL: http://host.docker.internal:8765
+      AISTOCK_LOCAL_TDX_ROOT: /tdx/vipdoc
+    volumes:
+      - type: bind
+        source: ${AISTOCK_SETTINGS_FILE:?set private configuration file}
+        target: /app/config/settings.local.yaml
+        read_only: true
+        bind: {create_host_path: false}
+      - F:/Stock/AiStockData/data:/aistock/data
+      - F:/Stock/AiStockData/artifacts:/aistock/artifacts
+      - F:/Stock/AiStockData/logs:/aistock/logs
+      - F:/Stock/AiStockResearchArchive/reports:/aistock/reports
+      - D:/TDX/vipdoc:/tdx/vipdoc:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready',timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 4
+      start_period: 60s
+    stop_grace_period: 120s
+  frontend:
+    image: aistock-core-frontend:${AISTOCK_RELEASE_VERSION:?set exact release commit}
+    container_name: aistock-frontend-dev
+    restart: unless-stopped
+    ports: ["127.0.0.1:3000:80"]
+    depends_on:
+      backend: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3

@@ -4,7 +4,7 @@ from pathlib import Path
 from threading import Lock
 from time import monotonic
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from services.operations.read_models import task_board, mainwave_daily
 from services.operations.incidents import read_incidents
@@ -17,9 +17,10 @@ _cache_lock = Lock()
 
 
 @router.get('/tasks')
-def tasks():
+def tasks(request: Request):
     manifest = json.loads((Path(__file__).resolve().parents[1]/'config/runtime_orchestration_manifest.json').read_text(encoding='utf-8'))
-    return task_board(runtime_path(), manifest)
+    telemetry = getattr(request.app.state, 'scheduler_registry', None)
+    return task_board(runtime_path(), manifest, live=telemetry.snapshot() if telemetry else None)
 
 
 @router.get('/incidents')

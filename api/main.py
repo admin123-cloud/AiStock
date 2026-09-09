@@ -28,68 +28,35 @@ from utils.paths import runtime_path
 logger = get_logger("main")
 
 
-def _log_startup_scheduler_policy() -> None:
-    value = str(os.environ.get("AISTOCK_STARTUP_SCHEDULERS_ENABLED", "1")).strip().lower()
-    if value in {"0", "false", "no", "off"}:
-        logger.warning(
-            "AISTOCK_STARTUP_SCHEDULERS_ENABLED is set to a disabled value, "
-            "but startup schedulers are forced on by policy."
-        )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+    from contextlib import suppress
+    from services.operations.lifecycle import InstanceLock, startup_specs, publish_heartbeat
+    from services.operations.schedulers import registry
+    from services.operations.health import write_snapshot
+    lock = InstanceLock(runtime_path('operations', 'api-owner.lock'))
+    lock.acquire()
+    heartbeat = None
     try:
         from utils.database import db
-
         db.ensure_ready_for_startup()
-        logger.info("Database tables ensured")
-    except Exception as exc:
-        logger.error(f"Create tables failed: {exc}")
-        raise
-
-    logger.info("TdxQuant startup health check skipped; QMT is the active market-data source")
-
-    logger.info("AiStock Backend API started")
-    logger.info("API docs: http://localhost:8000/docs")
-
-    _log_startup_scheduler_policy()
-
-    try:
-        from api.system_config import (
-            start_core_data_maintenance_scheduler,
-            maybe_run_startup_reference_sync,
-        )
-        from api.gen3_state_alpha import init_gen3_state_alpha_monitor_scheduler_from_config
-        from api.trading import (
-            init_gen2_strategy_refresh_scheduler_from_config,
-            init_gen2_shadow_buy_monitor_scheduler_from_config,
-            init_v4_manual_holdings_monitor_scheduler_from_config,
-        )
-
-        core_maintenance_status = start_core_data_maintenance_scheduler()
-        if core_maintenance_status is None:
-            logger.info("Core data maintenance scheduler remains disabled; Windows Host QMT tasks own market-data production")
-        else:
-            logger.info("Core data maintenance scheduler started")
-        v4_monitor_status = init_v4_manual_holdings_monitor_scheduler_from_config()
-        logger.info(f"V4 manual holdings monitor scheduler initialized: {v4_monitor_status}")
-        gen2_shadow_monitor_status = init_gen2_shadow_buy_monitor_scheduler_from_config()
-        logger.info(f"G2 shadow buy monitor scheduler initialized: {gen2_shadow_monitor_status}")
-        gen2_strategy_refresh_status = init_gen2_strategy_refresh_scheduler_from_config()
-        logger.info(f"G2 strategy refresh scheduler initialized: {gen2_strategy_refresh_status}")
-        gen3_state_alpha_monitor_status = init_gen3_state_alpha_monitor_scheduler_from_config()
-        logger.info(f"G3 State Alpha monitor scheduler initialized: {gen3_state_alpha_monitor_status}")
-        if maybe_run_startup_reference_sync():
-            logger.info("Startup reference data sync enabled")
-        else:
-            logger.info("Startup reference data sync skipped")
-    except Exception as exc:
-        logger.warning(f"Core data maintenance scheduler did not start: {exc}")
-
-    yield
-
-    logger.info("AiStock Backend API stopped")
+        enabled = os.environ.get('AISTOCK_STARTUP_SCHEDULERS_ENABLED', '1').lower() not in {'0','false','no','off'}
+        registry.initialize(startup_specs(), enabled=enabled)
+        app.state.scheduler_registry = registry
+        write_snapshot(registry.snapshot(), runtime_path('operations', 'api_tasks.json'))
+        heartbeat = asyncio.create_task(publish_heartbeat(runtime_path('operations', 'api_tasks.json')))
+        yield
+    finally:
+        if heartbeat:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+        try:
+            await asyncio.to_thread(registry.shutdown)
+            write_snapshot(registry.snapshot(), runtime_path('operations', 'api_tasks.json'))
+        finally:
+            lock.release()
 
 
 app = FastAPI(
@@ -109,15 +76,22 @@ app.add_middleware(
 )
 
 
-@app.get("/api/health/check")
+@app.get('/api/health/live')
+async def liveness():
+    return {'status': 'alive', 'version': os.environ.get('AISTOCK_RELEASE_VERSION', 'development')}
+
+
+@app.get('/api/health/check')
+@app.get('/api/health/ready')
 async def health_check():
-    runtime_health = read_snapshot(runtime_path("health", "latest.json"))
-    return {
-        "status": "ok",
-        "service": "AiStock Backend",
-        "version": "1.0.0",
-        "runtime_health": runtime_health,
-    }
+    from fastapi.responses import JSONResponse
+    from services.operations.schedulers import registry
+    state = registry.snapshot()
+    return JSONResponse(status_code=200 if state['ready'] else 503, content={
+        'status': state['status'], 'service': 'AiStock Backend',
+        'version': os.environ.get('AISTOCK_RELEASE_VERSION', 'development'),
+        'schedulers': state, 'runtime_health': read_snapshot(runtime_path('health', 'latest.json')),
+    })
 
 
 @app.get("/api/health/runtime")

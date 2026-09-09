@@ -5,6 +5,7 @@ export const getIncidents = () => request.get('/operations/incidents')
 export const getDataCalendar = (days = 30) => request.get('/operations/data-calendar', { params: { days }, timeout: 120000 })
 export const getMainwaveDaily = () => request.get('/operations/mainwave-daily')
 export const labels = {
+  ready: '启动成功', not_ready: '尚未就绪', starting: '启动中', stopped: '已停止',
   healthy: '正常', blocked: '阻断', degraded: '降级', stale: '已过期', deferred: '休市待刷新',
   unknown: '状态未知', not_observed: '未发现实例', disabled: '已停用', configured: '已配置 · 待核在线',
   running: '运行中', failed: '失败', idle: '待下次运行', never_run: '尚未运行',

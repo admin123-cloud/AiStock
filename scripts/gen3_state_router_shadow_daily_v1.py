@@ -1728,6 +1728,11 @@ def _write_outputs(out_dir: Path, runtime_dir: Path, summary: dict[str, Any], al
         (STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_strategy_contract.json").write_text(json.dumps(contract, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
         (STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
 
+    from services.operations.batches import publish_mainwave_batch
+    publish_mainwave_batch(STATE_ALPHA_RUNTIME_DIR.parent,
+                          json.loads(json.dumps(summary, default=_json_default)), all_rows.to_csv(index=False),
+                          tickets_csv=tickets.to_csv(index=False), diagnostics_csv=diagnostics.to_csv(index=False))
+
     preview_cols = [
         "entry_date",
         "code",

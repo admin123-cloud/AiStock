@@ -27,6 +27,8 @@ output*
 *.duckdb
 
 .env
+.env*
 .env.local
 .env.*.local
 config/settings.local.yaml
+config/settings.docker-app.yaml
