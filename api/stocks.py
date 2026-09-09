@@ -3750,6 +3750,23 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
         DatabaseSessionManager.close_session(session)
 
 
+def _index_listing_date(index, previous=None):
+    """Use dated QMT evidence or retained metadata, never the refresh date."""
+    from datetime import date
+    def parse(value):
+        if isinstance(value, datetime):
+            value = value.date()
+        if not isinstance(value, date):
+            text = str(value or '').strip()
+            try:
+                value = datetime.strptime(text, '%Y%m%d').date() if len(text) == 8 and text.isdigit() else date.fromisoformat(text[:10])
+            except (ValueError, TypeError, OverflowError):
+                return None
+        # Zero/epoch and future values are not evidence of a historical listing.
+        return value if date(1900, 1, 1) <= value <= date.today() and value != date(1970, 1, 1) else None
+    return parse(index.get('list_date')) or parse(index.get('OpenDate')) or parse(previous)
+
+
 @router.post("/update-indices")
 def update_indices():
     """更新指数列表到 ClickHouse。"""
@@ -3789,13 +3806,14 @@ def update_indices():
 
         existing_rows = ch.query(
             """
-            SELECT code, type
+            SELECT code, type, list_date
             FROM stocks
             """
         ).result_rows
         existing_map = {
             str(r[0]): {
                 "type": str(r[1] or ""),
+                "list_date": r[2],
             }
             for r in existing_rows if r and r[0]
         }
@@ -3816,11 +3834,15 @@ def update_indices():
                 skipped_count += 1
                 continue
 
-            index_codes.add(code)
             exist = existing_map.get(code)
             if exist and exist.get("type") == "stock":
                 skipped_count += 1
                 continue
+
+            if code in index_codes:
+                skipped_count += 1
+                continue
+            index_codes.add(code)
 
             if exist and exist.get("type") == "index":
                 updated_count += 1
@@ -3834,7 +3856,7 @@ def update_indices():
                 "index",
                 "",
                 "",
-                datetime.now().date(),
+                _index_listing_date(index, (exist or {}).get("list_date")),
                 0,
                 0,
             ])
@@ -3852,13 +3874,13 @@ def update_indices():
         ch.command(f"DROP TABLE IF EXISTS {backup_table}")
         ch.command(f"CREATE TABLE {tmp_table} AS stocks")
 
-        # 原子交换 index 类型记录
+        # 仅替换本轮有效更新；QMT暂缺/无效的旧指数完整保留。
         ch.command(
             f"""
             INSERT INTO {tmp_table}
             SELECT * FROM stocks
-            WHERE type != 'index' OR type IS NULL
-            """
+            WHERE type != 'index' OR type IS NULL OR code NOT IN {{updated_codes:Array(String)}}
+            """, parameters={'updated_codes':sorted(index_codes)}
         )
 
         if index_rows:

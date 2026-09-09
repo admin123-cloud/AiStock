@@ -43,8 +43,9 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
         raise ValueError("交易日历未就绪，不能计算覆盖率")
     start = dates[0]
     universe = client.query("SELECT code, type, list_date, delist_date FROM stocks WHERE type IN ('stock','index') SETTINGS max_execution_time=10").result_rows
-    missing_listing = [str(code) for code, kind, listed, _ in universe
-                       if kind == 'stock' and (not listed or str(listed)[:10] in ('1970-01-01','0000-00-00'))]
+    missing_listing = {kind:[str(code) for code, typ, listed, _ in universe
+                             if typ == kind and (not listed or str(listed)[:10] in ('1970-01-01','0000-00-00'))]
+                       for kind in ('stock','index')}
     # Verified business absences only; unresolved QMT empty responses remain missing.
     exclusions = client.query(
         "SELECT code, start_date, end_date FROM kline_daily_market_status_audit FINAL "
@@ -83,9 +84,9 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
                     actual = sum(len(set(observed.get((code, day), [])) & times) if period else int((code, day) in observed) for code in codes)
                     total = len(codes) * (len(times) if period else 1)
                     cell = coverage_cell(day, total, actual, due=due, exceptions=exceptions[kind, day])
-                    if kind == 'stock' and missing_listing:
-                        cell['metadata_warning'] = '部分股票缺少上市日期，历史预期全集尚未验收'
-                        cell['missing_listing_metadata_count'] = len(missing_listing)
+                    if missing_listing[kind]:
+                        cell['metadata_warning'] = ('部分股票' if kind == 'stock' else '部分指数')+'缺少上市日期，历史预期全集尚未验收'
+                        cell['missing_listing_metadata_count'] = len(missing_listing[kind])
                         if cell['status'] == 'complete':
                             cell['status'] = 'unverified'
                     cell['delivery_deadline'] = policy['daily_deadline'] if not period else f"收线后{policy['minute_delivery_lag_minutes']}分钟"
