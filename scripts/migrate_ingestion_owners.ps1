@@ -8,7 +8,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $taskNames = @('AiStock QMT xtquant Intraday Collector', 'AiStock QMT xtquant After Close Repair',
-  'AiStock QMT xtquant Daily Coverage Repair', 'AiStock QMT xtquant Night Rolling Repair')
+  'AiStock QMT xtquant Daily Coverage Repair', 'AiStock QMT xtquant Night Rolling Repair',
+  'AiStock G3 Holding T Paper Monitor')
 $TargetRoot = (Resolve-Path -LiteralPath $TargetRoot).Path
 $taskVersion = (& git -C $TargetRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Cannot determine target version' }
@@ -16,7 +17,7 @@ function Assert-NoWorkers {
   $activeTasks = @($taskNames | ForEach-Object { Get-ScheduledTask -TaskName $_ } | Where-Object { $_.State -eq 'Running' })
   if ($activeTasks.Count) { throw 'A collector task is running; wait for its safe completion before migration.' }
   $workers = @(Get-CimInstance Win32_Process | Where-Object {
-    $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)(qmt_fullpush_intraday_aggregator|qmt_xtquant_data_source_task|qmt_xtquant_minute_gap_audit_repair|qmtmini_daily_backfill_validate|qmt_xtquant_minute_backfill_validate|daily_kline_coverage_maintenance|run_ingestion_backlog|run_reference_maintenance|repair_index_daily|repair_sector_daily)\.py'
+    $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)(qmt_fullpush_intraday_aggregator|qmt_xtquant_data_source_task|qmt_xtquant_minute_gap_audit_repair|qmtmini_daily_backfill_validate|qmt_xtquant_minute_backfill_validate|daily_kline_coverage_maintenance|run_ingestion_backlog|run_reference_maintenance|repair_index_daily|repair_sector_daily|run_holding_t_service|run_g3_holding_t_paper_monitor|run_g3_holding_t_daily_review)\.py'
   })
   if ($workers.Count) { throw "Collector workers still active (PIDs $($workers.ProcessId -join ',')); no process is killed by this script." }
 }
@@ -49,7 +50,7 @@ $plan = Get-Content -LiteralPath (Join-Path $BackupDir 'plan.json') -Raw -Encodi
 if ($plan.target -ne $TargetRoot -or ($Mode -ne 'Rollback' -and $plan.version -ne $taskVersion)) { throw 'Plan target/version differs from checkout; regenerate plan.' }
 if ($plan.tasks.Count -ne $taskNames.Count -or @($plan.tasks.name | Select-Object -Unique).Count -ne $taskNames.Count -or
     @($plan.tasks | Where-Object { $_.name -notin $taskNames }).Count -gt 0) {
-  throw 'Plan must contain exactly the four known collector task names.'
+  throw 'Plan must contain exactly the five known ingestion and Holding T task names.'
 }
 foreach ($row in $plan.tasks) {
   foreach ($pair in @(@($row.file,$row.sha256), @($row.planned_file,$row.planned_sha256))) {

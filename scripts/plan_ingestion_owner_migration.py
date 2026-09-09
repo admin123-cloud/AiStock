@@ -12,7 +12,7 @@ NS = 'http://schemas.microsoft.com/windows/2004/02/mit/task'
 ET.register_namespace('', NS)
 
 
-def transform(xml, source, target, *, daily=False, now=None):
+def transform(xml, source, target, *, daily=False, holding=False, now=None):
     root = ET.fromstring(xml)
     actions = root.find('{'+NS+'}Actions')
     commands = list(actions) if actions is not None else []
@@ -20,7 +20,8 @@ def transform(xml, source, target, *, daily=False, now=None):
         raise ValueError('Expected exactly one collector action')
     action = commands[0]
     arguments = action.find('{'+NS+'}Arguments')
-    if arguments is None or 'run_qmt_xtquant_collector.ps1' not in (arguments.text or ''):
+    entry = 'run_holding_t_service.py' if holding else 'run_qmt_xtquant_collector.ps1'
+    if arguments is None or entry not in (arguments.text or ''):
         raise ValueError('Unexpected collector entry point')
     if source.lower() not in arguments.text.lower():
         raise ValueError('Action no longer points at expected source checkout')
@@ -71,7 +72,8 @@ def main():
         original = args.directory/row['file']
         before = original.read_bytes()
         xml, old_count, new_count = transform(before.decode('utf-16'), args.source, args.target,
-                                              daily=row['name'].endswith('Daily Coverage Repair'))
+                                              daily=row['name'].endswith('Daily Coverage Repair'),
+                                              holding=row['name'] == 'AiStock G3 Holding T Paper Monitor')
         planned = original.with_suffix('.planned.xml')
         planned.write_bytes(xml.encode('utf-16'))
         plans.append({**row, 'sha256': hashlib.sha256(before).hexdigest(), 'planned_file': planned.name,

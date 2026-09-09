@@ -241,3 +241,34 @@ def test_termination_failure_still_blocks_retry_and_child_uses_utf8(monkeypatch,
         monkeypatch.setattr(budget.os, 'killpg', fail)
     result = budget.run_owned(['python', 'worker.py'], 1, cwd=tmp_path)
     assert result['uncertain'] and result['termination_error'] == 'termination tool unavailable'
+
+
+def test_holding_owner_keeps_two_triggers_and_updates_inner_source_root():
+    from scripts.plan_ingestion_owner_migration import transform, NS
+    import xml.etree.ElementTree as ET
+    xml = f'''<Task xmlns="{NS}"><Triggers><CalendarTrigger><StartBoundary>2026-07-01T09:30:00</StartBoundary></CalendarTrigger>
+      <CalendarTrigger><StartBoundary>2026-07-01T16:00:00</StartBoundary></CalendarTrigger></Triggers>
+      <Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>pythonw.exe</Command>
+      <Arguments>"F:\\Stock\\AiStock-refactor\\scripts\\run_holding_t_service.py" --source-root "F:\\Stock\\AiStock-core"</Arguments>
+      <WorkingDirectory>F:\\Stock\\AiStock-refactor</WorkingDirectory></Exec></Actions></Task>'''
+    planned, before, after = transform(xml, r'F:\Stock\AiStock-core', r'F:\Stock\AiStock-refactor', holding=True)
+    assert (before, after) == (2, 2) and 'AiStock-core' not in planned
+    assert '--source-root' in planned and 'run_holding_t_service.py' in planned
+
+
+def test_dify_expired_once_triggers_become_daily_without_losing_windows():
+    from scripts.plan_dify_launcher import planned_xml, NS
+    import xml.etree.ElementTree as ET
+    xml = f'''<Task xmlns="{NS}"><Triggers><TimeTrigger><StartBoundary>2026-09-07T09:30:00+08:00</StartBoundary>
+      <Repetition><Interval>PT30M</Interval><Duration>PT2H30M</Duration></Repetition></TimeTrigger>
+      <CalendarTrigger><StartBoundary>2026-09-07T15:30:00+08:00</StartBoundary><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger></Triggers>
+      <Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>pwsh.exe</Command>
+      <Arguments>-NoProfile -File "original.ps1"</Arguments></Exec></Actions></Task>'''
+    planned, count, converted = planned_xml(xml, 'system-powershell.exe', 'original.ps1', 'compatible.ps1')
+    root = ET.fromstring(planned)
+    assert (count, converted) == (2, 1)
+    assert not root.findall('.//{'+NS+'}TimeTrigger')
+    assert root.find('.//{'+NS+'}Interval').text == 'PT30M'
+    assert root.find('.//{'+NS+'}Duration').text == 'PT2H30M'
+    assert root.find('.//{'+NS+'}StartBoundary').text == '2026-09-07T09:30:00+08:00'
+    assert root.find('.//{'+NS+'}Enabled').text == 'false'
