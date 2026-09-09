@@ -2923,7 +2923,8 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     batch_summary, _, batch = read_mainwave_batch(STATE_ALPHA_RUNTIME_DIR.parent, include_runtime=True)
     if batch['ok']:
         summary = batch_summary
-        tickets = _enrich_trade_strategy_records(batch['tickets'][:limit])
+        tickets = (_enrich_trade_strategy_records(batch['tickets'][:limit])
+                   if all(item['ok'] for item in batch.get('source_checks', [])) else [])
         use_afterhours_pair = bool(summary.get("pending_next_session_confirmation"))
     else:
         # Legacy files remain available to audit pages, but cannot supply actionable tickets.
@@ -2941,6 +2942,7 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     if batch['ok']:
         diagnostics = batch['diagnostics'][:50]
     return {
+        "source_checks": batch.get('source_checks', []),
         "batch_check": {"name": "runtime_batch_integrity", "ok": batch['ok'],
                         "message": "摘要、票据与诊断来自同一完整批次" if batch['ok'] else "运行批次未验收："+batch.get('reason','unknown')},
         "summary": summary,
@@ -2996,7 +2998,7 @@ def _build_workflow_status() -> dict[str, Any]:
     ]
     pipeline_checks.extend(business_checks)
     pipeline_checks.append(runtime.get("batch_check") or {"name":"runtime_batch_integrity", "ok":False, "message":"缺少批次验收"})
-    data_checks = strategy_data_checks(summary, read_snapshot(runtime_path("health", "latest.json")))
+    data_checks = strategy_data_checks(summary, read_snapshot(runtime_path("health", "latest.json"))) + runtime.get('source_checks', [])
     pipeline_checks.extend(data_checks)
     blockers = [item for item in pipeline_checks if not item.get("ok") and item.get("blocking", True)]
     monitor = configure_shadow_monitor_scheduler()

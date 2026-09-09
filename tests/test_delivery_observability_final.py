@@ -175,3 +175,114 @@ def test_backup_expiry_notifies_and_recovery_resolves_without_auto_repair(tmp_pa
     dispatch(events,lambda *args:sent.append(args),now=NOW+timedelta(minutes=32))
     assert len(sent)==2 and read_incidents(events)[0]['status']=='resolved'
     assert not plan_repairs({'datasets':[{'id':'backup_recovery','cells':[{'date':'2026-09-09','status':'missing'}]}]})
+
+
+def test_uncertain_failure_and_recovery_are_never_resent_even_if_worsened(tmp_path):
+    import sqlite3
+    from services.operations.incidents import notification_transport_status
+    path=tmp_path/'uncertain.sqlite'
+    reconcile(path,[{'name':'source','ok':False,'reason':'missing','missing_keys':1}],now=NOW,grace_minutes=0)
+    reconcile(path,[{'name':'source','ok':False,'reason':'missing','missing_keys':1}],now=NOW)
+    db=sqlite3.connect(path)
+    db.execute("UPDATE incidents SET notification='sending',attempts=1,last_attempt=?,recovery_notification='sending'",(NOW.isoformat(),))
+    db.commit();db.close()
+    sent=[]
+    dispatch(path,lambda *args:sent.append(args),now=NOW+timedelta(hours=1))
+    reconcile(path,[{'name':'source','ok':False,'reason':'missing','missing_keys':1000}],now=NOW+timedelta(hours=2))
+    dispatch(path,lambda *args:sent.append(args),now=NOW+timedelta(hours=2))
+    assert not sent
+    event=read_incidents(path)[0]
+    assert event['notification']=='uncertain' and event['recovery_notification']=='uncertain'
+    assert notification_transport_status(path,enabled=True,configured=True,now=NOW)['state']=='failed_or_uncertain'
+
+
+def test_g3_shared_runtime_page_and_notification_gate_rejects_false_summary(tmp_path,monkeypatch):
+    import ast
+    from pathlib import Path
+    from types import SimpleNamespace
+    from services.operations.batches import publish_mainwave_batch
+    from services.operations.health import write_snapshot
+    from services.operations.read_models import mainwave_daily
+    import scripts.publish_operations as publisher
+    import utils.market_warehouse as warehouse
+    summary={'entry_date':'2026-09-10','decision_date':'2026-09-09','minute_data_failure_rows':0,'qualified_shadow_buy_rows':1}
+    publish_mainwave_batch(tmp_path,summary,'route,code,entry_date,decision_date,m30_source_ok\ninstitutional_mainwave,000001,2026-09-10,2026-09-09,False\n',tickets_csv='code,entry_date,m30_confirmed\n000001,2026-09-10,True\n',diagnostics_csv='code\n')
+    write_snapshot({'generated_at':NOW.isoformat(),'strategy_actionable':True},tmp_path/'health/latest.json')
+    # Deliberately contradict the authoritative batch with an old legacy summary.
+    write_snapshot({'minute_data_failure_rows':0},tmp_path/'gen3_state_alpha/latest_summary.json')
+    daily=mainwave_daily(tmp_path,now=NOW)
+    assert daily['state']=='data_blocked'
+    assert next(x for x in daily['checks'] if x['name']=='candidate_row_sources')['ok'] is False
+    source=ast.parse(Path('api/gen3_state_alpha.py').read_text(encoding='utf-8'))
+    fn=next(x for x in source.body if isinstance(x,ast.FunctionDef) and x.name=='_load_current_runtime')
+    env={'Any':object,'STATE_ALPHA_RUNTIME_DIR':tmp_path/'gen3_state_alpha','STATE_ROUTER_RUNTIME_DIR':tmp_path/'gen3_state_router_shadow',
+         '_read_json':lambda p:{},'_read_csv_records':lambda *a,**kw:[], '_enrich_trade_strategy_records':lambda x:x,
+         '_broker_snapshot':lambda:{},'_attach_exit_advice':lambda x,**kw:x,'_read_shadow_ledger_records':lambda *a,**kw:[],
+         '_filter_open_shadow_ledger_records':lambda x:x,'_build_pipeline':lambda *a:[], '_build_readiness':lambda *a:[]}
+    exec(compile(ast.Module(body=[fn],type_ignores=[]),'<runtime-gate>','exec'),env)
+    runtime=env['_load_current_runtime']()
+    assert runtime['tickets']==[] and any(not x['ok'] for x in runtime['source_checks'])
+    class Clock:
+        @staticmethod
+        def now(*args):return NOW
+    monkeypatch.setattr(publisher,'datetime',Clock)
+    monkeypatch.setattr(publisher,'host_inventory',lambda:[])
+    monkeypatch.setattr(publisher,'task_board',lambda *a,**kw:{'backups':{'delivery_ok':True},'api_runtime':{'ready':True}})
+    monkeypatch.setattr(publisher,'build_delivery_calendar',lambda *a,**kw:{'datasets':[]})
+    monkeypatch.setattr(warehouse,'clickhouse_client',lambda:None)
+    publisher.publish(SimpleNamespace(runtime_root=tmp_path,notify=False,repair=False))
+    events=read_incidents(tmp_path/'operations/incidents.sqlite3')
+    assert any(x['detail']['name']=='candidate_row_sources' and x['status']!='resolved' for x in events)
+
+
+def test_g3_ticket_source_conflict_alone_blocks_shared_gate(tmp_path):
+    from services.operations.batches import publish_mainwave_batch,read_mainwave_batch
+    from scripts.verify_g3_delivery import verify
+    summary={'entry_date':'2026-09-10','decision_date':'2026-09-09','minute_data_failure_rows':0}
+    publish_mainwave_batch(tmp_path,summary,'route,code,entry_date,decision_date\n',tickets_csv='code,entry_date,m30_conflict_rows\n000001,2026-09-10,NaN\n',diagnostics_csv='code\n')
+    _,_,batch=read_mainwave_batch(tmp_path,include_runtime=True)
+    assert not next(x for x in batch['source_checks'] if x['name']=='ticket_row_sources')['ok']
+    assert not verify(tmp_path,entry_date='2026-09-10',decision_date='2026-09-09')['ok']
+
+
+def test_partial_smtp_acceptance_is_uncertain_and_does_not_retry(tmp_path,monkeypatch):
+    import smtplib
+    from services.operations.incidents import send_digest
+    from utils.config import config
+    original=config.get
+    monkeypatch.setattr(config,'get',lambda key,*args: {'enabled':True,'to_emails':['one@example.invalid','two@example.invalid'],'smtp_server':'fixture.invalid','from_email':'sender@example.invalid'} if key=='email' else original(key,*args))
+    calls=[]
+    class FakeSMTP:
+        def __init__(self,*args,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def send_message(self,msg):
+            calls.append(msg)
+            return {'two@example.invalid':(550,b'refused')}
+    monkeypatch.setattr(smtplib,'SMTP_SSL',FakeSMTP)
+    path=tmp_path/'smtp.sqlite'
+    reconcile(path,[{'name':'source','ok':False}],now=NOW,grace_minutes=0)
+    reconcile(path,[{'name':'source','ok':False}],now=NOW)
+    dispatch(path,send_digest,now=NOW)
+    dispatch(path,send_digest,now=NOW+timedelta(hours=1))
+    assert len(calls)==1 and read_incidents(path)[0]['notification']=='uncertain'
+
+
+def test_repair_stops_alert_and_only_verified_evidence_resolves(tmp_path):
+    from scripts.publish_operations import repair_incident_checks
+    path=tmp_path/'repair.sqlite'
+    held=[{'key':f'fixture:{i}','status':state} for i,state in enumerate(('budget_exhausted','no_progress_requires_review','requires_review','awaiting_job','awaiting_fresh_verification'))]
+    checks=repair_incident_checks({'held':held})
+    assert len(checks)==3 and all(not x['ok'] for x in checks)
+    reconcile(path,checks,now=NOW,grace_minutes=0)
+    reconcile(path,checks,now=NOW)
+    sent=[]
+    dispatch(path,lambda *args:sent.append(args),now=NOW)
+    assert len(sent)==1 and len(read_incidents(path))==3
+    # Merely waiting is not proof of recovery.
+    reconcile(path,repair_incident_checks({'held':[{'key':'fixture:0','status':'awaiting_job'}]}),now=NOW)
+    assert all(x['status']=='overdue' for x in read_incidents(path))
+    reconcile(path,repair_incident_checks({'verified':['fixture:0']}),now=NOW)
+    dispatch(path,lambda *args:sent.append(args),now=NOW)
+    assert len(sent)==2
+    assert next(x for x in read_incidents(path) if x['group_key']=='repair:fixture:0')['status']=='resolved'

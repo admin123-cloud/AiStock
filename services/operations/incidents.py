@@ -10,6 +10,10 @@ from services.operations.health import BUSINESS_TZ
 from services.operations.lifecycle import InstanceLock
 
 
+class NotificationOutcomeUncertain(RuntimeError):
+    """Delivery may have happened; automatic retries could duplicate accepted mail."""
+
+
 def _schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS incidents (key TEXT PRIMARY KEY, status TEXT, first_seen TEXT, last_seen TEXT, deadline TEXT, resolved_at TEXT, payload TEXT, notification TEXT, attempts INTEGER DEFAULT 0, last_attempt TEXT, error TEXT)')
     columns = {x[1] for x in db.execute('PRAGMA table_info(incidents)')}
@@ -81,7 +85,7 @@ def reconcile(path: Path, checks: list[dict], *, now=None, grace_minutes=30):
                 worsened = fingerprint != prior[3] and (check.get('reason') != old.get('reason') or (check.get('missing_keys') or 0) > (old.get('missing_keys') or 0))
                 db.execute('UPDATE incidents SET status=?,last_seen=?,payload=? WHERE key=?', (status,stamp,payload,prior[0]))
                 if worsened:
-                    db.execute("UPDATE incidents SET fingerprint=?,notification='waiting',attempts=0,last_attempt=NULL WHERE key=?", (fingerprint,prior[0]))
+                    db.execute("UPDATE incidents SET fingerprint=?,notification=CASE WHEN notification IN ('sending','uncertain') THEN 'uncertain' ELSE 'waiting' END,attempts=CASE WHEN notification IN ('sending','uncertain') THEN attempts ELSE 0 END,last_attempt=CASE WHEN notification IN ('sending','uncertain') THEN last_attempt ELSE NULL END WHERE key=?", (fingerprint,prior[0]))
                 if worsened or status != prior[1]:
                     db.execute('INSERT INTO incident_history(event_key,at,status,payload) VALUES(?,?,?,?)', (prior[0],stamp,'escalated' if worsened else status,payload))
     return read_incidents(path)
@@ -109,8 +113,13 @@ def _dispatch_failures(path: Path, sender, *, now=None):
     except RuntimeError:
         return {'status':'busy','count':0}
     try:
+        # Holding the send lock proves any previous sending marker has no active sender.
+        # SMTP may have accepted before the process stopped; never guess and resend.
+        with sqlite3.connect(path) as db:
+            db.execute("UPDATE incidents SET notification='uncertain',error='smtp_outcome_requires_review' WHERE notification='sending'")
+            db.execute("UPDATE incidents SET recovery_notification='uncertain',error='smtp_outcome_requires_review' WHERE recovery_notification='sending'")
         due = [x for x in read_incidents(path,limit=None) if x['status']=='overdue'
-               and x['notification']!='smtp_accepted' and x['attempts']<3
+               and x['notification'] in ('waiting','failed') and x['attempts']<3
                and (not x['last_attempt'] or now-datetime.fromisoformat(x['last_attempt'])>=timedelta(minutes=30))]
         if not due:
             return {'status':'idle','count':0}
@@ -122,7 +131,7 @@ def _dispatch_failures(path: Path, sender, *, now=None):
                 f"{x['detail']['name']}\n首次发现：{x['first_seen']}\n恢复窗口：{x['deadline']}\n说明：{x['detail'].get('message') or x['detail'].get('reason')}\n责任：{x['detail'].get('remediation_owner') or '运行中心'}" for x in due))
             status,error = 'smtp_accepted',None
         except Exception as exc:
-            status,error = 'failed',f'{type(exc).__name__}: {exc}'
+            status,error = ('uncertain' if isinstance(exc,NotificationOutcomeUncertain) else 'failed'),f'{type(exc).__name__}: {exc}'
         with sqlite3.connect(path) as db:
             for item in due:
                 db.execute('UPDATE incidents SET notification=?,error=? WHERE key=? AND fingerprint IS ?', (status,error,item['key'],item.get('fingerprint')))
@@ -161,9 +170,12 @@ def send_digest(subject: str, body: str) -> None:
             server.starttls()
         if cfg.get('smtp_user'):
             server.login(cfg['smtp_user'], cfg.get('smtp_password') or '')
-        refused = server.send_message(msg)
+        try:
+            refused = server.send_message(msg)
+        except (smtplib.SMTPServerDisconnected, TimeoutError, ConnectionError) as exc:
+            raise NotificationOutcomeUncertain('smtp_data_outcome_unknown') from exc
         if refused:
-            raise RuntimeError('one_or_more_recipients_refused')
+            raise NotificationOutcomeUncertain('some_recipients_accepted_others_refused')
 
 
 def dispatch(path: Path, sender, *, now=None):
@@ -194,7 +206,7 @@ def dispatch(path: Path, sender, *, now=None):
                 f"{x['detail']['name']}\n恢复验收：{x['resolved_at']}" for x in due))
             status, error = 'smtp_accepted', None
         except Exception as exc:
-            status, error = 'failed', f'{type(exc).__name__}: {exc}'
+            status, error = ('uncertain' if isinstance(exc,NotificationOutcomeUncertain) else 'failed'), f'{type(exc).__name__}: {exc}'
         with sqlite3.connect(path, timeout=10) as db:
             for item in due:
                 db.execute('UPDATE incidents SET recovery_notification=?,error=? WHERE key=?', (status,error,item['key']))
@@ -222,7 +234,8 @@ def notification_transport_status(path: Path, *, enabled, configured, now=None):
         if item.get('recovery_notification')=='smtp_accepted' and item.get('recovery_attempt_at'):
             stamps.append(item['recovery_attempt_at'])
         failed = failed or (item['status']!='resolved' and item.get('notification') in ('failed','sending'))
-        failed = failed or item.get('recovery_notification') in ('failed','sending')
+        failed = failed or item.get('notification') == 'uncertain'
+        failed = failed or item.get('recovery_notification') in ('failed','sending','uncertain')
     accepted = max(stamps,default=None)
     try:
         recent = accepted is not None and 0 <= (now-datetime.fromisoformat(accepted)).total_seconds() <= 86400

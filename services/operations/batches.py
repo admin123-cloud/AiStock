@@ -53,7 +53,10 @@ def read_mainwave_batch(root: Path, *, include_runtime=False):
         if not summary.get('entry_date') or any(
                 x.get('entry_date') != summary.get('entry_date') or x.get('decision_date') != summary.get('decision_date') for x in rows):
             raise ValueError('batch_business_date_mismatch')
-        metadata = {'ok': True, 'batch_id': batch['batch_id'], 'contract_hash': batch['contract_hash']}
+        from services.operations.health import g3_batch_source_checks
+        ticket_rows = list(csv.DictReader(io.StringIO(payload.get('tickets_csv', '').lstrip('\ufeff'))))
+        source_checks = g3_batch_source_checks(rows, ticket_rows)
+        metadata = {'source_checks':source_checks, 'ok': True, 'batch_id': batch['batch_id'], 'contract_hash': batch['contract_hash']}
         if include_runtime:
             if 'tickets_csv' not in payload or 'diagnostics_csv' not in payload:
                 raise ValueError('batch_runtime_payload_missing')

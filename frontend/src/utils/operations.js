@@ -11,6 +11,7 @@ export const labels = {
   host_archive_not_verified: '宿主归档尚未验收', backup_execution_unknown: '备份执行状态未知',
   backup_reports_degraded: '备份生产者报告验收未通过', isolated_restore_drill_required: '需要隔离恢复验证',
 
+  budget_exhausted: '自动修复批次预算已用尽', no_progress_requires_review: '连续复验无进展 · 已停修', requires_review: '执行结果需人工核实 · 已停修', awaiting_job: '等待队列任务结束', awaiting_fresh_verification: '等待任务结束后的独立复验',
   configured_unverified: '已配置，发送尚未验收', configuration_incomplete: '通知配置不完整', failed_or_uncertain: '发送失败或结果不确定', queued: '已排队', awaiting_verification: '等待独立复验', not_requested: '尚未启用', not_required: '无需通知', retired: '已退役', external: '外部联动',
   ready: '启动成功', not_ready: '尚未就绪', starting: '启动中', stopped: '已停止',
   healthy: '正常', blocked: '阻断', degraded: '降级', stale: '已过期', deferred: '休市待刷新',
@@ -18,7 +19,7 @@ export const labels = {
   running: '运行中', failed: '失败', idle: '待下次运行', never_run: '尚未运行',
   unverified: '待验收', not_due: '尚未到期', complete: '覆盖齐全', partial: '部分缺失', missing: '缺失',
   observing: '恢复窗口内', overdue: '恢复已超时', resolved: '已恢复', waiting: '等待恢复',
-  smtp_accepted: 'SMTP已接受', sending: '发送中', data_blocked: '数据不可判断', confirmed: '已完成30m确认',
+  uncertain: '发送结果不确定 · 需人工核实', smtp_accepted: 'SMTP已接受', sending: '发送中', data_blocked: '数据不可判断', confirmed: '已完成30m确认',
   waiting_30m: '等待30m确认', candidates: '候选跟踪中', no_candidates: '本批次无候选', stale_batch: '历史批次',
   candidate_observing: '门槛未达 · 继续观察',
 }

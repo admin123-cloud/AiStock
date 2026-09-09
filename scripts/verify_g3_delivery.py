@@ -17,16 +17,9 @@ def verify(root, *, entry_date, decision_date, prior_batch_id=None):
         checks.extend([{'name':'expected_dates','ok':summary.get('entry_date')==entry_date and summary.get('decision_date')==decision_date},
                        {'name':'regenerated','ok':not prior_batch_id or metadata['batch_id']!=prior_batch_id}])
         checks.extend(x for x in strategy_data_checks(summary,{}) if x['name']!='runtime_data_health')
-        def unavailable(row):
-            try:
-                conflicts = float(row.get('m30_conflict_rows') or 0)
-            except (ValueError,TypeError):
-                return True
-            return (conflicts > 0 or row.get('m30_visibility_status')=='data_conflict'
-                    or row.get('m30_status') in ('data_unavailable','source_unavailable','data_conflict','missing')
-                    or (row.get('m30_source_ok') not in (None,'') and str(row['m30_source_ok']).lower() not in ('true','1','1.0')))
-        conflicts = [x for x in rows if unavailable(x)]
-        checks.append({'name':'main_stage_conflicts','ok':not conflicts,'count':len(conflicts)})
+        checks.extend(metadata.get('source_checks', []))
+        checks.append({'name':'main_stage_conflicts', 'ok':all(x['ok'] for x in metadata.get('source_checks', [])),
+                       'count':sum(x['failure_count'] for x in metadata.get('source_checks', []))})
     return {'ok':all(x['ok'] for x in checks),'checks':checks,'batch':metadata,
             'scope':'批次一致性与生产者来源证据；不执行委托、不证明收益，覆盖数据另验'}
 

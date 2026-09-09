@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from services.operations.health import BUSINESS_TZ, read_snapshot, strategy_data_checks, backup_health
+from services.operations.health import BUSINESS_TZ, read_snapshot, strategy_data_checks, backup_health, g3_row_source_unavailable
 from strategies.contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata
 
 
@@ -156,6 +156,7 @@ def mainwave_daily(root: Path, *, now: datetime | None = None) -> dict:
     if batch['ok']:
         summary, rows = batch_summary, batch_rows
         checks = strategy_data_checks(summary, health)
+    checks.extend(batch.get('source_checks', []))
     checks.append({'name': 'mainwave_batch_integrity', 'ok': batch['ok'],
                    'message': '完整批次校验通过' if batch['ok'] else '候选批次未验收，需由生产者重新发布完整批次',
                    'reason': batch.get('reason', 'atomic_batch_verified')})
@@ -163,10 +164,8 @@ def mainwave_daily(root: Path, *, now: datetime | None = None) -> dict:
     for item in rows:
         if item.get('route') != 'institutional_mainwave':
             continue
-        conflict = item.get('m30_visibility_status') == 'data_conflict' or number(item.get('m30_conflict_rows')) > 0
-        unavailable = conflict or item.get('m30_status') in ('data_unavailable','source_unavailable','data_conflict','missing')
+        unavailable = g3_row_source_unavailable(item)
         confirmed = truth(item.get('m30_confirmed'))
-        unavailable = unavailable or (item.get('m30_source_ok') not in (None, '') and not truth(item.get('m30_source_ok')))
         qualified = number(item.get('wave_style_score')) >= contract['entry']['minimum_score'] and number(item.get('sector_signal_count')) >= contract['entry']['minimum_same_day_industry_mainwave_count']
         stage = 'data_blocked' if unavailable else 'candidate_observing' if not qualified else 'confirmed' if confirmed else 'waiting_30m'
         candidates.append({'code': item.get('code'), 'name': item.get('name') or item.get('stock_name'),

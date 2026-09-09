@@ -282,3 +282,27 @@ def backup_health(path: Path, *, now=None) -> dict:
             'backup_age_hours':None if backup_age is None else round(backup_age/3600,2),
             'restore_age_days':None if restore_age is None else round(restore_age/86400,2),
             'delivery_ok':not reasons,'repair_policy':'operator_review_only'}
+
+
+def g3_row_source_unavailable(row: dict) -> bool:
+    """Shared negative source evidence; missing legacy optional fields are not invented."""
+    import math
+    try:
+        conflicts = float(row.get('m30_conflict_rows') or 0)
+    except (ValueError, TypeError, OverflowError):
+        return True
+    source_ok = row.get('m30_source_ok')
+    return (not math.isfinite(conflicts) or conflicts < 0 or conflicts > 0
+            or row.get('m30_visibility_status') in ('data_conflict', 'data_unavailable', 'source_unavailable', 'missing')
+            or row.get('m30_status') in ('data_unavailable', 'source_unavailable', 'data_conflict', 'missing')
+            or (source_ok not in (None, '') and str(source_ok).strip().lower() not in ('true', '1', '1.0')))
+
+
+def g3_batch_source_checks(candidates, tickets=()) -> list[dict]:
+    checks = []
+    for name, rows in (('candidate_row_sources', candidates), ('ticket_row_sources', tickets)):
+        bad = [row for row in rows if g3_row_source_unavailable(row)]
+        checks.append({'name':name, 'ok':not bad, 'status':'blocked' if bad else 'pass',
+                       'failure_count':len(bad), 'codes':[str(row.get('code') or '') for row in bad],
+                       'message':f'{len(bad)}条逐行来源证据冲突或不可用' if bad else '逐行来源未报告故障'})
+    return checks

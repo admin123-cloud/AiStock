@@ -38,6 +38,18 @@ def host_inventory() -> list[dict]:
     return value if isinstance(value, list) else [value]
 
 
+def repair_incident_checks(result):
+    reasons = {'budget_exhausted':'自动修复批次预算已用尽',
+               'no_progress_requires_review':'连续复验没有进展，已停止自动补数',
+               'requires_review':'执行结果不确定或任务失败，需人工核实'}
+    checks = [{'name':'repair:'+item['key'], 'ok':False, 'reason':item['status'],
+               'message':item['key']+'：'+reasons[item['status']], 'remediation_owner':'共享数据修复队列'}
+              for item in result.get('held', []) if item.get('status') in reasons]
+    checks.extend({'name':'repair:'+key, 'ok':True, 'message':key+'：独立数据复验通过'}
+                  for key in result.get('verified', []))
+    return checks
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--runtime-root', type=Path, default=runtime_path())
@@ -57,9 +69,9 @@ def publish(args):
     now = datetime.now(BUSINESS_TZ)
     root = args.runtime_root
     health = read_snapshot(root/'health/latest.json', now=now)
-    summary = read_json(root/'gen3_state_alpha/latest_summary.json')
+    daily = mainwave_daily(root,now=now)
     repair_result = {'status':'verification_unavailable'}
-    checks = [x for x in strategy_data_checks(summary, health) if x['name'] != 'runtime_data_health']
+    checks = [x for x in daily['checks'] if x['name'] != 'runtime_data_health']
     checks.append({'name':'runtime_health_publisher','ok':health.get('publisher_status')=='healthy',
                    'message':'健康发布者心跳检查；过期状态不能解释为正常'})
     board = task_board(root, {}, now=now)
@@ -86,6 +98,7 @@ def publish(args):
         write_snapshot(calendar,root/'operations/delivery_calendar.json')
         from services.operations.remediation import request_repairs
         repair_result = request_repairs(calendar,root,enabled=getattr(args,'repair',False),now=now)
+        checks.extend(repair_incident_checks(repair_result))
         checks.append({'name':'delivery_verifier','ok':True})
         for dataset in calendar['datasets']:
             bad = [cell for cell in dataset['cells'] if cell['status'] in ('partial','missing','unknown','unverified')]
@@ -99,8 +112,6 @@ def publish(args):
     except Exception as exc:
         checks.append({'name':'delivery_verifier','ok':False,'message':f'覆盖验收无法完成：{type(exc).__name__}'})
     path = root/'operations/incidents.sqlite3'
-    daily = mainwave_daily(root,now=now)
-    checks.extend(x for x in daily['checks'] if x['name'] == 'mainwave_batch_integrity')
     events = reconcile(path,checks,now=now,grace_minutes=delivery_contract()['repair_grace_minutes'])
     record_mainwave_tracking(root, daily)
     result = dispatch(path,send_digest,now=now) if args.notify else {'status':'not_requested'}

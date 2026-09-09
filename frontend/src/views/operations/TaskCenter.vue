@@ -47,7 +47,13 @@
         <el-table-column prop="last_result" label="退出码" width="105" />
       </el-table></div><p class="ops-meta">宿主机清单：{{ dateTime(board.host_inventory_at) }}。展开任务可查看失败原因、最近成功和耗时；退出码与业务结果分别展示。</p>
     </section>
-    <section class="ops-panel" aria-label="数据源稳定性"><h2>数据源稳定性 · 最近24小时</h2><p v-if="!board.source_metrics?.sources?.length">尚无真实请求样本，成功率与延迟未知。</p><div v-for="source in board.source_metrics?.sources||[]" :key="source.source+source.operation" class="ops-candidate"><strong>{{ source.source }} · {{ source.operation }}</strong><p>请求 {{ source.requests }} 次 · 失败 {{ source.failures }} · 超时 {{ source.timeouts }} · P95 {{ source.p95_seconds?.toFixed(2) }}秒</p><p>本次返回 {{ source.received ?? '未知' }} / {{ source.requested ?? '未知' }} · 源时间 {{ dateTime(source.source_at) }} · 落盘时间 {{ dateTime(source.persisted_at) }}</p><p class="ops-meta">最近采样 {{ dateTime(source.last_request_at) }}；请求返回覆盖不等于有效证券完整交付，历史记录不代表当前在线。</p></div><p>自动修复：{{ label(board.operations_publisher?.repair?.status) }}。明确缺口进入共享队列，执行完成后仍须独立复验。</p></section>
+    <section class="ops-panel" aria-label="数据源稳定性"><h2>数据源稳定性 · 最近24小时</h2><p v-if="!board.source_metrics?.sources?.length">尚无真实请求样本，成功率与延迟未知。</p><div v-for="source in board.source_metrics?.sources||[]" :key="source.source+source.operation" class="ops-candidate"><strong>{{ source.source }} · {{ source.operation }}</strong><p>请求 {{ source.requests }} 次 · 失败 {{ source.failures }} · 超时 {{ source.timeouts }} · P95 {{ source.p95_seconds?.toFixed(2) }}秒</p><p>本次返回 {{ source.received ?? '未知' }} / {{ source.requested ?? '未知' }} · 源时间 {{ dateTime(source.source_at) }} · 落盘时间 {{ dateTime(source.persisted_at) }}</p><p class="ops-meta">最近采样 {{ dateTime(source.last_request_at) }}；请求返回覆盖不等于有效证券完整交付，历史记录不代表当前在线。</p></div></section>
+    <section class="ops-panel" aria-label="自动修复与复验">
+      <div class="ops-toolbar"><h2>自动修复与复验</h2><el-tag :type="repairStopped.length?'danger':'warning'">{{ repairStopped.length ? `${repairStopped.length}项已停止自动修复` : label(board.operations_publisher?.repair?.status) }}</el-tag></div>
+      <p class="ops-meta">状态采集 {{ dateTime(board.operations_publisher?.generated_at) }} · {{ board.operations_publisher?.publisher_status==='healthy'?'本次已发布状态':'快照已过期，当前状态未知' }}。任务完成后仍须独立数据复验；预算耗尽或连续无进展时停止补数并进入告警窗口。</p>
+      <div v-for="item in board.operations_publisher?.repair?.held||[]" :key="item.key" class="ops-candidate"><strong style="overflow-wrap:anywhere">{{ item.key }}</strong><p :class="isRepairStopped(item.status)?'ops-error':'ops-meta'">{{ label(item.status) }}</p></div>
+      <p v-if="board.operations_publisher?.repair?.verified?.length">本轮复验通过：{{ board.operations_publisher.repair.verified.join('、') }}</p>
+    </section>
     <section class="ops-panel"><h2>异常与恢复记录</h2><p>异常先进入恢复窗口，超时后合并提醒；SMTP接受不代表收件人已收到或阅读。</p><el-empty v-if="!events.length" description="尚无已记录事件；这不代表所有数据已通过验收" />
       <div v-for="event in events" :key="event.key" class="ops-candidate"><div class="ops-toolbar"><strong>{{ event.detail.message || event.detail.reason || event.key }}</strong><el-tag :type="tone(event.status)">{{ label(event.status) }}</el-tag><el-tag type="info">{{ label(event.notification) }}</el-tag></div><p class="ops-meta">首次发现 {{ dateTime(event.first_seen) }} · 恢复窗口 {{ dateTime(event.deadline) }} · 发送尝试 {{ event.attempts }} · 恢复通知 {{ label(event.recovery_notification) }}</p><p v-if="event.error">{{ event.error }}</p></div>
     </section>
@@ -58,6 +64,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getTasks, getIncidents, label, tone, dateTime } from '@/utils/operations'
 import '@/styles/operations.css'
 const board=ref({}), events=ref([]), loading=ref(false), error=ref(''), filter=ref('all'), search=ref(''), scope=ref('core'), group=ref('delivery')
+const isRepairStopped=status=>['budget_exhausted','no_progress_requires_review','requires_review'].includes(status)
+const repairStopped=computed(()=>(board.value.operations_publisher?.repair?.held||[]).filter(x=>isRepairStopped(x.status)))
 const metrics=computed(()=>[{label:'Windows已登记',value:board.value.summary?.registered_windows},{label:'运行中',value:board.value.summary?.running},{label:'最近执行失败',value:board.value.summary?.failed},{label:'历史 / 退役入口',value:board.value.summary?.retired}])
 const recoveryStage=state=>({checking_source:'核验5分钟源数据',writing:'写入候选',validating:'校验候选与源数据',blocked:'已阻断，需排查'}[state]||state)
 const recoveryPeriod=key=>{const match=/^(15|30|60):(\d{4})(\d{2})$/.exec(key);return match?`${match[2]}年${match[3]}月 · ${match[1]}分钟`:key}
