@@ -8,6 +8,12 @@ $ErrorActionPreference = 'Stop'
 $taskDocker = (Get-Command docker -ErrorAction SilentlyContinue).Source
 if (-not $taskDocker) { $taskDocker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' }
 if (-not (Test-Path -LiteralPath $taskDocker -PathType Leaf)) { throw 'Docker CLI not found' }
+$taskComposeExe = Join-Path (Split-Path (Split-Path $taskDocker -Parent) -Parent) 'cli-plugins\docker-compose.exe'
+function Invoke-ReleaseCompose {
+    if (Test-Path -LiteralPath $taskComposeExe -PathType Leaf) { & $taskComposeExe @args }
+    else { & $taskDocker compose @args }
+}
+
 if ($Version -notmatch '^[a-f0-9]{7,40}$') { throw 'Version must be an exact Git commit hash' }
 $taskRepo = (Resolve-Path -LiteralPath $HostRepoRoot).Path
 $taskSettings = (Resolve-Path -LiteralPath $SettingsFile).Path
@@ -22,7 +28,7 @@ $env:AISTOCK_RELEASE_VERSION = $Version
 $env:AISTOCK_HOST_REPO_ROOT = $taskRepo
 $env:AISTOCK_SETTINGS_FILE = $taskSettings
 $taskCompose = Join-Path $taskRepo 'docker-compose.release.yml'
-& $taskDocker compose -f $taskCompose config --quiet
+Invoke-ReleaseCompose -f $taskCompose config --quiet
 if ($LASTEXITCODE -ne 0) { throw 'Release configuration invalid' }
 Write-Output "Release $Version / mode $Mode / host $taskRepo"
 if ($Mode -eq 'Inspect') {
@@ -43,9 +49,9 @@ foreach ($taskImage in @("aistock-core-backend:$Version","aistock-core-frontend:
 $taskRecordDir = 'F:\Stock\AiStockData\artifacts\releases'
 New-Item -ItemType Directory -Force -Path $taskRecordDir | Out-Null
 $taskRecord = Join-Path $taskRecordDir ("{0}-{1}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss'),$Mode)
-$taskPrevious = & $taskDocker compose -f $taskCompose images --format json
+$taskPrevious = Invoke-ReleaseCompose -f $taskCompose images --format json
 if ($LASTEXITCODE -ne 0) { throw 'Could not record previous container images' }
 @{version=$taskHead; mode=$Mode; host_repo=$taskRepo; previous_images=$taskPrevious; started_at=(Get-Date).ToString('o')} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $taskRecord -Encoding UTF8
-& $taskDocker compose -f $taskCompose up -d --no-build --wait --wait-timeout 180
+Invoke-ReleaseCompose -f $taskCompose up -d --no-build --wait --wait-timeout 180
 if ($LASTEXITCODE -ne 0) { throw "Release not healthy. Preserve data; use recorded prior release checkout and Rollback. Record: $taskRecord" }
 Write-Output "Containers ready. Record: $taskRecord. Host task publisher must target this verified checkout; trading-day acceptance remains separate."
