@@ -16,7 +16,7 @@ function Assert-NoWorkers {
   $activeTasks = @($taskNames | ForEach-Object { Get-ScheduledTask -TaskName $_ } | Where-Object { $_.State -eq 'Running' })
   if ($activeTasks.Count) { throw 'A collector task is running; wait for its safe completion before migration.' }
   $workers = @(Get-CimInstance Win32_Process | Where-Object {
-    $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)(qmt_fullpush_intraday_aggregator|qmt_xtquant_data_source_task|qmt_xtquant_minute_gap_audit_repair|daily_kline_coverage_maintenance|repair_index_daily|repair_sector_daily)\.py'
+    $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)(qmt_fullpush_intraday_aggregator|qmt_xtquant_data_source_task|qmt_xtquant_minute_gap_audit_repair|qmtmini_daily_backfill_validate|qmt_xtquant_minute_backfill_validate|daily_kline_coverage_maintenance|run_ingestion_backlog|run_reference_maintenance|repair_index_daily|repair_sector_daily)\.py'
   })
   if ($workers.Count) { throw "Collector workers still active (PIDs $($workers.ProcessId -join ',')); no process is killed by this script." }
 }
@@ -47,7 +47,8 @@ if ($Mode -eq 'Plan') {
 if (-not $BackupDir) { throw 'BackupDir is required' }
 $plan = Get-Content -LiteralPath (Join-Path $BackupDir 'plan.json') -Raw -Encoding utf8 | ConvertFrom-Json
 if ($plan.target -ne $TargetRoot -or ($Mode -ne 'Rollback' -and $plan.version -ne $taskVersion)) { throw 'Plan target/version differs from checkout; regenerate plan.' }
-if ($plan.tasks.Count -ne $taskNames.Count -or @($plan.tasks | Where-Object { $_.name -notin $taskNames }).Count -gt 0) {
+if ($plan.tasks.Count -ne $taskNames.Count -or @($plan.tasks.name | Select-Object -Unique).Count -ne $taskNames.Count -or
+    @($plan.tasks | Where-Object { $_.name -notin $taskNames }).Count -gt 0) {
   throw 'Plan must contain exactly the four known collector task names.'
 }
 foreach ($row in $plan.tasks) {

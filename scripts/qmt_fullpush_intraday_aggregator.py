@@ -241,7 +241,6 @@ class FullPushAggregator:
             return
         with self.lock:
             self.received_events += 1
-            self.last_callback_at = now
             for raw_code, raw_tick in datas.items():
                 code = normalize_tick_code(raw_code)
                 if not code or not isinstance(raw_tick, dict):
@@ -253,6 +252,8 @@ class FullPushAggregator:
                 price = tick_number(tick, "lastPrice", "last", "price", "close")
                 if price <= 0:
                     continue
+                if update_bars:
+                    self.last_callback_at = now
                 self.latest_ticks[code] = tick
                 self.received_codes.add(code)
                 if not update_bars:
@@ -812,6 +813,13 @@ def run_collector(args):
         poll_seconds = time.monotonic()-poll_started
         # Subscription remains available if a disposable polling worker fails.
         result = flush_snapshot(aggregator)
+        with aggregator.lock:
+            last_push = aggregator.last_callback_at
+        push_age = (datetime.now(SH_TZ).replace(tzinfo=None)-last_push).total_seconds() if last_push else None
+        active_session = session_name(datetime.now(SH_TZ).replace(tzinfo=None)) is not None
+        if active_session and (push_age is None or push_age > 120):
+            errors['subscription'] = 'No verified subscription callback in 120 seconds; polling cannot certify minute bars'
+        result['subscription_age_seconds'] = round(push_age, 3) if push_age is not None else None
         total_seconds = round(time.monotonic()-poll_started, 3)
         if result['coverage']['slo_300s'] != 'passed':
             errors['coverage'] = f"{len(result['coverage']['unverified'])} securities not verified fresh and persisted"

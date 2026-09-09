@@ -72,9 +72,10 @@ def coordinated_download(codes, period, start, end, action, *, root=None, wait_s
                     sdk_started = time.monotonic()
                     try:
                         result = action()
-                    except Exception:
+                    except Exception as exc:
                         observe(source='qmt', operation='history_download:'+period,
-                                duration_seconds=time.monotonic()-sdk_started, outcome='failed', requested=len(codes), path=metrics_path)
+                                duration_seconds=time.monotonic()-sdk_started,
+                                outcome='timeout' if isinstance(exc, TimeoutError) else 'failed', requested=len(codes), path=metrics_path)
                         raise
                     observe(source='qmt', operation='history_download:'+period,
                             duration_seconds=time.monotonic()-sdk_started, outcome='success', requested=len(codes), path=metrics_path)

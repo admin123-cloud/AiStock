@@ -211,3 +211,33 @@ def test_owner_migration_keeps_original_triggers_and_principal():
     assert root.find('.//{'+NS+'}Principal').attrib['id'] == 'original'
     assert root.find('.//{'+NS+'}Enabled').text == 'false'
     assert 'daily-maintenance' in planned and 'AiStock-core' not in planned
+
+
+def test_polling_does_not_hide_a_dead_subscription():
+    from scripts.qmt_fullpush_intraday_aggregator import FullPushAggregator
+    collector = FullPushAggregator(SimpleNamespace())
+    tick = {'a': {'time': '20260909100000', 'lastPrice': 1}}
+    collector.on_data(tick, update_bars=False)
+    assert collector.last_callback_at is None
+    collector.on_data(tick, update_bars=True)
+    assert collector.last_callback_at is not None
+
+
+def test_termination_failure_still_blocks_retry_and_child_uses_utf8(monkeypatch, tmp_path):
+    from services.operations import ingestion_budget as budget
+    import subprocess
+    def popen(command, **kwargs):
+        assert kwargs['env']['PYTHONIOENCODING'] == 'utf-8'
+        assert kwargs['env']['PYTHONUTF8'] == '1'
+        def communicate(**kw):
+            raise subprocess.TimeoutExpired(command, 1)
+        return SimpleNamespace(pid=99999, communicate=communicate)
+    def fail(*args, **kwargs):
+        raise OSError('termination tool unavailable')
+    monkeypatch.setattr(budget.subprocess, 'Popen', popen)
+    if budget.os.name == 'nt':
+        monkeypatch.setattr(budget.subprocess, 'run', fail)
+    else:
+        monkeypatch.setattr(budget.os, 'killpg', fail)
+    result = budget.run_owned(['python', 'worker.py'], 1, cwd=tmp_path)
+    assert result['uncertain'] and result['termination_error'] == 'termination tool unavailable'
