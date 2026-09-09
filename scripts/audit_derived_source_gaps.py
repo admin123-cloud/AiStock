@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.rebuild_derived_history import aggregate_range
+from services.operations.health import BUSINESS_TZ, write_snapshot
 from utils.market_warehouse import clickhouse_client
 from utils.paths import runtime_path
 
@@ -42,19 +43,21 @@ def tail_summary(client, cutoff):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--start', required=True); p.add_argument('--end', required=True)
-    p.add_argument('--cutoff', default='2026-09-08'); p.add_argument('--period', type=int, default=15)
+    p.add_argument('--cutoff', default='2026-09-08'); p.add_argument('--period', type=int, choices=(15, 30, 60), default=15)
     p.add_argument('--output', default='')
-    a = p.parse_args(); start, end = date.fromisoformat(a.start), date.fromisoformat(a.end)
+    a = p.parse_args(); start, end, cutoff = date.fromisoformat(a.start), date.fromisoformat(a.end), date.fromisoformat(a.cutoff)
+    if start > end: raise SystemExit('--start must not be after --end')
     out = Path(a.output) if a.output else runtime_path('operations', 'derived_recovery', 'gap_audits',
                                                         f'{datetime.now():%Y%m%d_%H%M%S}.json')
     out.parent.mkdir(parents=True, exist_ok=True); c = clickhouse_client()
     try:
         gaps = missing_buckets(c, start, end, a.period)
-        payload = {'generated_at': datetime.now().isoformat(), 'range': [str(start), str(end)],
+        payload = {'generated_at': datetime.now(BUSINESS_TZ).isoformat(), 'range': [str(start), str(end)],
                    'period': a.period, 'gaps': gaps, 'gap_count': len(gaps),
-                   'tail_after_cutoff': tail_summary(c, a.cutoff),
+                   'tail_after_cutoff': tail_summary(c, cutoff.isoformat()),
+                   'scope': 'partial_bucket_only; does not enumerate wholly absent code-days or buckets',
                    'write_authority': 'read_only_manifest'}
-        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        write_snapshot(payload, out)
         print(out); print(json.dumps({'gap_count': len(gaps), 'tail': payload['tail_after_cutoff']}))
     finally: c.close()
 
