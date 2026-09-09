@@ -88,3 +88,19 @@ def test_registered_membership_failure_precedes_both_live_table_swaps():
     with pytest.raises(RuntimeError, match='Empty current'):
         syncer.sync_all_sectors()
     assert called == []
+
+
+def test_host_reference_owner_prevents_api_startup_refresh(monkeypatch):
+    import ast
+    import os
+    from pathlib import Path
+    tree = ast.parse((Path(__file__).parents[1]/'api/system_config.py').read_text(encoding='utf-8'))
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name=='maybe_run_startup_reference_sync')
+    called = []
+    scope = {'os':os,'logger':SimpleNamespace(info=lambda *a:None),
+             'get_startup_reference_sync_enabled':lambda:True,
+             '_kickoff_core_maintenance_bootstrap_refresh':lambda:called.append(True)}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),'<startup-owner>','exec'),scope)
+    monkeypatch.setenv('AISTOCK_REFERENCE_DATA_OWNER','host')
+    assert scope['maybe_run_startup_reference_sync']() is False
+    assert called == []

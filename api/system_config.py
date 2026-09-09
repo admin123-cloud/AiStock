@@ -7526,6 +7526,9 @@ def kickoff_manual_today_full_market_refresh() -> bool:
 
 
 def maybe_run_startup_reference_sync() -> bool:
+    if os.getenv('AISTOCK_REFERENCE_DATA_OWNER', 'api') == 'host':
+        logger.info('Reference-data refresh is owned by the host maintenance task')
+        return False
     if not get_startup_reference_sync_enabled():
         logger.info("Startup reference data sync is disabled by configuration")
         return False
@@ -8745,4 +8748,5 @@ def ingestion_owners():
         "legacy_sector_history_enabled": owner != "host",
         "legacy_sector_history_running": bool(state.get("is_running")),
         "sector_daily_owner": owner,
+        "reference_data_owner": os.getenv('AISTOCK_REFERENCE_DATA_OWNER', 'api'),
     }

@@ -19,6 +19,7 @@ services:
       AISTOCK_STARTUP_SCHEDULERS_ENABLED: "1"
       AISTOCK_CORE_DATA_MAINTENANCE_SCHEDULER_ENABLED: "0"
       AISTOCK_SECTOR_DAILY_OWNER: "host"
+      AISTOCK_REFERENCE_DATA_OWNER: "host"
       AISTOCK_QMT_TICK_BRIDGE_URL: http://host.docker.internal:8766/full-tick
       AISTOCK_QMT_ACCOUNT_BRIDGE_URL: http://host.docker.internal:8766/account-snapshot
       AISTOCK_TDX_GATEWAY_URL: http://host.docker.internal:8765
