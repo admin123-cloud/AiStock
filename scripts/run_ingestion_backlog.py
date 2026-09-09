@@ -21,21 +21,31 @@ def job_command(payload):
     return [sys.executable, str(ROOT / 'scripts' / scripts[kind]), *arguments]
 
 
+def execution_budget(command):
+    def option(name, default):
+        if name not in command:
+            return default
+        return max(1, int(command[command.index(name) + 1]))
+    # The cooperative 15-minute slice is checked BETWEEN durable phases. Allow
+    # the current declared phase to finish; never kill a 90-minute phase at 15m.
+    if Path(command[1]).name == 'daily_kline_coverage_maintenance.py':
+        return 7200  # bounded security batch; current entry has no phase timeout flag
+    phase = max(option('--daily-timeout-sec', 5400), option('--minute-timeout-sec', 7200))
+    return 900 + phase + 120
+
+
 def execute(arguments):
+    import time
+    from services.operations.ingestion_budget import run_owned
     command = job_command(arguments)
-    env=dict(os.environ,AISTOCK_BACKLOG_REPLAY='1')
-    proc=subprocess.Popen(command,
-                          cwd=ROOT,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',
-                          creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
-    try:
-        stdout,stderr=proc.communicate(timeout=900)
-    except subprocess.TimeoutExpired:
-        if os.name=='nt':
-            subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW,timeout=15)
-        else:
-            proc.kill()
-        return {'ok':False,'error':'execution_deadline_uncertain: stopped owned worker tree; verify checkpoint before retry'}
-    return {'ok':proc.returncode==0,'exit_code':proc.returncode,'error':(stderr+'\n'+stdout)[-2000:] if proc.returncode else None}
+    env = dict(os.environ, AISTOCK_BACKLOG_REPLAY='1', AISTOCK_INGESTION_YIELD_AT=str(time.time()+900))
+    result = run_owned(command, execution_budget(command), cwd=ROOT, env=env)
+    error = result.get('error') or (result.get('stderr_tail', '')+'\n'+result.get('stdout_tail', ''))[-4000:]
+    if result.get('returncode') == 76:
+        error = 'execution_deadline_uncertain: ' + error
+    elif result.get('returncode') == 77:
+        error = 'storage_blocked_requires_recovery: ' + error
+    return {**result, 'error': error if not result.get('ok') else None}
 
 
 

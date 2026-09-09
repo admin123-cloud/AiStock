@@ -24,6 +24,7 @@ def request_priority(codes, start, now):
 
 
 def coordinated_download(codes, period, start, end, action, *, root=None, wait_seconds=120, now=None, variant=None):
+    metrics_path = root/'source_metrics.sqlite' if root is not None else None
     fixed_now = now
     now = now or datetime.now(ZoneInfo('Asia/Shanghai'))
     priority = request_priority(codes, start, now)
@@ -67,7 +68,16 @@ def coordinated_download(codes, period, start, end, action, *, root=None, wait_s
                         return None
                     conn.execute("UPDATE requests SET state='abandoned',finished=? WHERE state='running'",(clock,))
                     conn.execute("UPDATE requests SET state='running',heartbeat=? WHERE id=?",(clock,request_id))
-                    result = action()
+                    from services.operations.ingestion_store import observe
+                    sdk_started = time.monotonic()
+                    try:
+                        result = action()
+                    except Exception:
+                        observe(source='qmt', operation='history_download:'+period,
+                                duration_seconds=time.monotonic()-sdk_started, outcome='failed', requested=len(codes), path=metrics_path)
+                        raise
+                    observe(source='qmt', operation='history_download:'+period,
+                            duration_seconds=time.monotonic()-sdk_started, outcome='success', requested=len(codes), path=metrics_path)
                     conn.execute("UPDATE requests SET state='complete',finished=? WHERE id=?",(time.time(),request_id))
                     return result
             if time.monotonic() >= deadline:

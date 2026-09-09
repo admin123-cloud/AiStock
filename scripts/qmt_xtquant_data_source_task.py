@@ -36,24 +36,10 @@ def _json_default(value: Any) -> str:
 
 
 def _run_subprocess(cmd: list[str], timeout: int) -> dict[str, Any]:
-    started = time.perf_counter()
-    proc = subprocess.run(
-        cmd,
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
-    return {
-        "ok": proc.returncode == 0,
-        "returncode": proc.returncode,
-        "elapsed_sec": round(time.perf_counter() - started, 3),
-        "stdout_tail": (proc.stdout or "")[-4000:],
-        "stderr_tail": (proc.stderr or "")[-4000:],
-        "cmd": cmd,
-    }
+    from services.operations.ingestion_budget import run_owned, yield_requested, deferred_result
+    if yield_requested():
+        return deferred_result()
+    return run_owned(cmd, timeout, cwd=str(REPO_ROOT))
 
 
 def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
@@ -62,7 +48,7 @@ def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
     report_dir = report_path("qmt_xtquant_data_source_task")
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S")
-    daily_report = report_dir / f"daily_{args.start_date}_{args.end_date}_{stamp}.json"
+    daily_report = report_dir / f"daily_{args.start_date}_{args.end_date}.json"
 
     daily_cmd = [
         sys.executable,
@@ -92,7 +78,10 @@ def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
         daily_cmd.append("--reset-stage")
 
     log(f"run QMT daily phase={args.daily_phase} date={args.start_date}~{args.end_date}")
-    daily_result = _run_subprocess(daily_cmd, timeout=args.daily_timeout_sec)
+    from services.operations.ingestion_checkpoint import run_staged
+    daily_result = run_staged(daily_cmd, args.daily_timeout_sec, report_dir, _run_subprocess,
+                              phases=('fetch', 'validate-stage', 'apply', 'validate-target') if args.daily_phase == 'all'
+                              else (args.daily_phase,))
 
     minute_result: dict[str, Any] = {"skipped": True, "reason": "minute disabled"}
     if args.with_minutes:
@@ -157,10 +146,18 @@ def run_isolated_history(args, runner=None):
     runner = runner or run_minute_gap_repair
     deadline = time.monotonic() + args.minute_timeout_sec
     root = Path(args.minute_report_dir) if args.minute_report_dir else report_path("qmt_history", args.start_date + "_" + args.end_date)
-    results = {}
+    from services.operations.health import write_snapshot
+    import hashlib
+    identity = {name: getattr(args, name, None) for name in (
+        'start_date', 'end_date', 'codes', 'universe', 'minute_periods', 'max_repair_codes',
+        'dividend_type', 'retry_after_close_source_empty')}
+    key = hashlib.sha256((json.dumps(identity, sort_keys=True)+Path(__file__).read_text(encoding='utf-8')).encode()).hexdigest()[:20]
+    checkpoint = root / ('period-progress-' + key + '.json')
+    state = _read_json_file(checkpoint)
+    results = state.get('completed', {})
     for period in args.minute_periods.split(","):
         period = period.strip()
-        if not period:
+        if not period or results.get(period, {}).get("ok"):
             continue
         remaining = int(deadline-time.monotonic())
         if remaining <= 0:
@@ -176,6 +173,8 @@ def run_isolated_history(args, runner=None):
         child.retry_after_close_source_empty = period == "5m" and args.retry_after_close_source_empty
         try:
             results[period] = runner(child)
+            if results[period].get('ok'):
+                write_snapshot({'completed': {p: r for p, r in results.items() if r.get('ok')}}, checkpoint)
         except Exception as exc:
             results[period] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     counts = [x.get("minute", {}).get("worker_summary", {}).get("issue_count") for x in results.values()]
@@ -388,7 +387,7 @@ def run_after_close_full_refresh(args: argparse.Namespace) -> dict[str, Any]:
     """
     report_dir = Path(args.minute_report_dir) if args.minute_report_dir else report_path(
         "qmt_xtquant_data_source_task",
-        f"after_close_full_refresh_{args.start_date}_{args.end_date}_{datetime.now(ZoneInfo('Asia/Shanghai')):%Y%m%d_%H%M%S}",
+        f"after_close_full_refresh_{args.start_date}_{args.end_date}",
     )
     report_dir.mkdir(parents=True, exist_ok=True)
     daily_report = report_dir / "daily_full_refresh.json"
@@ -493,6 +492,7 @@ def run_after_close_full_refresh(args: argparse.Namespace) -> dict[str, Any]:
         "final_validation": final_validation,
         "final_repair": final_result,
         "validation_status": "passed" if ok else "failed",
+        "deferred": any(x.get("deferred") for x in (daily_result, minute_result, final_result)),
     }
     out_report = report_dir / "collector_summary.json"
     out_report.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
@@ -545,7 +545,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def _main() -> int:
     args = parse_args()
     if args.mode == "date-repair":
         summary = run_date_repair(args)
@@ -556,7 +556,7 @@ def main() -> int:
     else:
         raise SystemExit(f"unsupported mode: {args.mode}")
     encoded = json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default)
-    if not summary.get("ok") and "DownloadDeferred" in encoded and os.getenv("AISTOCK_BACKLOG_REPLAY") != "1":
+    if not summary.get("ok") and ("DownloadDeferred" in encoded or "cooperative_budget_yield" in encoded or summary.get("deferred")) and os.getenv("AISTOCK_BACKLOG_REPLAY") != "1":
         from services.operations.ingestion_backlog import enqueue
         arguments = list(sys.argv[1:])
         for option, value in (("--start-date", args.start_date), ("--end-date", args.end_date)):
@@ -564,7 +564,27 @@ def main() -> int:
                 arguments.extend([option, value])
         summary["deferred_job_id"] = enqueue(arguments)
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
-    return 0 if summary.get("ok") else 1
+    def flagged(value, key):
+        if isinstance(value, dict):
+            return bool(value.get(key)) or any(flagged(x, key) for x in value.values())
+        if isinstance(value, list):
+            return any(flagged(x, key) for x in value)
+        return False
+    if flagged(summary, 'uncertain') or 'execution_deadline_uncertain' in encoded:
+        return 76
+    if flagged(summary, 'storage_blocked') or 'storage_blocked_requires_recovery' in encoded:
+        return 77
+    return 0 if summary.get("ok") else 75 if (summary.get("deferred") or "cooperative_budget_yield" in encoded or "DownloadDeferred" in encoded) else 1
+
+
+def main() -> int:
+    from services.operations.lifecycle import InstanceLock
+    lock = InstanceLock(runtime_path('operations', 'canonical-ingestion.lock'))
+    lock.acquire()
+    try:
+        return _main()
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

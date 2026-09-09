@@ -21,8 +21,12 @@ class IngestionLane:
         def run():
             try:
                 result = self.action()
-                self.state.update(status="degraded" if isinstance(result, dict) and result.get("errors") else "complete", result=result, error=None,
-                                  last_success=datetime.now(ZoneInfo("Asia/Shanghai")).isoformat())
+                degraded = isinstance(result, dict) and (result.get("errors") or result.get('ok') is False)
+                self.state.update(status="degraded" if degraded else "complete", result=result, error=None)
+                if not degraded:
+                    self.state['last_success'] = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
+                else:
+                    self.state['failures'] += 1
             except Exception as exc:
                 self.state.update(status="failed", error=f"{type(exc).__name__}: {exc}",
                                   failures=self.state["failures"] + 1)

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from services.operations.health import write_snapshot
 from services.operations.lifecycle import InstanceLock
+from services.operations.ingestion_budget import yield_requested, deferred_result
 
 
 def storage_failure(message):
@@ -34,9 +35,13 @@ def run_staged(command, timeout, root, runner, *, phases):
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"completed": [], "batch_id": key}
         if state.get("storage_blocked"):
             return {"ok": False, "reason": "storage_blocked_requires_recovery", "checkpoint": str(state_path), "batch_id": key}
+        if state.get("in_flight") or state.get("uncertain"):
+            return {"ok": False, "uncertain": True, "reason": "execution_deadline_uncertain", "checkpoint": str(state_path), "batch_id": key}
         for phase in phases:
             if phase in state["completed"]:
                 continue
+            if yield_requested():
+                return {**deferred_result(), "checkpoint": str(state_path), "completed": state["completed"]}
             cmd = list(command)
             cmd[cmd.index("--phase")+1] = phase
             for flag in ("--reset-stage", "--in-process"):
@@ -46,6 +51,7 @@ def run_staged(command, timeout, root, runner, *, phases):
                 cmd.append("--reset-stage")
             attempt = state.setdefault("attempts", {}).get(phase, 0) + 1
             state["attempts"][phase] = attempt
+            state["in_flight"] = phase
             write_snapshot(state, state_path)
             report = directory / f"{phase}-{attempt}.json"
             cmd[cmd.index("--report")+1] = str(report)
@@ -53,19 +59,23 @@ def run_staged(command, timeout, root, runner, *, phases):
             try:
                 result = runner(cmd, timeout=timeout)
             except Exception as exc:
-                result = {"ok": False, "stderr_tail": f"{type(exc).__name__}: {exc}"}
+                # An exception after dispatch cannot establish whether a remote write finished.
+                result = {"ok": False, "uncertain": True, "stderr_tail": f"{type(exc).__name__}: {exc}"}
             try:
                 payload = json.loads(report.read_text(encoding="utf-8-sig")) if report.exists() else None
             except (ValueError, OSError) as exc:
                 payload = None
                 result = {**result, "ok": False, "stderr_tail": f"invalid phase report: {exc}"}
             if not result.get("ok") or payload is None or not report_ok(payload):
+                detail = str(result) + str(payload)
                 state.update(failed_phase=phase, last_result=result,
-                             storage_blocked=storage_failure(str(result)))
+                             in_flight=None, uncertain=bool(result.get("uncertain")),
+                             storage_blocked=storage_failure(detail))
                 write_snapshot(state, state_path)
-                return {**result, "ok": False, "failed_phase": phase, "batch_id": key, "checkpoint": str(state_path)}
+                return {**result, "ok": False, "storage_blocked": state.get('storage_blocked', False),
+                        "failed_phase": phase, "batch_id": key, "checkpoint": str(state_path)}
             state["completed"].append(phase)
-            state.update(failed_phase=None, last_result=result)
+            state.update(failed_phase=None, last_result=result, in_flight=None)
             write_snapshot(state, state_path)
         return {"ok": True, "batch_id": key, "checkpoint": str(state_path), "completed": state["completed"]}
     finally:

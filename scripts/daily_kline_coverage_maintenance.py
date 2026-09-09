@@ -536,6 +536,12 @@ def _run(args) -> int:
     # that coverage state explicit in the report, but reserve a non-zero exit
     # code for an execution failure so the host scheduler does not mislabel a
     # completed, still-unclosed maintenance pass as a runtime failure.
+    if os.getenv('AISTOCK_BACKLOG_REPLAY') == '1' and args.mode == 'repair' and payload['status'] != 'healthy':
+        # Continue bounded batches only on measurable progress. A source-empty
+        # loop consumes the queue's failure allowance instead of retrying forever.
+        before_gap = int(before.get('repair_backlog_code_dates', 0))
+        after_gap = int(final.get('repair_backlog_code_dates', 0))
+        return 75 if after_gap < before_gap else 1
     return 0 if args.mode == "repair" else (0 if payload["status"] == "healthy" else 2)
 
 

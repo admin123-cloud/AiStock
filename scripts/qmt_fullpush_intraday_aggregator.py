@@ -26,7 +26,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from utils.market_warehouse import clickhouse_client, clickhouse_query_df
+from services.operations.ingestion_store import clickhouse_client, clickhouse_query_df, observe
 from utils.paths import runtime_path
 from utils.qmt_universe import qmt_universe_filter_sql
 
@@ -367,7 +367,7 @@ class FullPushAggregator:
 
 
 def aggregate_bars(source: list[BarState], target: str) -> list[BarState]:
-    # A-share has two independent sessions.  Six 5m bars form each 60m bar
+    # A-share has two independent sessions. Twelve 5m bars form each 60m bar
     # (10:30 / 11:30 / 14:00 / 15:00); never aggregate across the noon break.
     size = {"15m": 3, "30m": 6, "60m": 12}.get(target)
     if not size:
@@ -519,7 +519,15 @@ def insert_rows(table: str, rows: list[tuple], columns: list[str], dry_run: bool
         return 0
     if dry_run:
         return len(rows)
-    clickhouse_client().insert(table, rows, column_names=columns)
+    started = time.monotonic()
+    try:
+        clickhouse_client().insert(table, rows, column_names=columns)
+    except Exception:
+        observe(source='clickhouse', operation='insert:'+table, duration_seconds=time.monotonic()-started,
+                outcome='failed', requested=len(rows), received=0)
+        raise
+    observe(source='clickhouse', operation='insert:'+table, duration_seconds=time.monotonic()-started,
+            outcome='success', requested=len(rows), received=len(rows), persisted_at=datetime.now(SH_TZ).isoformat())
     return len(rows)
 
 
@@ -604,7 +612,18 @@ def flush_snapshot(aggregator):
     expected = set(aggregator.allowed_codes)
     fresh = {code for code, tick in ticks.items() if code in expected and
              0 <= (now-parse_tick_time(tick.get("time"), datetime.min)).total_seconds() <= 300}
+    from services.operations.intraday_coverage import evaluate_coverage
+    coverage = evaluate_coverage(expected, ticks, {row[0] for row in daily} if written and not dry_run else set(),
+                                 now=now, parse_time=parse_tick_time, metadata=getattr(aggregator, 'metadata', {}))
+    persisted_at = time.monotonic() if written and not dry_run else None
+    previous = getattr(aggregator, 'last_persisted_monotonic', None)
+    interval = round(persisted_at-previous, 3) if previous is not None and persisted_at is not None else None
+    if persisted_at is not None:
+        aggregator.last_persisted_monotonic = persisted_at
     return {"daily_rows": written, "market_snapshot": market,
+            "coverage": coverage, "persisted_at": now.isoformat() if persisted_at else None,
+            "previous_successful_write_gap_seconds": interval,
+            "interval_slo_300s": 'unknown' if interval is None else 'passed' if interval <= 300 else 'failed',
             "duration_seconds": round(time.monotonic()-started, 3),
             "universe_count": len(expected), "source_fresh_300s": len(fresh),
             "unverified_codes": sorted(expected-fresh),
@@ -738,6 +757,12 @@ def run_collector(args):
             log(f"QMT 5m history cache seed failed: {cache_seed['error']}")
     aggregator = FullPushAggregator(args)
     aggregator.allowed_codes = set(codes)
+    try:
+        frame = clickhouse_query_df('SELECT code, type FROM stocks FINAL')
+        aggregator.metadata = {row['code']: {'type': row['type']} for row in frame.to_dict('records')}
+    except Exception as exc:
+        aggregator.metadata = {}
+        log(f'Universe classification unavailable: {type(exc).__name__}')
     stopped = {"value": False}
 
     def _handle_stop(_signum, _frame) -> None:
@@ -787,7 +812,13 @@ def run_collector(args):
         poll_seconds = time.monotonic()-poll_started
         # Subscription remains available if a disposable polling worker fails.
         result = flush_snapshot(aggregator)
-        result.update(poll_seconds=round(poll_seconds, 3), polled_codes=count, errors=errors)
+        total_seconds = round(time.monotonic()-poll_started, 3)
+        if result['coverage']['slo_300s'] != 'passed':
+            errors['coverage'] = f"{len(result['coverage']['unverified'])} securities not verified fresh and persisted"
+        if result['interval_slo_300s'] == 'failed' or total_seconds > 300:
+            errors['slo'] = 'full-market persistence exceeded 300 seconds'
+        result.update(poll_seconds=round(poll_seconds, 3), end_to_end_seconds=total_seconds,
+                      polled_codes=count, errors=errors)
         log(f"snapshot {result['daily_rows']} rows poll={poll_seconds:.3f}s write={result['duration_seconds']}s fresh={result['source_fresh_300s']}/{result['universe_count']}")
         return result
 

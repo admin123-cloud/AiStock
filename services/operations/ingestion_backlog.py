@@ -50,12 +50,15 @@ def process_one(execute,*,path=None,now=None):
         try:
             result=execute(json.loads(payload))
         except Exception as exc:result={'ok':False,'error':str(exc)}
-        error=str(result.get('error') or '')
+        error=str(result.get('error') or result.get('reason') or '')
         from services.operations.ingestion_checkpoint import storage_failure
         blocked=storage_failure(error) or 'storage_blocked_requires_recovery' in error or 'execution_deadline_uncertain' in error
-        state='complete' if result.get('ok') else 'blocked' if blocked or attempts>=3 else 'queued'
-        conn.execute('UPDATE jobs SET state=?,due=?,updated=?,error=? WHERE id=?',
-                     (state,(now+timedelta(minutes=15*attempts)).timestamp(),now.timestamp(),error[:2000],key))
+        deferred = bool(result.get('deferred')) and not blocked
+        if deferred:
+            attempts -= 1  # A clean boundary yield is scheduling, not a failed attempt.
+        state='complete' if result.get('ok') else 'queued' if deferred else 'blocked' if blocked or attempts>=3 else 'queued'
+        conn.execute('UPDATE jobs SET state=?,attempts=?,due=?,updated=?,error=? WHERE id=?',
+                     (state,attempts,(now+timedelta(minutes=max(5,15*attempts))).timestamp(),now.timestamp(),error[:2000],key))
         return {'id':key,'state':state,'attempts':attempts,'result':result}
     finally:
         conn.close()

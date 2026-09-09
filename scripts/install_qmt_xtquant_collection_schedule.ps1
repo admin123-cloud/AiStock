@@ -1,4 +1,5 @@
 param(
+  [switch]$ValidateOnly,
   [string]$PythonExe = "F:\python3.10\python.exe",
   [string]$TaskPrefix = "AiStock QMT xtquant",
   [string]$IntradayAt = "09:25",
@@ -205,6 +206,28 @@ function Set-RegisteredTaskWindowTrigger {
   Register-ScheduledTask -TaskName $TaskName -Xml $TaskXml -Force | Out-Null
 }
 
+function Merge-TaskTriggerXml {
+  param([string[]]$Fragments)
+  $Merged = [xml]'<Triggers xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task" />'
+  foreach ($Fragment in $Fragments) {
+    $Document = [xml]$Fragment
+    foreach ($Child in $Document.DocumentElement.ChildNodes) {
+      [void]$Merged.DocumentElement.AppendChild($Merged.ImportNode($Child, $true))
+    }
+  }
+  return $Merged.OuterXml
+}
+
+if ($ValidateOnly) {
+  $Fragments = @('00:05', '16:10', '18:10') | ForEach-Object {
+    New-TaskWeeklyTriggerXml -StartAt ([datetime]"2026-09-09 $_") -DaysOfWeek @('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday')
+  }
+  $Merged = [xml](Merge-TaskTriggerXml -Fragments $Fragments)
+  if ($Merged.DocumentElement.ChildNodes.Count -ne 3) { throw 'Expected all three maintenance triggers' }
+  Write-Output 'Schedule XML verified: one Triggers root and three preserved maintenance triggers; no tasks registered.'
+  return
+}
+
 $Now = Get-Date
 $Weekdays = @("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
 $NightDays = @("Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
@@ -241,9 +264,10 @@ Register-CollectorTask `
   -Action (New-CollectorAction -Mode "daily-maintenance" -Scenario "daily-coverage" -Periods "1d" -Universe "stock" -MaxRepairCodes $DailyCoverageMaxRepairCodes -CodeChunkSize 30 -ActiveStart $DailyCoverageAt -ActiveEnd $DailyCoverageAt -SkipTimeWindowCheck) `
   -Trigger $DailyCoverageTrigger
 $DailyCoverageAfterCloseStartAt = Resolve-CollectorStartAt -Now $Now -At $DailyCoverageAfterCloseAt -ActiveStart $DailyCoverageAfterCloseAt -ActiveEnd $DailyCoverageAfterCloseAt
-$DailyCoverageTriggerXml = (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageStartAt -DaysOfWeek $NightDays) + (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageAfterCloseStartAt -DaysOfWeek $Weekdays)
+$DailyCoverageTriggerFragments = @((New-TaskWeeklyTriggerXml -StartAt $DailyCoverageStartAt -DaysOfWeek $NightDays), (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageAfterCloseStartAt -DaysOfWeek $Weekdays))
 $ReferenceStartAt = Resolve-CollectorStartAt -Now $Now -At '18:10' -ActiveStart '18:10' -ActiveEnd '18:10'
-$DailyCoverageTriggerXml += (New-TaskWeeklyTriggerXml -StartAt $ReferenceStartAt -DaysOfWeek $Weekdays)
+$DailyCoverageTriggerFragments += (New-TaskWeeklyTriggerXml -StartAt $ReferenceStartAt -DaysOfWeek $Weekdays)
+$DailyCoverageTriggerXml = Merge-TaskTriggerXml -Fragments $DailyCoverageTriggerFragments
 Set-RegisteredTaskWindowTrigger -TaskName "$TaskPrefix Daily Coverage Repair" -TriggerXml $DailyCoverageTriggerXml
 
 $NightStartAt = Resolve-CollectorStartAt -Now $Now -At $NightRepairAt -ActiveStart $NightRepairAt -ActiveEnd $NightRepairActiveEnd -AllowWeekend $true
