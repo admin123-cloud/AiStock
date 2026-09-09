@@ -25,7 +25,21 @@ def transform(xml, source, target, *, daily=False, holding=False, now=None):
         raise ValueError('Unexpected collector entry point')
     if source.lower() not in arguments.text.lower():
         raise ValueError('Action no longer points at expected source checkout')
-    arguments.text = re.sub(re.escape(source), lambda match: target, arguments.text, flags=re.I)
+    if holding:
+        # The current wrapper already lives in refactor while its inner source is core.
+        # Rewrite only the exact known dispatcher token, never arbitrary .py arguments.
+        dispatcher = re.match(r'^"([^"\r\n]+)"(?=\s|$)', arguments.text)
+        allowed_roots = {source.casefold(), target.casefold(), r'F:\Stock\AiStock-refactor'.casefold()}
+        allowed_paths = {root + r'\scripts\run_holding_t_service.py' for root in allowed_roots}
+        if not dispatcher or dispatcher[1].casefold() not in allowed_paths:
+            raise ValueError('Unrecognized Holding T dispatcher path')
+        inner = re.search(r'--source-root\s+"([^"\r\n]+)"', arguments.text)
+        if not inner or inner[1].casefold() != source.casefold():
+            raise ValueError('Unexpected Holding T source-root')
+        arguments.text = arguments.text[:inner.start(1)] + target + arguments.text[inner.end(1):]
+        arguments.text = '"' + target + r'\scripts\run_holding_t_service.py"' + arguments.text[dispatcher.end():]
+    else:
+        arguments.text = re.sub(re.escape(source), lambda match: target, arguments.text, flags=re.I)
     directory = action.find('{'+NS+'}WorkingDirectory')
     if directory is None:
         directory = ET.SubElement(action, '{'+NS+'}WorkingDirectory')

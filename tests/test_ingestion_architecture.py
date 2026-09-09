@@ -251,7 +251,9 @@ def test_holding_owner_keeps_two_triggers_and_updates_inner_source_root():
       <Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>pythonw.exe</Command>
       <Arguments>"F:\\Stock\\AiStock-refactor\\scripts\\run_holding_t_service.py" --source-root "F:\\Stock\\AiStock-core"</Arguments>
       <WorkingDirectory>F:\\Stock\\AiStock-refactor</WorkingDirectory></Exec></Actions></Task>'''
-    planned, before, after = transform(xml, r'F:\Stock\AiStock-core', r'F:\Stock\AiStock-refactor', holding=True)
+    planned, before, after = transform(xml, r'F:\Stock\AiStock-core', r'F:\Stock\AiStock-release-final', holding=True)
+    assert r'F:\Stock\AiStock-refactor' not in planned
+    assert r'F:\Stock\AiStock-release-final\scripts\run_holding_t_service.py' in planned
     assert (before, after) == (2, 2) and 'AiStock-core' not in planned
     assert '--source-root' in planned and 'run_holding_t_service.py' in planned
 
