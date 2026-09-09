@@ -13,7 +13,7 @@ def main():
  c=clickhouse_client()
  try:
   c.command('CREATE DATABASE IF NOT EXISTS stock_repair');c.command(f'CREATE TABLE IF NOT EXISTS stock_repair.{keep} AS stock.{t}')
-  src=f'SELECT o.* FROM stock.{t} FINAL o LEFT JOIN (SELECT * FROM stock.{t}_recovery_{a.run_id} FINAL WHERE toYYYYMM(datetime)={month}) r ON o.code=r.code AND o.datetime=r.datetime WHERE toYYYYMM(o.datetime)={month} AND r.code IS NULL'
+  src=f'SELECT o.* FROM (SELECT * FROM stock.{t} FINAL WHERE toYYYYMM(datetime)={month}) o LEFT JOIN (SELECT * FROM stock.{t}_recovery_{a.run_id} FINAL WHERE toYYYYMM(datetime)={month}) r ON o.code=r.code AND o.datetime=r.datetime WHERE r.code IS NULL'
   dig=lambda q:c.query(f'SELECT count(),uniqExact(tuple(code,datetime)),toString(sumWithOverflow(cityHash64(tuple(code,datetime,open,high,low,close,volume,amount)))),toString(groupBitXor(cityHash64(tuple(code,datetime,open,high,low,close,volume,amount)))) FROM ({q})',settings={'max_threads':1,'max_memory_usage':1000000000}).result_rows[0]
   expected=dig(src); dst=f'SELECT * FROM stock_repair.{keep} FINAL WHERE toYYYYMM(datetime)={month}'
   before=dig(dst)
