@@ -12,9 +12,19 @@ from utils.paths import runtime_path
 from datetime import datetime
 
 
+def job_command(payload):
+    kind = 'ingestion' if isinstance(payload, list) else payload.get('kind') if isinstance(payload, dict) else None
+    arguments = payload if isinstance(payload, list) else payload.get('arguments') if isinstance(payload, dict) else None
+    scripts = {'ingestion': 'qmt_xtquant_data_source_task.py', 'daily_coverage': 'daily_kline_coverage_maintenance.py'}
+    if kind not in scripts or not isinstance(arguments, list) or not all(isinstance(a, str) for a in arguments):
+        raise ValueError('Unsupported persisted ingestion job')
+    return [sys.executable, str(ROOT / 'scripts' / scripts[kind]), *arguments]
+
+
 def execute(arguments):
+    command = job_command(arguments)
     env=dict(os.environ,AISTOCK_BACKLOG_REPLAY='1')
-    proc=subprocess.Popen([sys.executable,str(ROOT/'scripts/qmt_xtquant_data_source_task.py'),*arguments],
+    proc=subprocess.Popen(command,
                           cwd=ROOT,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',
                           creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
     try:

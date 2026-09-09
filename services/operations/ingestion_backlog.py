@@ -16,9 +16,14 @@ def connect(path=None):
     return conn
 
 
-def enqueue(arguments,*,path=None,now=None):
+def enqueue(arguments,*,path=None,now=None,kind='ingestion'):
+    if kind not in ('ingestion', 'daily_coverage'):
+        raise ValueError('Unsupported ingestion job kind')
+    if not isinstance(arguments, list) or not all(isinstance(a, str) for a in arguments):
+        raise ValueError('Job arguments must be a list of strings')
     now=now or datetime.now(ZoneInfo('Asia/Shanghai'))
-    payload=json.dumps(arguments,ensure_ascii=False)
+    # Preserve legacy canonical job identities and rows while adding a fixed second entry point.
+    payload=json.dumps(arguments if kind == 'ingestion' else {'kind':kind,'arguments':arguments},ensure_ascii=False)
     key=hashlib.sha256(payload.encode()).hexdigest()
     due=now+timedelta(minutes=5)
     if protected_session(now):due=now.replace(hour=15,minute=20,second=0,microsecond=0)

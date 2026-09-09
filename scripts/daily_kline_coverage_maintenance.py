@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -246,13 +248,32 @@ def _attach_unit_audit(
     }
 
 
-def main() -> int:
-    args = parse_args()
+def defer_coverage(args, end_date, reason):
+    from services.operations.ingestion_backlog import enqueue
+    arguments = ['--mode', 'repair', '--start-date', args.start_date, '--end-date', end_date,
+                 '--scope', args.scope, '--max-repair-codes', str(args.max_repair_codes),
+                 '--batch-size', str(args.batch_size), '--report', str(args.report),
+                 '--tdx-root', str(args.tdx_root),
+                 '--cross-source-fallback' if args.cross_source_fallback else '--no-cross-source-fallback',
+                 '--unit-audit' if args.unit_audit else '--no-unit-audit']
+    payload = {'status': 'deferred', 'reason': reason, 'start_date': args.start_date,
+               'end_date': end_date, 'checked_at': datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}
+    if os.getenv('AISTOCK_BACKLOG_REPLAY') != '1':
+        payload['deferred_job_id'] = enqueue(arguments, kind='daily_coverage')
+    _write(args.report, payload)
+    print(json.dumps(payload, ensure_ascii=False))
+    return 75
+
+
+def _run(args) -> int:
     client = daily.ch_client()
     end_date = args.end_date or _default_end_date(client)
     args.start_date = args.start_date or (end_date if args.scope == 'latest' else f'{end_date[:4]}-01-01')
     if args.start_date > end_date:
         raise ValueError('start_date must not be after the last closed trading date')
+    from services.operations.qmt_download_queue import protected_session
+    if args.mode == 'repair' and protected_session(datetime.now(ZoneInfo('Asia/Shanghai'))):
+        return defer_coverage(args, end_date, 'Historical daily repair yields to realtime collection')
     # Keep the coverage contract aligned with reviewed exchange/issuer events.
     # This is idempotent: raw QMT-absence evidence is retained in its own
     # table, while only verified status intervals are exempted from repair.
@@ -377,6 +398,7 @@ def main() -> int:
         if codes:
             qmt_stage_started_at = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None, microsecond=0)
             repair_args = _daily_args(args.start_date, end_date, codes, args.batch_size, args.report.with_name("latest_repair.json"))
+            fetch_started_at = time.time()
             try:
                 fetch_step = daily.fetch_to_stage(repair_args)
                 source_absent_count = _record_qmt_source_absences(client, repair_args, codes)
@@ -416,10 +438,19 @@ def main() -> int:
                     target_validation = daily.validate_target(repair_args)
                     steps.append(target_validation)
             except Exception as exc:
+                # Fetch reports preserve the underlying DownloadDeferred which the worker's
+                # aggregate exception intentionally abbreviates. Only consume this run's report.
+                report = Path(repair_args.report)
+                detail = str(exc)
+                if report.exists() and report.stat().st_mtime >= fetch_started_at:
+                    detail += ' '.join(str(row.get('error', '')) for row in
+                                       _read_rolling_state(report).get('failed', []) if isinstance(row, dict))
+                if 'DownloadDeferred' in detail:
+                    return defer_coverage(args, end_date, 'DownloadDeferred: shared history queue busy')
                 payload["repair"] = {
                     "status": "failed",
                     "target_codes": codes,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": f"{type(exc).__name__}: {detail}",
                 }
                 payload["status"] = "failed"
                 _write(args.report, payload)
@@ -506,6 +537,16 @@ def main() -> int:
     # code for an execution failure so the host scheduler does not mislabel a
     # completed, still-unclosed maintenance pass as a runtime failure.
     return 0 if args.mode == "repair" else (0 if payload["status"] == "healthy" else 2)
+
+
+def main() -> int:
+    from services.operations.lifecycle import InstanceLock
+    lock = InstanceLock(runtime_path('operations', 'daily-coverage.lock'))
+    lock.acquire()
+    try:
+        return _run(parse_args())
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

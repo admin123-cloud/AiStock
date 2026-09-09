@@ -802,6 +802,10 @@ function Invoke-CollectorOnce {
     $Args += "--isolate-history-periods"
     Write-CollectorLog "ISOLATE historical periods; previous-close delivery remains independently monitored"
   }
+  if ($CollectorMode -eq "minute-gap-repair" -and $RetryAfterCloseSourceEmpty) {
+    $Args += "--retry-after-close-source-empty"
+    Write-CollectorLog "ENABLE qmt_xtquant_collector retry_after_close_source_empty"
+  }
   Push-Location $RootDir
   try {
     $ExitCode = Invoke-LoggedNative -Exe $PythonExe -Arguments $Args
@@ -860,10 +864,6 @@ function Invoke-CollectorOnce {
     } else {
       Write-CollectorLog "SKIP after_close_governance marker_exists=$FinalizeMarker"
     }
-  }
-  if ($CollectorMode -eq "minute-gap-repair" -and $RetryAfterCloseSourceEmpty) {
-    $Args += "--retry-after-close-source-empty"
-    Write-CollectorLog "ENABLE qmt_xtquant_collector retry_after_close_source_empty"
   }
   Write-CollectorLog "END qmt_xtquant_collector exit_code=$ExitCode worker_issue_count=$WorkerIssueCount"
   return [PSCustomObject]@{
