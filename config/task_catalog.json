@@ -27,9 +27,9 @@
       "purpose": "汇总任务、数据交付和告警状态，发现静默失败。"
     },
     {
-      "id": "backup",
-      "label": "备份恢复",
-      "purpose": "保存独立数据副本，并核验备份与恢复能力。"
+      "id": "audit",
+      "label": "定期数据审计",
+      "purpose": "定期核验数据交付覆盖与异常，不下载、不修复、不备份。"
     },
     {
       "id": "external",
@@ -177,16 +177,16 @@
     },
     {
       "names": [
-        "AiStock_ClickHouse_Backup_3AM"
+        "AiStock Weekly Data Integrity Audit"
       ],
-      "group": "backup",
-      "title": "ClickHouse数据备份",
-      "purpose": "为行情数据库保存独立副本，供故障恢复使用。",
-      "schedule_description": "以实际触发器为准；旧注册每月1日03:00，迁移目标每日07:00（需激活）",
-      "produces": "F:/Stock/clickhouse_backup压缩包",
-      "failure_impact": "故障后可能无法恢复行情；退出码0不能证明备份可恢复。",
+      "group": "audit",
+      "title": "每周数据完整性审计",
+      "purpose": "只读核验最近30个交易日的股票、指数、分钟线和板块交付覆盖。",
+      "schedule_description": "每周日10:30；不下载、不修复、不备份",
+      "produces": "operations/weekly_audit/latest.json",
+      "failure_impact": "数据长期缺失可能未被周期性汇总发现。",
       "lifecycle": "active",
-      "consolidation_note": "原生备份方案：每周全量、每日增量，新全量后隔离恢复演练；须通过迁移与夜间资源验收后激活。"
+      "consolidation_note": "替代已停用的ClickHouse备份计划；历史备份文件保留但不再新增。"
     },
     {
       "names": [

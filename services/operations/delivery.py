@@ -28,28 +28,30 @@ def coverage_cell(day: str, expected: int, actual: int, *, due: bool, exceptions
             "coverage": round(min(actual / expected, 1), 6) if due and expected else None}
 
 
-def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = None, sector_universe: dict | None = None) -> dict[str, Any]:
+def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = None,
+                            sector_universe: dict | None = None, query_timeout_seconds: int = 10) -> dict[str, Any]:
     now = now or datetime.now(BUSINESS_TZ)
     policy = delivery_contract()
     daily_deadline = time.fromisoformat(policy['daily_deadline'])
     minute_cutoff = now - timedelta(minutes=policy['minute_delivery_lag_minutes'])
     end = now.date().isoformat()
     days = min(60, max(1, int(days)))
+    query_timeout_seconds = min(120, max(1, int(query_timeout_seconds)))
     dates = [str(row[0])[:10] for row in client.query(
         f"SELECT DISTINCT trade_date FROM trade_calendar WHERE market='SH' AND is_trading=1 "
-        f"AND trade_date<=toDate('{end}') ORDER BY trade_date DESC LIMIT {days} SETTINGS max_execution_time=10"
+        f"AND trade_date<=toDate('{end}') ORDER BY trade_date DESC LIMIT {days} SETTINGS max_execution_time={query_timeout_seconds}"
     ).result_rows][::-1]
     if not dates:
         raise ValueError("交易日历未就绪，不能计算覆盖率")
     start = dates[0]
-    universe = client.query("SELECT code, type, list_date, delist_date FROM stocks WHERE type IN ('stock','index') SETTINGS max_execution_time=10").result_rows
+    universe = client.query(f"SELECT code, type, list_date, delist_date FROM stocks WHERE type IN ('stock','index') SETTINGS max_execution_time={query_timeout_seconds}").result_rows
     missing_listing = {kind:[str(code) for code, typ, listed, _ in universe
                              if typ == kind and (not listed or str(listed)[:10] in ('1970-01-01','0000-00-00'))]
                        for kind in ('stock','index')}
     # Verified business absences only; unresolved QMT empty responses remain missing.
     exclusions = client.query(
         "SELECT code, start_date, end_date FROM kline_daily_market_status_audit FINAL "
-        f"WHERE evidence_url != '' AND status IN ('suspended','delisted') AND start_date<=toDate('{end}') AND end_date>=toDate('{start}') SETTINGS max_execution_time=10"
+        f"WHERE evidence_url != '' AND status IN ('suspended','delisted') AND start_date<=toDate('{end}') AND end_date>=toDate('{start}') SETTINGS max_execution_time={query_timeout_seconds}"
     ).result_rows
     expected = {}
     exceptions = {}
@@ -73,7 +75,7 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
                 # Unique business time keys, not physical row counts (ReplacingMergeTree may contain versions).
                 sql = f"SELECT code, toDate({col}), "
                 sql += "groupUniqArray(formatDateTime(datetime, '%H:%i', 'Asia/Shanghai'))" if period else "count()"
-                sql += f" FROM {table} WHERE {col}>=toDate('{start}') AND {col}<toDate('{end}')+1 GROUP BY code,toDate({col}) SETTINGS max_execution_time=10"
+                sql += f" FROM {table} WHERE {col}>=toDate('{start}') AND {col}<toDate('{end}')+1 GROUP BY code,toDate({col}) SETTINGS max_execution_time={query_timeout_seconds}"
                 if period not in observed_cache:
                     observed_cache[period] = {(str(code), str(day)[:10]): values for code, day, values in client.query(sql).result_rows}
                 observed = observed_cache[period]
@@ -99,7 +101,7 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
                 dataset['cells'] = [{'date': day, 'status': 'unknown', 'coverage': None} for day in dates]
             datasets.append(dataset)
     try:
-        rows = client.query(f"SELECT trade_date, groupUniqArray(code) FROM sector_kline_daily WHERE trade_date>=toDate('{start}') AND trade_date<=toDate('{end}') GROUP BY trade_date SETTINGS max_execution_time=10").result_rows
+        rows = client.query(f"SELECT trade_date, groupUniqArray(code) FROM sector_kline_daily WHERE trade_date>=toDate('{start}') AND trade_date<=toDate('{end}') GROUP BY trade_date SETTINGS max_execution_time={query_timeout_seconds}").result_rows
         by_date = {str(day)[:10]: set(map(str,codes)) for day,codes in rows}
         sector_cells = sector_coverage_cells(dates,by_date,sector_universe,now=now,daily_deadline=daily_deadline)
     except Exception as exc:

@@ -75,10 +75,6 @@ def publish(args):
     checks.append({'name':'runtime_health_publisher','ok':health.get('publisher_status')=='healthy',
                    'message':'健康发布者心跳检查；过期状态不能解释为正常'})
     board = task_board(root, {}, now=now)
-    backup = board['backups']
-    checks.append({'name':'backup_recovery','ok':backup.get('delivery_ok') is True,
-                   'reason':','.join(backup.get('reasons') or []),
-                   'message':'备份与恢复验收：'+(','.join(backup.get('reasons') or []) or '验收通过'),'remediation_owner':'备份恢复任务'})
     api_state = board['api_runtime']
     checks.append({'name':'api_scheduler_readiness', 'ok':api_state['ready'],
                    'message':'API任务启动与30秒心跳验收', 'remediation_owner':'API服务生命周期'})
