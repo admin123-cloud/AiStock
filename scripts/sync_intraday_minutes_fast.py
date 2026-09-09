@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from data_fetcher.sources.tdxquant_pool import tdxquant_pool  # noqa: E402
+from utils.clickhouse_mutation_guard import require_month_partitioned_minute_mutation  # noqa: E402
 from utils.market_warehouse import clickhouse_client, clickhouse_query_df  # noqa: E402
 
 
@@ -257,6 +258,7 @@ def _write_rows(table: str, rows: pd.DataFrame, target_date: str, dry_run: bool)
         log(f"{table} write blocked by trade_calendar guard: date={target_date}, dropped={before_rows}")
         return 0
     client = clickhouse_client()
+    require_month_partitioned_minute_mutation(client, table)
     codes = sorted({str(code) for code in rows["code"].dropna().tolist()})
     code_sql = ", ".join(_quote_sql(code) for code in codes)
     delete_sql = (

@@ -900,16 +900,24 @@ def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
             result["periods"][period] = {"ok": True, "main_table": main_table, "inserted_rows": 0, "skipped": "no_complete_5m_codes"}
             continue
         partitioned_target = _is_month_partitioned_minute_table(client, main_table)
-        if partitioned_target:
-            client.command(
-                f"""
-                ALTER TABLE {main_table}
-                DELETE WHERE code IN ({code_sql})
-                  AND toDate(datetime) >= toDate({quote_sql(args.start_date)})
-                  AND toDate(datetime) <= toDate({quote_sql(args.end_date)})
-                SETTINGS mutations_sync = 1
-                """
-            )
+        if not partitioned_target:
+            result["periods"][period] = {
+                "ok": False,
+                "main_table": main_table,
+                "inserted_rows": 0,
+                "write_mode": "blocked_unpartitioned_formal_target",
+                "reason": "derived_minutes_must_be_rebuilt_in_candidate",
+            }
+            continue
+        client.command(
+            f"""
+            ALTER TABLE {main_table}
+            DELETE WHERE code IN ({code_sql})
+              AND toDate(datetime) >= toDate({quote_sql(args.start_date)})
+              AND toDate(datetime) <= toDate({quote_sql(args.end_date)})
+            SETTINGS mutations_sync = 1
+            """
+        )
         client.command(
             f"""
             INSERT INTO {main_table} (code, datetime, open, high, low, close, volume, amount, created_at, id)
@@ -947,7 +955,7 @@ def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
             "ok": bool(visibility["ok"]),
             "main_table": main_table,
             "inserted_rows": int(visibility["main_final_rows"]),
-            "write_mode": "replace_partitioned" if partitioned_target else "append_only_unpartitioned",
+            "write_mode": "replace_partitioned",
             "verification": visibility,
         }
     write_report(args.report, {"summary": result})
