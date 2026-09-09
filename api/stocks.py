@@ -3332,7 +3332,7 @@ def update_stock_list():
             task_manager.update_progress("update_stock_list", {"stage": "fetch", "message": "股票列表更新: 拉取中"})
         except Exception:
             pass
-        stock_list = data_sources.get_stock_list(market="ALL", stock_type="stock")
+        stock_list = data_sources.get_stock_list(market="ALL", stock_type="stock", source_name="qmt_xtquant")
         t_fetch_done = time.perf_counter()
         if not stock_list:
             logger.error("Stock list is empty")
@@ -3774,7 +3774,7 @@ def update_indices():
             task_manager.update_progress("update_index_list", {"stage": "fetch", "message": "指数列表更新: 拉取中"})
         except Exception:
             pass
-        indices = data_sources.call_with_failover("get_stock_list", market="9", list_type=1)
+        indices = data_sources.call_with_failover("get_stock_list", market="9", list_type=1, source_name="qmt_xtquant")
         t_fetch_done = time.perf_counter()
         if not indices:
             logger.warning("指数列表为空")
