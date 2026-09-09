@@ -90,16 +90,23 @@ def digest_days(client, sqls):
     return combine_digests(digest(client, sql) for sql in sqls)
 
 
-def candidate_days(client, table, month):
+def candidate_codes(client, table, month):
     rows = client.query(
-        f'SELECT DISTINCT toDate(datetime) FROM {table} '
-        f'WHERE toYYYYMM(datetime) = {int(month)} AND datetime IS NOT NULL ORDER BY 1',
+        f'SELECT DISTINCT code FROM {table} '
+        f'WHERE toYYYYMM(datetime) = {int(month)} AND code IS NOT NULL ORDER BY 1',
         settings=SETTINGS).result_rows
     return [row[0] for row in rows]
 
 
-def candidate_day_sql(table, day):
-    return f'SELECT {FIELDS} FROM {table} WHERE toDate(datetime) = toDate(\'{day}\')'
+def candidate_digest(client, table, month):
+    """Digest code chunks: candidate ORDER BY begins with code, unlike date."""
+    codes = candidate_codes(client, table, month)
+    sqls = []
+    for offset in range(0, len(codes), 200):
+        quoted = ', '.join("'" + str(code).replace("'", "''") + "'" for code in codes[offset:offset + 200])
+        sqls.append(f'SELECT {FIELDS} FROM {table} WHERE toYYYYMM(datetime) = {int(month)} '
+                    f'AND code IN ({quoted})')
+    return digest_days(client, sqls)
 
 
 def table_name(period, run_id):
@@ -114,7 +121,7 @@ def build_month(client, state, period, month, save):
     table = table_name(period, state['run_id'])
     target = f'SELECT {FIELDS} FROM {table} WHERE toYYYYMM(datetime) = {int(month)}'
     if job.get('state') == 'verified':
-        if digest(client, target) != job['actual']:
+        if candidate_digest(client, table, month) != job['actual']:
             raise RuntimeError(f'{key}: verified candidate changed; rebuild with a new run-id')
         return
     if job and job.get('state') != 'retry_authorized_empty_candidate':
@@ -145,7 +152,7 @@ def build_month(client, state, period, month, save):
         job.pop('writing_day', None)
         job['state'] = 'validating'
         save()
-        job['actual'] = digest(client, target)
+        job['actual'] = candidate_digest(client, table, month)
         after_days = source_days(client, month, state['cutoff'])
         job['source_after'] = digest_days(client, (source_day_sql(period, day) for day in after_days))
         if not (job['expected'] == job['actual'] == job['source_after']):
@@ -161,7 +168,7 @@ def build_month(client, state, period, month, save):
 
 
 def authorize_empty_memory_blocked_jobs(client, state, save):
-    """Permit an explicit retry only after proving that a failed write left no rows."""
+    """Recover only memory-blocked jobs with either an empty or fully revalidated candidate."""
     for key, job in state['jobs'].items():
         if job.get('state') != 'blocked':
             continue
@@ -171,11 +178,20 @@ def authorize_empty_memory_blocked_jobs(client, state, save):
         table = table_name(int(period), state['run_id'])
         count = client.query(f'SELECT count() FROM {table} WHERE toYYYYMM(datetime) = {int(month)}',
                              settings=SETTINGS).result_rows[0][0]
-        if count:
-            raise RuntimeError(f'{key}: blocked candidate contains {count} rows; refusing retry')
         job['recovery_history'] = [dict(state='blocked', error=job.get('error'),
                                         expected=job.get('expected'),
                                         incomplete_buckets=job.get('incomplete_buckets'))]
+        if count:
+            actual = candidate_digest(client, table, month)
+            days = source_days(client, month, state['cutoff'])
+            source_after = digest_days(client, (source_day_sql(int(period), day) for day in days))
+            if not (job.get('expected') == actual == source_after) or actual[0] != actual[1]:
+                raise RuntimeError(f'{key}: blocked candidate contains {count} rows but failed full recovery validation')
+            job.update(state='verified', actual=actual, source_after=source_after,
+                       source_days=[str(day) for day in days],
+                       retry_reason='memory_limited_validation_recovered_existing_candidate')
+            save()
+            continue
         job['state'] = 'retry_authorized_empty_candidate'
         job['retry_reason'] = 'explicit_daily_chunk_recovery_after_empty_memory_limited_attempt'
         save()
@@ -192,7 +208,7 @@ def migrate_legacy_manifest(client, state, fingerprint, save):
             continue
         period, month = key.split(':', 1)
         table = table_name(int(period), state['run_id'])
-        actual = digest(client, f'SELECT {FIELDS} FROM {table} WHERE toYYYYMM(datetime) = {int(month)}')
+        actual = candidate_digest(client, table, month)
         if actual != job.get('actual'):
             raise RuntimeError(f'{key}: legacy verified candidate changed; refusing manifest migration')
     state['fingerprint'] = fingerprint
