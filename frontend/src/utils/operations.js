@@ -5,7 +5,7 @@ export const getIncidents = () => request.get('/operations/incidents')
 export const getDataCalendar = (days = 30) => request.get('/operations/data-calendar', { params: { days }, timeout: 120000 })
 export const getMainwaveDaily = () => request.get('/operations/mainwave-daily')
 export const labels = {
-  queued: '已排队', awaiting_verification: '等待独立复验', not_requested: '尚未启用', not_required: '无需通知', retired: '已退役', external: '外部联动',
+  configured_unverified: '已配置，发送尚未验收', configuration_incomplete: '通知配置不完整', failed_or_uncertain: '发送失败或结果不确定', queued: '已排队', awaiting_verification: '等待独立复验', not_requested: '尚未启用', not_required: '无需通知', retired: '已退役', external: '外部联动',
   ready: '启动成功', not_ready: '尚未就绪', starting: '启动中', stopped: '已停止',
   healthy: '正常', blocked: '阻断', degraded: '降级', stale: '已过期', deferred: '休市待刷新',
   unknown: '状态未知', not_observed: '未发现实例', disabled: '已停用', configured: '已配置 · 待核在线',

@@ -120,3 +120,17 @@ def test_g3_source_unavailable_cannot_pass_zero_summary(tmp_path):
     summary={'entry_date':'2026-09-10','decision_date':'2026-09-09','minute_data_failure_rows':0}
     publish_mainwave_batch(tmp_path,summary,'route,code,entry_date,decision_date,m30_source_ok\ninstitutional_mainwave,A,2026-09-10,2026-09-09,false\n',tickets_csv='code,entry_date\n',diagnostics_csv='code\n')
     assert not verify(tmp_path,entry_date='2026-09-10',decision_date='2026-09-09')['ok']
+
+
+def test_index_daily_uses_fixed_index_owner_without_stock_expansion():
+    from services.operations.remediation import plan_repairs
+    result=plan_repairs({'datasets':[{'id':'index_daily','cells':[{'date':'2026-09-09','status':'missing'}]}]})
+    assert result[0]['kind']=='index_daily'
+    assert result[0]['arguments']==['--start-date','2026-09-09','--end-date','2026-09-09','--batch-size','40']
+
+
+def test_sector_owner_only_receives_verified_missing_day():
+    from services.operations.remediation import plan_repairs
+    result=plan_repairs({'datasets':[{'id':'sector_daily','cells':[{'date':'2026-09-08','status':'unverified'}, {'date':'2026-09-09','status':'partial'}]}]})
+    assert len(result)==1 and result[0]['kind']=='sector_daily'
+    assert result[0]['arguments']==['--trade-date','2026-09-09']

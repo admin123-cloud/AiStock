@@ -621,7 +621,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/charts'
 import { compactStatusWithZh } from '@/utils/g3StatusText'
 import { getGen3StateAlphaCurrent, getGen3StateAlphaHistoricalTrades } from '@/api/trading'
 

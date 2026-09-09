@@ -22,6 +22,17 @@ export default defineConfig({
     },
   build: {
     outDir: 'dist',
-    sourcemap: false
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('/zrender/')) return 'chart-renderer'
+          if (id.includes('/echarts/')) return 'charts'
+          if (id.includes('/element-plus/') || id.includes('/@element-plus/')) return 'ui-components'
+          if (id.includes('/@vue/') || id.includes('/vue/') || id.includes('/vue-router/') || id.includes('/pinia/')) return 'vue-runtime'
+        }
+      }
+    }
   }
 })

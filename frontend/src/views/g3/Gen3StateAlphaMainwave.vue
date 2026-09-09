@@ -303,7 +303,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/charts'
 import { ElMessage } from 'element-plus'
 import { getGen3StateAlphaMainwaveOpportunities } from '@/api/trading'
 

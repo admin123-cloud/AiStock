@@ -167,7 +167,7 @@
 </template>
 
 <script setup>
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/charts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getGen2Timing } from '@/api/trading'
 

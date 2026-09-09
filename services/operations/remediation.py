@@ -18,6 +18,14 @@ def plan_repairs(calendar):
                 args = ['--mode','repair','--scope','latest','--start-date',day,'--end-date',day,
                         '--max-repair-codes','60','--batch-size','30','--no-cross-source-fallback']
                 key = 'daily:'+day
+            elif ident == 'index_daily':
+                kind = 'index_daily'
+                args = ['--start-date',day,'--end-date',day,'--batch-size','40']
+                key = 'index_daily:'+day
+            elif ident == 'sector_daily':
+                kind = 'sector_daily'
+                args = ['--trade-date',day]
+                key = 'sector_daily:'+day
             elif ident.startswith(('stock_','index_')) and ident.split('_')[-1] in ('5','15','30','60'):
                 kind = 'ingestion'
                 args = ['--mode','minute-gap-repair','--scenario','history','--start-date',day,'--end-date',day,

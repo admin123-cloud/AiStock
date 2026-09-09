@@ -151,7 +151,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import axios from 'axios'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/charts'
 
 const router = useRouter()
 const route = useRoute()

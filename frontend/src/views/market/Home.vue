@@ -532,7 +532,7 @@
 import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/charts'
 
 const router = useRouter()
 

@@ -1,21 +1,14 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import { ElAlert, ElAutocomplete, ElButton, ElCheckbox, ElCol, ElDatePicker, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElPagination, ElProgress, ElRadioButton, ElRadioGroup, ElRow, ElSegmented, ElSelect, ElSwitch, ElTabPane, ElTable, ElTableColumn, ElTabs, ElTag, ElLoading } from 'element-plus'
 import 'element-plus/dist/index.css'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
-
+import { DocumentCopy } from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 
 const app = createApp(App)
-
-// 注册Element Plus图标
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
-  app.component(key, component)
-}
-
+app.component('DocumentCopy', DocumentCopy)
+for (const component of [ElAlert, ElAutocomplete, ElButton, ElCheckbox, ElCol, ElDatePicker, ElDialog, ElDrawer, ElEmpty, ElForm, ElFormItem, ElIcon, ElInput, ElInputNumber, ElOption, ElPagination, ElProgress, ElRadioButton, ElRadioGroup, ElRow, ElSegmented, ElSelect, ElSwitch, ElTabPane, ElTable, ElTableColumn, ElTabs, ElTag, ElLoading]) app.use(component)
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus)
-
 app.mount('#app')

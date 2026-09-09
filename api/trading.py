@@ -52,6 +52,26 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+from services.trading.ths_parser import (
+    _split_ths_row,
+    _parse_ths_numeric,
+    _extract_numeric_after_labels,
+    _is_valid_ths_holding_name,
+    _validate_ths_capital_holdings_result,
+    _parse_ths_capital_holdings,
+)
+from services.trading.values import (
+    _sanitize,
+    _to_float,
+    _normalize_stock_code6,
+)
+from services.trading.g2_tickets import (
+    _gen2_ticket_position_policy,
+    _gen2_ticket_strategy_source,
+    _gen2_ticket_candidate,
+    _gen2_ticket_markdown,
+)
+
 router = APIRouter(prefix="/trading", tags=["trading"])
 logger = get_logger("trading")
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -346,177 +366,6 @@ def _read_ths_current_table_text() -> Dict[str, Any]:
         "preview_lines": lines[:12],
     }
 
-
-def _split_ths_row(line: str) -> List[str]:
-    raw_text = str(line or "").rstrip("\r\n")
-    if not raw_text.strip():
-        return []
-    if "\t" in raw_text:
-        parts = [part.strip() for part in raw_text.split("\t")]
-        while parts and parts[-1] == "":
-            parts.pop()
-        return parts
-    text = raw_text.strip()
-    return [part.strip() for part in re.split(r"\s{2,}", text) if str(part).strip()]
-
-
-def _parse_ths_numeric(value: Any) -> Optional[float]:
-    text = str(value or "").replace(",", "").strip()
-    if not text:
-        return None
-    m = re.search(r"-?\d+(?:\.\d+)?", text)
-    if not m:
-        return None
-    try:
-        return float(m.group(0))
-    except Exception:
-        return None
-
-
-def _extract_numeric_after_labels(raw_text: str, labels: List[str]) -> Optional[float]:
-    text = str(raw_text or "")
-    for label in labels:
-        pattern = rf"{re.escape(label)}[^\d\-]{{0,16}}(-?\d[\d,]*(?:\.\d+)?)"
-        m = re.search(pattern, text)
-        if m:
-            value = _parse_ths_numeric(m.group(1))
-            if value is not None:
-                return value
-    tokens = [tok.strip() for tok in re.split(r"[\t\r\n]+", text) if str(tok).strip()]
-    for idx, tok in enumerate(tokens):
-        for label in labels:
-            if label in tok and idx + 1 < len(tokens):
-                value = _parse_ths_numeric(tokens[idx + 1])
-                if value is not None:
-                    return value
-    return None
-
-
-def _is_valid_ths_holding_name(value: Any) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    return re.fullmatch(r"[\d.\-]+", text) is None
-
-
-def _validate_ths_capital_holdings_result(holdings: List[Dict[str, Any]]) -> bool:
-    if not holdings:
-        return False
-    for item in holdings:
-        code = str(item.get("code") or "").strip()
-        name = str(item.get("name") or "").strip()
-        shares = int(item.get("shares") or 0)
-        cost_price = _parse_ths_numeric(item.get("cost_price"))
-        current_price = _parse_ths_numeric(item.get("current_price"))
-        market_value = _parse_ths_numeric(item.get("market_value"))
-        if not re.fullmatch(r"\d{6}", code):
-            return False
-        if not _is_valid_ths_holding_name(name):
-            return False
-        if shares <= 0:
-            return False
-        if market_value is not None and market_value <= 0:
-            return False
-        if cost_price is not None and cost_price <= 0:
-            return False
-        if current_price is not None and current_price <= 0:
-            return False
-    return True
-
-
-def _parse_ths_capital_holdings(raw_text: str) -> Dict[str, Any]:
-    lines = [line.rstrip("\r") for line in str(raw_text or "").splitlines() if str(line).strip()]
-    header_idx = -1
-    headers: List[str] = []
-    for idx, line in enumerate(lines):
-        cols = _split_ths_row(line)
-        if any("股票代码" in col for col in cols) and any("股票名称" in col for col in cols):
-            header_idx = idx
-            headers = cols
-            break
-
-    def _find_header_index(candidates: List[str]) -> int:
-        for i, header in enumerate(headers):
-            normalized = str(header or "").replace(" ", "")
-            if any(candidate in normalized for candidate in candidates):
-                return i
-        return -1
-
-    code_idx = _find_header_index(["股票代码"])
-    name_idx = _find_header_index(["股票名称"])
-    shares_idx = _find_header_index(["证券数量", "当前持仓", "持仓数量", "股票余额"])
-    cost_idx = _find_header_index(["成本价", "摊薄成本", "保本价"])
-    current_idx = _find_header_index(["市价", "最新价", "现价"])
-    market_idx = _find_header_index(["参考市值", "市值", "最新市值"])
-    pnl_idx = _find_header_index(["盈亏比", "盈亏比例"])
-
-    holdings: List[Dict[str, Any]] = []
-    if header_idx >= 0:
-        for line in lines[header_idx + 1 :]:
-            cols = _split_ths_row(line)
-            if not cols:
-                continue
-            code = ""
-            if 0 <= code_idx < len(cols):
-                code = str(cols[code_idx]).strip()
-            if not re.fullmatch(r"\d{6}", code):
-                hit = next((str(col).strip() for col in cols if re.fullmatch(r"\d{6}", str(col).strip())), "")
-                code = hit
-            if not code:
-                continue
-            name = str(cols[name_idx]).strip() if 0 <= name_idx < len(cols) else ""
-            shares = _parse_ths_numeric(cols[shares_idx]) if 0 <= shares_idx < len(cols) else None
-            cost_price = _parse_ths_numeric(cols[cost_idx]) if 0 <= cost_idx < len(cols) else None
-            current_price = _parse_ths_numeric(cols[current_idx]) if 0 <= current_idx < len(cols) else None
-            market_value = _parse_ths_numeric(cols[market_idx]) if 0 <= market_idx < len(cols) else None
-            pnl_ratio = _parse_ths_numeric(cols[pnl_idx]) if 0 <= pnl_idx < len(cols) else None
-            shares_int = int(shares or 0)
-            if shares_int <= 0:
-                continue
-            if (current_price is None or current_price <= 0) and market_value is not None and shares_int > 0:
-                current_price = market_value / shares_int
-            holdings.append(
-                {
-                    "code": code,
-                    "name": name,
-                    "shares": shares_int,
-                    "cost_price": cost_price,
-                    "current_price": current_price,
-                    "market_value": market_value,
-                    "pnl_ratio": pnl_ratio,
-                }
-            )
-
-    holdings_market_value = None
-    if holdings:
-        holdings_market_value = sum((_parse_ths_numeric(item.get("market_value")) or 0.0) for item in holdings)
-    market_value = _extract_numeric_after_labels(raw_text, ["参考市值", "市值", "最新市值", "总市值"])
-    available_cash = _extract_numeric_after_labels(raw_text, ["可用资金", "可用现金", "可用金额", "现金可用"])
-    total_capital = _extract_numeric_after_labels(raw_text, ["总资产", "总可用", "总资金"])
-    cost_value = None
-    if holdings:
-        cost_value = 0.0
-        for item in holdings:
-            shares = int(item.get("shares") or 0)
-            cost_price = _parse_ths_numeric(item.get("cost_price"))
-            if cost_price is not None and shares > 0:
-                cost_value += cost_price * shares
-    if holdings_market_value is not None and holdings_market_value > 0:
-        if market_value is None or market_value <= 0 or market_value < holdings_market_value * 0.5:
-            market_value = holdings_market_value
-    if cost_value is None and holdings:
-        cost_value = sum(((_parse_ths_numeric(item.get("cost_price")) or 0.0) * int(item.get("shares") or 0)) for item in holdings)
-    if total_capital is None and available_cash is not None and market_value is not None:
-        total_capital = available_cash + market_value
-    return {
-        "capital": {
-            "total_capital": total_capital,
-            "available_cash": available_cash,
-            "market_value": market_value,
-            "cost_value": cost_value,
-        },
-        "holdings": holdings,
-    }
 
 def _get_ths_trade_window_win32():
     from pywinauto import Application
@@ -4990,37 +4839,6 @@ def _resolve_effective_signal_date(decision: Dict[str, Any], selected_date: Opti
     return selected or origin
 
 
-def _sanitize(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {k: _sanitize(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_sanitize(v) for v in value]
-    if isinstance(value, (np.integer, np.floating)):
-        value = value.item()
-    if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
-    return value
-
-
-def _to_float(value: Any) -> Optional[float]:
-    try:
-        if value is None:
-            return None
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        val = float(value)
-        if np.isnan(val) or np.isinf(val):
-            return None
-        return val
-    except Exception:
-        return None
-
-
 def _to_int(value: Any, default: int = 0) -> int:
     try:
         if value is None:
@@ -6512,132 +6330,6 @@ def _load_gen2_open_state_for_date(signal_date: Optional[str]) -> Dict[str, Any]
             "raw": row.where(pd.notna(row), None).to_dict(),
         }
     )
-
-
-def _gen2_ticket_position_policy(open_state: str) -> Dict[str, Any]:
-    state = str(open_state or "UNKNOWN").strip().upper()
-    if state == "AGGRESSIVE":
-        return {"can_open": True, "target_exposure": "60%-90%", "max_new_positions": 3, "single_position": "25%-35%"}
-    if state == "NORMAL":
-        return {"can_open": True, "target_exposure": "30%-60%", "max_new_positions": 2, "single_position": "20%-30%"}
-    if state == "PROBE":
-        return {"can_open": False, "target_exposure": "0%-20%", "max_new_positions": 0, "single_position": "0%"}
-    if state == "OFF":
-        return {"can_open": False, "target_exposure": "0%", "max_new_positions": 0, "single_position": "0%"}
-    return {"can_open": False, "target_exposure": "0%", "max_new_positions": 0, "single_position": "0%"}
-
-
-def _gen2_ticket_strategy_source(row: Dict[str, Any]) -> str:
-    if row.get("pass_mainline1") and row.get("pass_mainline2"):
-        return "volume5 + big_bull"
-    if row.get("pass_mainline2"):
-        return "big_bull"
-    if row.get("pass_mainline1") or str(row.get("source_family") or "") == "volume5":
-        return "volume5"
-    return str(row.get("source_family") or row.get("signal_family") or "g2_v2_complete")
-
-
-def _gen2_ticket_candidate(row: Dict[str, Any], index: int, policy: Dict[str, Any]) -> Dict[str, Any]:
-    code = str(row.get("code") or row.get("code6") or "")
-    name = str(row.get("name") or "")
-    entry_price = _to_float(row.get("entry_price"))
-    single_position = str(policy.get("single_position") or "0%")
-    strategy_source = _gen2_ticket_strategy_source(row)
-    buy_area = "等待盘中确认价"
-    if entry_price is not None:
-        buy_area = f"{entry_price:.2f} 附近，严禁明显高开/直线拉升后追价"
-    return _sanitize(
-        {
-            "rank": int(index),
-            "code": code,
-            "code6": str(row.get("code6") or "") or _normalize_stock_code6(code),
-            "name": name,
-            "strategy_source": strategy_source,
-            "stage_label": row.get("stage_label"),
-            "confirm_datetime": row.get("confirm_datetime"),
-            "entry_price": entry_price,
-            "buy_area": buy_area,
-            "suggested_position": single_position,
-            "auto_order_allowed": False,
-            "requires_manual_approval": True,
-            "evidence": {
-                "v4_rank": row.get("v4_rank"),
-                "v4_score": row.get("v4_score"),
-                "alpha191_volume5_score": row.get("alpha191_volume5_score"),
-                "alpha191_volume5_rank_in_day": row.get("alpha191_volume5_rank_in_day"),
-                "source_family": row.get("source_family"),
-                "signal_family": row.get("signal_family"),
-                "g2_v2_buy_logic": row.get("g2_v2_buy_logic"),
-                "l3_rt_strong3_ratio": row.get("l3_rt_strong3_ratio"),
-                "sector_score_bonus": row.get("sector_score_bonus"),
-                "pass_mainline1": row.get("pass_mainline1"),
-                "pass_mainline2": row.get("pass_mainline2"),
-                "pass_official_v2_live": row.get("pass_official_v2_live"),
-            },
-            "buy_conditions": [
-                "只在交易单允许开仓时执行",
-                "必须属于 G2 V4 g2_v2_complete 正式候选",
-                "盘中 15m/30m 确认信号不能撤销或过期",
-                "不追直线拉升，不在明显高开透支后临时加价",
-            ],
-            "invalid_conditions": [
-                "市场状态降为 PROBE/OFF",
-                "候选从 G2 V4 正式可买池消失",
-                "盘中跌破确认结构或买入理由失效",
-                "出现 ST、停牌、涨停买不到或明显流动性异常",
-            ],
-            "risk_rules": [
-                "单票浮亏 -4% 后禁止加仓",
-                "单票浮亏 -6% 必须处理",
-                "买入后 3 个交易日仍未按预期走强则降级复盘",
-            ],
-            "review_points": ["T+1 表现", "T+3 是否走强", "T+5 盈亏与买点质量归因"],
-            "reason_text": row.get("reason_text"),
-        }
-    )
-
-
-def _gen2_ticket_markdown(ticket: Dict[str, Any]) -> str:
-    lines = [
-        f"# G2 V4 Daily Trade Ticket - {ticket.get('signal_date') or ''}",
-        "",
-        f"- 生成时间：{ticket.get('generated_at') or ''}",
-        f"- 策略口径：{ticket.get('strategy_code') or ''}",
-        f"- 市场状态：{ticket.get('market_state') or 'UNKNOWN'}",
-        f"- 今日是否允许开仓：{'是' if ticket.get('can_open') else '否'}",
-        f"- 允许总仓位：{ticket.get('target_exposure') or '0%'}",
-        f"- 正式候选数：{len(ticket.get('formal_candidates') or [])}",
-        f"- 自动下单：关闭，必须人工确认",
-        "",
-        "## 今日纪律",
-    ]
-    for item in ticket.get("forbidden_actions") or []:
-        lines.append(f"- {item}")
-    lines.extend(["", "## 正式候选"])
-    candidates = ticket.get("formal_candidates") or []
-    if not candidates:
-        lines.append("- 今日无正式买入候选。")
-    for item in candidates:
-        evidence = item.get("evidence") or {}
-        lines.extend(
-            [
-                "",
-                f"### {item.get('rank')}. {item.get('code')} {item.get('name')}",
-                f"- 来源：{item.get('strategy_source')}",
-                f"- 买入区间：{item.get('buy_area')}",
-                f"- 建议仓位：{item.get('suggested_position')}",
-                f"- 确认时间：{item.get('confirm_datetime') or '-'}",
-                f"- V4：rank={evidence.get('v4_rank')}, score={evidence.get('v4_score')}",
-                f"- 主线证据：mainline1={evidence.get('pass_mainline1')}, mainline2={evidence.get('pass_mainline2')}, l3={evidence.get('l3_rt_strong3_ratio')}",
-                f"- 理由：{item.get('reason_text') or '-'}",
-                "- 失效条件：" + "；".join(str(x) for x in (item.get("invalid_conditions") or [])),
-                "- 风控规则：" + "；".join(str(x) for x in (item.get("risk_rules") or [])),
-            ]
-        )
-    lines.extend(["", "## 数据状态"])
-    for stage in ticket.get("pipeline") or []:
-        lines.append(f"- {stage.get('label')}: {stage.get('count')} | {stage.get('note')}")
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def _save_gen2_daily_trade_ticket(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -9833,7 +9525,6 @@ def _build_live_checks(
     return _sanitize(checks)
 
 
-
 def _build_holdings_strategy(
     snapshot_holding: Dict[str, Any],
     trades_df: pd.DataFrame,
@@ -10703,17 +10394,6 @@ def get_v4_market_gate(
             "message": message,
         }
     )
-
-
-def _normalize_stock_code6(value: Any) -> str:
-    raw = str(value or "").strip().upper()
-    match = re.search(r"(\d{6})", raw)
-    if match:
-        return match.group(1)
-    digits = re.sub(r"\D+", "", raw)
-    if digits and len(digits) <= 6:
-        return digits.zfill(6)
-    return ""
 
 
 def _to_exchange_stock_code(value: Any) -> str:

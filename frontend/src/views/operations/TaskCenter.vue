@@ -10,7 +10,8 @@
       <p v-for="item in (board.api_runtime?.startups||[]).filter(x=>x.status==='failed')" :key="item.name" class="ops-error" role="alert">{{ item.name }}：{{ item.error }}</p>
       <details v-if="board.api_runtime?.startups?.length"><summary style="cursor:pointer;padding:10px 0">查看全部 {{ board.api_runtime.startups.length }} 项启动检查</summary><div v-for="item in board.api_runtime.startups" :key="item.name" class="ops-candidate"><div class="ops-toolbar"><strong>{{ item.name }}</strong><el-tag :type="tone(board.api_runtime?.fresh?item.status:'unknown')">{{ label(board.api_runtime?.fresh?item.status:'unknown') }}</el-tag><span class="ops-meta">{{ dateTime(item.finished_at) }}</span></div></div></details>
     </section>
-    <el-alert v-if="board.operations_publisher?.publisher_status!=='healthy'||!board.operations_publisher?.notifications_enabled" title="独立数据告警尚未接管或心跳已过期" description="此处记录异常不等于已发送通知；上线需同时部署通知发布器。原G3通知仅在自身运行窗口内兜底。" type="warning" :closable="false" show-icon />
+    <el-alert v-if="board.operations_publisher?.publisher_status!=='healthy'||!board.operations_publisher?.notifications_enabled||!board.operations_publisher?.notification_transport_ok" title="独立数据告警尚未接管或心跳已过期" description="此处记录异常不等于已发送通知；上线需同时部署通知发布器。原G3通知仅在自身运行窗口内兜底。" type="warning" :closable="false" show-icon />
+    <p class="ops-meta">通知通道：{{ label(board.operations_publisher?.notification_transport?.state) }} · 最近SMTP接受 {{ dateTime(board.operations_publisher?.notification_transport?.last_smtp_accepted_at) }}</p>
     <el-alert v-if="board.host_inventory_status !== 'healthy'" title="Windows任务清单尚未发布或已过期" description="未把缺少心跳解释为任务正常。请检查 Operations Publisher 的运行状态。" type="warning" :closable="false" show-icon />
     <div class="ops-metrics"><div v-for="item in metrics" :key="item.label" class="ops-metric"><span>{{ item.label }}</span><strong>{{ item.value ?? '—' }}</strong></div></div>
     <section v-if="board.historical_recovery?.total" class="ops-panel" aria-label="历史数据恢复进度">

@@ -126,7 +126,7 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import axios from 'axios'
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/charts'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 

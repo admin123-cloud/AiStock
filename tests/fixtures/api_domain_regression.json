@@ -1,0 +1,906 @@
+[
+  {
+    "module": "services/trading/ths_parser.py",
+    "function": "_parse_ths_capital_holdings",
+    "args": [
+      "总资产  12,000\n可用资金  2,000\n股票代码\t股票名称\t证券数量\t成本价\t市价\t参考市值\t盈亏比\n600000\t浦发银行\t1000\t9.5\t10\t10000\t5.26%"
+    ],
+    "expected": {
+      "capital": {
+        "total_capital": 12000.0,
+        "available_cash": 2000.0,
+        "market_value": 600000.0,
+        "cost_value": 9500.0
+      },
+      "holdings": [
+        {
+          "code": "600000",
+          "name": "浦发银行",
+          "shares": 1000,
+          "cost_price": 9.5,
+          "current_price": 10.0,
+          "market_value": 10000.0,
+          "pnl_ratio": 5.26
+        }
+      ]
+    }
+  },
+  {
+    "module": "services/trading/ths_parser.py",
+    "function": "_parse_ths_capital_holdings",
+    "args": [
+      "股票代码  股票名称  持仓数量  成本价  现价  市值\n000001  平安银行  200  12.3  --  2600"
+    ],
+    "expected": {
+      "capital": {
+        "total_capital": null,
+        "available_cash": null,
+        "market_value": 2600.0,
+        "cost_value": 2460.0
+      },
+      "holdings": [
+        {
+          "code": "000001",
+          "name": "平安银行",
+          "shares": 200,
+          "cost_price": 12.3,
+          "current_price": 13.0,
+          "market_value": 2600.0,
+          "pnl_ratio": null
+        }
+      ]
+    }
+  },
+  {
+    "module": "services/trading/ths_parser.py",
+    "function": "_parse_ths_capital_holdings",
+    "args": [
+      "数据暂不可用"
+    ],
+    "expected": {
+      "capital": {
+        "total_capital": null,
+        "available_cash": null,
+        "market_value": null,
+        "cost_value": null
+      },
+      "holdings": []
+    }
+  },
+  {
+    "module": "services/operations/result_compaction.py",
+    "function": "_compact_monitor_last_result",
+    "args": [
+      {
+        "ok": false,
+        "reason": "data_gap",
+        "blockers": [
+          {
+            "nested": {
+              "data": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29
+              ]
+            }
+          }
+        ],
+        "last_result": {
+          "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        "ignored_private": "not needed"
+      }
+    ],
+    "expected": {
+      "ok": false,
+      "reason": "data_gap",
+      "blockers": [
+        {
+          "nested": {
+            "data": {
+              "omitted": true,
+              "type": "list",
+              "count": 30
+            }
+          }
+        }
+      ],
+      "last_result": {
+        "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...[truncated]"
+      },
+      "compacted": true
+    }
+  },
+  {
+    "module": "services/g3/sector_opportunities.py",
+    "function": "_build_mainwave_sector_opportunities",
+    "args": [
+      [
+        {
+          "sector_name": "银行",
+          "code": "600000",
+          "name": "浦发",
+          "wave_style_score": 88,
+          "sector_diffusion_score": 80,
+          "m30_confirmed": true,
+          "is_recommended": false
+        },
+        {
+          "sector_name": "银行",
+          "code": "000001",
+          "name": "平安",
+          "wave_style_score": 122,
+          "sector_diffusion_score": 90,
+          "is_recommended": true
+        }
+      ]
+    ],
+    "expected": [
+      {
+        "sector_name": "银行",
+        "sector_code": "",
+        "state": "strong_mainwave",
+        "state_label": "强主升机会",
+        "candidate_count": 2,
+        "recommended_count": 1,
+        "m30_ok_count": 1,
+        "max_wave_style_score": 122.0,
+        "avg_wave_style_score": 105.0,
+        "avg_sector_diffusion_score": 85.0,
+        "top_candidates": [
+          {
+            "sector_name": "银行",
+            "code": "000001",
+            "name": "平安",
+            "wave_style_score": 122,
+            "sector_diffusion_score": 90,
+            "is_recommended": true
+          },
+          {
+            "sector_name": "银行",
+            "code": "600000",
+            "name": "浦发",
+            "wave_style_score": 88,
+            "sector_diffusion_score": 80,
+            "m30_confirmed": true,
+            "is_recommended": false
+          }
+        ],
+        "top_candidate_names": "平安 / 浦发",
+        "template_labels": [],
+        "rank_score": 98.45
+      }
+    ]
+  },
+  {
+    "module": "services/g3/sector_opportunities.py",
+    "function": "_build_mainwave_sector_opportunities_v2",
+    "args": [
+      [
+        {
+          "sector_name": "银行",
+          "code": "600000",
+          "name": "浦发",
+          "wave_style_score": 88,
+          "sector_diffusion_score": 80,
+          "m30_confirmed": true,
+          "is_recommended": false
+        },
+        {
+          "sector_name": "银行",
+          "code": "000001",
+          "name": "平安",
+          "wave_style_score": 122,
+          "sector_diffusion_score": 90,
+          "is_recommended": true
+        }
+      ],
+      [
+        {
+          "sector_name": "电力",
+          "code": "600900",
+          "wave_style_score": "120",
+          "sector_diffusion_score": 77
+        }
+      ]
+    ],
+    "expected": [
+      {
+        "sector_name": "银行",
+        "sector_code": "",
+        "state": "strong_mainwave",
+        "state_label": "强主升机会",
+        "candidate_count": 2,
+        "watch_candidate_count": 0,
+        "recommended_count": 1,
+        "m30_ok_count": 1,
+        "max_wave_style_score": 122.0,
+        "avg_wave_style_score": 105.0,
+        "avg_sector_diffusion_score": 85.0,
+        "top_candidates": [
+          {
+            "sector_name": "银行",
+            "code": "000001",
+            "name": "平安",
+            "wave_style_score": 122,
+            "sector_diffusion_score": 90,
+            "is_recommended": true
+          },
+          {
+            "sector_name": "银行",
+            "code": "600000",
+            "name": "浦发",
+            "wave_style_score": 88,
+            "sector_diffusion_score": 80,
+            "m30_confirmed": true,
+            "is_recommended": false
+          }
+        ],
+        "top_candidate_names": "平安 / 浦发",
+        "template_labels": [],
+        "rank_score": 98.45
+      },
+      {
+        "sector_name": "电力",
+        "sector_code": "",
+        "state": "sector_watch",
+        "state_label": "板块观察",
+        "candidate_count": 0,
+        "watch_candidate_count": 1,
+        "recommended_count": 0,
+        "m30_ok_count": 0,
+        "max_wave_style_score": 120.0,
+        "avg_wave_style_score": 120.0,
+        "avg_sector_diffusion_score": 77.0,
+        "top_candidates": [
+          {
+            "sector_name": "电力",
+            "code": "600900",
+            "wave_style_score": "120",
+            "sector_diffusion_score": 77
+          }
+        ],
+        "top_candidate_names": "600900",
+        "template_labels": [],
+        "rank_score": 85.55
+      }
+    ]
+  },
+  {
+    "module": "services/g3/sector_opportunities.py",
+    "function": "_build_mainwave_sector_opportunities_v2",
+    "args": [
+      [],
+      [
+        {
+          "sector_name": "电力",
+          "code": "600900",
+          "wave_style_score": "120",
+          "sector_diffusion_score": 77
+        }
+      ]
+    ],
+    "expected": [
+      {
+        "sector_name": "电力",
+        "sector_code": "",
+        "state": "sector_watch",
+        "state_label": "板块观察",
+        "candidate_count": 0,
+        "watch_candidate_count": 1,
+        "recommended_count": 0,
+        "m30_ok_count": 0,
+        "max_wave_style_score": 120.0,
+        "avg_wave_style_score": 120.0,
+        "avg_sector_diffusion_score": 77.0,
+        "top_candidates": [
+          {
+            "sector_name": "电力",
+            "code": "600900",
+            "wave_style_score": "120",
+            "sector_diffusion_score": 77
+          }
+        ],
+        "top_candidate_names": "600900",
+        "template_labels": [],
+        "rank_score": 85.55
+      }
+    ]
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_monitor_state",
+    "args": [
+      {}
+    ],
+    "expected": {
+      "enabled": true,
+      "interval_seconds": 120,
+      "trading_hours_only": true,
+      "email_enabled": true,
+      "heartbeat_enabled": false,
+      "heartbeat_minutes": 30,
+      "recipient_email": "",
+      "run_current_refresh": true,
+      "paper_entry_enabled": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null,
+      "last_email_sent_at": null,
+      "last_heartbeat_sent_at": null,
+      "last_blocker_alert_at": null,
+      "last_refresh_task_id": null,
+      "last_alert_keys": {},
+      "last_email_error": null
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_exit_monitor_state",
+    "args": [
+      {}
+    ],
+    "expected": {
+      "enabled": true,
+      "interval_seconds": 120,
+      "trading_hours_only": true,
+      "paper_exit_enabled": true,
+      "update_ledger_enabled": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_daily_trend_exit_monitor_state",
+    "args": [
+      {}
+    ],
+    "expected": {
+      "enabled": true,
+      "interval_seconds": 300,
+      "trading_hours_only": true,
+      "lookback_days": 180,
+      "pivot_window": 3,
+      "min_pivot_separation": 5,
+      "break_buffer_pct": 0.0,
+      "email_enabled": true,
+      "alerted_signal_keys": [],
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null,
+      "hour": 15,
+      "minute": 10
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_observation_scheduler_state",
+    "args": [
+      {}
+    ],
+    "expected": {
+      "enabled": true,
+      "hour": 15,
+      "minute": 40,
+      "retry_hour": 10,
+      "retry_minutes": [
+        1,
+        6,
+        11,
+        16,
+        31,
+        36
+      ],
+      "trading_days_only": true,
+      "run_smoke": true,
+      "refresh_smoke": true,
+      "auto_repair_minute30": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_broker_sync_state",
+    "args": [
+      {}
+    ],
+    "expected": {
+      "enabled": true,
+      "interval_seconds": null,
+      "trading_hours_only": false,
+      "trading_days_only": true,
+      "hour": 17,
+      "minute": 30,
+      "sync_holdings": true,
+      "sync_trades": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_holdings_success_at": null,
+      "last_trades_success_at": null,
+      "last_error": null,
+      "last_result": null
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_monitor_state",
+    "args": [
+      {
+        "enabled": false,
+        "interval_seconds": 15,
+        "minute": 0,
+        "hour": 24,
+        "heartbeat_enabled": true,
+        "retry_minutes": "1,6,99,bad",
+        "last_alert_keys": [],
+        "alerted_signal_keys": "invalid"
+      }
+    ],
+    "expected": {
+      "enabled": false,
+      "interval_seconds": 120,
+      "trading_hours_only": true,
+      "email_enabled": true,
+      "heartbeat_enabled": false,
+      "heartbeat_minutes": 30,
+      "recipient_email": "",
+      "run_current_refresh": true,
+      "paper_entry_enabled": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null,
+      "last_email_sent_at": null,
+      "last_heartbeat_sent_at": null,
+      "last_blocker_alert_at": null,
+      "last_refresh_task_id": null,
+      "last_alert_keys": {},
+      "last_email_error": null,
+      "minute": 0,
+      "hour": 24,
+      "retry_minutes": "1,6,99,bad",
+      "alerted_signal_keys": "invalid"
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_exit_monitor_state",
+    "args": [
+      {
+        "enabled": false,
+        "interval_seconds": 15,
+        "minute": 0,
+        "hour": 24,
+        "heartbeat_enabled": true,
+        "retry_minutes": "1,6,99,bad",
+        "last_alert_keys": [],
+        "alerted_signal_keys": "invalid"
+      }
+    ],
+    "expected": {
+      "enabled": false,
+      "interval_seconds": 120,
+      "trading_hours_only": true,
+      "paper_exit_enabled": true,
+      "update_ledger_enabled": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null,
+      "minute": 0,
+      "hour": 24,
+      "heartbeat_enabled": true,
+      "retry_minutes": "1,6,99,bad",
+      "last_alert_keys": [],
+      "alerted_signal_keys": "invalid"
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_daily_trend_exit_monitor_state",
+    "args": [
+      {
+        "enabled": false,
+        "interval_seconds": 15,
+        "minute": 0,
+        "hour": 24,
+        "heartbeat_enabled": true,
+        "retry_minutes": "1,6,99,bad",
+        "last_alert_keys": [],
+        "alerted_signal_keys": "invalid"
+      }
+    ],
+    "expected": {
+      "enabled": false,
+      "interval_seconds": 300,
+      "trading_hours_only": true,
+      "lookback_days": 180,
+      "pivot_window": 3,
+      "min_pivot_separation": 5,
+      "break_buffer_pct": 0.0,
+      "email_enabled": true,
+      "alerted_signal_keys": [],
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null,
+      "minute": 10,
+      "hour": 23,
+      "heartbeat_enabled": true,
+      "retry_minutes": "1,6,99,bad",
+      "last_alert_keys": []
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_observation_scheduler_state",
+    "args": [
+      {
+        "enabled": false,
+        "interval_seconds": 15,
+        "minute": 0,
+        "hour": 24,
+        "heartbeat_enabled": true,
+        "retry_minutes": "1,6,99,bad",
+        "last_alert_keys": [],
+        "alerted_signal_keys": "invalid"
+      }
+    ],
+    "expected": {
+      "enabled": false,
+      "hour": 23,
+      "minute": 40,
+      "retry_hour": 10,
+      "retry_minutes": [
+        1,
+        6
+      ],
+      "trading_days_only": true,
+      "run_smoke": true,
+      "refresh_smoke": true,
+      "auto_repair_minute30": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_error": null,
+      "last_result": null,
+      "interval_seconds": 15,
+      "heartbeat_enabled": true,
+      "last_alert_keys": [],
+      "alerted_signal_keys": "invalid"
+    }
+  },
+  {
+    "module": "services/g3/monitor_state.py",
+    "function": "normalize_broker_sync_state",
+    "args": [
+      {
+        "enabled": false,
+        "interval_seconds": 15,
+        "minute": 0,
+        "hour": 24,
+        "heartbeat_enabled": true,
+        "retry_minutes": "1,6,99,bad",
+        "last_alert_keys": [],
+        "alerted_signal_keys": "invalid"
+      }
+    ],
+    "expected": {
+      "enabled": false,
+      "interval_seconds": 60,
+      "trading_hours_only": false,
+      "trading_days_only": true,
+      "hour": 23,
+      "minute": 0,
+      "sync_holdings": true,
+      "sync_trades": true,
+      "last_run_at": null,
+      "last_success_at": null,
+      "last_holdings_success_at": null,
+      "last_trades_success_at": null,
+      "last_error": null,
+      "last_result": null,
+      "heartbeat_enabled": true,
+      "retry_minutes": "1,6,99,bad",
+      "last_alert_keys": [],
+      "alerted_signal_keys": "invalid"
+    }
+  },
+  {
+    "module": "services/trading/g2_tickets.py",
+    "function": "_gen2_ticket_position_policy",
+    "args": [
+      "AGGRESSIVE"
+    ],
+    "expected": {
+      "can_open": true,
+      "target_exposure": "60%-90%",
+      "max_new_positions": 3,
+      "single_position": "25%-35%"
+    }
+  },
+  {
+    "module": "services/trading/g2_tickets.py",
+    "function": "_gen2_ticket_position_policy",
+    "args": [
+      "NORMAL"
+    ],
+    "expected": {
+      "can_open": true,
+      "target_exposure": "30%-60%",
+      "max_new_positions": 2,
+      "single_position": "20%-30%"
+    }
+  },
+  {
+    "module": "services/trading/g2_tickets.py",
+    "function": "_gen2_ticket_position_policy",
+    "args": [
+      "PROBE"
+    ],
+    "expected": {
+      "can_open": false,
+      "target_exposure": "0%-20%",
+      "max_new_positions": 0,
+      "single_position": "0%"
+    }
+  },
+  {
+    "module": "services/trading/g2_tickets.py",
+    "function": "_gen2_ticket_position_policy",
+    "args": [
+      "OFF"
+    ],
+    "expected": {
+      "can_open": false,
+      "target_exposure": "0%",
+      "max_new_positions": 0,
+      "single_position": "0%"
+    }
+  },
+  {
+    "module": "services/trading/g2_tickets.py",
+    "function": "_gen2_ticket_position_policy",
+    "args": [
+      "unknown"
+    ],
+    "expected": {
+      "can_open": false,
+      "target_exposure": "0%",
+      "max_new_positions": 0,
+      "single_position": "0%"
+    }
+  },
+  {
+    "module": "services/trading/g2_tickets.py",
+    "function": "_gen2_ticket_candidate",
+    "args": [
+      {
+        "code": "000001.SZ",
+        "name": "平安",
+        "entry_price": "12.3",
+        "pass_mainline1": true,
+        "pass_mainline2": false
+      },
+      1,
+      {
+        "can_open": true,
+        "target_exposure": "30%-60%",
+        "max_new_positions": 2,
+        "single_position": "20%-30%"
+      }
+    ],
+    "expected": {
+      "rank": 1,
+      "code": "000001.SZ",
+      "code6": "000001",
+      "name": "平安",
+      "strategy_source": "volume5",
+      "stage_label": null,
+      "confirm_datetime": null,
+      "entry_price": 12.3,
+      "buy_area": "12.30 附近，严禁明显高开/直线拉升后追价",
+      "suggested_position": "20%-30%",
+      "auto_order_allowed": false,
+      "requires_manual_approval": true,
+      "evidence": {
+        "v4_rank": null,
+        "v4_score": null,
+        "alpha191_volume5_score": null,
+        "alpha191_volume5_rank_in_day": null,
+        "source_family": null,
+        "signal_family": null,
+        "g2_v2_buy_logic": null,
+        "l3_rt_strong3_ratio": null,
+        "sector_score_bonus": null,
+        "pass_mainline1": true,
+        "pass_mainline2": false,
+        "pass_official_v2_live": null
+      },
+      "buy_conditions": [
+        "只在交易单允许开仓时执行",
+        "必须属于 G2 V4 g2_v2_complete 正式候选",
+        "盘中 15m/30m 确认信号不能撤销或过期",
+        "不追直线拉升，不在明显高开透支后临时加价"
+      ],
+      "invalid_conditions": [
+        "市场状态降为 PROBE/OFF",
+        "候选从 G2 V4 正式可买池消失",
+        "盘中跌破确认结构或买入理由失效",
+        "出现 ST、停牌、涨停买不到或明显流动性异常"
+      ],
+      "risk_rules": [
+        "单票浮亏 -4% 后禁止加仓",
+        "单票浮亏 -6% 必须处理",
+        "买入后 3 个交易日仍未按预期走强则降级复盘"
+      ],
+      "review_points": [
+        "T+1 表现",
+        "T+3 是否走强",
+        "T+5 盈亏与买点质量归因"
+      ],
+      "reason_text": null
+    }
+  },
+  {
+    "module": "services/trading/g2_tickets.py",
+    "function": "_gen2_ticket_markdown",
+    "args": [
+      {
+        "signal_date": "2026-09-09",
+        "formal_candidates": [
+          {
+            "rank": 1,
+            "code": "000001.SZ",
+            "code6": "000001",
+            "name": "平安",
+            "strategy_source": "volume5",
+            "stage_label": null,
+            "confirm_datetime": null,
+            "entry_price": 12.3,
+            "buy_area": "12.30 附近，严禁明显高开/直线拉升后追价",
+            "suggested_position": "20%-30%",
+            "auto_order_allowed": false,
+            "requires_manual_approval": true,
+            "evidence": {
+              "v4_rank": null,
+              "v4_score": null,
+              "alpha191_volume5_score": null,
+              "alpha191_volume5_rank_in_day": null,
+              "source_family": null,
+              "signal_family": null,
+              "g2_v2_buy_logic": null,
+              "l3_rt_strong3_ratio": null,
+              "sector_score_bonus": null,
+              "pass_mainline1": true,
+              "pass_mainline2": false,
+              "pass_official_v2_live": null
+            },
+            "buy_conditions": [
+              "只在交易单允许开仓时执行",
+              "必须属于 G2 V4 g2_v2_complete 正式候选",
+              "盘中 15m/30m 确认信号不能撤销或过期",
+              "不追直线拉升，不在明显高开透支后临时加价"
+            ],
+            "invalid_conditions": [
+              "市场状态降为 PROBE/OFF",
+              "候选从 G2 V4 正式可买池消失",
+              "盘中跌破确认结构或买入理由失效",
+              "出现 ST、停牌、涨停买不到或明显流动性异常"
+            ],
+            "risk_rules": [
+              "单票浮亏 -4% 后禁止加仓",
+              "单票浮亏 -6% 必须处理",
+              "买入后 3 个交易日仍未按预期走强则降级复盘"
+            ],
+            "review_points": [
+              "T+1 表现",
+              "T+3 是否走强",
+              "T+5 盈亏与买点质量归因"
+            ],
+            "reason_text": null
+          }
+        ]
+      }
+    ],
+    "expected": "# G2 V4 Daily Trade Ticket - 2026-09-09\n\n- 生成时间：\n- 策略口径：\n- 市场状态：UNKNOWN\n- 今日是否允许开仓：否\n- 允许总仓位：0%\n- 正式候选数：1\n- 自动下单：关闭，必须人工确认\n\n## 今日纪律\n\n## 正式候选\n\n### 1. 000001.SZ 平安\n- 来源：volume5\n- 买入区间：12.30 附近，严禁明显高开/直线拉升后追价\n- 建议仓位：20%-30%\n- 确认时间：-\n- V4：rank=None, score=None\n- 主线证据：mainline1=True, mainline2=False, l3=None\n- 理由：-\n- 失效条件：市场状态降为 PROBE/OFF；候选从 G2 V4 正式可买池消失；盘中跌破确认结构或买入理由失效；出现 ST、停牌、涨停买不到或明显流动性异常\n- 风控规则：单票浮亏 -4% 后禁止加仓；单票浮亏 -6% 必须处理；买入后 3 个交易日仍未按预期走强则降级复盘\n\n## 数据状态\n"
+  },
+  {
+    "module": "services/trading/broker_parser.py",
+    "function": "_parse_broker_trade_text",
+    "args": [
+      "成交日期\t成交时间\t证券代码\t证券名称\t操作\t成交数量\t成交价格\t成交金额\n20260909\t093001\t000001\t平安银行\t买入\t100\t12.3\t1230\n20260909\t093001\t000001\t平安银行\t买入\t100\t12.3\t1230"
+    ],
+    "expected": {
+      "ok": true,
+      "rows": [
+        {
+          "trade_time": "2026-09-09 09:30:01",
+          "trade_date": "2026-09-09",
+          "side": "BUY",
+          "side_label": "买入",
+          "code": "000001",
+          "name": "平安银行",
+          "shares": 100,
+          "price": 12.3,
+          "amount": 1230.0,
+          "remark": "",
+          "source": "ths_history_trade"
+        }
+      ],
+      "parsed_count": 1,
+      "raw_line_count": 3
+    }
+  },
+  {
+    "module": "services/trading/broker_parser.py",
+    "function": "_parse_broker_trade_text",
+    "args": [
+      "无表头"
+    ],
+    "expected": {
+      "ok": false,
+      "message": "未识别到同花顺历史成交表头",
+      "rows": [],
+      "raw_line_count": 1
+    }
+  },
+  {
+    "module": "services/trading/broker_parser.py",
+    "function": "_parse_qmtmini_trade_side",
+    "args": [
+      23
+    ],
+    "expected": "BUY"
+  },
+  {
+    "module": "services/trading/broker_parser.py",
+    "function": "_parse_qmtmini_trade_side",
+    "args": [
+      "未知"
+    ],
+    "expected": ""
+  },
+  {
+    "module": "services/trading/broker_parser.py",
+    "function": "_normalize_qmtmini_trade_time",
+    "args": [
+      "20260909143000"
+    ],
+    "expected": "2026-09-09 14:30:00"
+  }
+]

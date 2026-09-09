@@ -278,7 +278,7 @@
 </template>
 
 <script setup>
-import * as echarts from 'echarts'
+import * as echarts from '@/utils/charts'
 import { DocumentCopy, Edit, Refresh, Upload } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'

@@ -40,6 +40,43 @@ from utils.paths import report_path, runtime_path
 from strategies.contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata
 
 
+from services.g3.sector_opportunities import (
+    _to_float_or_none,
+    _mainwave_sector_state,
+    _build_mainwave_sector_opportunities,
+    _build_mainwave_sector_opportunities_v2,
+)
+from services.g3.monitor_state import (
+    _default_monitor_state,
+    _default_exit_monitor_state,
+    _default_daily_trend_exit_monitor_state,
+    _default_observation_scheduler_state,
+    _default_broker_sync_state,
+    normalize_monitor_state,
+    normalize_exit_monitor_state,
+    normalize_daily_trend_exit_monitor_state,
+    normalize_observation_scheduler_state,
+    normalize_broker_sync_state,
+    _coerce_scheduler_minutes,
+    save_monitor_state,
+)
+from services.operations.result_compaction import (
+    _compact_monitor_value,
+    _compact_monitor_last_result,
+)
+from services.trading.broker_parser import (
+    _qmtmini_position_to_broker_holding,
+    _normalize_code6,
+    _split_table_row,
+    _parse_broker_number,
+    _normalize_trade_datetime,
+    _parse_trade_side,
+    _trade_signature,
+    _parse_broker_trade_text,
+    _normalize_qmtmini_trade_time,
+    _parse_qmtmini_trade_side,
+)
+
 router = APIRouter(prefix="/gen3-state-alpha", tags=["G3 State Alpha"])
 logger = get_logger("gen3_state_alpha")
 
@@ -507,18 +544,6 @@ def _historical_trades_path() -> Path:
     if HISTORICAL_TRADES_WITH_OPEN_PATH.exists():
         return HISTORICAL_TRADES_WITH_OPEN_PATH
     return HISTORICAL_TRADES_BASE_PATH
-
-
-def _to_float_or_none(value: Any) -> float | None:
-    try:
-        if value is None or value == "":
-            return None
-        number = float(value)
-        if pd.isna(number):
-            return None
-        return number
-    except Exception:
-        return None
 
 
 def _to_int_or_zero(value: Any) -> int:
@@ -1048,121 +1073,6 @@ def _build_mainwave_watch_candidates(limit: int) -> list[dict[str, Any]]:
         reverse=True,
     )
     return rows[:limit]
-
-
-def _mainwave_sector_state(avg_diffusion: float, max_score: float, candidate_count: int, recommended_count: int) -> tuple[str, str]:
-    if avg_diffusion >= 85 and max_score >= 120 and (candidate_count >= 2 or recommended_count > 0):
-        return "strong_mainwave", "强主升机会"
-    if avg_diffusion >= 75 and max_score >= 118:
-        return "important_industry", "重点行业机会"
-    return "watch", "观察机会"
-
-
-def _build_mainwave_sector_opportunities(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for item in candidates:
-        groups.setdefault(str(item.get("sector_name") or "未识别行业"), []).append(item)
-    out: list[dict[str, Any]] = []
-    for sector, rows in groups.items():
-        scores = [_to_float_or_none(item.get("wave_style_score")) for item in rows]
-        scores = [value for value in scores if value is not None]
-        diffusions = [_to_float_or_none(item.get("sector_diffusion_score")) for item in rows]
-        diffusions = [value for value in diffusions if value is not None]
-        max_score = max(scores) if scores else 0.0
-        avg_score = sum(scores) / len(scores) if scores else 0.0
-        avg_diffusion = sum(diffusions) / len(diffusions) if diffusions else 0.0
-        recommended = [item for item in rows if item.get("is_recommended")]
-        m30_ok = [item for item in rows if item.get("m30_confirmed") or str(item.get("m30_status") or "") == "ok"]
-        state, state_label = _mainwave_sector_state(avg_diffusion, max_score, len(rows), len(recommended))
-        top_rows = sorted(rows, key=lambda item: _to_float_or_none(item.get("wave_style_score")) or 0, reverse=True)[:5]
-        templates = sorted({str(item.get("template_label") or "") for item in rows if item.get("template_label")})
-        sector_code = next(
-            (
-                str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
-                for item in rows
-                if str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
-            ),
-            "",
-        )
-        out.append(
-            {
-                "sector_name": sector,
-                "sector_code": sector_code,
-                "state": state,
-                "state_label": state_label,
-                "candidate_count": len(rows),
-                "recommended_count": len(recommended),
-                "m30_ok_count": len(m30_ok),
-                "max_wave_style_score": max_score,
-                "avg_wave_style_score": avg_score,
-                "avg_sector_diffusion_score": avg_diffusion,
-                "top_candidates": top_rows,
-                "top_candidate_names": " / ".join([str(item.get("name") or item.get("code") or "") for item in top_rows[:3]]),
-                "template_labels": templates,
-                "rank_score": avg_diffusion * 0.55 + max_score * 0.35 + min(len(rows), 8) * 2.0 + len(recommended) * 5.0,
-            }
-        )
-    out.sort(key=lambda item: _to_float_or_none(item.get("rank_score")) or 0, reverse=True)
-    return out
-
-
-def _build_mainwave_sector_opportunities_v2(candidates: list[dict[str, Any]], watch_candidates: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for item in candidates:
-        groups.setdefault(str(item.get("sector_name") or ""), []).append(item)
-    watch_groups: dict[str, list[dict[str, Any]]] = {}
-    for item in watch_candidates or []:
-        watch_groups.setdefault(str(item.get("sector_name") or ""), []).append(item)
-    for sector in watch_groups:
-        groups.setdefault(sector, [])
-
-    out: list[dict[str, Any]] = []
-    for sector, rows in groups.items():
-        watch_rows = watch_groups.get(sector, [])
-        scoring_rows = rows or watch_rows
-        scores = [_to_float_or_none(item.get("wave_style_score")) for item in scoring_rows]
-        scores = [value for value in scores if value is not None]
-        diffusions = [_to_float_or_none(item.get("sector_diffusion_score")) for item in scoring_rows]
-        diffusions = [value for value in diffusions if value is not None]
-        max_score = max(scores) if scores else 0.0
-        avg_score = sum(scores) / len(scores) if scores else 0.0
-        avg_diffusion = sum(diffusions) / len(diffusions) if diffusions else 0.0
-        recommended = [item for item in rows if item.get("is_recommended")]
-        m30_ok = [item for item in rows if item.get("m30_confirmed") or str(item.get("m30_status") or "") == "ok"]
-        state, state_label = _mainwave_sector_state(avg_diffusion, max_score, len(rows), len(recommended))
-        if not rows and watch_rows:
-            state, state_label = "sector_watch", "板块观察"
-        top_rows = sorted(scoring_rows, key=lambda item: _to_float_or_none(item.get("wave_style_score")) or 0, reverse=True)[:5]
-        templates = sorted({str(item.get("template_label") or "") for item in scoring_rows if item.get("template_label")})
-        sector_code = next(
-            (
-                str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
-                for item in scoring_rows
-                if str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
-            ),
-            "",
-        )
-        out.append(
-            {
-                "sector_name": sector,
-                "sector_code": sector_code,
-                "state": state,
-                "state_label": state_label,
-                "candidate_count": len(rows),
-                "watch_candidate_count": len(watch_rows),
-                "recommended_count": len(recommended),
-                "m30_ok_count": len(m30_ok),
-                "max_wave_style_score": max_score,
-                "avg_wave_style_score": avg_score,
-                "avg_sector_diffusion_score": avg_diffusion,
-                "top_candidates": top_rows,
-                "top_candidate_names": " / ".join([str(item.get("name") or item.get("code") or "") for item in top_rows[:3]]),
-                "template_labels": templates,
-                "rank_score": avg_diffusion * 0.55 + max_score * 0.35 + min(len(rows), 8) * 2.0 + min(len(watch_rows), 8) * 1.2 + len(recommended) * 5.0,
-            }
-        )
-    out.sort(key=lambda item: _to_float_or_none(item.get("rank_score")) or 0, reverse=True)
-    return out
 
 
 def _quote_sql_text(value: Any) -> str:
@@ -2031,293 +1941,44 @@ def _read_backtest_snapshot() -> dict[str, Any]:
     }
 
 
-def _default_monitor_state() -> dict[str, Any]:
-    return {
-        "enabled": True,
-        "interval_seconds": 120,
-        "trading_hours_only": True,
-        "email_enabled": True,
-        "heartbeat_enabled": False,
-        "heartbeat_minutes": 30,
-        "recipient_email": "",
-        "run_current_refresh": True,
-        "paper_entry_enabled": True,
-        "last_run_at": None,
-        "last_success_at": None,
-        "last_error": None,
-        "last_result": None,
-        "last_email_sent_at": None,
-        "last_heartbeat_sent_at": None,
-        "last_blocker_alert_at": None,
-        "last_refresh_task_id": None,
-        "last_alert_keys": {},
-        "last_email_error": None,
-    }
-
-
 def _load_monitor_state() -> dict[str, Any]:
-    state = _read_json(MONITOR_STATE_PATH)
-    base = _default_monitor_state()
-    if isinstance(state, dict):
-        base.update(state)
-    base["enabled"] = bool(base.get("enabled"))
-    base["interval_seconds"] = max(120, int(base.get("interval_seconds") or 120))
-    base["trading_hours_only"] = bool(base.get("trading_hours_only", True))
-    base["email_enabled"] = bool(base.get("email_enabled", True))
-    # Notifications are event-driven: normal operation does not send email.
-    base["heartbeat_enabled"] = False
-    base["heartbeat_minutes"] = max(30, int(base.get("heartbeat_minutes") or 30))
-    base["recipient_email"] = str(base.get("recipient_email") or "").strip()
-    base["run_current_refresh"] = bool(base.get("run_current_refresh", True))
-    base["paper_entry_enabled"] = bool(base.get("paper_entry_enabled", True))
-    if not isinstance(base.get("last_alert_keys"), dict):
-        base["last_alert_keys"] = {}
-    return base
-
-
-def _compact_monitor_value(value: Any, depth: int = 0) -> Any:
-    if depth >= 3:
-        if isinstance(value, dict):
-            return {"omitted": True, "type": "dict", "keys": list(value.keys())[:20]}
-        if isinstance(value, list):
-            return {"omitted": True, "type": "list", "count": len(value)}
-        if isinstance(value, str) and len(value) > 1000:
-            return value[:1000] + "...[truncated]"
-        return value
-    if isinstance(value, dict):
-        return {
-            str(key): _compact_monitor_value(item, depth + 1)
-            for key, item in list(value.items())[:50]
-        }
-    if isinstance(value, list):
-        return [_compact_monitor_value(item, depth + 1) for item in value[:20]]
-    if isinstance(value, str) and len(value) > 1000:
-        return value[:1000] + "...[truncated]"
-    return value
-
-
-def _compact_monitor_last_result(result: Any) -> Any:
-    if not isinstance(result, dict):
-        return _compact_monitor_value(result)
-    keep_keys = [
-        "ok",
-        "status",
-        "skipped",
-        "reason",
-        "message",
-        "checked_at",
-        "started_at",
-        "finished_at",
-        "entry_date",
-        "decision_date",
-        "diagnosis_code",
-        "selected_route",
-        "task_id",
-        "source",
-        "duration_seconds",
-        "error",
-        "blockers",
-        "open_holding_count",
-        "exit_candidate_count",
-        "triggered_exit_count",
-        "skipped_count",
-        "saved_exits",
-        "skipped",
-        "pipeline_checks",
-        "last_result",
-    ]
-    compacted = {
-        key: _compact_monitor_value(result.get(key))
-        for key in keep_keys
-        if key in result
-    }
-    compacted["compacted"] = True
-    return compacted
+    return normalize_monitor_state(_read_json(MONITOR_STATE_PATH))
 
 
 def _save_monitor_state(state: dict[str, Any]) -> None:
-    payload = dict(state)
-    if "last_result" in payload:
-        payload["last_result"] = _compact_monitor_last_result(payload.get("last_result"))
-    _write_json(MONITOR_STATE_PATH, payload)
-
-
-def _default_exit_monitor_state() -> dict[str, Any]:
-    return {
-        "enabled": True,
-        "interval_seconds": 120,
-        "trading_hours_only": True,
-        "paper_exit_enabled": True,
-        "update_ledger_enabled": True,
-        "last_run_at": None,
-        "last_success_at": None,
-        "last_error": None,
-        "last_result": None,
-    }
+    save_monitor_state(MONITOR_STATE_PATH,state,_write_json,compact=True)
 
 
 def _load_exit_monitor_state() -> dict[str, Any]:
-    state = _read_json(EXIT_MONITOR_STATE_PATH)
-    base = _default_exit_monitor_state()
-    if isinstance(state, dict):
-        base.update(state)
-    base["enabled"] = bool(base.get("enabled"))
-    base["interval_seconds"] = max(120, int(base.get("interval_seconds") or 120))
-    base["trading_hours_only"] = bool(base.get("trading_hours_only", True))
-    base["paper_exit_enabled"] = bool(base.get("paper_exit_enabled", True))
-    base["update_ledger_enabled"] = bool(base.get("update_ledger_enabled", True))
-    return base
+    return normalize_exit_monitor_state(_read_json(EXIT_MONITOR_STATE_PATH))
 
 
 def _save_exit_monitor_state(state: dict[str, Any]) -> None:
-    payload = dict(state)
-    if "last_result" in payload:
-        payload["last_result"] = _compact_monitor_last_result(payload.get("last_result"))
-    _write_json(EXIT_MONITOR_STATE_PATH, payload)
-
-
-def _default_daily_trend_exit_monitor_state() -> dict[str, Any]:
-    return {
-        "enabled": True,
-        "interval_seconds": 300,
-        "trading_hours_only": True,
-        "lookback_days": 180,
-        "pivot_window": 3,
-        "min_pivot_separation": 5,
-        "break_buffer_pct": 0.0,
-        "email_enabled": True,
-        "alerted_signal_keys": [],
-        "last_run_at": None,
-        "last_success_at": None,
-        "last_error": None,
-        "last_result": None,
-    }
+    save_monitor_state(EXIT_MONITOR_STATE_PATH,state,_write_json,compact=True)
 
 
 def _load_daily_trend_exit_monitor_state() -> dict[str, Any]:
-    state = _read_json(DAILY_TREND_EXIT_MONITOR_STATE_PATH)
-    base = _default_daily_trend_exit_monitor_state()
-    if isinstance(state, dict):
-        base.update(state)
-    base["enabled"] = bool(base.get("enabled"))
-    base["interval_seconds"] = min(1800, max(300, int(base.get("interval_seconds") or 300)))
-    base["trading_hours_only"] = bool(base.get("trading_hours_only", True))
-    base["hour"] = min(23, max(0, int(base.get("hour") or 15)))
-    base["minute"] = min(59, max(0, int(base.get("minute") or 10)))
-    base["lookback_days"] = min(500, max(60, int(base.get("lookback_days") or 180)))
-    base["pivot_window"] = min(10, max(1, int(base.get("pivot_window") or 3)))
-    base["min_pivot_separation"] = min(30, max(1, int(base.get("min_pivot_separation") or 5)))
-    base["break_buffer_pct"] = min(0.05, max(0.0, float(base.get("break_buffer_pct") or 0.0)))
-    base["email_enabled"] = bool(base.get("email_enabled", True))
-    keys = base.get("alerted_signal_keys")
-    base["alerted_signal_keys"] = [str(item) for item in keys[-500:]] if isinstance(keys, list) else []
-    return base
+    return normalize_daily_trend_exit_monitor_state(_read_json(DAILY_TREND_EXIT_MONITOR_STATE_PATH))
 
 
 def _save_daily_trend_exit_monitor_state(state: dict[str, Any]) -> None:
-    payload = dict(state)
-    if "last_result" in payload:
-        payload["last_result"] = _compact_monitor_last_result(payload.get("last_result"))
-    _write_json(DAILY_TREND_EXIT_MONITOR_STATE_PATH, payload)
-
-
-def _coerce_scheduler_minutes(value: Any, default: list[int]) -> list[int]:
-    if value in (None, ""):
-        items = default
-    elif isinstance(value, str):
-        items = [part.strip() for part in value.split(",") if part.strip()]
-    elif isinstance(value, (list, tuple, set)):
-        items = list(value)
-    else:
-        items = [value]
-    minutes: list[int] = []
-    for item in items:
-        try:
-            minute = int(item)
-        except Exception:
-            continue
-        if 0 <= minute <= 59 and minute not in minutes:
-            minutes.append(minute)
-    return sorted(minutes)
-
-
-def _default_observation_scheduler_state() -> dict[str, Any]:
-    return {
-        "enabled": True,
-        "hour": 15,
-        "minute": 40,
-        "retry_hour": 10,
-        "retry_minutes": [1, 6, 11, 16, 31, 36],
-        "trading_days_only": True,
-        "run_smoke": True,
-        "refresh_smoke": True,
-        "auto_repair_minute30": True,
-        "last_run_at": None,
-        "last_success_at": None,
-        "last_error": None,
-        "last_result": None,
-    }
+    save_monitor_state(DAILY_TREND_EXIT_MONITOR_STATE_PATH,state,_write_json,compact=True)
 
 
 def _load_observation_scheduler_state() -> dict[str, Any]:
-    state = _read_json(OBSERVATION_STATE_PATH)
-    base = _default_observation_scheduler_state()
-    if isinstance(state, dict):
-        base.update(state)
-    base["enabled"] = bool(base.get("enabled"))
-    base["hour"] = min(23, max(0, int(base.get("hour") or 15)))
-    base["minute"] = min(59, max(0, int(base.get("minute") or 40)))
-    base["retry_hour"] = min(23, max(0, int(base.get("retry_hour") or 10)))
-    base["retry_minutes"] = _coerce_scheduler_minutes(base.get("retry_minutes"), [1, 6, 11, 16, 31, 36])
-    base["trading_days_only"] = bool(base.get("trading_days_only", True))
-    base["run_smoke"] = bool(base.get("run_smoke", True))
-    base["refresh_smoke"] = bool(base.get("refresh_smoke", True))
-    base["auto_repair_minute30"] = bool(base.get("auto_repair_minute30", True))
-    return base
+    return normalize_observation_scheduler_state(_read_json(OBSERVATION_STATE_PATH))
 
 
 def _save_observation_scheduler_state(state: dict[str, Any]) -> None:
-    _write_json(OBSERVATION_STATE_PATH, state)
-
-
-def _default_broker_sync_state() -> dict[str, Any]:
-    return {
-        "enabled": True,
-        "interval_seconds": None,
-        "trading_hours_only": False,
-        "trading_days_only": True,
-        "hour": 17,
-        "minute": 30,
-        "sync_holdings": True,
-        "sync_trades": True,
-        "last_run_at": None,
-        "last_success_at": None,
-        "last_holdings_success_at": None,
-        "last_trades_success_at": None,
-        "last_error": None,
-        "last_result": None,
-    }
+    save_monitor_state(OBSERVATION_STATE_PATH,state,_write_json,compact=False)
 
 
 def _load_broker_sync_state() -> dict[str, Any]:
-    state = _read_json(BROKER_SYNC_STATE_PATH)
-    base = _default_broker_sync_state()
-    if isinstance(state, dict):
-        base.update(state)
-    base["enabled"] = bool(base.get("enabled"))
-    interval = base.get("interval_seconds")
-    base["interval_seconds"] = max(60, int(interval)) if interval not in (None, "") else None
-    base["trading_hours_only"] = bool(base.get("trading_hours_only", False))
-    base["trading_days_only"] = bool(base.get("trading_days_only", True))
-    base["hour"] = min(23, max(0, int(base.get("hour") or 17)))
-    base["minute"] = min(59, max(0, int(base.get("minute") if base.get("minute") is not None else 30)))
-    base["sync_holdings"] = bool(base.get("sync_holdings", True))
-    base["sync_trades"] = bool(base.get("sync_trades", True))
-    return base
+    return normalize_broker_sync_state(_read_json(BROKER_SYNC_STATE_PATH))
 
 
 def _save_broker_sync_state(state: dict[str, Any]) -> None:
-    _write_json(BROKER_SYNC_STATE_PATH, state)
+    save_monitor_state(BROKER_SYNC_STATE_PATH,state,_write_json,compact=False)
 
 
 def _load_monitor_event_rows_with_repair() -> list[dict[str, Any]]:
@@ -9984,147 +9645,6 @@ def _wrap_guardrails(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _normalize_code6(value: Any) -> str:
-    raw = str(value or "").strip().upper()
-    hit = re.search(r"\d{6}", raw)
-    return hit.group(0) if hit else ""
-
-
-def _split_table_row(line: str) -> list[str]:
-    raw = str(line or "").rstrip("\r\n")
-    if not raw.strip():
-        return []
-    if "\t" in raw:
-        return [part.strip() for part in raw.split("\t")]
-    return [part.strip() for part in re.split(r"\s{2,}", raw.strip()) if part.strip()]
-
-
-def _parse_broker_number(value: Any) -> float | None:
-    if value is None:
-        return None
-    text = str(value).replace(",", "").strip()
-    if not text:
-        return None
-    match = re.search(r"-?\d+(?:\.\d+)?", text)
-    if not match:
-        return None
-    try:
-        return float(match.group(0))
-    except Exception:
-        return None
-
-
-def _normalize_trade_datetime(date_text: Any, time_text: Any = "") -> str | None:
-    d = str(date_text or "").strip()
-    t = str(time_text or "").strip()
-    if not d:
-        return None
-    digits = re.sub(r"\D", "", d)
-    if len(digits) >= 8:
-        d = f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    try:
-        if t:
-            t_digits = re.sub(r"\D", "", t)
-            if len(t_digits) >= 6:
-                t = f"{t_digits[:2]}:{t_digits[2:4]}:{t_digits[4:6]}"
-            elif len(t_digits) >= 4:
-                t = f"{t_digits[:2]}:{t_digits[2:4]}:00"
-            return pd.Timestamp(f"{d} {t}").strftime("%Y-%m-%d %H:%M:%S")
-        return pd.Timestamp(d).strftime("%Y-%m-%d 00:00:00")
-    except Exception:
-        return None
-
-
-def _parse_trade_side(action: Any) -> str:
-    text = str(action or "").strip().lower()
-    if "买" in text or "buy" in text:
-        return "BUY"
-    if "卖" in text or "sell" in text:
-        return "SELL"
-    return ""
-
-
-def _trade_signature(row: dict[str, Any]) -> str:
-    return "|".join(
-        [
-            str(row.get("trade_time") or ""),
-            str(row.get("side") or ""),
-            str(row.get("code") or ""),
-            str(row.get("shares") or ""),
-            str(row.get("price") or ""),
-        ]
-    )
-
-
-def _parse_broker_trade_text(raw_text: str) -> dict[str, Any]:
-    lines = [line.rstrip("\r") for line in str(raw_text or "").splitlines() if str(line).strip()]
-    rows = [_split_table_row(line) for line in lines]
-    header_idx = -1
-    headers: list[str] = []
-    for idx, cells in enumerate(rows):
-        compact = "|".join(cells)
-        if ("成交" in compact and "日期" in compact and "代码" in compact and "操作" in compact):
-            header_idx = idx
-            headers = cells
-            break
-    if header_idx < 0:
-        return {"ok": False, "message": "未识别到同花顺历史成交表头", "rows": [], "raw_line_count": len(lines)}
-
-    def idx_of(*names: str) -> int:
-        for i, header in enumerate(headers):
-            text = str(header or "").replace(" ", "")
-            if any(name in text for name in names):
-                return i
-        return -1
-
-    date_idx = idx_of("成交日期", "日期")
-    time_idx = idx_of("成交时间", "时间")
-    code_idx = idx_of("证券代码", "股票代码", "代码")
-    name_idx = idx_of("证券名称", "股票名称", "名称")
-    action_idx = idx_of("操作", "买卖")
-    shares_idx = idx_of("成交数量", "数量")
-    price_idx = idx_of("成交均价", "成交价格", "价格", "均价")
-    amount_idx = idx_of("成交金额", "金额")
-    remark_idx = idx_of("备注")
-
-    parsed: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for cells in rows[header_idx + 1 :]:
-        if not cells:
-            continue
-        code = _normalize_code6(cells[code_idx] if 0 <= code_idx < len(cells) else "")
-        trade_time = _normalize_trade_datetime(
-            cells[date_idx] if 0 <= date_idx < len(cells) else "",
-            cells[time_idx] if 0 <= time_idx < len(cells) else "",
-        )
-        side = _parse_trade_side(cells[action_idx] if 0 <= action_idx < len(cells) else "")
-        shares = int(abs(_parse_broker_number(cells[shares_idx] if 0 <= shares_idx < len(cells) else "") or 0))
-        price = _parse_broker_number(cells[price_idx] if 0 <= price_idx < len(cells) else "")
-        amount = _parse_broker_number(cells[amount_idx] if 0 <= amount_idx < len(cells) else "")
-        if not code or not trade_time or side not in {"BUY", "SELL"} or shares <= 0 or not price or price <= 0:
-            continue
-        row = {
-            "trade_time": trade_time,
-            "trade_date": trade_time[:10],
-            "side": side,
-            "side_label": "买入" if side == "BUY" else "卖出",
-            "code": code,
-            "name": str(cells[name_idx]).strip() if 0 <= name_idx < len(cells) else "",
-            "shares": shares,
-            "price": round(float(price), 3),
-            "amount": round(float(amount), 3) if amount is not None else round(float(price) * shares, 3),
-            "remark": str(cells[remark_idx]).strip() if 0 <= remark_idx < len(cells) else "",
-            "source": "ths_history_trade",
-        }
-        sig = _trade_signature(row)
-        if sig in seen:
-            continue
-        seen.add(sig)
-        parsed.append(row)
-    parsed.sort(key=lambda item: str(item.get("trade_time") or ""), reverse=True)
-    return {"ok": True, "rows": parsed, "parsed_count": len(parsed), "raw_line_count": len(lines)}
-
-
 def _load_broker_state() -> dict[str, Any]:
     state = _read_json(BROKER_STATE_PATH)
     if not state:
@@ -14777,37 +14297,6 @@ def _read_ths_trades_via_gateway() -> dict[str, Any]:
     return body
 
 
-def _qmtmini_position_to_broker_holding(row: dict[str, Any]) -> dict[str, Any]:
-    code = str(row.get("stock_code") or row.get("code") or "").strip().upper()
-    code6 = _normalize_code6(code)
-    shares = int(_parse_broker_number(row.get("volume")) or 0)
-    available_shares = int(_parse_broker_number(row.get("can_use_volume")) or 0)
-    cost_price = (
-        _parse_broker_number(row.get("avg_price"))
-        or _parse_broker_number(row.get("cost_price"))
-        or _parse_broker_number(row.get("open_price"))
-    )
-    current_price = _parse_broker_number(row.get("last_price"))
-    market_value = _parse_broker_number(row.get("market_value"))
-    if current_price is None and market_value is not None and shares > 0:
-        current_price = market_value / shares
-    return {
-        "code": code6,
-        "code_raw": code,
-        "name": row.get("stock_name") or code6,
-        "shares": shares,
-        "available_shares": available_shares,
-        "cost_price": cost_price,
-        "current_price": current_price,
-        "market_value": market_value,
-        "position_cost": _parse_broker_number(row.get("position_cost")),
-        "route": "broker_real_position",
-        "route_label": "QMT Mini real position",
-        "trade_status": "broker_open",
-        "management_action": "check_exit_contract",
-        "exit_contract": "QMT Mini read-only position snapshot; managed by G3 12% hard stop, 12% half take-profit, and remaining-position protection.",
-        "source": "qmtmini_readonly_snapshot",
-    }
 
 
 def _read_qmtmini_capital_holdings() -> dict[str, Any]:
@@ -14876,32 +14365,6 @@ def _read_qmtmini_capital_holdings() -> dict[str, Any]:
             "trades_count": snapshot.get("trades_count"),
         },
     }
-
-
-def _normalize_qmtmini_trade_time(value: Any) -> str | None:
-    text = str(value or "").strip()
-    digits = re.sub(r"\D", "", text)
-    try:
-        if len(digits) >= 14:
-            return pd.Timestamp(
-                f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:{digits[12:14]}"
-            ).strftime("%Y-%m-%d %H:%M:%S")
-        if len(digits) == 8:
-            return pd.Timestamp(f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}").strftime("%Y-%m-%d 00:00:00")
-        if text:
-            return pd.Timestamp(text).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return None
-    return None
-
-
-def _parse_qmtmini_trade_side(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    if text in {"23", "stock_buy"} or "buy" in text or "买" in text:
-        return "BUY"
-    if text in {"24", "stock_sell"} or "sell" in text or "卖" in text:
-        return "SELL"
-    return _parse_trade_side(value)
 
 
 def _read_qmtmini_trades() -> dict[str, Any]:
