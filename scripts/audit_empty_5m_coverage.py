@@ -15,7 +15,8 @@ def main():
  c=clickhouse_client();
  try:
   cal=f"SELECT trade_date FROM trade_calendar WHERE is_trading=1 AND trade_date>=toDate('{start}') AND trade_date<toDate('{end}')"
-  q=f"SELECT d, count() FROM (SELECT t.trade_date d,s.code FROM ({cal}) AS t CROSS JOIN (SELECT code,list_date,delist_date FROM stocks WHERE type='stock' AND list_date IS NOT NULL) AS s WHERE s.list_date<=t.trade_date AND (s.delist_date IS NULL OR s.delist_date>=t.trade_date)) AS y WHERE NOT EXISTS (SELECT 1 FROM kline_minute_5 WHERE code=y.code AND toDate(datetime)=y.d) GROUP BY d ORDER BY d"
+  present=f"SELECT code,toDate(datetime) d FROM kline_minute_5 WHERE toYYYYMM(datetime)={a.month} GROUP BY code,d"
+  q=f"SELECT y.d,count() FROM (SELECT t.trade_date d,s.code FROM ({cal}) AS t CROSS JOIN (SELECT code,list_date,delist_date FROM stocks WHERE type='stock' AND list_date IS NOT NULL) AS s WHERE s.list_date<=t.trade_date AND (s.delist_date IS NULL OR s.delist_date>=t.trade_date)) AS y LEFT JOIN ({present}) AS k ON y.code=k.code AND y.d=k.d WHERE k.code IS NULL GROUP BY y.d ORDER BY y.d"
   empty=c.query(q,settings={'max_threads':1,'max_memory_usage':2000000000}).result_rows
   extra=[]
   for n in (15,30,60):
