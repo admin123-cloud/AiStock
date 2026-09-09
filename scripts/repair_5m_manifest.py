@@ -55,20 +55,34 @@ def prepare_day(source, existing):
             raise ValueError('invalid_source_values')
         if values[1]<max(values[0],values[3]) or values[2]>min(values[0],values[3]):
             raise ValueError('invalid_source_ohlc')
-    for dt in overlap:
-        for i in (2,3,4,5):
-            if old[dt][i] is None or not math.isclose(float(src[dt][i]),float(old[dt][i]),rel_tol=1e-5,abs_tol=0.0001):
-                raise ValueError('overlap_price_conflict')
-        if old[dt][7] is None or not math.isclose(float(src[dt][7]),float(old[dt][7]),rel_tol=0.0005,abs_tol=2):
-            raise ValueError('overlap_amount_conflict')
+    # The legacy full-tick aggregator carried prior closes into OHLC and rounded
+    # amounts to hundreds. Native QMT includes opening-auction trades. Preserve
+    # every old key; calibrate missing rows using close/time and non-opening units.
+    if any(old[dt][5] is None or not math.isclose(float(src[dt][5]),float(old[dt][5]),rel_tol=.005,abs_tol=.01) for dt in overlap):
+        raise ValueError('overlap_price_conflict')
+    close_matches=sum(math.isclose(float(src[dt][5]),float(old[dt][5]),rel_tol=1e-5,abs_tol=.0001) for dt in overlap)
+    if close_matches/len(overlap)<.9:raise ValueError('overlap_price_conflict')
+    calibration=[dt for dt in overlap if dt.strftime('%H:%M')!='09:35']
+    if len(calibration)<6:raise ValueError('insufficient_overlap_for_unit_validation')
+    if any(old[dt][7] is None or not math.isclose(float(src[dt][7]),float(old[dt][7]),rel_tol=.05,abs_tol=100) for dt in calibration):
+        raise ValueError('overlap_amount_conflict')
+    amount_matches=sum(math.isclose(float(src[dt][7]),float(old[dt][7]),rel_tol=.001,abs_tol=100) for dt in calibration)
+    if amount_matches/len(calibration)<.8:raise ValueError('overlap_amount_conflict')
     factors=[factor for factor in (1.,100.,.01) if all(old[dt][6] is not None and
-             math.isclose(float(src[dt][6])*factor,float(old[dt][6]),rel_tol=.005,abs_tol=1) for dt in overlap)]
+             math.isclose(float(src[dt][6])*factor,float(old[dt][6]),rel_tol=.05,abs_tol=1) for dt in calibration)
+             and sum(math.isclose(float(src[dt][6])*factor,float(old[dt][6]),rel_tol=.005,abs_tol=1) for dt in calibration)/len(calibration)>=.8]
     if len(factors)!=1:
         raise ValueError('ambiguous_or_conflicting_volume_units')
+    if factors[0] != 1:
+        raise ValueError('legacy_volume_unit_conflict; canonical minute volume is QMT lots')
     missing=[]
     for dt in sorted(src.keys()-old.keys()):
         row=list(src[dt]);row[1]=dt.replace(tzinfo=BUSINESS_TZ);row[6]=int(round(float(row[6])*factors[0]));missing.append(row)
-    return missing,{'overlap':len(overlap),'volume_factor':factors[0],'missing':len(missing)}
+    ohlc_differences=sum(any(old[dt][i] is None or not math.isclose(float(src[dt][i]),float(old[dt][i]),rel_tol=1e-5,abs_tol=.0001) for i in (2,3,4)) for dt in overlap)
+    return missing,{'overlap':len(overlap),'volume_factor':factors[0],'missing':len(missing),
+                    'close_matches':close_matches,'amount_unit_matches':amount_matches,
+                    'existing_ohlc_differences_retained':ohlc_differences,
+                    'validation':'missing_keys_only; existing OHLC not reclassified as canonical'}
 
 
 def load_days(path):
@@ -81,6 +95,23 @@ def load_days(path):
         if not re.fullmatch(r'\d{6}\.(SH|SZ|BJ)',code):raise ValueError('invalid_security_code')
         days.add((day.isoformat(),code))
     return sorted(days)
+
+
+def validate_evidence(evidence, staged):
+    reproduced=[]
+    identities=set()
+    for item in evidence:
+        identity=(item['day'],item['code'])
+        if identity in identities:raise ValueError('duplicate_source_evidence')
+        identities.add(identity)
+        missing,proof=prepare_day(item['source'],item['existing'])
+        if any(item.get(key)!=value for key,value in proof.items()):
+            raise ValueError('source_calibration_proof_changed')
+        if any(r[0]!=item['code'] or timestamp(r[1]).date().isoformat()!=item['day'] for r in item['source']):
+            raise ValueError('source_evidence_identity_mismatch')
+        reproduced.extend(missing)
+    if len(reproduced)!=len(staged) or digest(reproduced)!=digest(staged):
+        raise ValueError('source_evidence_does_not_reproduce_stage')
 
 
 def read_day(client, day, codes):
@@ -133,7 +164,9 @@ def stage(args, client):
         client.insert(table,[r+[now,_stable_id('5m',r[0],timestamp(r[1]))] for r in all_missing],column_names=FIELDS+['created_at','id'])
     stored=client.query(f"SELECT {','.join(FIELDS)} FROM {table} FINAL ORDER BY code,datetime").result_rows
     if len(stored)!=len(all_missing) or digest(stored)!=digest(all_missing):raise RuntimeError('stage_readback_mismatch')
-    report.update(state='staged',rows=len(stored),sha256=digest(stored),completed_at=datetime.now(BUSINESS_TZ).isoformat())
+    report.update(state='staged',rows=len(stored),sha256=digest(stored),
+                  evidence_sha256=hashlib.sha256((out/'source-evidence.jsonl').read_bytes()).hexdigest(),
+                  volume_unit='lots',completed_at=datetime.now(BUSINESS_TZ).isoformat())
     write_snapshot(report,out/'stage.json')
     print(json.dumps({'stage_report':str(out/'stage.json'),'rows':len(stored),'blocked':len(report['blocked'])}))
 
@@ -146,12 +179,25 @@ def apply(args, client):
     if sha256(args.backup_confirmation.parent/'backup.zip')!=proof.get('archive',{}).get('sha256'):
         raise ValueError('source_backup_hash_mismatch')
     path=args.stage_report;report=json.loads(path.read_text(encoding='utf-8'));table=report['table']
+    evidence_path=path.parent/'source-evidence.jsonl'
+    if report.get('volume_unit')!='lots' or not evidence_path.is_file() or hashlib.sha256(evidence_path.read_bytes()).hexdigest()!=report.get('evidence_sha256'):
+        raise ValueError('canonical_unit_and_source_evidence_required')
+    evidence=[json.loads(line) for line in evidence_path.read_text(encoding='utf-8').splitlines()]
     if not re.fullmatch(r'stock_repair\.five_minute_gap_[a-f0-9]{16}',table):raise ValueError('unexpected_stage_table')
     rows=client.query(f"SELECT {','.join(FIELDS)} FROM {table} FINAL ORDER BY code,datetime").result_rows
     if len(rows)!=report.get('rows') or digest(rows)!=report.get('sha256'):raise ValueError('stage_evidence_changed')
+    validate_evidence(evidence, rows)
     if report['state'] not in ('staged','applied','applying','outcome_uncertain'):raise ValueError('invalid_stage_state')
     groups=defaultdict(list)
     for row in rows:groups[timestamp(row[1]).date().isoformat()].append(row)
+    for item in evidence:
+        if item.get('volume_factor') != 1:
+            raise ValueError('legacy_unit_conversion_forbidden')
+        current=read_day(client,item['day'],[item['code']])
+        expected={tuple(r[:2]):r for r in item['existing']}
+        actual={tuple(canonical(r)[:2]):canonical(r) for r in current}
+        if any(actual.get(key)!=value for key,value in expected.items()):
+            raise ValueError('calibration_baseline_changed; restage_required')
     def verify(require_all=False):
         found=0
         for day,staged in groups.items():
@@ -196,7 +242,10 @@ def main():
     if args.mode=='plan':print(json.dumps({'code_days':len(load_days(args.manifest)),'writes':False}));return
     from utils.market_warehouse import clickhouse_client
     with ExitStack() as stack:
-        for path in (runtime_path('operations','derived_recovery','cache_repair.lock'),runtime_path('operations','qmt_downloads','download.lock')):
+        for path in (runtime_path('operations','derived_recovery','cache_repair.lock'),
+                     runtime_path('operations','canonical-ingestion.lock'),
+                     runtime_path('operations','intraday-full-market.lock'),
+                     runtime_path('operations','qmt_downloads','download.lock')):
             lock=InstanceLock(path);lock.acquire();stack.callback(lock.release)
         if args.mode=='stage':stage(args,clickhouse_client())
         else:apply(args,clickhouse_client())
