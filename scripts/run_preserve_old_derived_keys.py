@@ -1,6 +1,7 @@
 """Bounded, resumable driver for independent derived-key preservation."""
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -41,7 +42,8 @@ def main():
                 try:
                     result=subprocess.run([sys.executable,str(ROOT/'scripts/preserve_old_derived_keys.py'),
                         '--month',month,'--period',str(period),'--run-id',a.run_id],
-                        capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=600)
+                        capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=600,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
                 except Exception as exc:
                     report.update(state='uncertain',error=str(exc));write_snapshot(report,a.output);raise
                 report['results'].append({**report['in_flight'],'returncode':result.returncode,

@@ -1,5 +1,6 @@
 from scripts.audit_derived_storage_parts import report
 from scripts.rebuild_derived_history import revalidation_status
+from scripts.run_preserve_old_derived_keys import months_between
 
 
 def test_checksum_audit_never_infers_unreadable_row_range():
@@ -19,3 +20,8 @@ def test_revalidation_marks_source_changes_stale_without_rebuilding():
     accepted = [10, 10, '20', '30']
     assert revalidation_status(accepted, accepted, [11, 11, '21', '31']) == 'source_changed_since_acceptance'
     assert revalidation_status(accepted, accepted, accepted) == 'matched'
+
+
+def test_preservation_driver_keeps_81_month_range_explicit():
+    months=months_between('202001','202609')
+    assert len(months)==81 and months[0]=='202001' and months[-1]=='202609'
