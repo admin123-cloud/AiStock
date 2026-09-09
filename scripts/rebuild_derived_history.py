@@ -114,8 +114,7 @@ def build_month(client, state, period, month, save):
     table = table_name(period, state['run_id'])
     target = f'SELECT {FIELDS} FROM {table} WHERE toYYYYMM(datetime) = {int(month)}'
     if job.get('state') == 'verified':
-        target_days = candidate_days(client, table, month)
-        if digest_days(client, (candidate_day_sql(table, day) for day in target_days)) != job['actual']:
+        if digest(client, target) != job['actual']:
             raise RuntimeError(f'{key}: verified candidate changed; rebuild with a new run-id')
         return
     if job and job.get('state') != 'retry_authorized_empty_candidate':
@@ -146,8 +145,7 @@ def build_month(client, state, period, month, save):
         job.pop('writing_day', None)
         job['state'] = 'validating'
         save()
-        target_days = candidate_days(client, table, month)
-        job['actual'] = digest_days(client, (candidate_day_sql(table, day) for day in target_days))
+        job['actual'] = digest(client, target)
         after_days = source_days(client, month, state['cutoff'])
         job['source_after'] = digest_days(client, (source_day_sql(period, day) for day in after_days))
         if not (job['expected'] == job['actual'] == job['source_after']):
@@ -194,8 +192,7 @@ def migrate_legacy_manifest(client, state, fingerprint, save):
             continue
         period, month = key.split(':', 1)
         table = table_name(int(period), state['run_id'])
-        days = candidate_days(client, table, month)
-        actual = digest_days(client, (candidate_day_sql(table, day) for day in days))
+        actual = digest(client, f'SELECT {FIELDS} FROM {table} WHERE toYYYYMM(datetime) = {int(month)}')
         if actual != job.get('actual'):
             raise RuntimeError(f'{key}: legacy verified candidate changed; refusing manifest migration')
     state['fingerprint'] = fingerprint
