@@ -126,6 +126,15 @@ def sync_trade_calendar() -> int:
         client.command(f"DROP TABLE IF EXISTS {tmp_table}")
         client.command(f"DROP TABLE IF EXISTS {backup_table}")
         client.command(f"CREATE TABLE {tmp_table} AS trade_calendar")
+        # QMT can return history only even when a future end date is requested.
+        # Replace its evidenced date range, preserving the existing future calendar.
+        first_date = min(row[0] for row in insert_rows)
+        last_date = max(row[0] for row in insert_rows)
+        client.command(
+            f"INSERT INTO {tmp_table} SELECT * FROM trade_calendar "
+            "WHERE trade_date < {first:Date} OR trade_date > {last:Date}",
+            parameters={'first':first_date,'last':last_date},
+        )
         client.insert(tmp_table, insert_rows, column_names=["trade_date", "market", "is_trading"])
         client.command(f"RENAME TABLE trade_calendar TO {backup_table}, {tmp_table} TO trade_calendar")
         client.command(f"DROP TABLE IF EXISTS {backup_table}")
