@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from services.operations.health import BUSINESS_TZ, read_snapshot, strategy_data_checks, write_snapshot
 from services.operations.read_models import read_json, mainwave_daily, record_mainwave_tracking, task_board
-from services.operations.incidents import reconcile, dispatch, send_digest, read_incidents, notification_configured
+from services.operations.incidents import reconcile, dispatch, send_digest, read_incidents, notification_configured, notification_transport_status
 from services.operations.delivery import build_delivery_calendar, delivery_contract
 from utils.paths import runtime_path
 
@@ -103,10 +103,10 @@ def publish(args):
     events = reconcile(path,checks,now=now,grace_minutes=delivery_contract()['repair_grace_minutes'])
     record_mainwave_tracking(root, daily)
     result = dispatch(path,send_digest,now=now) if args.notify else {'status':'not_requested'}
+    transport = notification_transport_status(path,enabled=args.notify,configured=notification_configured(),now=now)
     write_snapshot({'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'),
                     'notifications_enabled':args.notify, 'notification':result, 'repair':repair_result,
-                    'notification_transport_ok':bool(args.notify and notification_configured()) and not any((x['notification'] in ('failed','sending') or x.get('recovery_notification') in ('failed','sending'))
-                        for x in read_incidents(path,limit=None) if x['status'] != 'superseded'),
+                    'notification_transport_ok':transport['ok'], 'notification_transport':transport,
                     'incidents':len(events)},root/'operations/latest.json')
     print(json.dumps({'incidents':len(events),'notification':result},ensure_ascii=False))
     return 0

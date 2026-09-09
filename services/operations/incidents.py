@@ -203,3 +203,30 @@ def dispatch(path: Path, sender, *, now=None):
         return {**failure, 'recovery_status':status, 'recovery_count':len(due)}
     finally:
         lock.release()
+
+
+def notification_transport_status(path: Path, *, enabled, configured, now=None):
+    now = now or datetime.now(BUSINESS_TZ)
+    if not enabled:
+        return {'state':'not_requested','ok':False,'last_smtp_accepted_at':None}
+    if not configured:
+        return {'state':'configuration_incomplete','ok':False,'last_smtp_accepted_at':None}
+    events = read_incidents(path,limit=None)
+    stamps = []
+    failed = False
+    for item in events:
+        if item['status']=='superseded':
+            continue
+        if item.get('notification')=='smtp_accepted' and item.get('last_attempt'):
+            stamps.append(item['last_attempt'])
+        if item.get('recovery_notification')=='smtp_accepted' and item.get('recovery_attempt_at'):
+            stamps.append(item['recovery_attempt_at'])
+        failed = failed or (item['status']!='resolved' and item.get('notification') in ('failed','sending'))
+        failed = failed or item.get('recovery_notification') in ('failed','sending')
+    accepted = max(stamps,default=None)
+    try:
+        recent = accepted is not None and 0 <= (now-datetime.fromisoformat(accepted)).total_seconds() <= 86400
+    except (ValueError,TypeError):
+        recent = False
+    return {'state':'failed_or_uncertain' if failed else 'smtp_accepted' if recent else 'configured_unverified',
+            'ok':bool(recent and not failed),'last_smtp_accepted_at':accepted}

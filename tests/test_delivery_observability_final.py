@@ -101,3 +101,22 @@ def test_recovery_send_failure_is_persistent_and_bounded(tmp_path):
     assert len(sent)==3
     event=read_incidents(path)[0]
     assert event['recovery_notification']=='failed' and event['recovery_attempts']==3
+
+
+def test_configured_smtp_is_not_verified_transport(tmp_path):
+    from services.operations.incidents import notification_transport_status
+    path=tmp_path/'incidents.sqlite'
+    assert notification_transport_status(path,enabled=True,configured=True,now=NOW)['state']=='configured_unverified'
+    reconcile(path,[{'name':'test','ok':False}],now=NOW,grace_minutes=0)
+    reconcile(path,[{'name':'test','ok':False}],now=NOW)
+    dispatch(path,lambda *args:None,now=NOW)
+    assert notification_transport_status(path,enabled=True,configured=True,now=NOW)['ok']
+    assert not notification_transport_status(path,enabled=True,configured=True,now=NOW+timedelta(days=2))['ok']
+
+
+def test_g3_source_unavailable_cannot_pass_zero_summary(tmp_path):
+    from services.operations.batches import publish_mainwave_batch
+    from scripts.verify_g3_delivery import verify
+    summary={'entry_date':'2026-09-10','decision_date':'2026-09-09','minute_data_failure_rows':0}
+    publish_mainwave_batch(tmp_path,summary,'route,code,entry_date,decision_date,m30_source_ok\ninstitutional_mainwave,A,2026-09-10,2026-09-09,false\n',tickets_csv='code,entry_date\n',diagnostics_csv='code\n')
+    assert not verify(tmp_path,entry_date='2026-09-10',decision_date='2026-09-09')['ok']
