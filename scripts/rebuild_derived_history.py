@@ -22,7 +22,10 @@ from utils.paths import runtime_path
 FIELDS = 'code, datetime, open, high, low, close, volume, amount'
 SETTINGS = {'max_execution_time': 600, 'max_threads': 2,
             'max_memory_usage': 4000000000, 'max_bytes_before_external_group_by': 1000000000}
-LEGACY_FINGERPRINTS = {'fb88a8940f185d5e75f568822aeb45f0a0450eb76d2e934de4510336a412fe9e'}
+LEGACY_FINGERPRINTS = {
+    'fb88a8940f185d5e75f568822aeb45f0a0450eb76d2e934de4510336a412fe9e',
+    'e05d6623f5c6ed3eb9285111b41c8348312b08ca59426f0c5b86e35699342152',
+}
 
 
 def bounds(month, cutoff):
@@ -201,7 +204,8 @@ def migrate_legacy_manifest(client, state, fingerprint, save):
     """Revalidate every accepted checkpoint before changing its implementation fingerprint."""
     if state['fingerprint'] == fingerprint:
         return
-    if state['fingerprint'] not in LEGACY_FINGERPRINTS:
+    prior_fingerprint = state['fingerprint']
+    if prior_fingerprint not in LEGACY_FINGERPRINTS:
         raise ValueError('Existing run uses a different cutoff or implementation')
     for key, job in state['jobs'].items():
         if job.get('state') != 'verified':
@@ -213,7 +217,7 @@ def migrate_legacy_manifest(client, state, fingerprint, save):
             raise RuntimeError(f'{key}: legacy verified candidate changed; refusing manifest migration')
     state['fingerprint'] = fingerprint
     state['manifest_migration'] = {
-        'from_fingerprint': next(iter(LEGACY_FINGERPRINTS)),
+        'from_fingerprint': prior_fingerprint,
         'method': 'revalidated_accepted_candidates_then_switched_to_daily_chunks',
     }
     save()
