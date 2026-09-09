@@ -17,7 +17,7 @@ def connect(path=None):
 
 
 def enqueue(arguments,*,path=None,now=None,kind='ingestion'):
-    if kind not in ('ingestion', 'daily_coverage'):
+    if kind not in ('ingestion', 'daily_coverage', 'index_daily', 'sector_daily'):
         raise ValueError('Unsupported ingestion job kind')
     if not isinstance(arguments, list) or not all(isinstance(a, str) for a in arguments):
         raise ValueError('Job arguments must be a list of strings')

@@ -15,7 +15,8 @@ from datetime import datetime
 def job_command(payload):
     kind = 'ingestion' if isinstance(payload, list) else payload.get('kind') if isinstance(payload, dict) else None
     arguments = payload if isinstance(payload, list) else payload.get('arguments') if isinstance(payload, dict) else None
-    scripts = {'ingestion': 'qmt_xtquant_data_source_task.py', 'daily_coverage': 'daily_kline_coverage_maintenance.py'}
+    scripts = {'ingestion': 'qmt_xtquant_data_source_task.py', 'daily_coverage': 'daily_kline_coverage_maintenance.py',
+               'index_daily': 'repair_index_daily.py', 'sector_daily': 'repair_sector_daily.py'}
     if kind not in scripts or not isinstance(arguments, list) or not all(isinstance(a, str) for a in arguments):
         raise ValueError('Unsupported persisted ingestion job')
     return [sys.executable, str(ROOT / 'scripts' / scripts[kind]), *arguments]

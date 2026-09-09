@@ -112,3 +112,81 @@ def test_completed_history_period_is_not_reexecuted_on_resume(tmp_path):
     assert not run_isolated_history(args, runner)['ok']
     assert run_isolated_history(args, runner)['ok']
     assert calls == ['5m', '15m', '15m']
+
+
+def test_index_universe_filters_before_limit_and_rejects_stock(monkeypatch):
+    from scripts import qmt_xtquant_data_source_task as task
+    seen = []
+    class Client:
+        def query(self, sql):
+            seen.append(sql)
+            return SimpleNamespace(result_rows=[('000001.SH',), ('399001.SZ',)])
+    monkeypatch.setattr(task, 'load_codes', lambda *args: ['600000.SH', '000001.SH', '399001.SZ'])
+    args = SimpleNamespace(universe='index', include_index=False, codes='', limit=1, end_date='2026-09-09')
+    assert task.resolve_daily_codes(Client(), args) == ['000001.SH']
+    assert "type = 'index'" in seen[0]
+    args.codes = '600000.SH'
+    with pytest.raises(ValueError, match='outside requested'):
+        task.resolve_daily_codes(Client(), args)
+
+
+def test_index_daily_fixed_entry_cannot_enable_minutes_or_stock():
+    from scripts.repair_index_daily import canonical_arguments
+    from scripts.run_ingestion_backlog import job_command
+    args = SimpleNamespace(start_date='2026-09-08', end_date='2026-09-09', batch_size=999)
+    argv = canonical_arguments(args)
+    assert argv[argv.index('--universe')+1] == 'index'
+    assert '--no-with-minutes' in argv
+    assert argv[argv.index('--daily-batch-size')+1] == '80'
+    assert Path(job_command({'kind': 'index_daily', 'arguments': argv})[1]).name == 'repair_index_daily.py'
+
+
+def test_daily_batches_preserve_exact_codes_and_successful_batch_checkpoint(tmp_path):
+    from scripts.qmt_xtquant_data_source_task import run_daily_batches
+    worker = tmp_path/'worker.py'; worker.write_text('# worker')
+    command = ['python', str(worker), '--phase', 'all', '--report', str(tmp_path/'report.json')]
+    seen = []
+    def runner(cmd, timeout):
+        codes = cmd[cmd.index('--codes')+1]; phase = cmd[cmd.index('--phase')+1]
+        seen.append((codes, phase))
+        if codes == 'i3' and sum(c == 'i3' for c, p in seen) == 1:
+            return {'ok': False}
+        Path(cmd[cmd.index('--report')+1]).write_text('{"ok":true}')
+        return {'ok': True}
+    args = SimpleNamespace(daily_phase='all', daily_batch_size=2, daily_timeout_sec=100)
+    assert not run_daily_batches(command, ['i1', 'i2', 'i3'], args, tmp_path, runner)['ok']
+    assert run_daily_batches(command, ['i1', 'i2', 'i3'], args, tmp_path, runner)['ok']
+    assert sum(c == 'i1,i2' for c, p in seen) == 4
+    assert sum(c == 'i3' for c, p in seen) == 5
+
+
+def test_sector_membership_cannot_be_projected_backwards_or_read_without_evidence():
+    from scripts.repair_sector_daily import verified_members, TZ
+    from datetime import date
+    now = datetime(2026, 9, 9, 20, tzinfo=TZ)
+    manifest = {'source': 'qmt', 'verified': True, 'generated_at': now.isoformat(),
+                'effective_from': '2026-09-09', 'codes': ['sector'], 'members': {'sector': ['a', 'b']}}
+    assert len(verified_members(manifest, date(2026, 9, 9), now)) == 2
+    with pytest.raises(ValueError, match='older history'):
+        verified_members(manifest, date(2026, 9, 8), now)
+    manifest['members'] = {}
+    with pytest.raises(ValueError, match='member snapshot'):
+        verified_members(manifest, date(2026, 9, 9), now)
+
+
+def test_sector_fill_requires_all_members_and_preserves_previous_price_base():
+    import pandas as pd
+    from datetime import date
+    from scripts.repair_sector_daily import prepare_rows
+    day = date(2026, 9, 9)
+    members = pd.DataFrame([{'sector_code': 's', 'stock_code': c} for c in ('a', 'b')])
+    daily = pd.DataFrame([{'code': c, 'trade_date': day, 'open_ret': .01, 'high_ret': .03,
+                          'low_ret': -.01, 'close_ret': .02, 'change_pct': 2., 'amount': 100., 'volume': 10.}
+                         for c in ('a', 'b')])
+    with pytest.raises(ValueError, match='Incomplete'):
+        prepare_rows(members, daily.iloc[:1], set(), {'s': 2500}, day)
+    with pytest.raises(ValueError, match='Prior sector close'):
+        prepare_rows(members, daily, set(), {}, day)
+    rows = prepare_rows(members, daily, set(), {'s': 2500}, day)
+    assert rows.iloc[0]['close'] == pytest.approx(2550)
+    assert prepare_rows(members, daily, {'s'}, {'s': 2500}, day).empty

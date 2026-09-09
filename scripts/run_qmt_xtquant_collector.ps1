@@ -34,9 +34,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-if ($Mode -eq 'daily-maintenance') {
-  $Mode = if ((Get-Date).Hour -eq 18) { 'reference-maintenance' } else { 'daily-coverage-repair' }
-}
+$IsDailyMaintenance = $Mode -eq 'daily-maintenance'
+if ($IsDailyMaintenance) { $Mode = 'daily-coverage-repair' }
 $DailyStartExplicit = $PSBoundParameters.ContainsKey('StartDate')
 $DailyEndExplicit = $PSBoundParameters.ContainsKey('EndDate')
 
@@ -384,6 +383,17 @@ function Invoke-CollectorOnce {
     return [PSCustomObject]@{ ExitCode = $ReferenceExit; WorkerIssueCount = $null }
   }
   if ($Mode -eq "daily-coverage-repair") {
+    $ReferenceExit = 0
+    if ($IsDailyMaintenance) {
+      try {
+        $ReferenceArgs = @((Join-Path $RootDir 'scripts/run_reference_maintenance.py'), '--if-due')
+        $ReferenceExit = Invoke-LoggedNative -Exe $PythonExe -Arguments $ReferenceArgs
+      } catch {
+        $ReferenceExit = 1
+        Write-CollectorLog "ERROR reference_maintenance error=$($_.Exception.Message)"
+      }
+      Write-CollectorLog "END reference_maintenance exit_code=$ReferenceExit; continue independent daily coverage"
+    }
     $DailyScope = if ((Get-Date).Hour -ge 15) { 'latest' } else { 'year' }
     $CoverageArgs = @(
       $DailyCoverageScript,
@@ -401,9 +411,10 @@ function Invoke-CollectorOnce {
     } finally {
       Pop-Location
     }
-    Write-CollectorLog "END qmt_daily_coverage_repair exit_code=$ExitCode report=F:\Stock\AiStockData\data\runtime\daily_kline_coverage\latest.json"
+    Write-CollectorLog "END qmt_daily_coverage_repair exit_code=$ExitCode reference_exit_code=$ReferenceExit report=F:\Stock\AiStockData\data\runtime\daily_kline_coverage\latest.json"
+    $CombinedExit = if ($ExitCode -ne 0) { $ExitCode } else { $ReferenceExit }
     return [PSCustomObject]@{
-      ExitCode = $ExitCode
+      ExitCode = $CombinedExit
       WorkerIssueCount = $null
     }
   }

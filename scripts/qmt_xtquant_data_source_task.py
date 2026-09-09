@@ -42,9 +42,46 @@ def _run_subprocess(cmd: list[str], timeout: int) -> dict[str, Any]:
     return run_owned(cmd, timeout, cwd=str(REPO_ROOT))
 
 
+def resolve_daily_codes(client, args):
+    from utils.qmt_universe import qmt_universe_filter_sql
+    kinds = {x.strip().lower() for x in args.universe.split(',') if x.strip()}
+    if args.include_index:
+        kinds.add('index')
+    if not kinds or not kinds <= {'stock', 'index'}:
+        raise ValueError('Daily universe must be stock, index or stock,index')
+    predicate = qmt_universe_filter_sql(','.join(sorted(kinds)))
+    rows = client.query('SELECT code FROM stocks FINAL WHERE ('+predicate+
+                        ') AND (quit=0 OR quit IS NULL) ORDER BY code').result_rows
+    allowed = {str(row[0]).upper() for row in rows}
+    codes = list(dict.fromkeys(load_codes(client, args.codes, 0, 'index' in kinds, args.end_date)))
+    if args.codes and set(codes)-allowed:
+        raise ValueError('Explicit securities outside requested daily universe: '+','.join(sorted(set(codes)-allowed)))
+    codes = [code for code in codes if code in allowed]
+    return codes[:args.limit] if args.limit > 0 else codes
+
+
+def run_daily_batches(command, codes, args, report_dir, runner=None):
+    from services.operations.ingestion_checkpoint import run_staged
+    from services.operations.ingestion_budget import yield_requested, deferred_result
+    runner = runner or _run_subprocess
+    results = []
+    phases = ('fetch', 'validate-stage', 'apply', 'validate-target') if args.daily_phase == 'all' else (args.daily_phase,)
+    size = max(1, min(80, args.daily_batch_size))
+    for offset in range(0, len(codes), size):
+        if yield_requested():
+            return {**deferred_result(), 'batches': results, 'next_offset': offset}
+        batch_command = [*command, '--codes', ','.join(codes[offset:offset+size])]
+        result = run_staged(batch_command, args.daily_timeout_sec, report_dir, runner, phases=phases)
+        results.append(result)
+        if not result.get('ok'):
+            return {'ok': False, 'deferred': result.get('deferred', False), 'batches': results, 'next_offset': offset}
+    return {'ok': bool(codes), 'batches': results, 'selected_codes': len(codes),
+            'reason': None if codes else 'empty_requested_daily_universe'}
+
+
 def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
     client = ch_client()
-    codes = load_codes(client, args.codes, args.limit, args.include_index, args.end_date)
+    codes = resolve_daily_codes(client, args)
     report_dir = report_path("qmt_xtquant_data_source_task")
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S")
@@ -68,20 +105,14 @@ def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
         "--report",
         str(daily_report),
     ]
-    if args.codes:
-        daily_cmd.extend(["--codes", args.codes])
-    if args.limit:
-        daily_cmd.extend(["--limit", str(args.limit)])
     if args.include_index:
         daily_cmd.append("--include-index")
     if args.reset_stage:
         daily_cmd.append("--reset-stage")
 
     log(f"run QMT daily phase={args.daily_phase} date={args.start_date}~{args.end_date}")
-    from services.operations.ingestion_checkpoint import run_staged
-    daily_result = run_staged(daily_cmd, args.daily_timeout_sec, report_dir, _run_subprocess,
-                              phases=('fetch', 'validate-stage', 'apply', 'validate-target') if args.daily_phase == 'all'
-                              else (args.daily_phase,))
+    daily_result = run_daily_batches(daily_cmd, codes, args, report_dir)
+
 
     minute_result: dict[str, Any] = {"skipped": True, "reason": "minute disabled"}
     if args.with_minutes:
@@ -97,6 +128,7 @@ def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
             args.end_date,
             "--periods",
             args.minute_periods,
+            "--universe", args.universe,
             "--repair-batch-size",
             str(args.minute_batch_size),
             "--max-retries",
@@ -423,9 +455,12 @@ def run_after_close_full_refresh(args: argparse.Namespace) -> dict[str, Any]:
     if "index" in {item.strip().lower() for item in args.universe.split(",")}:
         daily_cmd.append("--include-index")
         minute_cmd.append("--include-index")
-    if args.codes:
-        daily_cmd.extend(["--codes", args.codes])
-        minute_cmd.extend(["--codes", args.codes])
+    if args.codes or args.universe.strip() == 'index':
+        selected = resolve_daily_codes(ch_client(), args)
+        if not selected:
+            return {'ok': False, 'reason': 'empty_requested_daily_universe'}
+        daily_cmd.extend(["--codes", ','.join(selected)])
+        minute_cmd.extend(["--codes", ','.join(selected)])
 
     log(
         "run QMT after-close full refresh "

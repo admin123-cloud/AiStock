@@ -92,15 +92,15 @@ def load_members(levels: list[int], min_members: int) -> pd.DataFrame:
     return df.drop_duplicates(["sector_code", "stock_code"]).reset_index(drop=True)
 
 
-def load_daily(codes: list[str], start_date: str, end_date: str, max_abs_change_pct: float = 21.0) -> pd.DataFrame:
+def load_daily(codes: list[str], start_date: str, end_date: str, max_abs_change_pct: float = 21.0, *, query_df=None) -> pd.DataFrame:
     if not codes:
         return pd.DataFrame()
     query_start = pd.Timestamp(start_date) - pd.Timedelta(days=14)
     code_text = _sql_list(codes)
-    df = clickhouse_query_df(
+    df = (query_df or clickhouse_query_df)(
         f"""
         SELECT code, trade_date, open, high, low, close, volume, amount, change_pct
-        FROM kline_daily
+        FROM kline_daily FINAL
         WHERE code IN ({code_text})
           AND trade_date BETWEEN ? AND ?
           AND open > 0
