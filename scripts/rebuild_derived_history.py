@@ -112,6 +112,17 @@ def candidate_digest(client, table, month):
     return digest_days(client, sqls)
 
 
+def revalidation_status(accepted, candidate, source):
+    """Classify a source recheck without mutating a candidate table."""
+    if candidate[0] != candidate[1]:
+        return 'candidate_duplicate_keys'
+    if candidate != accepted:
+        return 'candidate_changed_since_acceptance'
+    if candidate != source:
+        return 'source_changed_since_acceptance'
+    return 'matched'
+
+
 def table_name(period, run_id):
     if not re.fullmatch(r'[a-z0-9_]{1,48}', run_id):
         raise ValueError('run-id must contain only lowercase ASCII letters, digits, underscores')
@@ -223,6 +234,36 @@ def migrate_legacy_manifest(client, state, fingerprint, save):
     save()
 
 
+def revalidate_month(client, state, period, month, save):
+    """Recheck a verified candidate after a 5m source repair; never write candidates."""
+    key = f'{period}:{month}'
+    job = state['jobs'].get(key)
+    if not job or job.get('state') not in ('verified', 'stale_source'):
+        raise RuntimeError(f'{key}: only previously verified candidates can be source-revalidated')
+    table = table_name(period, state['run_id'])
+    candidate = candidate_digest(client, table, month)
+    days = source_days(client, month, state['cutoff'])
+    source = digest_days(client, (source_day_sql(period, day) for day in days))
+    outcome = revalidation_status(job.get('actual'), candidate, source)
+    job['source_revalidation'] = {
+        'checked_at': datetime.now(BUSINESS_TZ).isoformat(),
+        'candidate': candidate,
+        'source': source,
+        'source_days': [str(day) for day in days],
+        'outcome': outcome,
+        'write_authority': 'read_only',
+    }
+    if outcome != 'matched':
+        job['state'] = 'stale_source'
+        job['stale_reason'] = outcome
+        state['promotion'] = 'blocked_by_source_revalidation'
+    elif job.get('state') == 'stale_source':
+        job['state'] = 'verified'
+        job.pop('stale_reason', None)
+    save()
+    return outcome
+
+
 def run(args):
     table_name(15, args.run_id)
     if date.fromisoformat(args.cutoff) >= datetime.now(BUSINESS_TZ).date():
@@ -243,7 +284,10 @@ def run(args):
             state = json.loads(path.read_text(encoding='utf-8'))
             if state['cutoff'] != args.cutoff:
                 raise ValueError('Existing run uses a different cutoff or implementation')
-            migrate_legacy_manifest(client, state, fingerprint, lambda: write_snapshot(state, path))
+            # A source revalidation only compares existing evidence and never writes a candidate.
+            # It must remain available when this driver's own implementation fingerprint changes.
+            if not args.revalidate_source:
+                migrate_legacy_manifest(client, state, fingerprint, lambda: write_snapshot(state, path))
         else:
             months = [str(r[0]) for r in client.query(
                 "SELECT DISTINCT partition FROM system.parts WHERE database=currentDatabase() "
@@ -258,6 +302,20 @@ def run(args):
             state = dict(run_id=args.run_id, cutoff=args.cutoff, fingerprint=fingerprint,
                          months=months, jobs={}, promotion='not_performed')
             write_snapshot(state, path)
+        if args.revalidate_source:
+            if not args.months:
+                raise ValueError('--revalidate-source requires explicit --months')
+            selected = [month.strip() for month in args.months.split(',') if month.strip()]
+            if not selected or any(not re.fullmatch(r'\d{6}', month) or month not in state['months'] for month in selected):
+                raise ValueError('--months must be source months in this run')
+            outcomes = {}
+            for month in selected:
+                for period in (15, 30, 60):
+                    outcomes[f'{period}:{month}'] = revalidate_month(
+                        client, state, period, month, lambda: write_snapshot(state, path))
+            print(json.dumps({'revalidated_months': selected, 'outcomes': outcomes,
+                              'promotion': state['promotion']}, ensure_ascii=False), flush=True)
+            return
         if not args.build:
             print(json.dumps(state, ensure_ascii=False), flush=True)
             return
@@ -302,4 +360,8 @@ if __name__ == '__main__':
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--resume-blocked', action='store_true',
                         help='Explicitly retry only memory-blocked jobs whose candidate month is empty.')
+    parser.add_argument('--revalidate-source', action='store_true',
+                        help='Read-only compare accepted candidates with current 5m source for explicit months.')
+    parser.add_argument('--months', default='',
+                        help='Comma-separated YYYYMM source months required by --revalidate-source.')
     run(parser.parse_args())
