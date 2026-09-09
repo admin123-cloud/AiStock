@@ -180,10 +180,10 @@ class QmtMiniMarketClient:
         end_time: str = "",
     ) -> None:
         xtdata = self._ensure_connected()
-        _call_xtdata(
-            "download_history_data",
-            lambda: xtdata.download_history_data(stock_code, period, start_time, end_time),
-        )
+        from services.operations.qmt_download_queue import coordinated_download
+        coordinated_download([stock_code], period, start_time, end_time,
+            lambda: _call_xtdata("download_history_data",
+                lambda: xtdata.download_history_data(stock_code, period, start_time, end_time)))
 
     def download_history_data2(
         self,
@@ -200,10 +200,10 @@ class QmtMiniMarketClient:
             kwargs["callback"] = callback
         if incrementally is not None:
             kwargs["incrementally"] = incrementally
-        return _call_xtdata(
-            "download_history_data2",
-            lambda: xtdata.download_history_data2(stock_list, period, start_time, end_time, **kwargs),
-        )
+        from services.operations.qmt_download_queue import coordinated_download
+        return coordinated_download(stock_list, period, start_time, end_time,
+            lambda: _call_xtdata("download_history_data2",
+                lambda: xtdata.download_history_data2(stock_list, period, start_time, end_time, **kwargs)), variant=incrementally)
 
     def get_market_data(
         self,

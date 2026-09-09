@@ -238,10 +238,12 @@ $DailyCoverageTrigger = New-ScheduledTaskTrigger -Once -At $DailyCoverageStartAt
 Register-CollectorTask `
   -TaskName "$TaskPrefix Daily Coverage Repair" `
   -Description "Run bounded QMT daily-bar coverage repair on the Windows host before the backend publishes the overnight audit result." `
-  -Action (New-CollectorAction -Mode "daily-coverage-repair" -Scenario "daily-coverage" -Periods "1d" -Universe "stock" -MaxRepairCodes $DailyCoverageMaxRepairCodes -CodeChunkSize 30 -ActiveStart $DailyCoverageAt -ActiveEnd $DailyCoverageAt -SkipTimeWindowCheck) `
+  -Action (New-CollectorAction -Mode "daily-maintenance" -Scenario "daily-coverage" -Periods "1d" -Universe "stock" -MaxRepairCodes $DailyCoverageMaxRepairCodes -CodeChunkSize 30 -ActiveStart $DailyCoverageAt -ActiveEnd $DailyCoverageAt -SkipTimeWindowCheck) `
   -Trigger $DailyCoverageTrigger
 $DailyCoverageAfterCloseStartAt = Resolve-CollectorStartAt -Now $Now -At $DailyCoverageAfterCloseAt -ActiveStart $DailyCoverageAfterCloseAt -ActiveEnd $DailyCoverageAfterCloseAt
 $DailyCoverageTriggerXml = (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageStartAt -DaysOfWeek $NightDays) + (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageAfterCloseStartAt -DaysOfWeek $Weekdays)
+$ReferenceStartAt = Resolve-CollectorStartAt -Now $Now -At '18:10' -ActiveStart '18:10' -ActiveEnd '18:10'
+$DailyCoverageTriggerXml += (New-TaskWeeklyTriggerXml -StartAt $ReferenceStartAt -DaysOfWeek $Weekdays)
 Set-RegisteredTaskWindowTrigger -TaskName "$TaskPrefix Daily Coverage Repair" -TriggerXml $DailyCoverageTriggerXml
 
 $NightStartAt = Resolve-CollectorStartAt -Now $Now -At $NightRepairAt -ActiveStart $NightRepairAt -ActiveEnd $NightRepairActiveEnd -AllowWeekend $true

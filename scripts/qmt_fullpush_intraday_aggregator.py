@@ -727,12 +727,9 @@ def run_collector(args):
         cache_seed["attempted"] = True
         try:
             now = datetime.now(SH_TZ)
-            xtdata.download_history_data2(
-                codes,
-                "5m",
-                now.strftime("%Y%m%d000000"),
-                now.strftime("%Y%m%d%H%M%S"),
-            )
+            from services.operations.qmt_download_queue import coordinated_download
+            coordinated_download(codes, "5m", now.strftime("%Y%m%d000000"), now.strftime("%Y%m%d%H%M%S"),
+                lambda: xtdata.download_history_data2(codes, "5m", now.strftime("%Y%m%d000000"), now.strftime("%Y%m%d%H%M%S")))
             cache_seed["ok"] = True
             log(f"seeded QMT 5m history cache for {len(codes)} targeted codes")
         except Exception as exc:

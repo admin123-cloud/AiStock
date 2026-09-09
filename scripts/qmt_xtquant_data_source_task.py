@@ -151,6 +151,42 @@ def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
     return summary
 
 
+def run_isolated_history(args, runner=None):
+    from copy import copy
+    runner = runner or run_minute_gap_repair
+    deadline = time.monotonic() + args.minute_timeout_sec
+    root = Path(args.minute_report_dir) if args.minute_report_dir else report_path("qmt_history", args.start_date + "_" + args.end_date)
+    results = {}
+    for period in args.minute_periods.split(","):
+        period = period.strip()
+        if not period:
+            continue
+        remaining = int(deadline-time.monotonic())
+        if remaining <= 0:
+            results[period] = {"ok": False, "reason": "shared_time_budget_exhausted"}
+            continue
+        child = copy(args)
+        child.minute_periods = period
+        child.minute_timeout_sec = remaining
+        child.minute_report_dir = str(root/period)
+        child.report = str(root/period/"collector_summary.json")
+        child.repair_code_offset = 0
+        child.issue_file = ""  # Each period audits its own target; no shared stale queue.
+        child.retry_after_close_source_empty = period == "5m" and args.retry_after_close_source_empty
+        try:
+            results[period] = runner(child)
+        except Exception as exc:
+            results[period] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    counts = [x.get("minute", {}).get("worker_summary", {}).get("issue_count") for x in results.values()]
+    total_issues = sum(counts) if counts and all(isinstance(x, int) for x in counts) else None
+    summary = {"minute": {"worker_summary": {"issue_count": total_issues}}, "ok": bool(results) and all(x.get("ok") for x in results.values()),
+               "mode": "isolated_history", "start_date": args.start_date, "end_date": args.end_date,
+               "datasets": results, "previous_close_gate": "reported_separately_not_global_blocker"}
+    from services.operations.health import write_snapshot
+    write_snapshot(summary, Path(args.report) if args.report else root/"collector_summary.json")
+    return summary
+
+
 def run_minute_gap_repair(args: argparse.Namespace) -> dict[str, Any]:
     report_dir = Path(args.minute_report_dir) if args.minute_report_dir else report_path(
         "qmt_xtquant_data_source_task",
@@ -467,6 +503,7 @@ def run_after_close_full_refresh(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
     parser = argparse.ArgumentParser(description="QMT/xtquant data-source replacement task for AiStock.")
+    parser.add_argument("--isolate-history-periods", action="store_true")
     parser.add_argument("--mode", choices=["date-repair", "minute-gap-repair", "after-close-full-refresh"], default="date-repair")
     parser.add_argument("--scenario", choices=["history", "intraday", "after-close", "manual"], default="manual")
     parser.add_argument("--start-date", default=today)
@@ -514,7 +551,7 @@ def main() -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
         return 0 if summary.get("ok") else 1
     if args.mode == "minute-gap-repair":
-        summary = run_minute_gap_repair(args)
+        summary = run_isolated_history(args) if args.isolate_history_periods else run_minute_gap_repair(args)
         print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
         return 0 if summary.get("ok") else 1
     if args.mode == "after-close-full-refresh":

@@ -34,6 +34,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($Mode -eq 'daily-maintenance') {
+  $Mode = if ((Get-Date).Hour -eq 18) { 'reference-maintenance' } else { 'daily-coverage-repair' }
+}
 $DailyStartExplicit = $PSBoundParameters.ContainsKey('StartDate')
 $DailyEndExplicit = $PSBoundParameters.ContainsKey('EndDate')
 
@@ -292,7 +295,7 @@ function Invoke-AfterCloseRecovery {
   return $ExitCode
 }
 
-if ($RequireAfterCloseFinalValidation) {
+if ($RequireAfterCloseFinalValidation -and $Scenario -ne "history") {
   $PreviousCloseDate = Resolve-PreviousTradingDate -Now (Get-Date)
   $AfterCloseState = Get-AfterCloseValidationState -TradeDate $PreviousCloseDate
   if (-not $AfterCloseState.Closed -and $ResumeAfterCloseOnValidationFailure) {
@@ -308,6 +311,12 @@ if ($RequireAfterCloseFinalValidation) {
     exit 2
   }
   Write-CollectorLog "PASS qmt_xtquant_collector after-close validation closed date=$PreviousCloseDate path=$($AfterCloseState.Path)"
+}
+
+if ($Scenario -eq "history" -and $RequireAfterCloseFinalValidation) {
+  $PreviousCloseDate = Resolve-PreviousTradingDate -Now (Get-Date)
+  if ($EndDate -lt $PreviousCloseDate) { $EndDate = $PreviousCloseDate }
+  Write-CollectorLog "HISTORY includes previous trading day $PreviousCloseDate without global period gate"
 }
 
 $SafeScenario = $Scenario -replace '[^A-Za-z0-9_-]', '_'
@@ -363,6 +372,11 @@ function Write-RollingState {
 
 function Invoke-CollectorOnce {
   $AppliedRepairCodeOffset = Read-AppliedOffset
+  if ($Mode -eq "reference-maintenance") {
+    $ReferenceArgs = @((Join-Path $RootDir 'scripts/run_reference_maintenance.py'))
+    $ReferenceExit = Invoke-LoggedNative -Exe $PythonExe -Arguments $ReferenceArgs
+    return [PSCustomObject]@{ ExitCode = $ReferenceExit; WorkerIssueCount = $null }
+  }
   if ($Mode -eq "daily-coverage-repair") {
     $DailyScope = if ((Get-Date).Hour -ge 15) { 'latest' } else { 'year' }
     $CoverageArgs = @(
@@ -778,6 +792,10 @@ function Invoke-CollectorOnce {
     Write-CollectorLog "ROLLING qmt_xtquant_collector max_repair_codes=$MaxRepairCodes repair_code_offset=$AppliedRepairCodeOffset state=$RollingStateFile"
   }
 
+  if ($Scenario -eq "history" -and $CollectorMode -eq "minute-gap-repair") {
+    $Args += "--isolate-history-periods"
+    Write-CollectorLog "ISOLATE historical periods; previous-close delivery remains independently monitored"
+  }
   Push-Location $RootDir
   try {
     $ExitCode = Invoke-LoggedNative -Exe $PythonExe -Arguments $Args
@@ -785,7 +803,7 @@ function Invoke-CollectorOnce {
     Pop-Location
   }
 
-  if ($CollectorMode -eq "minute-gap-repair" -and $MaxRepairCodes -gt 0 -and $ExitCode -eq 0 -and $RollingStateFile) {
+  if ($Scenario -ne "history" -and $CollectorMode -eq "minute-gap-repair" -and $MaxRepairCodes -gt 0 -and $ExitCode -eq 0 -and $RollingStateFile) {
     $NextOffset = $AppliedRepairCodeOffset + $MaxRepairCodes
     $CurrentIssueCodeCount = Get-IssueCodeCount -Path $StableIssueFile
     if ($CurrentIssueCodeCount -gt 0 -and $NextOffset -ge $CurrentIssueCodeCount) {
