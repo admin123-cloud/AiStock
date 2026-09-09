@@ -176,12 +176,15 @@ def load_codes(universe: str, codes_arg: str, limit: int, include_index: bool, i
     else:
         active_universe = "stock,index" if include_index or "index" in universe.lower() else "stock"
         type_filter = qmt_universe_filter_sql(active_universe)
+        current_day = datetime.now(SH_TZ).date().isoformat()
         df = clickhouse_query_df(
             f"""
             SELECT code
             FROM stocks FINAL
             WHERE {type_filter}
               AND (quit = 0 OR quit IS NULL)
+              AND (list_date IS NULL OR list_date <= toDate('{current_day}'))
+              AND (delist_date IS NULL OR delist_date > toDate('{current_day}'))
             ORDER BY type, code
             """
         )

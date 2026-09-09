@@ -45,4 +45,5 @@ def qmt_universe_filter_sql(
         parts.append(
             f"match({code_expr}, '^(159|510|511|512|513|515|516|517|518|588)[0-9]{{3}}\\\\.(SH|SZ)$')"
         )
-    return " OR ".join(parts) if parts else "1"
+    # Callers append AND lifecycle/date constraints; OR branches must stay grouped.
+    return "(" + " OR ".join(parts) + ")" if parts else "1"
