@@ -36,3 +36,40 @@ def test_reference_requires_new_business_success_not_return_only():
     manager=Manager()
     result=run_steps(manager,[('calendar',lambda:None)])
     assert not result[0]['ok']
+
+
+def test_reference_success_does_not_hide_unknown_official_pool_metadata():
+    manager=Manager()
+    def finish(name, metadata=None):
+        manager.states[name].update(is_running=False,last_success_at='fresh',results={'metadata':metadata or {}})
+    result=run_steps(manager,[('calendar',lambda:finish('calendar')),
+                             ('update_stock_list',lambda:finish('update_stock_list',{'metadata_verified':False}))])
+    assert result[0]['ok']
+    assert not result[1]['ok']
+    assert result[1]['reason']=='reference_metadata_unverified'
+
+
+def test_reference_requires_explicit_metadata_proof():
+    for metadata, expected in [({},False),({'metadata_verified':True},True)]:
+        manager=Manager()
+        def finish():
+            manager.states['update_stock_list'].update(is_running=False,last_success_at='fresh',results={'metadata':metadata})
+        result=run_steps(manager,[('update_stock_list',finish)])
+        assert result[0]['ok'] is expected
+
+
+def test_task_wrapper_preserves_metadata_proof(monkeypatch):
+    import ast
+    import logging
+    import sys
+    from pathlib import Path
+    tree=ast.parse((Path(__file__).parents[1]/'api/system_config.py').read_text(encoding='utf-8'))
+    node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='update_stock_list_task')
+    captured=[]
+    metadata={'metadata_verified':False,'metadata_unknown_codes':['821028.BJ']}
+    monkeypatch.setitem(sys.modules,'api.stocks',SimpleNamespace(update_stock_list=lambda:{'success':True,'metadata':metadata}))
+    manager=SimpleNamespace(update_progress=lambda *a:None,set_results=lambda name,result:captured.append(result))
+    scope={'task_manager':manager,'logger':logging.getLogger(__name__)}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),'<reference-task>','exec'),scope)
+    scope['update_stock_list_task']()
+    assert captured[0]['metadata']==metadata

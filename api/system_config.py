@@ -2899,6 +2899,7 @@ def update_stock_list_task():
             task_name,
             {
                 "message": result.get("message") or "股票列表更新成功",
+                "metadata": result.get("metadata") or {},
                 "stats": {
                     "new_count": result.get("new_count", 0),
                     "update_count": result.get("update_count", 0),

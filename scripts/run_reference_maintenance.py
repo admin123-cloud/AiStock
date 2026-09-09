@@ -36,8 +36,12 @@ def run_steps(manager, steps):
             state=manager.get_task_status(name)
             result = state.get('results') or {}
             cached = result.get('active_source') == 'local_reference_cache' or str(result.get('validation_status', '')).startswith('degraded')
-            ok=bool(not cached and not state.get('is_running') and not state.get('error') and state.get('last_success_at') and state.get('last_success_at')!=before)
-            results.append({'name':name,'ok':ok,'error':state.get('error') or state.get('last_error')})
+            metadata = result.get('metadata') or {}
+            metadata_verified = metadata.get('metadata_verified') is True if name == 'update_stock_list' else True
+            ok=bool(not cached and metadata_verified and not state.get('is_running') and not state.get('error') and state.get('last_success_at') and state.get('last_success_at')!=before)
+            results.append({'name':name,'ok':ok,'error':state.get('error') or state.get('last_error'),
+                            'metadata_verified':metadata_verified,
+                            'reason':'reference_metadata_unverified' if not metadata_verified else None})
         except Exception as exc:
             manager.set_error(name,str(exc))
             results.append({'name':name,'ok':False,'error':str(exc)})
@@ -54,7 +58,7 @@ def main():
         now = datetime.now(ZoneInfo('Asia/Shanghai'))
         today = due_date(now) if args.if_due else now.date().isoformat()
         old=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-        if old.get('date')==today and old.get('ok') and old.get('sector_universe_verified'):
+        if old.get('date')==today and old.get('ok') and old.get('sector_universe_verified') and old.get('reference_metadata_verified'):
             return 0
         from services.operations.qmt_download_queue import protected_session
         if args.if_due and protected_session(now):
@@ -67,6 +71,7 @@ def main():
                ('update_index_list',system.update_index_list_task),
                ('sync_sectors',system.sync_sectors_task)]
         results=run_steps(system.task_manager,steps)
+        metadata_verified = any(x['name']=='update_stock_list' and x.get('metadata_verified') for x in results)
         ok=all(x['ok'] for x in results)
         verified = False
         if ok:
@@ -88,7 +93,7 @@ def main():
                            runtime_path('operations','sector_universe.json'))
         ok = ok and verified
         write_snapshot({'date':today,'generated_at':datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),'ok':ok,
-                        'sector_universe_verified':verified,'steps':results},path)
+                        'sector_universe_verified':verified,'reference_metadata_verified':metadata_verified,'steps':results},path)
         return 0 if ok else 2
     finally:
         lock.release()
