@@ -922,12 +922,14 @@ const artifactRows = computed(() => {
 })
 
 const alertType = computed(() => {
+  if (payload.value?.data_freshness_blocked || Number(summary.value.minute_data_failure_rows || 0) > 0) return 'error'
   if ((summary.value.qualified_shadow_buy_rows || 0) > 0) return 'warning'
   if (summary.value.diagnosis_code === 'NO_STATE_ROUTER_CANDIDATE') return 'success'
   return 'info'
 })
 
 const statusText = computed(() => {
+  if (payload.value?.data_freshness_blocked || Number(summary.value.minute_data_failure_rows || 0) > 0) return `今日数据不可判断：${summary.value.minute_data_failure_rows || 0}个候选分钟来源异常。没有票据不等于没有机会；请查看数据健康与主升每日跟踪。`
   const code = summary.value.diagnosis_code || '--'
   const count = summary.value.qualified_shadow_buy_rows ?? 0
   return `状态 ${statusWithZh(code)}，合格买入候选 ${count}。正式买点、自动下单、订单路径均关闭。`

@@ -1198,11 +1198,12 @@ def _build_daily_data_source_row(
 
     row.update(result)
     row["ok"] = row["row_count"] > 0 and row["code_count"] > 0
-    row["expected_row_count"] = row["row_count"]
+    row["expected_row_count"] = None
     row["missing_rows"] = 0
     row["extra_rows"] = 0
-    row["coverage_rate"] = 1.0 if row["ok"] else 0.0
-    row["complete"] = bool(row["ok"])
+    row["coverage_rate"] = None
+    row["complete"] = False
+    row["verification_status"] = "unverified"
     row["message"] = "ok" if row["ok"] else "missing for date"
     return row
 
@@ -1301,8 +1302,16 @@ def _build_minute_data_source_row(
         "periods": detail_rows,
     })
     row["ok"] = total_rows > 0 and max_codes > 0
-    row["complete"] = row["ok"] and total_expected_rows > 0 and total_missing_rows == 0
-    row["message"] = "complete" if row["complete"] else ("incomplete" if row["ok"] else "missing for date")
+    # This legacy query covers only codes present in the daily table. It is a
+    # sample diagnostic, not independent delivery verification (see /operations).
+    row["coverage_rate"] = None
+    row["complete"] = False
+    row["verification_status"] = "unverified"
+    row["message"] = "sample_only_use_data_health" if row["ok"] else "missing for date"
+    for detail in detail_rows:
+        detail["coverage_rate"] = None
+        detail["complete"] = False
+        detail["verification_status"] = "unverified"
     return row
 
 
@@ -7863,7 +7872,7 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20, include_histo
             latest_failed_at = last_error_at
             latest_failed_task = key
 
-    today_success_rate = round((today_success / today_total) * 100, 2) if today_total else 100.0
+    today_success_rate = round((today_success / today_total) * 100, 2) if today_total else None
     freshness = {
         key: {
             "last_success_at": task_status[key].get("last_success_at"),

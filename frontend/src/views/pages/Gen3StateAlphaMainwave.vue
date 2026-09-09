@@ -19,7 +19,7 @@
       title="页面分层说明"
     >
       <template #default>
-        <span>行业机会来自板块扩散和主升观察池；正式买入候选仍必须满足 score>=120、板块扩散、30m 确认和 index_mom60 合同。</span>
+        <span>行业机会来自板块扩散和主升观察池；当前合同主升分门槛 {{ summary.min_score ?? "待加载" }}，同业共振 {{ summary.min_sector_signal_count ?? "待加载" }}，仍需已完成30m确认和指数门槛。</span>
       </template>
     </el-alert>
 

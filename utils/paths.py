@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,10 @@ def _path_from_config(name: str, env_name: str, default: Path) -> Path:
     if env_value:
         return Path(env_value)
     value = _load_paths_config().get(name)
+    if isinstance(value, str):
+        placeholder = re.fullmatch(r"\$\{([^:}]+)(?::(.*))?\}", value)
+        if placeholder:
+            value = os.getenv(placeholder.group(1), placeholder.group(2))
     return Path(value) if value else default
 
 

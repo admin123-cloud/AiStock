@@ -33,7 +33,7 @@ from services.daily_trend_exit_monitor import evaluate_daily_rising_trend_exit, 
 from services.g3_holding_t_daily_review import REVIEW_DIR as HOLDING_T_REVIEW_DIR
 from services.g3_holding_t_daily_review import record_manual_execution, run_daily_review
 from services.g3_holding_t_portfolio_state import confirm_position_action, load_state as load_holding_t_portfolio_state, save_state as save_holding_t_portfolio_state
-from services.runtime_health import read_snapshot
+from services.runtime_health import read_snapshot, strategy_data_checks, operations_notification_owner
 from utils.config import config as app_config
 from utils.logger import get_logger
 from utils.paths import report_path, runtime_path
@@ -561,11 +561,7 @@ def _mainwave_summary_candidates() -> list[tuple[str, Path, dict[str, Any]]]:
 
 def _select_mainwave_summary_source() -> tuple[str, Path | None, dict[str, Any], dict[str, Any]]:
     fallback: tuple[str, Path | None, dict[str, Any], dict[str, Any]] = ("", None, {}, {})
-    candidates = _mainwave_summary_candidates()
-    for label, path, summary in candidates:
-        source = _find_institutional_mainwave_source(summary)
-        if source.get("mainwave_dynamic_cooldown") and (source.get("pre_confirm_preview") or source.get("rows") or "rows" in source):
-            return label, path, summary, source
+    candidates = sorted(_mainwave_summary_candidates(), key=lambda x: (str(x[2].get("entry_date") or ""), str(x[2].get("generated_at") or "")), reverse=True)
     for label, path, summary in candidates:
         source = _find_institutional_mainwave_source(summary)
         if source and (source.get("pre_confirm_preview") or source.get("rows") or "rows" in source):
@@ -3138,6 +3134,13 @@ def _run_shadow_notifications(
         _append_monitor_event({"type": "email_skipped", **result})
         return result
     runtime = _load_current_runtime(limit=50)
+    # Data delivery incidents have one notification owner. The independent host
+    # publisher observes the repair window and sends even when no tickets exist.
+    if (any(not item.get("ok") for item in workflow.get("data_checks", []))
+            and operations_notification_owner(runtime_path("operations", "latest.json"))):
+        result = {"ok": True, "email_sent": False, "reason": "data_incident_owned_by_operations_publisher"}
+        _append_monitor_event({"type": "email_skipped", **result})
+        return result
     tickets = runtime.get("tickets") if isinstance(runtime.get("tickets"), list) else []
     entry_date = str(workflow.get("entry_date") or runtime.get("summary", {}).get("entry_date") or "")
     last_alert_keys = state.get("last_alert_keys") if isinstance(state.get("last_alert_keys"), dict) else {}
@@ -3145,7 +3148,7 @@ def _run_shadow_notifications(
     sent: list[dict[str, Any]] = []
     recipient = state.get("recipient_email") or None
     try:
-        if new_tickets:
+        if new_tickets and workflow.get("ok"):
             subject = f"AiStock全局运行摘要 {entry_date or '--'} {now_text[11:16]} 买入候选"
             sent.append(_send_shadow_email(subject, _build_shadow_buy_email_body(now_text, workflow, new_tickets, runtime), recipient))
             for item in new_tickets:
@@ -3318,6 +3321,8 @@ def _build_workflow_status() -> dict[str, Any]:
         },
     ]
     pipeline_checks.extend(business_checks)
+    data_checks = strategy_data_checks(summary, read_snapshot(runtime_path("health", "latest.json")))
+    pipeline_checks.extend(data_checks)
     blockers = [item for item in pipeline_checks if not item.get("ok") and item.get("blocking", True)]
     monitor = configure_shadow_monitor_scheduler()
     exit_monitor = configure_shadow_exit_monitor_scheduler()
@@ -3326,6 +3331,7 @@ def _build_workflow_status() -> dict[str, Any]:
     status = {
         "available": True,
         "ok": not blockers,
+        "data_checks": data_checks,
         "checked_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
         "entry_date": summary.get("entry_date"),
         "decision_date": summary.get("decision_date"),

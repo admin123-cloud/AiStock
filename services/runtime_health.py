@@ -31,6 +31,8 @@ class ArtifactRule:
     remediation_owner: str = ""
     require_payload_healthy: bool = False
     defer_when_non_trading_day: bool = False
+    expected_business_date: str | None = None
+    business_date_field: str = "end_date"
 
 
 def _now() -> datetime:
@@ -88,6 +90,12 @@ def evaluate_artifact(
             "error": parse_error,
             "recommended_action": "rebuild_artifact_from_upstream",
         }
+    if rule.expected_business_date:
+        actual_date = str(payload.get(rule.business_date_field) or "")[:10]
+        result.update(expected_business_date=rule.expected_business_date, business_date=actual_date)
+        if actual_date != rule.expected_business_date:
+            return {**result, "status": "blocked", "reason": "business_date_mismatch",
+                    "recommended_action": "validate_expected_trading_date"}
     if rule.require_closed and payload.get("closed") is not True:
         return {
             **result,
@@ -105,6 +113,8 @@ def evaluate_artifact(
             "reason": "artifact_reports_data_gap",
             "artifact_status": payload.get("status"),
             "missing_code_dates": ((payload.get("after") or payload.get("before") or {}).get("missing_code_dates")),
+            "repair_backlog_code_dates": ((payload.get("after") or payload.get("before") or {}).get("repair_backlog_code_dates")),
+            "source_absent_code_dates": ((payload.get("after") or payload.get("before") or {}).get("source_absent_code_dates")),
             "repair_status": repair.get("status"),
             "stop_continuous": no_progress,
             "recommended_action": (
@@ -172,7 +182,7 @@ def write_snapshot(snapshot: dict[str, Any], path: Path) -> Path:
     return path
 
 
-def read_snapshot(path: Path) -> dict[str, Any]:
+def read_snapshot(path: Path, *, now: datetime | None = None, max_age_seconds: int = 900) -> dict[str, Any]:
     """Read a published snapshot without making any external call or repair."""
 
     payload, error = _read_json(path)
@@ -185,4 +195,49 @@ def read_snapshot(path: Path) -> dict[str, Any]:
             "error": error,
             "path": str(path),
         }
-    return payload
+    checked_at = now or _now()
+    try:
+        published = datetime.fromisoformat(str(payload.get("generated_at") or ""))
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=BUSINESS_TZ)
+        age = (checked_at - published).total_seconds()
+    except (ValueError, TypeError):
+        age = None
+    valid = age is not None and -60 <= age <= max_age_seconds
+    return {**payload, "publisher_age_seconds": round(age) if age is not None else None,
+            "publisher_status": "healthy" if valid else "stale",
+            **({} if valid else {"status": "blocked", "strategy_actionable": False,
+                                "reason": "runtime_health_publisher_stale"})}
+
+
+def strategy_data_checks(summary: dict[str, Any], health: dict[str, Any]) -> list[dict[str, Any]]:
+    """The same data gate drives workflow, UI and notification decisions, including zero-ticket days."""
+    try:
+        failures = int(summary.get("minute_data_failure_rows") or 0)
+    except (TypeError, ValueError, OverflowError):
+        failures = 1  # Malformed producer evidence cannot pass the gate.
+    diagnosis = summary.get("diagnosis_code")
+    blocked = failures > 0 or diagnosis == "MINUTE_DATA_UNAVAILABLE"
+    source_blocked = bool(summary.get("source_builder_failure") or summary.get("candidate_snapshot_failure"))
+    return [
+        {"name": "runtime_data_health", "ok": health.get("strategy_actionable") is True,
+         "status": "pass" if health.get("strategy_actionable") is True else "blocked",
+         "message": "数据验收通过" if health.get("strategy_actionable") is True else "数据交付未通过或健康发布过期",
+         "detail": health},
+        {"name": "minute_source_visibility", "ok": not blocked,
+         "status": "blocked" if blocked else "pass",
+         "message": f"{failures}个候选分钟来源不可用，不能解释为没有机会" if blocked else "未报告分钟来源故障",
+         "failure_count": failures},
+        {"name": "candidate_source_build", "ok": not source_blocked,
+         "status": "blocked" if source_blocked else "pass",
+         "message": "候选构建失败" if source_blocked else "候选构建未报告失败"},
+    ]
+
+
+def operations_notification_owner(path: Path, *, now: datetime | None = None) -> bool:
+    """Transfer notification ownership only after a completed, fresh notify-enabled poll."""
+    snapshot = read_snapshot(path, now=now)
+    return (snapshot.get('publisher_status') == 'healthy'
+            and snapshot.get('notifications_enabled') is True
+            and snapshot.get('notification_transport_ok') is True
+            and snapshot.get('notification', {}).get('status') in ('idle', 'smtp_accepted'))

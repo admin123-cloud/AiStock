@@ -20,6 +20,7 @@ from api.stocks import router as stocks_router
 from api.system_config import router as system_router
 from api.trading import router as trading_router
 from api.watchlist import router as watchlist_router
+from api.operations import router as operations_router
 from services.runtime_health import read_snapshot
 from utils.logger import get_logger
 from utils.paths import runtime_path
@@ -125,6 +126,7 @@ async def runtime_health_check():
     return read_snapshot(runtime_path("health", "latest.json"))
 
 
+app.include_router(operations_router, prefix="/api")
 app.include_router(data_stats_router, prefix="/api", tags=["data-statistics"])
 app.include_router(stocks_router, prefix="/api")
 app.include_router(market_router, prefix="/api")

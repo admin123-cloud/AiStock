@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,9 +24,27 @@ from scheduler.trading_calendar import TradingCalendar
 from utils.paths import runtime_path
 
 
+def _expected_delivery_day(deadline: str) -> str:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    cutoff = now.date() if now.strftime("%H:%M") >= deadline else now.date() - timedelta(days=1)
+    try:
+        from utils.market_warehouse import clickhouse_client
+        rows = clickhouse_client().query(
+            "SELECT max(trade_date) FROM trade_calendar WHERE market='SH' AND is_trading=1 "
+            f"AND trade_date<=toDate('{cutoff.isoformat()}') SETTINGS max_execution_time=5"
+        ).result_rows
+        day = str(rows[0][0])[:10]
+        if day < "2000-01-01":
+            raise ValueError("calendar_not_ready")
+    except Exception:
+        return "calendar_unavailable"
+    return day
+
+
 def _latest_after_close_validation() -> Path:
-    candidates = list(runtime_path().glob("qmt_xtquant_collector_after-close_*/*final_validation.json"))
-    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else runtime_path("missing_final_validation.json")
+    # Select the delivery that is due, not whichever successful file is newest.
+    day = _expected_delivery_day("18:30")
+    return runtime_path(f"qmt_xtquant_collector_after-close_{day}_{day}", "final_validation.json")
 
 
 def default_rules() -> list[ArtifactRule]:
@@ -35,7 +53,7 @@ def default_rules() -> list[ArtifactRule]:
     strategy_max_age = 10 * 60 if ("09:25" <= hhmm <= "11:35" or "13:00" <= hhmm <= "15:15") else 20 * 3600
     return [
         ArtifactRule("qmt_after_close_validation", _latest_after_close_validation(), 36 * 3600, True, "5m/15m/30m/60m closure", "AiStock QMT xtquant After Close Repair", defer_when_non_trading_day=True),
-        ArtifactRule("daily_kline_coverage", runtime_path("daily_kline_coverage", "latest.json"), 36 * 3600, False, "daily bars against SH trading calendar", "daily_kline_coverage_maintenance", True),
+        ArtifactRule("daily_kline_coverage", runtime_path("daily_kline_coverage", "latest.json"), 36 * 3600, False, "daily bars against SH trading calendar", "daily_kline_coverage_maintenance", True, expected_business_date=_expected_delivery_day("16:10")),
         ArtifactRule("g3_strategy_summary", runtime_path("gen3_state_alpha", "latest_summary.json"), strategy_max_age, False, "G3 current candidate result", "g3_state_alpha_shadow_monitor", defer_when_non_trading_day=True),
         ArtifactRule("broker_snapshot", runtime_path("gen3_state_alpha", "broker_state.json"), 24 * 3600, False, "read-only holdings and capital snapshot", "g3_state_alpha_broker_sync at 17:30", defer_when_non_trading_day=True),
     ]

@@ -6,8 +6,7 @@
         <span class="brand-title">AiStock</span>
       </router-link>
       <div class="system-badge">
-        <span class="dot"></span>
-        <span>系统运行中</span>
+        <span>策略观察工作台</span>
       </div>
     </div>
 

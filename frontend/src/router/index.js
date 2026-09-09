@@ -4,6 +4,19 @@ const APP_TITLE = 'AiStock'
 
 const routes = [
   {
+    path: '/system/tasks', name: 'TaskCenter', component: () => import('@/views/pages/TaskCenter.vue'),
+    meta: { title: '任务中心', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 1 }
+  },
+  {
+    path: '/data/health', name: 'DataHealth', component: () => import('@/views/pages/DataHealth.vue'),
+    meta: { title: '数据健康', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1 }
+  },
+  {
+    path: '/gen3/state-alpha/mainwave-evidence', name: 'MainwaveEvidence', component: () => import('@/views/pages/Gen3StateAlphaMainwave.vue'),
+    meta: { title: '主升行业证据', group: 'gen3', hiddenInNav: true }
+  },
+
+  {
     path: '/',
     name: 'Home',
     component: () => import('@/views/pages/Home.vue'),
@@ -271,14 +284,14 @@ const routes = [
   {
     path: '/gen3/state-alpha/mainwave',
     name: 'Gen3StateAlphaMainwave',
-    component: () => import('@/views/pages/Gen3StateAlphaMainwave.vue'),
+    component: () => import('@/views/pages/MainwaveDaily.vue'),
     meta: {
-      title: '主升行业机会',
+      title: '主升每日跟踪',
       group: 'gen3',
       groupLabel: 'G3第三代策略',
       groupOrder: 2.7,
       navOrder: 1.06,
-      navLabel: '主升行业机会'
+      navLabel: '主升每日跟踪'
     }
   },
   {

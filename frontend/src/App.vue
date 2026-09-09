@@ -11,6 +11,7 @@
       />
 
       <main class="main-panel">
+        <RuntimeBanner />
         <div class="breadcrumb-bar">
           <router-link
             v-for="(item, index) in breadcrumbItems"
@@ -40,6 +41,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import SideNav from '@/components/SideNav.vue'
 import TopHeader from '@/components/TopHeader.vue'
+import RuntimeBanner from '@/components/RuntimeBanner.vue'
 
 const route = useRoute()
 const router = useRouter()

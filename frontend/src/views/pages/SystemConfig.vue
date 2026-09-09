@@ -12,7 +12,7 @@
         </span>
         <div class="hero-health">
           <strong :class="`state-${coreMaintenance.overall_status || 'idle'}`">{{ maintenanceStatusText }}</strong>
-          <span>今日成功率 {{ formatRate(coreMaintenance.today_success_rate) }}</span>
+          <span>API任务成功率 {{ formatRate(coreMaintenance.today_success_rate) }}</span>
         </div>
         <div class="runtime-health-card">
           <div class="runtime-health-head">
@@ -880,7 +880,7 @@ const strategyMaintenanceTasks = [
 const coreMaintenance = ref({
   enabled: false,
   overall_status: 'idle',
-  today_success_rate: 100,
+  today_success_rate: null,
   latest_failed_task: null,
   running_task: null,
   jobs: {},
@@ -923,7 +923,7 @@ const normalizeCoreMaintenance = (payload = {}) => {
   return {
     enabled: !!payload.enabled || !!payload.is_enabled,
     overall_status: payload.overall_status || 'idle',
-    today_success_rate: payload.today_success_rate ?? 100,
+    today_success_rate: payload.today_success_rate ?? null,
     latest_failed_task: payload.latest_failed_task || null,
     latest_failed_at: payload.latest_failed_at || null,
     running_task: payload.running_task || null,
@@ -941,7 +941,7 @@ const formatDateTime = (value) => {
   return d.toLocaleString('zh-CN', { hour12: false })
 }
 
-const formatRate = (value) => `${Number(value || 0).toFixed(2)}%`
+const formatRate = (value) => value == null ? "暂无执行样本" : `${Number(value).toFixed(2)}%`
 const formatInteger = (value) => {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
@@ -949,12 +949,14 @@ const formatInteger = (value) => {
 }
 
 const formatCoverage = (value) => {
+  if (value == null) return "待验收"
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
   return `${(n * 100).toFixed(2)}%`
 }
 
 const getDataSourceStatusText = (row) => {
+  if (row?.verification_status === "unverified") return row.ok ? "有数据 / 待验收" : "无记录 / 待验收"
   if (!row?.ok) return '缺失'
   if (row.complete) return '完整'
   return '有缺口'
@@ -1293,6 +1295,7 @@ const runtimeHealthStatusText = computed(() => ({
 }[runtimeHealth.value.status] || '未知'))
 
 const runtimeComponentLabel = (name) => ({
+  daily_kline_coverage: '日线交易日覆盖',
   qmt_after_close_validation: 'QMT分钟数据闭环',
   g3_strategy_summary: 'G3策略摘要',
   broker_snapshot: '账户快照'
