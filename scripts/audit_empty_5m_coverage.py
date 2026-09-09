@@ -20,7 +20,7 @@ def main():
   empty=c.query(q,settings={'max_threads':1,'max_memory_usage':2000000000}).result_rows
   extra=[]
   for n in (15,30,60):
-   q=f"SELECT count() FROM kline_minute_{n} o WHERE toYYYYMM(o.datetime)={a.month} AND NOT EXISTS (SELECT 1 FROM kline_minute_{n}_recovery_{a.run_id} r WHERE r.code=o.code AND r.datetime=o.datetime)"
+   q=f"SELECT count() FROM (SELECT code,datetime FROM kline_minute_{n} WHERE toYYYYMM(datetime)={a.month}) o LEFT JOIN (SELECT code,datetime FROM kline_minute_{n}_recovery_{a.run_id} WHERE toYYYYMM(datetime)={a.month}) r ON o.code=r.code AND o.datetime=r.datetime WHERE r.code IS NULL"
    extra.append({'period':n,'old_only_keys':int(c.query(q,settings={'max_threads':1,'max_memory_usage':2000000000}).result_rows[0][0])})
   unknown=c.query(f"SELECT count() FROM stocks WHERE type='stock' AND list_date IS NULL",settings={'max_threads':1}).result_rows[0][0]
   out={'generated_at':datetime.now(BUSINESS_TZ).isoformat(),'month':a.month,'trusted_empty_code_days_by_date':[{'date':str(x[0]),'count':int(x[1])} for x in empty],'old_only_derived_keys':extra,'unknown_list_date_stocks':int(unknown),'limitations':'does not infer suspension; empty trusted code-days require QMT/official suspension evidence before repair'}
