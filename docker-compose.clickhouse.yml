@@ -16,6 +16,8 @@ services:
     volumes:
       - ./config/clickhouse/config.d/aistock-throttle.xml:/etc/clickhouse-server/config.d/aistock-throttle.xml:ro
       - ./config/clickhouse/users.d/aistock-throttle.xml:/etc/clickhouse-server/users.d/aistock-throttle.xml:ro
+      - ./config/clickhouse/config.d/aistock-backups.xml:/etc/clickhouse-server/config.d/aistock-backups.xml:ro
+      - F:/Stock/clickhouse_backup/native:/backups
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_log:/var/log/clickhouse-server
 

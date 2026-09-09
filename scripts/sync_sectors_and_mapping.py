@@ -97,7 +97,8 @@ def _classify_qmt_sector(name: str) -> Tuple[str, int]:
 
 
 class SectorSyncer:
-    def __init__(self):
+    def __init__(self, registered_only: bool = False):
+        self.registered_only = registered_only
         self.pure_qmt = _is_truthy_env("AISTOCK_QMT_SECTOR_PURE_MODE", "1")
         self.filter_to_universe = _is_truthy_env("AISTOCK_QMT_SECTOR_FILTER_TO_UNIVERSE", "1")
         self.include_all_qmt_sectors = _is_truthy_env("AISTOCK_QMT_SECTOR_INCLUDE_ALL", "1")
@@ -112,6 +113,7 @@ class SectorSyncer:
             "new_mappings": 0,
             "dropped_non_universe_mappings": 0,
             "failed": 0,
+            "source_fresh": False,
         }
 
     def sync_all_sectors(self, include_mappings: bool = True):
@@ -150,17 +152,30 @@ class SectorSyncer:
             xtdata = client._ensure_connected()
             if hasattr(xtdata, "download_sector_data"):
                 xtdata.download_sector_data()
+                self.stats['source_fresh'] = True
                 logger.info("QMT download_sector_data completed before sector list fetch")
+            elif self.registered_only:
+                raise RuntimeError('QMT online sector refresh capability is unavailable')
         except Exception as exc:
+            if self.registered_only:
+                raise RuntimeError('QMT online sector refresh failed; preserving registered taxonomy') from exc
             logger.warning("QMT download_sector_data failed before sector list fetch: {}", exc)
 
         try:
             sector_names = sorted({str(item).strip() for item in client.get_sector_list() if str(item).strip()})
         except Exception as exc:
+            if self.registered_only:
+                raise RuntimeError('QMT online sector list unavailable') from exc
             logger.warning("QMT get_sector_list failed, try local QMT sector files: {}", exc)
             return self._fetch_local_qmt_sector_files()
 
-        if not self.include_all_qmt_sectors:
+        if self.registered_only:
+            registered = {str(row[0])[4:] for row in clickhouse_client().query(
+                "SELECT code FROM sectors WHERE startsWith(code,'qmt:') AND type='industry'").result_rows}
+            if not registered or not registered.issubset(set(sector_names)):
+                raise RuntimeError('Registered QMT sector catalog is empty or differs from the refreshed source')
+            sector_names = sorted(registered)
+        elif not self.include_all_qmt_sectors:
             sector_names = [name for name in sector_names if _is_qmt_universe_sector(name)]
         if not sector_names:
             logger.warning("No QMT sectors returned, try local QMT sector files")
@@ -185,7 +200,7 @@ class SectorSyncer:
         # even though the local QMT sector files already contain it.  Merge the
         # local QMT-owned SW memberships so an online refresh cannot erase a
         # valid canonical mapping (for example, SW2电池 -> 002245.SZ).
-        local_rows = self._fetch_local_qmt_sector_files()
+        local_rows = [] if self.registered_only else self._fetch_local_qmt_sector_files()
         merged: Dict[str, Dict[str, Any]] = {str(row["code"]): row for row in out}
         for local in local_rows:
             code = str(local["code"])
@@ -437,6 +452,8 @@ class SectorSyncer:
         self.stats["total_mappings"] = len(rows)
         self.stats["new_mappings"] = len(rows)
         self.stats["dropped_non_universe_mappings"] = dropped_non_universe
+        if self.registered_only and self.stats['failed']:
+            raise RuntimeError('Some QMT memberships failed; preserve existing membership table')
         if not rows:
             raise RuntimeError("QMT returned no sector members; abort atomic swap to protect existing sector_stocks")
 

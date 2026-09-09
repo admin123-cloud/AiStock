@@ -2860,7 +2860,7 @@ def _mark_reference_cache_success(
             "counts": counts,
             "minimums": minimums,
         },
-        mark_success=True,
+        mark_success=False,
     )
     return True
 
@@ -3135,8 +3135,10 @@ def sync_sectors_task():
         logger.info("弢始同步一二三行业板块")
         task_manager.update_progress(task_name, {"message": "弢始同步行业板?.."})
 
-        syncer = SectorSyncer()
+        syncer = SectorSyncer(registered_only=True)
         syncer.sync_all_sectors()
+        if syncer.stats.get('failed') or not syncer.stats.get('source_fresh'):
+            raise RuntimeError('QMT sector membership sync has failed items; cached data is not a fresh success')
 
         task_manager.set_results(
             task_name,
@@ -3172,6 +3174,9 @@ def sync_sector_history_task(days=90):
         days: 同步多少天的历史数据，默?0?
     """
     task_name = "sync_sector_history"
+    if os.getenv('AISTOCK_SECTOR_DAILY_OWNER', 'host') == 'host':
+        task_manager.set_error(task_name, '板块日线已由宿主固定任务接管；旧历史同步入口已禁用')
+        return
     
     try:
         from datetime import datetime, timedelta
@@ -8309,6 +8314,8 @@ async def trigger_sync_sector_history(background_tasks: BackgroundTasks, days: i
     Returns:
         任务状?
     """
+    if os.getenv('AISTOCK_SECTOR_DAILY_OWNER', 'host') == 'host':
+        raise HTTPException(status_code=409, detail='板块日线已由任务中心统一维护，旧同步入口已停用')
     task_name = "sync_sector_history"
     
     logger.info(f"接收到同步板块历史数据请求，天数: {days}")
@@ -8725,4 +8732,16 @@ async def get_all_tasks_status():
     return {
         "success": True,
         "tasks": task_manager.tasks
+    }
+
+
+@router.get("/ingestion-owners")
+def ingestion_owners():
+    owner = os.getenv("AISTOCK_SECTOR_DAILY_OWNER", "host")
+    state = task_manager.get_task_status("sync_sector_history") or {}
+    return {
+        "version": os.getenv("AISTOCK_RELEASE_VERSION", "unknown"),
+        "legacy_sector_history_enabled": owner != "host",
+        "legacy_sector_history_running": bool(state.get("is_running")),
+        "sector_daily_owner": owner,
     }
