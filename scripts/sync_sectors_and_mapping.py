@@ -132,6 +132,23 @@ class SectorSyncer:
         sectors = self._fetch_qmt_sectors()
         if not sectors:
             raise RuntimeError("QMT returned no sectors; abort atomic swap to protect existing sector tables")
+        if self.registered_only and include_mappings:
+            # Fetch and validate every membership before replacing either live table.
+            universe = self._official_universe_codes()
+            if self.filter_to_universe and not universe:
+                raise RuntimeError('Official security universe unavailable; preserve sector metadata')
+            client = self._qmt_client()
+            from services.operations.reference_universe import current_stock_universe, scoped_members
+            active = current_stock_universe(client)
+            self.stats['excluded_members'] = {}
+            for sector in sectors:
+                raw = client.get_stock_list_in_sector(sector['qmt_name']) or []
+                codes, excluded = scoped_members(raw, active)
+                if universe and not set(codes).issubset(universe):
+                    raise RuntimeError(f"Empty or unknown QMT membership for {sector['code']}; preserve sector metadata")
+                sector['members'] = codes
+                if excluded:
+                    self.stats['excluded_members'][sector['code']] = excluded
         self._atomic_replace_sectors(sectors)
 
         if include_mappings:

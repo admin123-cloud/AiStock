@@ -1,10 +1,18 @@
 param(
-    [ValidateSet('Inspect','Build','Apply','Rollback')][string]$Mode = 'Inspect',
-    [Parameter(Mandatory=$true)][string]$Version,
-    [Parameter(Mandatory=$true)][string]$SettingsFile,
+    [ValidateSet('Inspect','Build','Apply','Rollback','RestorePrevious')][string]$Mode = 'Inspect',
+    [string]$Version,
+    [string]$SettingsFile,
+    [string]$RollbackRecord,
+    [string]$PythonExe = 'F:\python3.10\python.exe',
     [string]$HostRepoRoot = (Split-Path $PSScriptRoot -Parent)
 )
 $ErrorActionPreference = 'Stop'
+if ($Mode -eq 'RestorePrevious') {
+    if (-not $RollbackRecord) { throw 'RollbackRecord is required for RestorePrevious' }
+    & $PythonExe (Join-Path $PSScriptRoot 'manage_app_rollback.py') --mode rollback --record $RollbackRecord
+    if ($LASTEXITCODE -ne 0) { throw 'Recorded app rollback failed; preserve all evidence' }
+    exit 0
+}
 $taskDocker = (Get-Command docker -ErrorAction SilentlyContinue).Source
 if (-not $taskDocker) { $taskDocker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' }
 if (-not (Test-Path -LiteralPath $taskDocker -PathType Leaf)) { throw 'Docker CLI not found' }
@@ -49,9 +57,12 @@ foreach ($taskImage in @("aistock-core-backend:$Version","aistock-core-frontend:
 $taskRecordDir = 'F:\Stock\AiStockData\artifacts\releases'
 New-Item -ItemType Directory -Force -Path $taskRecordDir | Out-Null
 $taskRecord = Join-Path $taskRecordDir ("{0}-{1}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss'),$Mode)
+$taskRollbackDir = Join-Path $taskRecordDir ("rollback-{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+& $PythonExe (Join-Path $PSScriptRoot 'manage_app_rollback.py') --mode capture --output $taskRollbackDir
+if ($LASTEXITCODE -ne 0) { throw 'Could not capture the actual previous app rollback point; deployment stopped' }
 $taskPrevious = Invoke-ReleaseCompose -f $taskCompose images --format json
 if ($LASTEXITCODE -ne 0) { throw 'Could not record previous container images' }
-@{version=$taskHead; mode=$Mode; host_repo=$taskRepo; previous_images=$taskPrevious; started_at=(Get-Date).ToString('o')} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $taskRecord -Encoding UTF8
+@{version=$taskHead; mode=$Mode; host_repo=$taskRepo; previous_images=$taskPrevious; rollback_record=(Join-Path $taskRollbackDir 'rollback.json'); started_at=(Get-Date).ToString('o')} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $taskRecord -Encoding UTF8
 Invoke-ReleaseCompose -f $taskCompose up -d --no-build --wait --wait-timeout 180
 if ($LASTEXITCODE -ne 0) { throw "Release not healthy. Preserve data; use recorded prior release checkout and Rollback. Record: $taskRecord" }
 Write-Output "Containers ready. Record: $taskRecord. Host task publisher must target this verified checkout; trading-day acceptance remains separate."

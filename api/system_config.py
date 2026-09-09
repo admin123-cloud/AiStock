@@ -6792,7 +6792,8 @@ def update_trade_calendar_task():
         from scripts.sync_trade_calendar import sync_trade_calendar
         
         # 执行同步
-        sync_trade_calendar()
+        if sync_trade_calendar() <= 0:
+            raise RuntimeError('Trade calendar refresh wrote no verified dates')
         
         # 设置结果
         results = {

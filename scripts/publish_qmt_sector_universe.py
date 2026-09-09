@@ -3,7 +3,6 @@ from datetime import datetime
 import argparse
 from pathlib import Path
 import sys
-import re
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from services.operations.health import write_snapshot
 from utils.paths import runtime_path
+from services.operations.reference_universe import current_stock_universe, scoped_members, QMT_CURRENT_STOCKS
 
 
 def collect(client, *, now=None, progress=None, registered_codes=None):
@@ -31,21 +31,25 @@ def collect(client, *, now=None, progress=None, registered_codes=None):
         names = sorted(expected)
     if not names:
         raise RuntimeError('QMT refreshed sector list is empty')
-    members, errors = {}, []
+    active = current_stock_universe(client)
+    members, errors, excluded_members = {}, [], {}
     for index, name in enumerate(names):
         progress('read_members', completed=index, total=len(names), sector=name)
         codes = client.get_stock_list_in_sector(name)
-        raw = {str(c.get('Code') if isinstance(c, dict) else c).strip().upper()
-               for c in codes or [] if c}
-        clean = sorted(c for c in raw if re.fullmatch(r'\d{6}\.(SH|SZ|BJ)', c))
-        if set(clean) != raw:
-            errors.append(f'unsupported_member_identity:qmt:{name}')
-        if not clean:
-            errors.append(f'empty_members:qmt:{name}')
-        members[f'qmt:{name}'] = clean
+        try:
+            clean, excluded = scoped_members(codes, active)
+            members[f'qmt:{name}'] = clean
+            if excluded:
+                excluded_members[f'qmt:{name}'] = excluded
+        except RuntimeError as exc:
+            errors.append(f'qmt:{name}: {exc}')
+            members[f'qmt:{name}'] = []
     return {'source': 'qmt', 'verified': not errors, 'generated_at': now.isoformat(),
             'effective_from': now.date().isoformat(), 'codes': sorted(members), 'members': members,
             'exemptions': [], 'errors': errors,
+            'excluded_members':excluded_members,
+            'membership_scope':{'source':'qmt:'+QMT_CURRENT_STOCKS,'count':len(active),
+                                'excluded_reason':'not_in_current_qmt_stock_universe'},
             'scope': 'registered_qmt_industry_sectors' if registered_codes is not None else 'current_qmt_online_industry_sectors',
             'history_policy': 'Current membership cannot be used to backfill earlier dates'}
 

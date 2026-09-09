@@ -17,6 +17,8 @@ class Client:
         return ['沪深A股', 'SW2电池']
 
     def get_stock_list_in_sector(self, name):
+        if name == '沪深京A股':
+            return [f'{i:06d}.SZ' for i in range(1000)] + ['002245.SZ']
         return ['002245.SZ']
 
 
@@ -38,10 +40,19 @@ def test_failed_refresh_cannot_be_verified_from_cached_list():
 
 def test_empty_members_block_verified_denominator():
     client = Client()
-    client.get_stock_list_in_sector = lambda name: []
+    client.get_stock_list_in_sector = lambda name: Client().get_stock_list_in_sector(name) if name == '沪深京A股' else []
     result = collect(client)
     assert not result['verified']
     assert result['errors']
+
+
+def test_non_current_qmt_members_are_explained_without_guessing_delist_dates():
+    client = Client()
+    client.get_stock_list_in_sector = lambda name: Client().get_stock_list_in_sector(name) if name == '沪深京A股' else ['002245.SZ','999991.SZ']
+    result = collect(client)
+    assert result['verified'] and result['members'] == {'qmt:SW2电池':['002245.SZ']}
+    assert result['excluded_members'] == {'qmt:SW2电池':['999991.SZ']}
+    assert result['exemptions'] == []
 
 
 def test_registered_taxonomy_is_not_expanded_by_online_catalog():
@@ -59,3 +70,21 @@ def test_late_reference_trigger_keeps_due_date():
     assert due_date(datetime(2026, 9, 9, 19, 30, tzinfo=tz)) == '2026-09-09'
     assert due_date(datetime(2026, 9, 10, 0, 5, tzinfo=tz)) == '2026-09-09'
     assert due_date(datetime(2026, 9, 14, 0, 5, tzinfo=tz)) == '2026-09-11'
+
+
+def test_registered_membership_failure_precedes_both_live_table_swaps():
+    from scripts.sync_sectors_and_mapping import SectorSyncer
+    syncer = SectorSyncer.__new__(SectorSyncer)
+    syncer.registered_only = syncer.pure_qmt = syncer.filter_to_universe = True
+    syncer.include_all_qmt_sectors = syncer.include_universe_sectors = False
+    syncer._ensure_sector_tables = lambda: None
+    syncer._fetch_qmt_sectors = lambda: [{'code':'qmt:SW2电池','qmt_name':'SW2电池'}]
+    syncer._official_universe_codes = lambda: {'002245.SZ'}
+    syncer.stats = {}
+    syncer._qmt_client = lambda: SimpleNamespace(get_stock_list_in_sector=lambda name: Client().get_stock_list_in_sector(name) if name == '沪深京A股' else [])
+    called = []
+    syncer._atomic_replace_sectors = lambda rows: called.append('sectors')
+    syncer._atomic_replace_sector_mappings = lambda rows: called.append('members')
+    with pytest.raises(RuntimeError, match='Empty current'):
+        syncer.sync_all_sectors()
+    assert called == []
