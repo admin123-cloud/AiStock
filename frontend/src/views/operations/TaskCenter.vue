@@ -13,6 +13,14 @@
     <el-alert v-if="board.operations_publisher?.publisher_status!=='healthy'||!board.operations_publisher?.notifications_enabled" title="独立数据告警尚未接管或心跳已过期" description="此处记录异常不等于已发送通知；上线需同时部署通知发布器。原G3通知仅在自身运行窗口内兜底。" type="warning" :closable="false" show-icon />
     <el-alert v-if="board.host_inventory_status !== 'healthy'" title="Windows任务清单尚未发布或已过期" description="未把缺少心跳解释为任务正常。请检查 Operations Publisher 的运行状态。" type="warning" :closable="false" show-icon />
     <div class="ops-metrics"><div v-for="item in metrics" :key="item.label" class="ops-metric"><span>{{ item.label }}</span><strong>{{ item.value ?? '—' }}</strong></div></div>
+    <section v-if="board.historical_recovery?.total" class="ops-panel" aria-label="历史数据恢复进度">
+      <div class="ops-toolbar"><h2>历史数据恢复</h2><el-tag type="warning">{{ board.historical_recovery.candidate_complete?'候选已校验，待上线验收':board.historical_recovery.pending?.some(x=>x.state==='blocked')?'恢复已阻断':'候选构建记录' }}</el-tag></div>
+      <p>已校验 {{ board.historical_recovery.verified }} / {{ board.historical_recovery.total }} 个月份周期 · {{ Number(board.historical_recovery.rows).toLocaleString() }} 行</p>
+      <el-progress :percentage="Math.floor(board.historical_recovery.verified / board.historical_recovery.total * 100)" />
+      <p>数据截止 {{ board.historical_recovery.cutoff }} · 不完整组合 {{ board.historical_recovery.incomplete_buckets }} 个（未生成完整K线）</p>
+      <p v-for="item in board.historical_recovery.pending" :key="item.key" :class="{'ops-error':item.state==='blocked'}">{{ recoveryPeriod(item.key) }} · {{ recoveryStage(item.state) }}<span v-if="item.error">：{{ item.error }}</span></p>
+      <p class="ops-meta">最近记录 {{ dateTime(board.historical_recovery.updated_at) }}{{ board.historical_recovery.record_stale?' · 记录已过期，需核对执行进程':'' }}。此处显示恢复检查点，不代表进程在线；候选构建不会自动替换正式表。</p>
+    </section>
     <section class="ops-panel" aria-label="任务职责分组">
       <div class="ops-toolbar"><h2>按职责查看任务</h2><el-radio-group v-model="scope" @change="changeScope"><el-radio-button value="core">核心任务</el-radio-button><el-radio-button value="external">外部联动</el-radio-button><el-radio-button value="retired">已退役</el-radio-button></el-radio-group></div>
       <div class="ops-task-groups"><button v-for="item in visibleGroups" :key="item.id" class="ops-task-group" :class="{selected:group===item.id}" :aria-pressed="group===item.id" @click="group=item.id"><strong>{{ item.label }} <span>{{ item.count }}项</span></strong><p>{{ item.purpose }}</p><small>{{ item.attention ? `${item.attention}项需要核对` : '查看任务用途与执行详情' }}</small></button></div>
@@ -40,6 +48,8 @@ import { getTasks, getIncidents, label, tone, dateTime } from '@/utils/operation
 import '@/styles/operations.css'
 const board=ref({}), events=ref([]), loading=ref(false), error=ref(''), filter=ref('all'), search=ref(''), scope=ref('core'), group=ref('delivery')
 const metrics=computed(()=>[{label:'Windows已登记',value:board.value.summary?.registered_windows},{label:'运行中',value:board.value.summary?.running},{label:'最近执行失败',value:board.value.summary?.failed},{label:'历史 / 退役入口',value:board.value.summary?.retired}])
+const recoveryStage=state=>({checking_source:'核验5分钟源数据',writing:'写入候选',validating:'校验候选与源数据',blocked:'已阻断，需排查'}[state]||state)
+const recoveryPeriod=key=>{const match=/^(15|30|60):(\d{4})(\d{2})$/.exec(key);return match?`${match[2]}年${match[3]}月 · ${match[1]}分钟`:key}
 const visibleGroups=computed(()=>(board.value.groups||[]).filter(x=>scope.value==='core'?!['external','retired'].includes(x.id):x.id===scope.value))
 const groupRows=computed(()=>(board.value.tasks||[]).filter(x=>x.group===group.value))
 const groupTitle=computed(()=>(board.value.groups||[]).find(x=>x.id===group.value)?.label||'后台任务')

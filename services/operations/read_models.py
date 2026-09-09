@@ -41,6 +41,37 @@ def number(value, default=0):
         return default
 
 
+def recovery_summary(root: Path, *, now: datetime | None = None) -> dict:
+    """Only inspect manifests; a progress record is not a worker heartbeat."""
+    candidates = []
+    for path in (root / 'operations/derived_recovery').glob('*/state.json'):
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    for modified, path in sorted(candidates, reverse=True):
+        state = read_json(path)
+        if not isinstance(state.get('jobs'), dict) or not isinstance(state.get('months'), list):
+            continue
+        jobs = state['jobs']
+        if any(not isinstance(v, dict) for v in jobs.values()):
+            continue
+        verified = [v for v in jobs.values() if v.get('state') == 'verified']
+        pending = [{'key': k, 'state': v.get('state'), 'error': v.get('error')}
+                   for k, v in jobs.items() if v.get('state') != 'verified']
+        total = len(state['months']) * 3
+        stamp = datetime.fromtimestamp(modified, BUSINESS_TZ)
+        age = ((now or datetime.now(BUSINESS_TZ)) - stamp).total_seconds()
+        return {'run_id': state.get('run_id'), 'cutoff': state.get('cutoff'),
+                'updated_at': stamp.isoformat(), 'record_stale': not 0 <= age <= 900,
+                'verified': len(verified), 'total': total,
+                'rows': sum(number((v.get('actual') or [0])[0]) for v in verified),
+                'incomplete_buckets': sum(number(v.get('incomplete_buckets', 0)) for v in jobs.values()),
+                'pending': pending, 'candidate_complete': total > 0 and len(verified) == total,
+                'promotion': state.get('promotion', 'not_performed')}
+    return {}
+
+
 def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live: dict | None = None) -> dict:
     health = read_snapshot(root / 'health/latest.json', now=now)
     host = read_snapshot(root / 'operations/host_tasks.json', now=now)
@@ -96,6 +127,7 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
     from services.operations.task_catalog import describe_tasks
     rows, groups = describe_tasks(rows, read_json(root/'operations/task_transitions.json'))
     return {'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'), 'tasks': rows, 'groups':groups,
+            'historical_recovery': recovery_summary(root, now=now),
             'api_runtime': {**api_state, 'fresh': api_fresh, 'source': 'live' if live is not None else 'snapshot',
                             'ready': bool(api_fresh and api_state.get('ready'))},
             'operations_publisher':read_snapshot(root/'operations/latest.json',now=now),

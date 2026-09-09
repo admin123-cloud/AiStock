@@ -217,6 +217,11 @@ def _code_filter(codes: Optional[List[str]]) -> str:
 def _source_5m_subquery(start_date: Optional[date], end_date: Optional[date], use_final: bool, codes: Optional[List[str]] = None) -> str:
     table_expr = "kline_minute_5 FINAL" if use_final else "kline_minute_5"
     where = _date_filter("toDate(datetime)", start_date, end_date)
+    # Nullable datetime date filters alone may not prune monthly partitions.
+    if start_date is not None:
+        where += f" AND toYYYYMM(datetime) >= {start_date.year * 100 + start_date.month}"
+    if end_date is not None:
+        where += f" AND toYYYYMM(datetime) <= {end_date.year * 100 + end_date.month}"
     return f"""
     SELECT
         code,
