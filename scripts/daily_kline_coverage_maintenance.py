@@ -204,7 +204,7 @@ def _daily_args(start_date: str, end_date: str, codes: list[str], batch_size: in
     return argparse.Namespace(
         phase="all", start_date=start_date, end_date=end_date, codes=",".join(codes), code_offset=0,
         limit=0, include_index=False, batch_size=batch_size, delete_chunk_size=100,
-        stage_table="kline_daily_qmtmini_coverage_stage", reset_stage=True, resume=False,
+        stage_table="kline_daily_qmtmini_coverage_lots_v1_stage", reset_stage=True, resume=False,
         sleep=0.02, max_retries=2, retry_sleep=1.0, use_batch_download=True,
         skip_download=False, dividend_type="none", price_tolerance=0.001,
         volume_tolerance=1.0, require_complete=False, report=str(report),

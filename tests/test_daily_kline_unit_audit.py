@@ -45,7 +45,8 @@ def test_unit_comparison_summary_reports_latest_day_and_mismatch_samples():
     assert summary["classification_counts"]["amount_large_only"] == 1
 
 
-def test_temporary_qmt_stage_requires_current_refresh_timestamp():
+def test_temporary_qmt_stage_requires_current_refresh_timestamp(monkeypatch):
+    monkeypatch.setattr(audit, 'require_stage_contract', lambda *args: None)
     class Result:
         first_row = (2, date(2026, 8, 5), datetime(2026, 8, 5, 1, 0, 0))
         result_rows = []
@@ -64,6 +65,16 @@ def test_temporary_qmt_stage_requires_current_refresh_timestamp():
     assert result["temporary_stage"] is True
     assert result["trusted_for_auto_repair"] is False
     assert result["stage_rows"] == 2
+
+
+def test_fresh_timestamp_cannot_trust_legacy_stage(monkeypatch):
+    def reject(*args):
+        raise RuntimeError('stage_unit_contract_mismatch')
+    monkeypatch.setattr(audit, 'require_stage_contract', reject)
+    result = audit.audit_qmt_stage_units(None, '2026-08-01', '2026-08-31',
+                                        stage_created_after=datetime(2026,9,9))
+    assert result['status']=='unavailable' and result['trusted_for_auto_repair'] is False
+    assert result['rows_checked']==0
 
 
 def test_tdx_apply_is_followed_by_a_second_read_only_audit(monkeypatch, tmp_path):

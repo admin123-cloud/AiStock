@@ -22,9 +22,10 @@ from data_fetcher.sources.qmtmini_client import QmtMiniMarketClient
 from utils.kline_units import normalize_qmt_daily_units
 from utils.paths import report_path
 from utils.qmt_universe import qmt_universe_filter_sql
+from services.operations.stage_contract import require_stage_contract
 
 
-DEFAULT_STAGE_TABLE = "kline_daily_qmtmini_stage"
+DEFAULT_STAGE_TABLE = "kline_daily_qmtmini_lots_v1_stage"
 SOURCE_ABSENCE_TABLE = "kline_daily_qmt_source_absence_audit"
 MARKET_STATUS_TABLE = "kline_daily_market_status_audit"
 SECURITY_TYPE_AUDIT_TABLE = "security_master_type_evidence_audit"
@@ -178,6 +179,9 @@ def ch_client():
 
 
 def ensure_stage_table(client, stage_table: str) -> None:
+    import re
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?',stage_table):
+        raise ValueError('invalid_stage_identifier')
     client.command(
         f"""
         CREATE TABLE IF NOT EXISTS {stage_table}
@@ -201,6 +205,7 @@ def ensure_stage_table(client, stage_table: str) -> None:
         ORDER BY (code, trade_date)
         """
     )
+    require_stage_contract(client, stage_table, initialize_empty=True)
 
 
 def ensure_source_absence_table(client) -> None:
@@ -865,6 +870,7 @@ def fetch_to_stage(args: argparse.Namespace) -> dict[str, Any]:
 
 def validate_stage(args: argparse.Namespace) -> dict[str, Any]:
     client = ch_client()
+    require_stage_contract(client, args.stage_table)
     codes = select_codes_for_args(client, args)
     code_sql = ",".join(quote_sql(code) for code in codes) or "''"
     summary_row = client.query(
@@ -947,6 +953,7 @@ def validate_stage(args: argparse.Namespace) -> dict[str, Any]:
 
 def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
     client = ch_client()
+    require_stage_contract(client, args.stage_table)
     codes = select_codes_for_args(client, args)
     total_inserted = 0
     for chunk_no, code_chunk in enumerate(chunked(codes, args.delete_chunk_size), start=1):

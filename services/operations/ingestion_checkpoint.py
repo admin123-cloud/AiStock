@@ -25,6 +25,9 @@ def run_staged(command, timeout, root, runner, *, phases):
     root = Path(root)
     # Include worker bytes: changed algorithms must not reuse an earlier checkpoint.
     identity = json.dumps(command, ensure_ascii=False) + Path(command[1]).read_text(encoding="utf-8")
+    source_root = Path(__file__).resolve().parents[2]
+    for dependency in ('utils/kline_units.py', 'config/minute_units.json', 'services/operations/stage_contract.py'):
+        identity += hashlib.sha256((source_root / dependency).read_bytes()).hexdigest()
     key = hashlib.sha256(identity.encode()).hexdigest()[:20]
     directory = root / "batches" / key
     directory.mkdir(parents=True, exist_ok=True)

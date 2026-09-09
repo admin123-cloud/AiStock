@@ -26,10 +26,11 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.repair_kline_daily_units_from_tdx import repair_from_tdx
 from utils.kline_units import DAILY_UNIT_MISMATCH_CLASSES, classify_daily_unit_pair
 from utils.paths import runtime_path
+from services.operations.stage_contract import require_stage_contract
 
 
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
-DEFAULT_STAGE_TABLE = "kline_daily_qmtmini_coverage_stage"
+DEFAULT_STAGE_TABLE = "kline_daily_qmtmini_coverage_lots_v1_stage"
 DEFAULT_TDX_ROOT = Path(r"D:\TDX\vipdoc")
 
 
@@ -258,11 +259,12 @@ def audit_qmt_stage_units(
         "source": "qmt_xtquant_stage",
         "stage_table": table,
         "temporary_stage": True,
-        "trusted_for_auto_repair": stage_created_after is not None,
+        "trusted_for_auto_repair": False,
         "start_date": start_date,
         "end_date": end_date,
     }
     try:
+        require_stage_contract(client, table)
         stage_summary = _stage_summary(client, table)
     except Exception as exc:
         return {
@@ -286,6 +288,7 @@ def audit_qmt_stage_units(
         }
 
     created_after = stage_created_after.replace(tzinfo=None, microsecond=0)
+    base['trusted_for_auto_repair'] = True
     rows = client.query(
         f"""
         SELECT
@@ -380,7 +383,7 @@ def build_unit_audit_report(
             "stock_volume": "lots",
             "stock_amount": "yuan",
             "qmt_stock_daily_input": "lots/yuan",
-            "qmt_index_daily_input": "shares/yuan; volume divided by 100",
+            "qmt_index_daily_input": "SDK volume lots/amount yuan; raw DAT has a separate contract",
             "tdx_day_input": "volume shares converted to lots; amount yuan",
         },
         "status": status,
