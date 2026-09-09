@@ -693,8 +693,7 @@ def rows_from_qmt(
             counts[code] = 0
             continue
 
-        # QMT stock daily bars already use lots/yuan.  Index volume is returned
-        # as shares and keeps the historical shares-to-lots conversion.
+        # SDK standard volume is lots for stocks and indices; raw DAT is separate.
         instrument_type = (
             "index"
             if str(code).upper() in index_codes or str(source_code).upper() in index_codes

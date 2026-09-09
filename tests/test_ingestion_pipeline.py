@@ -45,7 +45,7 @@ def test_failed_minute_write_is_journaled_and_retried(tmp_path,monkeypatch):
 
 def test_newer_push_wins_over_older_polled_tick():
     a=f.FullPushAggregator(SimpleNamespace())
-    old={'time':'20260909100000','lastPrice':1,'open':1,'high':2,'low':1}
+    old={'time':'20260909100000','lastPrice':1,'open':1,'high':2,'low':1,'volume':10,'amount':1000}
     new={**old,'time':'20260909100100','lastPrice':2}
     a.latest_ticks={'000001.SZ':new};a.full_tick_ticks={'000001.SZ':old}
     assert a.daily_rows()[0][5]==2

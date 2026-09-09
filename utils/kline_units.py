@@ -27,12 +27,10 @@ _AMOUNT_MULTIPLIERS = {
     "ten_thousand_yuan": 10000.0,
 }
 
-# AiStock's daily K-line contract stores stock volume in lots and amount in
-# yuan.  The live QMT/xtquant 1d response already uses those units for stocks:
-# `volume` is lots and `amount` is yuan.  QMT index volume is returned as
-# shares, so index rows retain the historical /100 conversion for volume.
+# Current xtdata/get_market_data standard volume is lots for stocks and indices.
+# Raw DAT integers are a different source contract and must not reuse this rule.
 QMT_DAILY_VOLUME_TO_LOTS = 1.0
-QMT_DAILY_INDEX_VOLUME_TO_LOTS = 100.0
+QMT_DAILY_INDEX_VOLUME_TO_LOTS = 1.0
 QMT_DAILY_AMOUNT_TO_YUAN = 1.0
 QMT_DAILY_SOURCE_NAMES = frozenset({"qmt", "qmtmini", "qmt_xtquant", "xtquant"})
 DAILY_UNIT_MISMATCH_CLASSES = frozenset(
@@ -134,22 +132,9 @@ def normalize_qmt_daily_units(
     *,
     instrument_type: str = "stock",
 ) -> pd.DataFrame:
-    """Normalize raw QMT/xtquant daily fields to AiStock's storage contract.
+    """Normalize SDK standard volume/amount; security type does not change units."""
+    return normalize_daily_units(frame, volume_unit=MINUTE_UNIT_CONTRACT['qmt_sdk_daily_volume_unit'], amount_unit="yuan")
 
-    QMT stock daily bars already use lots/yuan.  Only index volume needs the
-    legacy shares-to-lots conversion; amount is already yuan for both.
-    """
-    normalized_type = str(instrument_type or "stock").strip().lower()
-    volume_unit = (
-        "shares"
-        if normalized_type == "index"
-        else "lots"
-    )
-    return normalize_daily_units(
-        frame,
-        volume_unit=volume_unit,
-        amount_unit="yuan",
-    )
 
 
 def normalize_qmt_intraday_units(
@@ -157,9 +142,9 @@ def normalize_qmt_intraday_units(
     *,
     instrument_type: str = "stock",
 ) -> pd.DataFrame:
-    """Normalize QMT DAT/tick-derived bars to lots/yuan."""
+    """Normalize legacy raw QMT DAT fields; SDK/tick.volume use minute helpers."""
 
-    return normalize_qmt_daily_units(frame, instrument_type=instrument_type)
+    return normalize_daily_units(frame, volume_unit="shares" if str(instrument_type).lower() == "index" else "lots", amount_unit="yuan")
 
 
 def normalize_tdxquant_daily_units(
@@ -201,3 +186,36 @@ def normalize_tushare_daily_units(frame: pd.DataFrame) -> pd.DataFrame:
     """Tushare ``daily.amount`` is thousand yuan; ``vol`` is lots."""
 
     return normalize_daily_units(frame, volume_unit="lots", amount_unit="thousand_yuan")
+
+
+# Native QMT minute fields and standardized tick.volume agree in lots for
+# sampled SH/SZ/BJ stocks and indices. Raw pvolume is exchange-dependent.
+import json as _json
+import math as _math
+from pathlib import Path as _Path
+MINUTE_UNIT_CONTRACT = _json.loads((_Path(__file__).resolve().parents[1]/'config/minute_units.json').read_text(encoding='utf-8'))
+MINUTE_UNIT_CONTRACT_ID = MINUTE_UNIT_CONTRACT['contract_id']
+
+
+def normalize_qmt_minute_values(volume, amount, *, volume_unit=None, amount_unit=None):
+    """Convert explicit source units only; never fit units against old database rows."""
+    volume_unit = volume_unit or MINUTE_UNIT_CONTRACT['qmt_history_volume_unit']
+    amount_unit = amount_unit or MINUTE_UNIT_CONTRACT['amount_unit']
+    if volume_unit not in ('lots','shares') or amount_unit != 'yuan':
+        raise ValueError('unverified_minute_source_units')
+    try:
+        volume, amount = float(volume), float(amount)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError('minute_volume_amount_missing_or_invalid') from exc
+    if not _math.isfinite(volume) or not _math.isfinite(amount) or volume < 0 or amount < 0:
+        raise ValueError('minute_volume_amount_missing_or_invalid')
+    return volume / (100.0 if volume_unit == 'shares' else 1.0), amount
+
+
+def qmt_tick_lots_yuan(tick):
+    # pvolume is shares in SH/SZ samples but already lots in BJ samples.
+    # A missing standardized field is unknown, not zero and not a /100 guess.
+    if MINUTE_UNIT_CONTRACT['qmt_tick_volume_field'] not in tick:
+        raise ValueError('qmt_tick_volume_unit_unverified')
+    return normalize_qmt_minute_values(tick.get('volume'),tick.get('amount'),
+                                      volume_unit=MINUTE_UNIT_CONTRACT['qmt_tick_volume_unit'])

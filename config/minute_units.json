@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "contract_id": "minute-lots-yuan-v1",
+  "volume_unit": "lots",
+  "shares_per_lot": 100,
+  "amount_unit": "yuan",
+  "qmt_history_volume_unit": "lots",
+  "qmt_tick_volume_field": "volume",
+  "qmt_tick_volume_unit": "lots",
+  "pvolume_fallback": "forbidden_without_explicit_unit_evidence",
+  "legacy_rows": "preserved_requires_separate_unit_audit",
+  "evidence_date": "2026-09-09",
+  "verified_sdk": "xtquant250807.1.2",
+  "verified_samples": [
+    "600000.SH",
+    "000698.SZ",
+    "920679.BJ",
+    "000001.SH",
+    "399001.SZ",
+    "899050.BJ"
+  ],
+  "qmt_sdk_daily_volume_unit": "lots",
+  "raw_dat_fields": "separate_legacy_contract_not_sdk_volume"
+}

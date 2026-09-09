@@ -137,11 +137,12 @@ class FullSyncKlineTask:
                         # Synchronize supported daily periods before minute-period chunks.
                         for period in daily_periods:
                             self.current_period = period
-                            result = self.market_data_source.get_stock_history(
+                            result = self.market_data_source.call_with_failover("get_stock_history",
                                 stock_code=code,
                                 start_date=start_date.strftime("%Y-%m-%d"),
                                 end_date=end_date.strftime("%Y-%m-%d"),
-                                period=period
+                                period=period,
+                                source_name="qmt_xtquant",
                             )
 
                             if result is not None and not result.empty:
@@ -170,11 +171,12 @@ class FullSyncKlineTask:
                             
                             for period in minute_periods:
                                 self.current_period = period
-                                result = self.market_data_source.get_stock_history(
+                                result = self.market_data_source.call_with_failover("get_stock_history",
                                     stock_code=code,
                                     start_date=current_chunk_start.strftime("%Y-%m-%d"),
                                     end_date=chunk_end.strftime("%Y-%m-%d"),
-                                    period=period
+                                    period=period,
+                                    source_name="qmt_xtquant",
                                 )
 
                                 if result is not None and not result.empty:

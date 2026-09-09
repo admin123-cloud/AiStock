@@ -887,11 +887,12 @@ class KlineSyncer:
             source_used = self.preferred_source or "qmt_xtquant"
             for fetch_code in _candidate_codes(code):
                 try:
-                    df = self.market_data_source.get_stock_history(
+                    df = self.market_data_source.call_with_failover("get_stock_history",
                         stock_code=fetch_code,
                         start_date=start_date,
                         end_date=end_date,
                         period=period,
+                        source_name=source_used,
                     )
                     if df is not None and not df.empty:
                         break
@@ -927,8 +928,7 @@ class KlineSyncer:
                     logger.warning(f"{code} {name} {period} data empty after anomaly filtering, skip insert")
                     return False
 
-            # QMT stock daily bars already use lots/yuan.  Index volume keeps
-            # the established shares-to-lots conversion.
+            # Explicit QMT SDK fields use lots/yuan for stocks and indices.
             if period == "1d" and source_used in QMT_DAILY_SOURCE_NAMES:
                 instrument_type = (
                     "index"

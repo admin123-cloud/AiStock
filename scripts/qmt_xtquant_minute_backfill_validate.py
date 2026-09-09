@@ -32,6 +32,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from data_fetcher.sources.qmtmini_client import QmtMiniMarketClient
 from scripts.qmtmini_daily_backfill_validate import ch_client, insert_request_log, load_codes, quote_sql
 from utils.paths import report_path
+from utils.kline_units import normalize_qmt_minute_values, MINUTE_UNIT_CONTRACT_ID
 from utils.qmt_universe import qmt_universe_filter_sql
 
 
@@ -199,11 +200,11 @@ def rows_from_qmt(
         if code in close_df.index:
             one = pd.DataFrame(index=close_df.columns)
             for field, frame in frames.items():
-                one[field] = pd.to_numeric(frame.loc[code], errors="coerce") if code in frame.index else 0.0
+                one[field] = pd.to_numeric(frame.loc[code], errors="coerce") if code in frame.index else float("nan")
         elif code in close_df.columns:
             one = pd.DataFrame(index=close_df.index)
             for field, frame in frames.items():
-                one[field] = pd.to_numeric(frame[code], errors="coerce") if code in frame.columns else 0.0
+                one[field] = pd.to_numeric(frame[code], errors="coerce") if code in frame.columns else float("nan")
         else:
             counts[code] = 0
             continue
@@ -229,6 +230,7 @@ def rows_from_qmt(
         count = 0
         for idx, values in one.iterrows():
             dt = idx.to_pydatetime()
+            volume, amount = normalize_qmt_minute_values(values.get("volume"), values.get("amount"))
             rows.append(
                 (
                     period,
@@ -238,8 +240,8 @@ def rows_from_qmt(
                     float(values["high"] or 0),
                     float(values["low"] or 0),
                     float(values["close"] or 0),
-                    float(values.get("volume", 0) or 0),
-                    float(values.get("amount", 0) or 0),
+                    volume,
+                    amount,
                     _as_clickhouse_market_datetime(created_at),
                     _stable_id(period, code, dt),
                 )
@@ -299,7 +301,7 @@ def _aggregate_5m_rows(rows: list[tuple], target_period: str) -> tuple[list[tupl
 def write_report(path: str, payload: dict[str, Any]) -> None:
     report = Path(path)
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    report.write_text(json.dumps({**payload, "minute_unit_contract":MINUTE_UNIT_CONTRACT_ID}, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
 def select_codes(client, args: argparse.Namespace) -> list[str]:

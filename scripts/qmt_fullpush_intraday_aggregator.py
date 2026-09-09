@@ -38,6 +38,8 @@ MINUTE_TABLES = {
     "30m": "kline_minute_30",
     "60m": "kline_minute_60",
 }
+from utils.kline_units import qmt_tick_lots_yuan, MINUTE_UNIT_CONTRACT_ID
+
 MINUTE_COLUMNS = ["code", "datetime", "open", "high", "low", "close", "volume", "amount", "created_at", "id"]
 INTRADAY_DAILY_COLUMNS = [
     "code",
@@ -235,7 +237,8 @@ class FullPushAggregator:
         self.received_events = 0
         self.received_codes: set[str] = set()
         self.last_callback_at: datetime | None = None
-        self.volume_field = "pvolume"
+        self.volume_field = "volume"
+        self.unit_errors: dict[str, str] = {}
         self.stop_requested = False
 
     def on_data(self, datas: Any, *, update_bars: bool = True) -> None:
@@ -261,10 +264,12 @@ class FullPushAggregator:
                 self.received_codes.add(code)
                 if not update_bars:
                     continue
-                cum_volume = tick_number(tick, "pvolume", "volume")
-                if "pvolume" not in tick and "volume" in tick:
-                    self.volume_field = "volume"
-                cum_amount = tick_number(tick, "amount")
+                try:
+                    cum_volume, cum_amount = qmt_tick_lots_yuan(tick)
+                except ValueError as exc:
+                    self.unit_errors[code] = str(exc)
+                    continue
+                self.unit_errors.pop(code, None)
                 prev_volume = self.prev_volume.get(code)
                 prev_amount = self.prev_amount.get(code)
                 end_ts = bucket_end_5m(tick_ts)
@@ -337,9 +342,14 @@ class FullPushAggregator:
             if last_price <= 0 or open_price <= 0 or high_price <= 0 or low_price <= 0:
                 continue
             prev_close = tick_number(tick, "lastClose", "preClose", default=0.0)
-            # QMT tick pvolume/volume is in shares; kline_daily uses lots.
-            volume = tick_number(tick, "pvolume", "volume") / 100.0
-            amount = tick_number(tick, "amount")
+            try:
+                volume, amount = qmt_tick_lots_yuan(tick)
+            except ValueError as exc:
+                with self.lock:
+                    self.unit_errors[code] = str(exc)
+                continue
+            with self.lock:
+                self.unit_errors.pop(code, None)
             change_amount = last_price - prev_close if prev_close > 0 else 0.0
             change_pct = change_amount / prev_close * 100 if prev_close > 0 else 0.0
             amplitude = (high_price - low_price) / prev_close * 100 if prev_close > 0 else 0.0
@@ -498,6 +508,11 @@ def derive_higher_rows_from_clickhouse(target: str, trade_day: date) -> list[tup
     return rows
 
 
+def validate_pending_unit_contract(saved):
+    if saved.get('bars') and saved.get('minute_unit_contract') != MINUTE_UNIT_CONTRACT_ID:
+        raise RuntimeError('pending_minute_units_unverified; preserve journal for manual review')
+
+
 def minute_rows(bars: list[BarState], period: str) -> list[tuple]:
     created_at = datetime.now(SH_TZ).replace(tzinfo=None)
     return [
@@ -625,6 +640,7 @@ def flush_snapshot(aggregator):
     if persisted_at is not None:
         aggregator.last_persisted_monotonic = persisted_at
     return {"daily_rows": written, "market_snapshot": market,
+            "minute_unit_contract": MINUTE_UNIT_CONTRACT_ID, "unit_errors": dict(aggregator.unit_errors),
             "coverage": coverage, "persisted_at": now.isoformat() if persisted_at else None,
             "previous_successful_write_gap_seconds": interval,
             "interval_slo_300s": 'unknown' if interval is None else 'passed' if interval <= 300 else 'failed',
@@ -642,14 +658,14 @@ def flush_minutes(aggregator, *, include_open_bars=False):
     aggregator.pending_bars = pending
     journal = getattr(aggregator, "minute_journal", None)
     if journal and pending:
-        write_report(journal, {"bars": [asdict(bar) for bar in pending]})
+        write_report(journal, {"minute_unit_contract":MINUTE_UNIT_CONTRACT_ID, "bars": [asdict(bar) for bar in pending]})
     summary = {"minute_rows": {}, "errors": {}}
     periods = {x.strip() for x in aggregator.args.periods.split(",")}
     if "5m" in periods or periods.intersection({"15m", "30m", "60m"}):
         summary["minute_rows"]["5m"] = insert_rows(MINUTE_TABLES["5m"], minute_rows(pending, "5m"), MINUTE_COLUMNS, aggregator.args.dry_run)
     aggregator.pending_bars = []
     if journal:
-        write_report(journal, {"bars": []})
+        write_report(journal, {"minute_unit_contract":MINUTE_UNIT_CONTRACT_ID, "bars": []})
     now = datetime.now(SH_TZ).replace(tzinfo=None)
     for target in ("15m", "30m", "60m"):
         if target not in periods:
@@ -780,6 +796,7 @@ def run_collector(args):
     aggregator.pending_bars = []
     if journal.exists():
         saved = json.loads(journal.read_text(encoding="utf-8"))
+        validate_pending_unit_contract(saved)
         for value in saved.get("bars", []):
             for key in ("end_ts", "last_update"):
                 if value.get(key):
@@ -879,6 +896,8 @@ def run_collector(args):
                 exit_code = 2
                 log(f"final minute flush failed: {exc}")
         flushes.extend(lane.snapshot() for lane in lanes)
+        if aggregator.unit_errors and exit_code == 0:
+            exit_code = 2
         report = {
             "ok": exit_code == 0,
             "started_at": datetime.fromtimestamp(time.time() - (time.monotonic() - started), SH_TZ).replace(tzinfo=None),
@@ -894,6 +913,8 @@ def run_collector(args):
             "current_open_bars": len(aggregator.current_bars),
             "closed_bars_pending": len(aggregator.closed_bars),
             "volume_field": aggregator.volume_field,
+            "minute_unit_contract": MINUTE_UNIT_CONTRACT_ID,
+            "unit_errors": dict(aggregator.unit_errors),
             "full_tick_polls": full_tick_polls,
             "cache_seed": cache_seed,
             "flushes": flushes,
