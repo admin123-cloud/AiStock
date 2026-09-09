@@ -47,21 +47,22 @@ def transform(xml, source, target, *, daily=False, holding=False, now=None):
     triggers = root.find('{'+NS+'}Triggers')
     original_triggers = [ET.tostring(child, encoding='unicode') for child in triggers]
     if daily:
-        arguments.text, changed = re.subn(r'(-Mode\s+)"?daily-coverage-repair"?',
+        arguments.text, changed = re.subn(r'(-Mode\s+)"?(?:daily-coverage-repair|daily-maintenance)"?(?=\s|$)',
                                           lambda match: match[1]+'"daily-maintenance"', arguments.text, flags=re.I)
         if changed != 1:
             raise ValueError('Unexpected daily action mode')
         template = next((child for child in triggers if 'T16:10:' in ET.tostring(child, encoding='unicode')), None)
         if template is None:
             raise ValueError('Expected existing 16:10 daily trigger')
-        added = deepcopy(template)
-        now = now or datetime.now()
-        next_run = now.replace(hour=18, minute=10, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        added.find('{'+NS+'}StartBoundary').text = next_run.isoformat()
-        added.attrib.pop('id', None)
-        triggers.append(added)
+        if not any('T18:10:' in ET.tostring(child, encoding='unicode') for child in triggers):
+            added = deepcopy(template)
+            now = now or datetime.now()
+            next_run = now.replace(hour=18, minute=10, second=0, microsecond=0)
+            if next_run <= now:
+                next_run += timedelta(days=1)
+            added.find('{'+NS+'}StartBoundary').text = next_run.isoformat()
+            added.attrib.pop('id', None)
+            triggers.append(added)
     if [ET.tostring(child, encoding='unicode') for child in triggers][:len(original_triggers)] != original_triggers:
         raise AssertionError('An existing trigger was changed')
     # Registration is staged disabled; activation is a separate guarded command.

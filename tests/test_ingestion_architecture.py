@@ -211,6 +211,12 @@ def test_owner_migration_keeps_original_triggers_and_principal():
     assert root.find('.//{'+NS+'}Principal').attrib['id'] == 'original'
     assert root.find('.//{'+NS+'}Enabled').text == 'false'
     assert 'daily-maintenance' in planned and 'AiStock-core' not in planned
+    upgraded, before, after = transform(planned, r'F:\Stock\AiStock-refactor', r'F:\Stock\AiStock-releases\next',
+                                       daily=True, now=datetime(2026, 9, 10, 20))
+    assert (before, after) == (3, 3)
+    updated = ET.fromstring(upgraded)
+    assert [node.text for node in updated.findall('.//{'+NS+'}StartBoundary')] == starts
+    assert 'AiStock-refactor' not in upgraded
 
 
 def test_polling_does_not_hide_a_dead_subscription():
