@@ -48,7 +48,7 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
     for name,value in [('data_fetcher.manager',source),('clickhouse_connect',clickhouse),('api.system_config',system)]:
         monkeypatch.setitem(sys.modules,name,value)
     tree=ast.parse(Path('api/stocks.py').read_text(encoding='utf-8'))
-    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_index_listing_date','update_indices')]
+    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','update_indices')]
     for fn in functions:fn.decorator_list=[]
     env={'datetime':datetime,'__name__':'index_test'}
     exec(compile(ast.Module(body=functions,type_ignores=[]),'<index-refresh>','exec'),env)
@@ -79,3 +79,86 @@ def test_unknown_index_listing_cannot_pass_historical_delivery():
     assert cell['status']=='unverified'
     assert cell['expected']==1 and cell['actual']==1
     assert cell['missing_listing_metadata_count']==1
+
+
+def test_qmt_official_pool_keeps_missing_details_without_false_delist():
+    from data_fetcher.sources.qmtmini import QmtMiniDataSource
+    source=object.__new__(QmtMiniDataSource)
+    codes=['600000.SH','821028.BJ','821029.BJ','821030.BJ','000004.SZ']
+    client=SimpleNamespace(download_history_contracts=lambda **kw:None,
+        get_stock_list_in_sector=lambda sector:codes,
+        get_instrument_detail_list=lambda *args:{'600000.SH':{'InstrumentName':'known','OpenDate':'19991110'},
+                                               '000004.SZ':{'InstrumentName':'retired','ExpireDate':'20260101'}})
+    source._ensure_client=lambda:client
+    source.mark_success=lambda:None
+    rows=source.get_stock_list(market='ALL')
+    assert {r['code'] for r in rows}==set(codes)-{'000004.SZ'}
+    unknown=[r for r in rows if r['metadata_unknown']]
+    assert len(unknown)==3
+    assert source.last_stock_list_metadata['official_codes']==codes
+    assert len(source.last_stock_list_metadata['returned_codes'])==4
+    assert source.last_stock_list_metadata['missing_detail_codes']==codes[1:4]
+    assert all(r['list_date']=='' and r['quit']==0 and r['name']==r['code'] for r in unknown)
+
+
+def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,monkeypatch):
+    from zoneinfo import ZoneInfo
+    import utils.paths
+    monkeypatch.setattr(utils.paths,'runtime_path',lambda *parts:tmp_path.joinpath(*parts))
+    existing=[('600000.SH','known','SH','stock','industry','region',date(1999,11,10),None,0,0),
+              ('old.SZ','retained','SZ','stock','','',None,None,0,0)]
+    calls=[];payload=[]
+    items=[{'code':'600000.SH','name':'known','source':'qmt_xtquant','list_date':''},
+           {'code':'821028.BJ','name':'821028.BJ','source':'qmt_xtquant','metadata_unknown':True}]
+    class Manager:
+        def get_stock_list(self,**kwargs):
+            assert kwargs['source_name']=='qmt_xtquant'
+            return items
+        def call_with_failover(self,*args,**kwargs):
+            calls.append((args,kwargs));return None
+        def get_source(self,name):return SimpleNamespace(get_expired_stock_info=lambda codes:{})
+    class Client:
+        def query(self,sql):return SimpleNamespace(result_rows=existing)
+        def command(self,*args,**kwargs):pass
+        def insert(self,table,rows,column_names):payload.extend(dict(zip(column_names,row)) for row in rows)
+    manager=ModuleType('data_fetcher.manager');manager.DataSourceManager=Manager
+    clickhouse=ModuleType('clickhouse_connect');clickhouse.get_client=lambda **kwargs:Client()
+    system=ModuleType('api.system_config');system.task_manager=SimpleNamespace(update_progress=lambda *args:None)
+    for name,value in [('data_fetcher.manager',manager),('clickhouse_connect',clickhouse),('api.system_config',system)]:
+        monkeypatch.setitem(sys.modules,name,value)
+    tree=ast.parse(Path('api/stocks.py').read_text(encoding='utf-8'))
+    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','update_stock_list')]
+    for fn in functions:fn.decorator_list=[]
+    logger=SimpleNamespace(info=lambda *a:None,error=lambda *a:None,warning=lambda *a:None)
+    env={'datetime':datetime,'ZoneInfo':ZoneInfo,'__name__':'stock_test','get_logger':lambda *a:logger,
+         'Any':object,'Dict':dict,'pd':SimpleNamespace(isna=lambda value:value is None)}
+    exec(compile(ast.Module(body=functions,type_ignores=[]),'<stock-refresh>','exec'),env)
+    result=env['update_stock_list']()
+    assert result['success'],result
+    rows={r['code']:r for r in payload}
+    assert rows['600000.SH']['list_date']==date(1999,11,10)
+    assert rows['821028.BJ']['list_date'] is None and rows['821028.BJ']['quit']==0
+    assert rows['old.SZ']['list_date'] is None
+    assert len(calls)==1 and calls[0][1]['source_name']=='qmt_xtquant'
+    assert result['metadata']['metadata_unknown_codes']==['821028.BJ']
+    assert not result['metadata']['metadata_verified']
+    assert (tmp_path/'operations/reference_metadata.json').exists()
+
+
+def test_reference_metadata_health_does_not_confuse_missing_details_with_quote_failure(tmp_path):
+    from services.operations.health import ArtifactRule,build_snapshot,write_snapshot
+    now=datetime(2026,9,9,18,tzinfo=BUSINESS_TZ)
+    path=tmp_path/'reference.json'
+    rule=ArtifactRule('reference_metadata',path,36*3600,require_payload_healthy=True)
+    payload={'generated_at':now.isoformat(),'status':'healthy','metadata_verified':False,
+             'official_pool_count':5596,'returned_pool_count':5596,'metadata_unknown_codes':['821028.BJ']}
+    write_snapshot(payload,path)
+    result=build_snapshot([rule],now=now)
+    assert not result['strategy_actionable']
+    component=result['components'][0]
+    assert component['reason']=='reference_metadata_unverified'
+    assert component['reference_metadata']['official_pool_count']==5596
+    assert component['recommended_action']=='verify_qmt_instrument_details_and_listing_dates'
+    payload.update(metadata_verified=True,metadata_unknown_codes=[])
+    write_snapshot(payload,path)
+    assert build_snapshot([rule],now=now)['strategy_actionable']

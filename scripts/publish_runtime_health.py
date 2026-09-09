@@ -52,6 +52,7 @@ def default_rules() -> list[ArtifactRule]:
     hhmm = now.strftime("%H:%M")
     strategy_max_age = 10 * 60 if ("09:25" <= hhmm <= "11:35" or "13:00" <= hhmm <= "15:15") else 20 * 3600
     return [
+        ArtifactRule("reference_metadata", runtime_path("operations", "reference_metadata.json"), 36 * 3600, False, "QMT证券池与上市日期元数据验收；不等同于行情连接故障", "QMT参考资料维护", True, defer_when_non_trading_day=True),
         ArtifactRule("qmt_after_close_validation", _latest_after_close_validation(), 36 * 3600, True, "5m/15m/30m/60m closure", "AiStock QMT xtquant After Close Repair", defer_when_non_trading_day=True),
         ArtifactRule("daily_kline_coverage", runtime_path("daily_kline_coverage", "latest.json"), 36 * 3600, False, "daily bars against SH trading calendar", "daily_kline_coverage_maintenance", True, expected_business_date=_expected_delivery_day("16:10")),
         ArtifactRule("g3_strategy_summary", runtime_path("gen3_state_alpha", "latest_summary.json"), strategy_max_age, False, "G3 current candidate result", "g3_state_alpha_shadow_monitor", defer_when_non_trading_day=True),

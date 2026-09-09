@@ -103,6 +103,14 @@ def evaluate_artifact(
             "closed": payload.get("closed"),
             "recommended_action": "run_targeted_gap_repair_then_final_validation",
         }
+    if rule.name == "reference_metadata":
+        evidence = {key:payload.get(key) for key in ('official_pool_count','returned_pool_count',
+                    'metadata_unknown_codes','listing_unknown_codes','metadata_verified')}
+        result = {**result, 'reference_metadata':evidence}
+        if payload.get('metadata_verified') is not True or payload.get('status') != 'healthy':
+            return {**result, 'status':'blocked', 'reason':'reference_metadata_unverified',
+                    'message':'QMT证券池或上市日期元数据未验收；保留未知证券，不把详情缺失解释为行情不可用或已退市',
+                    'recommended_action':'verify_qmt_instrument_details_and_listing_dates'}
     if rule.require_payload_healthy and payload.get("status") != "healthy":
         repair = payload.get("repair") if isinstance(payload.get("repair"), dict) else {}
         no_progress = bool(repair.get("stop_continuous")) or repair.get("reason") == "no_progress_after_full_cycle"

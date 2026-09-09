@@ -93,7 +93,7 @@ def _expired_date(value: Any) -> str:
 def _detail_to_stock_row(code: str, detail: Optional[Dict[str, Any]], stock_type: str) -> Dict[str, Any]:
     detail = detail or {}
     full_code = _normalize_code(code)
-    name = detail.get("InstrumentName") or _compact_code(full_code)
+    name = detail.get("InstrumentName") or full_code
     return {
         "code": full_code,
         "Code": full_code,
@@ -101,10 +101,12 @@ def _detail_to_stock_row(code: str, detail: Optional[Dict[str, Any]], stock_type
         "Name": name,
         "market": _market_from_code(full_code),
         "type": stock_type,
-        "list_date": detail.get("OpenDate") or detail.get("CreateDate") or "",
+        "list_date": detail.get("OpenDate") or "",
+        "metadata_unknown": not bool(detail),
+        "metadata_reason": "qmt_instrument_detail_missing" if not detail else None,
         "delist_date": _expired_date(detail.get("ExpireDate")),
         "st": 1 if "ST" in str(name).upper() else 0,
-        "quit": 0 if _is_active_stock_detail(detail) else 1,
+        "quit": 0 if not detail or _is_active_stock_detail(detail) else 1,
         "float_share": float(detail.get("FloatVolume") or 0.0),
         "total_share": float(detail.get("TotalVolume") or 0.0),
         "industry": "",
@@ -278,9 +280,15 @@ class QmtMiniDataSource(BaseDataSource):
             rows = []
             for code in codes:
                 detail = details.get(code)
-                if row_type == "stock" and not _is_active_stock_detail(detail):
+                if row_type == "stock" and detail and not _is_active_stock_detail(detail):
                     continue
                 rows.append(_detail_to_stock_row(code, detail, row_type))
+            self.last_stock_list_metadata = {
+                "source":"qmt_xtquant", "official_codes":list(codes),
+                "returned_codes":[row["code"] for row in rows],
+                "missing_detail_codes":[code for code in codes if not details.get(code)],
+                "excluded_with_detail_evidence":[code for code in codes if row_type == "stock" and details.get(code) and not _is_active_stock_detail(details[code])],
+            }
             self.mark_success()
             return rows
         except Exception as exc:

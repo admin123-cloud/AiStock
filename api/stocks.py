@@ -3369,18 +3369,9 @@ def update_stock_list():
         retired_marked = 0
         unresolved_removed_retained = 0
 
-        def _to_date_or_today(value):
-            if isinstance(value, dt_date):
-                return value
-            text_value = str(value or "").strip()
-            if not text_value or text_value == "0":
-                return datetime.now().date()
-            for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y/%m/%d"):
-                try:
-                    return datetime.strptime(text_value[:10], fmt).date()
-                except Exception:
-                    continue
-            return datetime.now().date()
+        metadata_unknown_codes = []
+        def _to_date_or_none(value):
+            return _reference_listing_date({'list_date':value})
 
         for idx, item in enumerate(stock_list, start=1):
             code = item.get("Code") or item.get("code", "")
@@ -3392,11 +3383,19 @@ def update_stock_list():
             current_codes.add(code)
             market = code.split(".")[-1] if "." in code else ""
 
-            stock_info = None
-            try:
-                stock_info = data_sources.call_with_failover("get_stock_info", code)
-            except Exception as exc:
-                logger.warning(f"Load stock info failed for {code}: {exc}")
+            # The official pool already carries the batched QMT detail. Retry only
+            # missing details, and never fall back to an unrelated source.
+            stock_info = item if item.get("source") == "qmt_xtquant" and not item.get("metadata_unknown") else None
+            if stock_info is None:
+                try:
+                    stock_info = data_sources.call_with_failover("get_stock_info", code, source_name="qmt_xtquant")
+                except Exception as exc:
+                    logger.warning(f"Load QMT stock info failed for {code}: {exc}")
+            if not stock_info or stock_info.get("metadata_unknown"):
+                metadata_unknown_codes.append(code)
+                stock_info = item
+                if code in existing_by_code:
+                    name = existing_by_code[code][1] or name
 
             st = int((stock_info or {}).get("st", 0) or 0)
             quit_flag = int((stock_info or {}).get("quit", 0) or 0)
@@ -3407,9 +3406,14 @@ def update_stock_list():
             industry_code = str((stock_info or {}).get("industry_code", "") or "")
             region = str((stock_info or {}).get("region", "") or "")
             raw_list_date = (stock_info or {}).get("list_date")
-            list_date = _to_date_or_today(raw_list_date)
+            list_date = _reference_listing_date(stock_info or {}, existing_by_code.get(code, [None]*7)[6])
             raw_delist_date = (stock_info or {}).get("delist_date")
-            delist_date = _to_date_or_today(raw_delist_date) if raw_delist_date else None
+            delist_date = _to_date_or_none(raw_delist_date) if raw_delist_date else None
+            if code in metadata_unknown_codes and code in existing_by_code:
+                retained = existing_by_code[code]
+                industry, region = retained[4] or "", retained[5] or ""
+                delist_date = _to_date_or_none(retained[7])
+                quit_flag, st = int(retained[8] or 0), int(retained[9] or 0)
 
             if code in existing_codes:
                 update_count += 1
@@ -3448,6 +3452,7 @@ def update_stock_list():
         # expired-contract cache positively confirms through ExpireDate.
         removed_codes = sorted(existing_codes - current_codes)
         expired_details: Dict[str, Dict[str, Any]] = {}
+        qmt_source = None
         try:
             qmt_source = data_sources.get_source("qmt_xtquant")
             if qmt_source and hasattr(qmt_source, "get_expired_stock_info"):
@@ -3463,11 +3468,11 @@ def update_stock_list():
                 market = str(expired.get("market") or existing[2] or code.split(".")[-1])
                 industry = str(expired.get("industry") or existing[4] or "")
                 region = str(expired.get("region") or existing[5] or "")
-                list_date = _to_date_or_today(expired.get("list_date") or existing[6])
-                delist_date = _to_date_or_today(expired.get("delist_date") or existing[7])
-                quit_flag = 1
+                list_date = _reference_listing_date(expired, existing[6])
+                delist_date = _to_date_or_none(expired.get("delist_date") or existing[7])
+                quit_flag = 1 if delist_date else int(existing[8] or 0)
                 st = int(expired.get("st", existing[9]) or 0)
-                retired_marked += 1
+                retired_marked += int(bool(delist_date))
             else:
                 # Do not turn a transient upstream omission into a false delist.
                 name = existing[1]
@@ -3478,7 +3483,7 @@ def update_stock_list():
                 delist_date = existing[7]
                 quit_flag = existing[8]
                 st = existing[9]
-                list_date = _to_date_or_today(list_date)
+                list_date = _to_date_or_none(list_date)
                 quit_flag = int(quit_flag or 0)
                 st = int(st or 0)
                 unresolved_removed_retained += 1
@@ -3526,7 +3531,7 @@ def update_stock_list():
             if with_delist_date:
                 ch.insert(
                     tmp_table,
-                    [row[:7] + [_to_date_or_today(row[7])] + row[8:] for row in with_delist_date],
+                    [row[:7] + [_to_date_or_none(row[7])] + row[8:] for row in with_delist_date],
                     column_names=[
                         "code", "name", "market", "type", "industry", "region", "list_date", "delist_date",
                         "quit", "st",
@@ -3549,6 +3554,19 @@ def update_stock_list():
         ch.command(f"DROP TABLE IF EXISTS {backup_table}")
         t_swap_done = time.perf_counter()
 
+        from services.operations.health import write_snapshot
+        from utils.paths import runtime_path
+        listing_unknown_codes = [row[0] for row in rows_to_insert if row[6] is None]
+        pool_metadata = getattr(qmt_source,'last_stock_list_metadata',{}) or {}
+        metadata_status = {'generated_at':datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),
+                           'source':'qmt_xtquant', 'returned_pool_count':len(stock_list),
+                           'official_pool_count':len(pool_metadata['official_codes']) if 'official_codes' in pool_metadata else None,
+                           'pool_evidence':pool_metadata,
+                           'metadata_unknown_codes':sorted(set(metadata_unknown_codes)),
+                           'listing_unknown_codes':sorted(set(listing_unknown_codes)),
+                           'metadata_verified':bool(pool_metadata.get('official_codes')) and not metadata_unknown_codes and not listing_unknown_codes}
+        metadata_status['status'] = 'healthy' if metadata_status['metadata_verified'] else 'unverified'
+        write_snapshot(metadata_status,runtime_path('operations','reference_metadata.json'))
         metrics = {
             "fetch_ms": int((t_fetch_done - t0) * 1000),
             "transform_ms": int((t_transform_done - t_fetch_done) * 1000),
@@ -3574,6 +3592,7 @@ def update_stock_list():
             "deleted_count": deleted_count,
             "total_count": len(stock_list),
             "metrics": metrics,
+            "metadata": metadata_status,
         }
     except Exception as e:
         logger.error(f"Stock list update failed: {e}")
@@ -3750,14 +3769,14 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
         DatabaseSessionManager.close_session(session)
 
 
-def _index_listing_date(index, previous=None):
+def _reference_listing_date(index, previous=None):
     """Use dated QMT evidence or retained metadata, never the refresh date."""
     from datetime import date
     def parse(value):
         if isinstance(value, datetime):
             value = value.date()
         if not isinstance(value, date):
-            text = str(value or '').strip()
+            text = str(value or '').strip().replace('/', '-')
             try:
                 value = datetime.strptime(text, '%Y%m%d').date() if len(text) == 8 and text.isdigit() else date.fromisoformat(text[:10])
             except (ValueError, TypeError, OverflowError):
@@ -3856,7 +3875,7 @@ def update_indices():
                 "index",
                 "",
                 "",
-                _index_listing_date(index, (exist or {}).get("list_date")),
+                _reference_listing_date(index, (exist or {}).get("list_date")),
                 0,
                 0,
             ])
