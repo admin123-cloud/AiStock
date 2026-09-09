@@ -1,0 +1,7 @@
+{
+  "url": "http://AISTOCK_HOST:8000/health/ready",
+  "state": "F:/AiStockWatchdog/events.sqlite",
+  "grace_minutes": 10,
+  "deployment": "independent_machine_required",
+  "notify": false
+}

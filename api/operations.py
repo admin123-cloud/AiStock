@@ -6,7 +6,7 @@ from time import monotonic
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from services.operations.read_models import task_board, mainwave_daily
+from services.operations.read_models import task_board, mainwave_daily, read_json
 from services.operations.incidents import read_incidents
 from services.operations.delivery import build_delivery_calendar
 from utils.paths import runtime_path
@@ -45,7 +45,7 @@ def data_calendar(days: int = Query(30, ge=1, le=60)):
             return _cache[days][1]
         try:
             from utils.market_warehouse import clickhouse_client
-            result = build_delivery_calendar(clickhouse_client(), days=days)
+            result = build_delivery_calendar(clickhouse_client(), days=days, sector_universe=read_json(runtime_path('operations','sector_universe.json')))
         except Exception as exc:
             raise HTTPException(503, '数据验收暂不可用，请检查交易日历、证券池和业务豁免表；未将查询失败解释为零缺口。') from exc
         _cache[days] = (monotonic(), result)

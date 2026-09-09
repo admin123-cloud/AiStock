@@ -15,9 +15,9 @@ from services.operations.health import write_snapshot, BUSINESS_TZ
 from utils.paths import runtime_path
 
 
-def phase_commands(*, notify=False):
+def phase_commands(*, notify=False, repair=False):
     return [('health', [sys.executable,'-X','utf8',str(ROOT/'scripts/publish_runtime_health.py')]),
-            ('delivery', [sys.executable,'-X','utf8',str(ROOT/'scripts/publish_operations.py')]+(['--notify'] if notify else []))]
+            ('delivery', [sys.executable,'-X','utf8',str(ROOT/'scripts/publish_operations.py')]+(['--notify'] if notify else [])+(['--repair'] if repair else []))]
 
 
 def run_phases(commands, runner=subprocess.run):
@@ -37,15 +37,16 @@ def run_phases(commands, runner=subprocess.run):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--notify',action='store_true')
+    parser.add_argument('--repair',action='store_true')
     parser.add_argument('--plan',action='store_true')
     args=parser.parse_args()
     if args.plan:
-        print(json.dumps({'steps':[name for name,_ in phase_commands(notify=args.notify)],'notify':args.notify,'executed':False}))
+        print(json.dumps({'steps':[name for name,_ in phase_commands(notify=args.notify,repair=args.repair)],'notify':args.notify,'executed':False}))
         return 0
     lock=InstanceLock(runtime_path('operations','monitor-service.lock'))
     lock.acquire()
     try:
-        rows=run_phases(phase_commands(notify=args.notify))
+        rows=run_phases(phase_commands(notify=args.notify,repair=args.repair))
         write_snapshot({'generated_at':datetime.now(BUSINESS_TZ).isoformat(), 'steps':rows,
                         'notifications_requested':args.notify}, runtime_path('operations','monitor_service.json'))
         return 0 if all(x['ok'] for x in rows) else 2

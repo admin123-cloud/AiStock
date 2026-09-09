@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--runtime-root', type=Path, default=runtime_path())
     parser.add_argument('--notify', action='store_true')
+    parser.add_argument('--repair', action='store_true')
     args = parser.parse_args()
     from services.operations.lifecycle import InstanceLock
     lock = InstanceLock(args.runtime_root/'operations/publisher-owner.lock')
@@ -57,10 +58,15 @@ def publish(args):
     root = args.runtime_root
     health = read_snapshot(root/'health/latest.json', now=now)
     summary = read_json(root/'gen3_state_alpha/latest_summary.json')
+    repair_result = {'status':'verification_unavailable'}
     checks = [x for x in strategy_data_checks(summary, health) if x['name'] != 'runtime_data_health']
     checks.append({'name':'runtime_health_publisher','ok':health.get('publisher_status')=='healthy',
                    'message':'健康发布者心跳检查；过期状态不能解释为正常'})
-    api_state = task_board(root, {}, now=now)['api_runtime']
+    board = task_board(root, {}, now=now)
+    backup = board['backups']
+    checks.append({'name':'backup_recovery','ok':backup.get('publisher_status')=='healthy' and backup.get('status')=='healthy',
+                   'message':'备份与恢复验收；缺失或过期不视为成功','remediation_owner':'备份恢复任务'})
+    api_state = board['api_runtime']
     checks.append({'name':'api_scheduler_readiness', 'ok':api_state['ready'],
                    'message':'API任务启动与30秒心跳验收', 'remediation_owner':'API服务生命周期'})
     checks += [{**x, 'ok': x.get('status') in ('healthy','deferred')} for x in health.get('components', [])]
@@ -75,8 +81,10 @@ def publish(args):
         checks.append({'name':'host_task_inventory','ok':False,'message':str(exc)})
     try:
         from utils.market_warehouse import clickhouse_client
-        calendar = build_delivery_calendar(clickhouse_client(),days=30,now=now)
+        calendar = build_delivery_calendar(clickhouse_client(),days=30,now=now,sector_universe=read_json(root/'operations/sector_universe.json'))
         write_snapshot(calendar,root/'operations/delivery_calendar.json')
+        from services.operations.remediation import request_repairs
+        repair_result = request_repairs(calendar,root,enabled=getattr(args,'repair',False),now=now)
         checks.append({'name':'delivery_verifier','ok':True})
         for dataset in calendar['datasets']:
             bad = [cell for cell in dataset['cells'] if cell['status'] in ('partial','missing','unknown','unverified')]
@@ -96,9 +104,9 @@ def publish(args):
     record_mainwave_tracking(root, daily)
     result = dispatch(path,send_digest,now=now) if args.notify else {'status':'not_requested'}
     write_snapshot({'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'),
-                    'notifications_enabled':args.notify, 'notification':result,
-                    'notification_transport_ok':bool(args.notify and notification_configured()) and not any(x['notification'] in ('failed','sending')
-                        for x in read_incidents(path,limit=None) if x['status'] not in ('resolved','superseded')),
+                    'notifications_enabled':args.notify, 'notification':result, 'repair':repair_result,
+                    'notification_transport_ok':bool(args.notify and notification_configured()) and not any((x['notification'] in ('failed','sending') or x.get('recovery_notification') in ('failed','sending'))
+                        for x in read_incidents(path,limit=None) if x['status'] != 'superseded'),
                     'incidents':len(events)},root/'operations/latest.json')
     print(json.dumps({'incidents':len(events),'notification':result},ensure_ascii=False))
     return 0

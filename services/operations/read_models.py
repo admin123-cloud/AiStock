@@ -124,10 +124,13 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
             rows.append({'name': artifact['owner'], 'executor': 'Windows', 'status': 'not_observed',
                          'registered': False,
                          'artifact': artifact['artifact'], 'window': artifact.get('window'), 'business_status': 'unknown'})
+    from services.operations.source_metrics import read_source_metrics
     from services.operations.task_catalog import describe_tasks
     rows, groups = describe_tasks(rows, read_json(root/'operations/task_transitions.json'))
     return {'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'), 'tasks': rows, 'groups':groups,
             'historical_recovery': recovery_summary(root, now=now),
+            'backups':read_snapshot(root/'operations/backups/latest.json',now=now,max_age_seconds=90000),
+            'source_metrics': read_source_metrics(root/'operations/source_metrics.sqlite',now=now),
             'api_runtime': {**api_state, 'fresh': api_fresh, 'source': 'live' if live is not None else 'snapshot',
                             'ready': bool(api_fresh and api_state.get('ready'))},
             'operations_publisher':read_snapshot(root/'operations/latest.json',now=now),

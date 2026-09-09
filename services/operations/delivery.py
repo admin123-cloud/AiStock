@@ -28,7 +28,7 @@ def coverage_cell(day: str, expected: int, actual: int, *, due: bool, exceptions
             "coverage": round(min(actual / expected, 1), 6) if due and expected else None}
 
 
-def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = None) -> dict[str, Any]:
+def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = None, sector_universe: dict | None = None) -> dict[str, Any]:
     now = now or datetime.now(BUSINESS_TZ)
     policy = delivery_contract()
     daily_deadline = time.fromisoformat(policy['daily_deadline'])
@@ -98,13 +98,39 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
                 dataset['cells'] = [{'date': day, 'status': 'unknown', 'coverage': None} for day in dates]
             datasets.append(dataset)
     try:
-        # Sector universe may differ by taxonomy. Presence is explicit, never a fabricated 100%.
-        rows = client.query(f"SELECT trade_date, uniqExact(code) FROM sector_kline_daily WHERE trade_date>=toDate('{start}') AND trade_date<=toDate('{end}') GROUP BY trade_date SETTINGS max_execution_time=10").result_rows
-        by_date = {str(day)[:10]: count for day, count in rows}
-        sector_cells = [{'date': day, 'status': 'not_due' if day == end and now.time() < daily_deadline else 'unverified' if by_date.get(day) else 'missing', 'actual': by_date.get(day, 0), 'expected': None, 'coverage': None} for day in dates]
+        rows = client.query(f"SELECT trade_date, groupUniqArray(code) FROM sector_kline_daily WHERE trade_date>=toDate('{start}') AND trade_date<=toDate('{end}') GROUP BY trade_date SETTINGS max_execution_time=10").result_rows
+        by_date = {str(day)[:10]: set(map(str,codes)) for day,codes in rows}
+        sector_cells = sector_coverage_cells(dates,by_date,sector_universe,now=now,daily_deadline=daily_deadline)
     except Exception as exc:
-        sector_cells = [{'date': day, 'status': 'unknown', 'error': type(exc).__name__} for day in dates]
+        sector_cells = [{'date': day, 'status': 'unknown', 'error': type(exc).__name__, 'coverage':None} for day in dates]
     datasets.append({'id': 'sector_daily', 'label': '板块日线', 'cells': sector_cells})
     return {'generated_at': now.isoformat(timespec='seconds'), 'dates': dates, 'datasets': datasets,
             'contract': policy,
-            'scope': '唯一时间键覆盖；含上市/退市及有依据的业务豁免。完整表示覆盖齐全，价格质量与主表/stage冲突由G3独立验收。板块仅报告可用数量，未宣称完整。'}
+            'scope': '唯一时间键覆盖；含上市/退市及有依据的业务豁免。完整表示覆盖齐全，价格质量与主表/stage冲突由G3独立验收。板块以有时效与生效日期的QMT全集验收，缺少证据时分母未知。'}
+
+
+def sector_coverage_cells(dates, observed, universe, *, now, daily_deadline):
+    universe = universe or {}
+    try:
+        stamp = datetime.fromisoformat(universe['generated_at'])
+        age = (now-stamp).total_seconds()
+        valid = universe.get('source') == 'qmt' and universe.get('verified') is True and 0 <= age <= 36*3600
+        codes = set(universe['codes'])
+        valid = valid and bool(codes) and all(isinstance(x,str) and x for x in codes)
+    except (KeyError,ValueError,TypeError):
+        valid,codes = False,set()
+    result = []
+    for day in dates:
+        actual = observed.get(day,set())
+        due = day < now.date().isoformat() or now.time() >= daily_deadline
+        if not valid or not universe.get('effective_from') or day < universe['effective_from']:
+            result.append({'date':day,'status':'not_due' if not due else 'unverified',
+                           'actual':len(actual),'expected':None,'coverage':None,
+                           'reason':'qmt_sector_universe_not_verified_for_date'})
+            continue
+        exempt = {x['code'] for x in universe.get('exemptions',[]) if x.get('evidence_url')
+                  and x.get('start_date','9999') <= day <= x.get('end_date','0000')}
+        expected = codes-exempt
+        result.append({**coverage_cell(day,len(expected),len(actual&expected),due=due,exceptions=len(codes&exempt)),
+                       'universe_source':'qmt','universe_generated_at':universe['generated_at']})
+    return result

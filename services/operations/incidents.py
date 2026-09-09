@@ -13,9 +13,11 @@ from services.operations.lifecycle import InstanceLock
 def _schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS incidents (key TEXT PRIMARY KEY, status TEXT, first_seen TEXT, last_seen TEXT, deadline TEXT, resolved_at TEXT, payload TEXT, notification TEXT, attempts INTEGER DEFAULT 0, last_attempt TEXT, error TEXT)')
     columns = {x[1] for x in db.execute('PRAGMA table_info(incidents)')}
-    for name in ('group_key', 'fingerprint'):
+    for name in ('group_key', 'fingerprint', 'recovery_notification', 'recovery_attempt_at'):
         if name not in columns:
             db.execute(f'ALTER TABLE incidents ADD COLUMN {name} TEXT')
+    if 'recovery_attempts' not in columns:
+        db.execute('ALTER TABLE incidents ADD COLUMN recovery_attempts INTEGER DEFAULT 0')
     db.execute('UPDATE incidents SET group_key=key WHERE group_key IS NULL')
     db.execute('CREATE TABLE IF NOT EXISTS incident_history (id INTEGER PRIMARY KEY, event_key TEXT, at TEXT, status TEXT, payload TEXT)')
 
@@ -64,7 +66,7 @@ def reconcile(path: Path, checks: list[dict], *, now=None, grace_minutes=30):
             prior = db.execute("SELECT key,status,deadline,fingerprint,payload FROM incidents WHERE group_key=? AND status NOT IN ('resolved','superseded') ORDER BY first_seen DESC LIMIT 1", (group,)).fetchone()
             if check.get('ok') is True:
                 if prior:
-                    db.execute("UPDATE incidents SET status='resolved',resolved_at=?,last_seen=?,payload=? WHERE key=?", (stamp,stamp,payload,prior[0]))
+                    db.execute("UPDATE incidents SET status='resolved',resolved_at=?,last_seen=?,payload=?,recovery_notification=CASE WHEN notification='smtp_accepted' THEN 'waiting' ELSE 'not_required' END WHERE key=?", (stamp,stamp,payload,prior[0]))
                     db.execute('INSERT INTO incident_history(event_key,at,status,payload) VALUES(?,?,?,?)', (prior[0],stamp,'resolved',payload))
                 continue
             fingerprint = _fingerprint(check)
@@ -97,7 +99,7 @@ def read_incidents(path: Path, *, limit=200):
     return rows
 
 
-def dispatch(path: Path, sender, *, now=None):
+def _dispatch_failures(path: Path, sender, *, now=None):
     now = now or datetime.now(BUSINESS_TZ)
     if not path.exists():
         return {'status':'idle','count':0}
@@ -162,3 +164,42 @@ def send_digest(subject: str, body: str) -> None:
         refused = server.send_message(msg)
         if refused:
             raise RuntimeError('one_or_more_recipients_refused')
+
+
+def dispatch(path: Path, sender, *, now=None):
+    """Send recovery only for a previously accepted failure; persist dedup separately."""
+    now = now or datetime.now(BUSINESS_TZ)
+    failure = _dispatch_failures(path, sender, now=now)
+    if failure['status'] == 'busy' or not path.exists():
+        return failure
+    lock = InstanceLock(path.with_suffix('.send.lock'))
+    try:
+        lock.acquire()
+    except RuntimeError:
+        return failure
+    try:
+        with sqlite3.connect(path, timeout=10) as db:
+            _schema(db)
+        due = [x for x in read_incidents(path, limit=None)
+               if x['status'] == 'resolved' and x.get('recovery_notification') in ('waiting', 'failed') and (x.get('recovery_attempts') or 0)<3
+               and (not x.get('recovery_attempt_at') or now-datetime.fromisoformat(x['recovery_attempt_at']) >= timedelta(minutes=30))]
+        if not due:
+            return failure
+        stamp = now.isoformat(timespec='seconds')
+        with sqlite3.connect(path, timeout=10) as db:
+            for item in due:
+                db.execute("UPDATE incidents SET recovery_notification='sending',recovery_attempts=COALESCE(recovery_attempts,0)+1,recovery_attempt_at=? WHERE key=?", (stamp,item['key']))
+        try:
+            sender('AiStock 数据交付恢复：重新验收通过', '\n\n'.join(
+                f"{x['detail']['name']}\n恢复验收：{x['resolved_at']}" for x in due))
+            status, error = 'smtp_accepted', None
+        except Exception as exc:
+            status, error = 'failed', f'{type(exc).__name__}: {exc}'
+        with sqlite3.connect(path, timeout=10) as db:
+            for item in due:
+                db.execute('UPDATE incidents SET recovery_notification=?,error=? WHERE key=?', (status,error,item['key']))
+                db.execute('INSERT INTO incident_history(event_key,at,status,payload) VALUES(?,?,?,?)',
+                           (item['key'],stamp,'recovery_'+status,json.dumps({'error':error})))
+        return {**failure, 'recovery_status':status, 'recovery_count':len(due)}
+    finally:
+        lock.release()
