@@ -190,3 +190,24 @@ def test_sector_fill_requires_all_members_and_preserves_previous_price_base():
     rows = prepare_rows(members, daily, set(), {'s': 2500}, day)
     assert rows.iloc[0]['close'] == pytest.approx(2550)
     assert prepare_rows(members, daily, {'s'}, {'s': 2500}, day).empty
+
+
+def test_owner_migration_keeps_original_triggers_and_principal():
+    from scripts.plan_ingestion_owner_migration import transform, NS
+    import xml.etree.ElementTree as ET
+    xml = f'''<Task xmlns="{NS}"><Triggers>
+      <CalendarTrigger><StartBoundary>2026-07-30T00:05:00</StartBoundary><ScheduleByWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek></CalendarTrigger>
+      <CalendarTrigger><StartBoundary>2026-07-30T16:10:00</StartBoundary><ScheduleByWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek></CalendarTrigger>
+      </Triggers><Principals><Principal id="original"><UserId>user</UserId></Principal></Principals>
+      <Settings><Enabled>true</Enabled><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
+      <Actions><Exec><Command>powershell.exe</Command><Arguments>-File "F:\\Stock\\AiStock-core\\scripts\\run_qmt_xtquant_collector.ps1" -Mode "daily-coverage-repair"</Arguments>
+      <WorkingDirectory>F:\\Stock\\AiStock-core</WorkingDirectory></Exec></Actions></Task>'''
+    planned, before, after = transform(xml, r'F:\Stock\AiStock-core', r'F:\Stock\AiStock-refactor',
+                                       daily=True, now=datetime(2026, 9, 9, 20))
+    root = ET.fromstring(planned)
+    assert (before, after) == (2, 3)
+    starts = [node.text for node in root.findall('.//{'+NS+'}StartBoundary')]
+    assert starts == ['2026-07-30T00:05:00', '2026-07-30T16:10:00', '2026-09-10T18:10:00']
+    assert root.find('.//{'+NS+'}Principal').attrib['id'] == 'original'
+    assert root.find('.//{'+NS+'}Enabled').text == 'false'
+    assert 'daily-maintenance' in planned and 'AiStock-core' not in planned
