@@ -32,6 +32,9 @@ foreach ($taskPath in @('F:\Stock\AiStockData\data','F:\Stock\AiStockData\artifa
 $taskHead = (& git -C $taskRepo rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $taskHead.StartsWith($Version)) { throw 'Host checkout differs from release version' }
 if (& git -C $taskRepo status --porcelain) { throw 'Release checkout has uncommitted or untracked files' }
+if ($Mode -in @('Apply','Rollback') -and -not (Test-Path -LiteralPath (Join-Path $taskRepo 'config\settings.local.yaml') -PathType Leaf)) {
+    throw 'Verified private host settings.local.yaml is required for the release host tasks; it stays ignored by Git and Docker.'
+}
 $env:AISTOCK_RELEASE_VERSION = $Version
 $env:AISTOCK_HOST_REPO_ROOT = $taskRepo
 $env:AISTOCK_SETTINGS_FILE = $taskSettings

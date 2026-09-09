@@ -44,7 +44,9 @@ from utils.market_warehouse import clickhouse_client
 manifest=json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
 checks=manifest.get('restore_checks') or []
 if manifest.get('state')!='archive_verified' or not manifest.get('restore_verified_at'): raise RuntimeError('No completed isolated restore evidence')
+if manifest.get('database')!='stock': raise RuntimeError('Activation requires the real stock database restore, not a synthetic probe')
 if datetime.fromisoformat(manifest['restore_verified_at']).tzinfo is None: raise RuntimeError('Restore proof needs business timezone')
+if not 0 <= (datetime.now().astimezone()-datetime.fromisoformat(manifest['restore_verified_at'])).total_seconds() <= 7*86400: raise RuntimeError('Restore evidence is expired or in the future')
 if not checks or not all(row.get('check')=='passed' for row in checks): raise RuntimeError('Restore table checks incomplete')
 client=clickhouse_client()
 if client.query("SELECT name,path FROM system.disks WHERE name='backups'").result_rows!=[('backups','/backups/')]: raise RuntimeError('Native /backups/ disk unavailable')
