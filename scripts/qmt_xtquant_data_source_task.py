@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import os
 import sys
 import time
 from datetime import datetime
@@ -548,17 +549,22 @@ def main() -> int:
     args = parse_args()
     if args.mode == "date-repair":
         summary = run_date_repair(args)
-        print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
-        return 0 if summary.get("ok") else 1
-    if args.mode == "minute-gap-repair":
+    elif args.mode == "minute-gap-repair":
         summary = run_isolated_history(args) if args.isolate_history_periods else run_minute_gap_repair(args)
-        print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
-        return 0 if summary.get("ok") else 1
-    if args.mode == "after-close-full-refresh":
+    elif args.mode == "after-close-full-refresh":
         summary = run_after_close_full_refresh(args)
-        print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
-        return 0 if summary.get("ok") else 1
-    raise SystemExit(f"unsupported mode: {args.mode}")
+    else:
+        raise SystemExit(f"unsupported mode: {args.mode}")
+    encoded = json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default)
+    if not summary.get("ok") and "DownloadDeferred" in encoded and os.getenv("AISTOCK_BACKLOG_REPLAY") != "1":
+        from services.operations.ingestion_backlog import enqueue
+        arguments = list(sys.argv[1:])
+        for option, value in (("--start-date", args.start_date), ("--end-date", args.end_date)):
+            if option not in arguments:
+                arguments.extend([option, value])
+        summary["deferred_job_id"] = enqueue(arguments)
+    print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
+    return 0 if summary.get("ok") else 1
 
 
 if __name__ == "__main__":

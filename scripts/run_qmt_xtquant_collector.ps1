@@ -295,6 +295,12 @@ function Invoke-AfterCloseRecovery {
   return $ExitCode
 }
 
+if ($Scenario -eq "history") {
+  $BacklogArgs = @((Join-Path $RootDir 'scripts/run_ingestion_backlog.py'))
+  $BacklogExit = Invoke-LoggedNative -Exe $PythonExe -Arguments $BacklogArgs
+  Write-CollectorLog "Deferred ingestion replay finished exit_code=$BacklogExit; inspect operations/ingestion_backlog.json"
+}
+
 if ($RequireAfterCloseFinalValidation -and $Scenario -ne "history") {
   $PreviousCloseDate = Resolve-PreviousTradingDate -Now (Get-Date)
   $AfterCloseState = Get-AfterCloseValidationState -TradeDate $PreviousCloseDate

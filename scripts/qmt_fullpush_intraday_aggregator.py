@@ -768,12 +768,26 @@ def run_collector(args):
     def snapshot_action():
         nonlocal full_tick_polls
         poll_started = time.monotonic()
-        count = aggregator.poll_full_tick(xtdata, codes, args.full_tick_batch_size) if args.poll_full_tick else 0
+        count = 0
+        errors = {}
         if args.poll_full_tick:
-            full_tick_polls += 1
+            try:
+                from services.operations.qmt_snapshot import read_full_snapshot
+                response = read_full_snapshot(codes, args.full_tick_batch_size)
+                ticks = response['ticks']
+                count = len(ticks)
+                aggregator.on_data(ticks, update_bars=False)
+                with aggregator.lock:
+                    aggregator.full_tick_ticks.update(ticks)
+                if response.get('failed_batches'):
+                    errors['poll'] = response['failed_batches']
+                full_tick_polls += 1
+            except Exception as exc:
+                errors['poll'] = f"{type(exc).__name__}: {exc}"
         poll_seconds = time.monotonic()-poll_started
+        # Subscription remains available if a disposable polling worker fails.
         result = flush_snapshot(aggregator)
-        result.update(poll_seconds=round(poll_seconds, 3), polled_codes=count)
+        result.update(poll_seconds=round(poll_seconds, 3), polled_codes=count, errors=errors)
         log(f"snapshot {result['daily_rows']} rows poll={poll_seconds:.3f}s write={result['duration_seconds']}s fresh={result['source_fresh_300s']}/{result['universe_count']}")
         return result
 
