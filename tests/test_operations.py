@@ -98,6 +98,23 @@ def test_missing_runtime_is_unknown_not_no_opportunity(tmp_path):
     result=mainwave_daily(tmp_path,now=NOW)
     assert result['state']=='data_blocked'
     assert result['contract']['entry']['minimum_score']==88
+    assert result['execution_readiness']['mode']=='paper_only'
+    assert result['execution_readiness']['real_order_enabled'] is False
+
+
+def test_mainwave_blocks_rows_that_expose_order_permission(tmp_path):
+    write_snapshot({'generated_at':NOW.isoformat(),'strategy_actionable':True},tmp_path/'health/latest.json')
+    write_snapshot({'entry_date':'2026-09-09','decision_date':'2026-09-08'},tmp_path/'gen3_state_alpha/latest_summary.json')
+    source=tmp_path/'gen3_state_router_shadow/latest_all_source_candidates.csv'
+    source.parent.mkdir()
+    source.write_text(
+        'route,code,entry_date,decision_date,auto_order_allowed\n'
+        'institutional_mainwave,A,2026-09-09,2026-09-08,true\n',
+        encoding='utf-8')
+    result=mainwave_daily(tmp_path,now=NOW)
+    assert result['state']=='data_blocked'
+    assert result['execution_readiness']['safe'] is False
+    assert next(x for x in result['checks'] if x['name']=='paper_order_guard')['ok'] is False
 
 
 def test_stale_host_inventory_does_not_claim_tasks_running(tmp_path):

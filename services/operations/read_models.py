@@ -197,6 +197,22 @@ def mainwave_daily(root: Path, *, now: datetime | None = None) -> dict:
         source_exists = True
     checks.append({'name':'candidate_batch_consistency', 'ok':coherent and source_exists,
                    'message':'候选日期与摘要一致' if coherent and source_exists else '候选文件缺失或与摘要日期不一致，不能作为当天结论'})
+    # Keep the execution boundary visible beside the data verdict.  This is a
+    # read-only product contract: paper mode remains the only allowed mode
+    # until a separately reviewed live-trading change is made.
+    order_flags = [item for item in rows if any(truth(item.get(key)) for key in
+                                                 ('formal_buy_signal', 'auto_order_allowed', 'order_path_enabled'))]
+    execution_readiness = {
+        'mode': 'paper_only',
+        'real_order_enabled': False,
+        'manual_review_required': True,
+        'order_flag_rows': len(order_flags),
+        'safe': not order_flags,
+        'message': '仅纸面跟踪，真实委托通道关闭' if not order_flags
+                   else '发现委托许可字段，已阻断当天交易结论并要求人工复核',
+    }
+    checks.append({'name': 'paper_order_guard', 'ok': execution_readiness['safe'],
+                   'message': execution_readiness['message']})
     blocked = not summary or any(not x['ok'] for x in checks)
     state = 'data_blocked' if blocked else 'stale_batch' if stale_batch else 'waiting_30m' if summary.get('pending_next_session_confirmation') else 'candidates' if candidates else 'no_candidates'
     snapshots = read_json(root/'operations/mainwave_tracking.json').get('snapshots', [])
@@ -217,6 +233,7 @@ def mainwave_daily(root: Path, *, now: datetime | None = None) -> dict:
             'state': state, 'entry_date': summary.get('entry_date'), 'decision_date': summary.get('decision_date'),
             'stale_batch': stale_batch, 'contract': contract, 'contract_metadata': metadata,
             'checks': checks, 'health': health, 'candidates': candidates, 'history': history,
+            'execution_readiness': execution_readiness,
             'changes': changes, 'comparison_date': prior.get('entry_date') if prior else None,
             'comparison_status': 'data_blocked' if blocked or stale_batch else 'available' if prior else 'no_baseline',
             'summary': {'candidate_count': len(candidates), 'confirmed_count': sum(x['stage'] == 'confirmed' for x in candidates),
