@@ -22,6 +22,7 @@ from utils.paths import runtime_path
 FIELDS = 'code, datetime, open, high, low, close, volume, amount'
 SETTINGS = {'max_execution_time': 600, 'max_threads': 2,
             'max_memory_usage': 4000000000, 'max_bytes_before_external_group_by': 1000000000}
+LEGACY_FINGERPRINTS = {'fb88a8940f185d5e75f568822aeb45f0a0450eb76d2e934de4510336a412fe9e'}
 
 
 def bounds(month, cutoff):
@@ -32,18 +33,37 @@ def bounds(month, cutoff):
 
 def aggregate(period, month, cutoff):
     first, last = bounds(month, cutoff)
+    return aggregate_range(period, first, last)
+
+
+def aggregate_range(period, first, last):
     sql = _derived_aggregate_sql(f'{period}m', first, last, True)
     # Stable chronological summation avoids nondeterministic Float64 merge order.
     sql = sql.replace('sum(amount) AS amount',
                       'if(count(amount) = 0, NULL, arraySum(arrayMap(x -> ifNull(x.2, 0), '
                       'arraySort(x -> x.1, groupArray(tuple(source_datetime, amount)))))) AS amount')
     # Explicit partition predicate is necessary with Nullable(DateTime) on this deployment.
-    return sql.replace('WHERE ', f'WHERE toYYYYMM(datetime) = {int(month)} AND ', 1)
+    return sql.replace('WHERE ', f'WHERE toYYYYMM(datetime) = {first.year * 100 + first.month} AND ', 1)
 
 
 def source_sql(period, month, cutoff):
     return (f'SELECT {FIELDS} FROM ({aggregate(period, month, cutoff)}) '
             f'WHERE source_bars = {period // 5}')
+
+
+def source_days(client, month, cutoff):
+    first, last = bounds(month, cutoff)
+    rows = client.query(
+        "SELECT DISTINCT toDate(datetime) FROM kline_minute_5 FINAL "
+        f"WHERE toYYYYMM(datetime) = {int(month)} AND datetime IS NOT NULL "
+        f"AND toDate(datetime) >= toDate('{first}') AND toDate(datetime) <= toDate('{last}') "
+        "ORDER BY 1", settings=SETTINGS).result_rows
+    return [row[0] for row in rows]
+
+
+def source_day_sql(period, day):
+    return (f'SELECT {FIELDS} FROM ({aggregate_range(period, day, day)}) '
+            f'WHERE toDate(datetime) = toDate(\'{day}\') AND source_bars = {period // 5}')
 
 
 def digest(client, sql):
@@ -53,6 +73,33 @@ def digest(client, sql):
                        f'toString(groupBitXor(cityHash64(tuple({FIELDS})))) '
                        f'FROM ({sql})', settings=SETTINGS).result_rows[0]
     return list(row)
+
+
+def combine_digests(digests):
+    """Combine day-disjoint exact digests with the same UInt64 arithmetic as ClickHouse."""
+    count = unique = total = xor = 0
+    for row in digests:
+        count += int(row[0])
+        unique += int(row[1])
+        total = (total + int(row[2])) & ((1 << 64) - 1)
+        xor ^= int(row[3])
+    return [count, unique, str(total), str(xor)]
+
+
+def digest_days(client, sqls):
+    return combine_digests(digest(client, sql) for sql in sqls)
+
+
+def candidate_days(client, table, month):
+    rows = client.query(
+        f'SELECT DISTINCT toDate(datetime) FROM {table} '
+        f'WHERE toYYYYMM(datetime) = {int(month)} AND datetime IS NOT NULL ORDER BY 1',
+        settings=SETTINGS).result_rows
+    return [row[0] for row in rows]
+
+
+def candidate_day_sql(table, day):
+    return f'SELECT {FIELDS} FROM {table} WHERE toDate(datetime) = toDate(\'{day}\')'
 
 
 def table_name(period, run_id):
@@ -67,31 +114,42 @@ def build_month(client, state, period, month, save):
     table = table_name(period, state['run_id'])
     target = f'SELECT {FIELDS} FROM {table} WHERE toYYYYMM(datetime) = {int(month)}'
     if job.get('state') == 'verified':
-        if digest(client, target) != job['actual']:
+        target_days = candidate_days(client, table, month)
+        if digest_days(client, (candidate_day_sql(table, day) for day in target_days)) != job['actual']:
             raise RuntimeError(f'{key}: verified candidate changed; rebuild with a new run-id')
         return
-    if job:
+    if job and job.get('state') != 'retry_authorized_empty_candidate':
         raise RuntimeError(f'{key}: uncertain previous attempt; inspect before using a new run-id')
     if client.query(f'SELECT count() FROM ({target})', settings=SETTINGS).result_rows[0][0]:
         raise RuntimeError(f'{key}: candidate partition is not empty')
-    job = {'state': 'checking_source'}
+    history = list(job.get('recovery_history', [])) if job else []
+    job = {'state': 'checking_source', 'recovery_history': history}
     state['jobs'][key] = job
     save()
     try:
-        sql = source_sql(period, month, state['cutoff'])
-        job['expected'] = digest(client, sql)
-        job['incomplete_buckets'] = client.query(
-            f'SELECT count() FROM ({aggregate(period, month, state["cutoff"])}) '
-            f'WHERE source_bars != {period // 5}', settings=SETTINGS).result_rows[0][0]
+        days = source_days(client, month, state['cutoff'])
+        job['source_days'] = [str(day) for day in days]
+        job['expected'] = digest_days(client, (source_day_sql(period, day) for day in days))
+        job['incomplete_buckets'] = sum(
+            client.query(f'SELECT count() FROM ({aggregate_range(period, day, day)}) '
+                         f'WHERE source_bars != {period // 5}', settings=SETTINGS).result_rows[0][0]
+            for day in days)
         job['state'] = 'writing'
         save()
-        client.command(f'INSERT INTO {table} ({FIELDS}, created_at, id) '
-                       f'SELECT {FIELDS}, now(), cityHash64(tuple(code, datetime)) '
-                       f'FROM ({sql})', settings=SETTINGS)
+        for day in days:
+            job['writing_day'] = str(day)
+            save()
+            sql = source_day_sql(period, day)
+            client.command(f'INSERT INTO {table} ({FIELDS}, created_at, id) '
+                           f'SELECT {FIELDS}, now(), cityHash64(tuple(code, datetime)) '
+                           f'FROM ({sql})', settings=SETTINGS)
+        job.pop('writing_day', None)
         job['state'] = 'validating'
         save()
-        job['actual'] = digest(client, target)
-        job['source_after'] = digest(client, sql)
+        target_days = candidate_days(client, table, month)
+        job['actual'] = digest_days(client, (candidate_day_sql(table, day) for day in target_days))
+        after_days = source_days(client, month, state['cutoff'])
+        job['source_after'] = digest_days(client, (source_day_sql(period, day) for day in after_days))
         if not (job['expected'] == job['actual'] == job['source_after']):
             raise RuntimeError('Source changed or candidate checksum mismatch')
         if job['actual'][0] != job['actual'][1]:
@@ -102,6 +160,50 @@ def build_month(client, state, period, month, save):
         job.update(state='blocked', error=str(exc)[:2000])
         save()
         raise
+
+
+def authorize_empty_memory_blocked_jobs(client, state, save):
+    """Permit an explicit retry only after proving that a failed write left no rows."""
+    for key, job in state['jobs'].items():
+        if job.get('state') != 'blocked':
+            continue
+        if 'MEMORY_LIMIT_EXCEEDED' not in str(job.get('error', '')):
+            raise RuntimeError(f'{key}: blocked for a non-memory error; refusing retry')
+        period, month = key.split(':', 1)
+        table = table_name(int(period), state['run_id'])
+        count = client.query(f'SELECT count() FROM {table} WHERE toYYYYMM(datetime) = {int(month)}',
+                             settings=SETTINGS).result_rows[0][0]
+        if count:
+            raise RuntimeError(f'{key}: blocked candidate contains {count} rows; refusing retry')
+        job['recovery_history'] = [dict(state='blocked', error=job.get('error'),
+                                        expected=job.get('expected'),
+                                        incomplete_buckets=job.get('incomplete_buckets'))]
+        job['state'] = 'retry_authorized_empty_candidate'
+        job['retry_reason'] = 'explicit_daily_chunk_recovery_after_empty_memory_limited_attempt'
+        save()
+
+
+def migrate_legacy_manifest(client, state, fingerprint, save):
+    """Revalidate every accepted checkpoint before changing its implementation fingerprint."""
+    if state['fingerprint'] == fingerprint:
+        return
+    if state['fingerprint'] not in LEGACY_FINGERPRINTS:
+        raise ValueError('Existing run uses a different cutoff or implementation')
+    for key, job in state['jobs'].items():
+        if job.get('state') != 'verified':
+            continue
+        period, month = key.split(':', 1)
+        table = table_name(int(period), state['run_id'])
+        days = candidate_days(client, table, month)
+        actual = digest_days(client, (candidate_day_sql(table, day) for day in days))
+        if actual != job.get('actual'):
+            raise RuntimeError(f'{key}: legacy verified candidate changed; refusing manifest migration')
+    state['fingerprint'] = fingerprint
+    state['manifest_migration'] = {
+        'from_fingerprint': next(iter(LEGACY_FINGERPRINTS)),
+        'method': 'revalidated_accepted_candidates_then_switched_to_daily_chunks',
+    }
+    save()
 
 
 def run(args):
@@ -122,8 +224,9 @@ def run(args):
                                      (ROOT / 'scripts/govern_kline_history.py').read_bytes()).hexdigest()
         if path.exists():
             state = json.loads(path.read_text(encoding='utf-8'))
-            if state['cutoff'] != args.cutoff or state['fingerprint'] != fingerprint:
+            if state['cutoff'] != args.cutoff:
                 raise ValueError('Existing run uses a different cutoff or implementation')
+            migrate_legacy_manifest(client, state, fingerprint, lambda: write_snapshot(state, path))
         else:
             months = [str(r[0]) for r in client.query(
                 "SELECT DISTINCT partition FROM system.parts WHERE database=currentDatabase() "
@@ -141,6 +244,8 @@ def run(args):
         if not args.build:
             print(json.dumps(state, ensure_ascii=False), flush=True)
             return
+        if args.resume_blocked:
+            authorize_empty_memory_blocked_jobs(client, state, lambda: write_snapshot(state, path))
         for period in (15, 30, 60):
             if state['jobs'] and not client.command(f'EXISTS TABLE {table_name(period, args.run_id)}'):
                 raise RuntimeError('Candidate disappeared; do not recreate an accepted table')
@@ -178,4 +283,6 @@ if __name__ == '__main__':
     parser.add_argument('--cutoff', default=str(datetime.now(BUSINESS_TZ).date() - timedelta(days=1)))
     parser.add_argument('--build', action='store_true')
     parser.add_argument('--limit', type=int, default=0)
+    parser.add_argument('--resume-blocked', action='store_true',
+                        help='Explicitly retry only memory-blocked jobs whose candidate month is empty.')
     run(parser.parse_args())

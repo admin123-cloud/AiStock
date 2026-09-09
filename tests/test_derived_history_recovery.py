@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import json
 import os
 from services.operations.health import BUSINESS_TZ
@@ -32,9 +32,13 @@ class Client:
         self.fail, self.changed, self.writes, self.digests = fail, changed, 0, 0
 
     def query(self, sql, **kwargs):
+        if sql.startswith('SELECT DISTINCT toDate(datetime) FROM kline_minute_5'):
+            return Result([(date(2020, 1, 2),)])
+        if sql.startswith('SELECT DISTINCT toDate(datetime) FROM kline_minute_15_recovery_test'):
+            return Result([(date(2020, 1, 2),)])
         if 'sumWithOverflow' in sql:
             self.digests += 1
-            return Result([(2, 2, 'different' if self.changed and self.digests == 3 else 'a', 'b')])
+            return Result([(2, 2, '4' if self.changed and self.digests == 3 else '3', '5')])
         return Result([(0,)])
 
     def command(self, sql, **kwargs):
