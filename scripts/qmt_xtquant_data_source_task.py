@@ -83,6 +83,9 @@ def run_date_repair(args: argparse.Namespace) -> dict[str, Any]:
     client = ch_client()
     codes = resolve_daily_codes(client, args)
     report_dir = report_path("qmt_xtquant_data_source_task")
+    generation = getattr(args, "repair_generation", 0)
+    if generation:
+        report_dir = report_dir / "verified_continuations" / str(generation)
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d_%H%M%S")
     daily_report = report_dir / f"daily_{args.start_date}_{args.end_date}.json"
@@ -575,6 +578,7 @@ def parse_args() -> argparse.Namespace:
         help="Retry once in history mode the QMT-empty 5m source candidates persisted by after-close refresh.",
     )
     parser.add_argument("--minute-report-dir", default="")
+    parser.add_argument("--repair-generation", type=int, choices=range(513), default=0)
     parser.add_argument("--stop-on-error", action="store_true")
     parser.add_argument("--report", default="")
     return parser.parse_args()

@@ -17,7 +17,8 @@ def canonical_arguments(args):
         raise ValueError('Index daily repair supports an ordered range of at most 32 calendar days')
     return ['--mode', 'date-repair', '--scenario', 'after-close', '--universe', 'index',
             '--start-date', start.isoformat(), '--end-date', end.isoformat(),
-            '--daily-batch-size', str(max(1, min(args.batch_size, 80))), '--no-with-minutes']
+            '--daily-batch-size', str(max(1, min(args.batch_size, 80))), '--no-with-minutes',
+            '--repair-generation', str(getattr(args, 'repair_generation', 0))]
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
     parser.add_argument('--start-date', required=True)
     parser.add_argument('--end-date', required=True)
     parser.add_argument('--batch-size', type=int, default=40)
+    parser.add_argument('--repair-generation', type=int, choices=range(513), default=0)
     args = parser.parse_args()
     arguments = canonical_arguments(args)
     from services.operations.qmt_download_queue import protected_session
