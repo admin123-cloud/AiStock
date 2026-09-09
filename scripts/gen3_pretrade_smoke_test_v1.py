@@ -7,6 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -15,6 +16,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists  # noqa: E402
+from utils.g3_mainwave_confirmation import is_confirmation_data_wall  # noqa: E402
+from utils.g3_minute_visibility import load_visible_minute_bars  # noqa: E402
 from utils.paths import report_path, runtime_path  # noqa: E402
 
 
@@ -23,6 +26,8 @@ STATE_ROUTER_RUNTIME_DIR = runtime_path("gen3_state_router_shadow")
 OUT_DIR = report_path("gen3_pretrade_smoke_test_v1")
 SHADOW_SCRIPT = ROOT / "scripts" / "gen3_state_router_shadow_daily_v1.py"
 PROMOTION_DIR = report_path("gen3_promotion_self_test_v1")
+BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
+FIRST_COMPLETED_30M_TIME = (10, 0)
 
 
 def _json_default(value: Any) -> Any:
@@ -147,7 +152,7 @@ def _latest_daily_date() -> dict[str, Any]:
 
 
 def _minute30_coverage(tickets: pd.DataFrame, decision_date: str) -> list[dict[str, Any]]:
-    if tickets.empty or not clickhouse_table_exists("kline_minute_30"):
+    if tickets.empty:
         return []
     rows: list[dict[str, Any]] = []
     for item in tickets.to_dict("records"):
@@ -157,18 +162,33 @@ def _minute30_coverage(tickets: pd.DataFrame, decision_date: str) -> list[dict[s
             rows.append({"code": code, "date": confirm_date, "ok": False, "reason": "missing_code_or_confirm_date"})
             continue
         try:
-            df = clickhouse_query_df(
-                """
-                SELECT count() AS rows, max(datetime) AS latest_datetime
-                FROM kline_minute_30
-                WHERE code = ?
-                  AND toDate(datetime) = ?
-                """,
-                [code, confirm_date],
+            bars, visibility = load_visible_minute_bars(
+                code,
+                30,
+                confirm_date,
+                confirm_date,
             )
-            count = int(df.iloc[0].get("rows") or 0) if not df.empty else 0
-            latest = _dt_text(df.iloc[0].get("latest_datetime")) if not df.empty else ""
-            rows.append({"code": code, "date": confirm_date, "ok": count > 0, "rows": count, "latest_datetime": latest})
+            count = int(len(bars))
+            latest = (
+                pd.Timestamp(bars["business_datetime"].max()).strftime("%Y-%m-%d %H:%M:%S")
+                if not bars.empty
+                else ""
+            )
+            rows.append(
+                {
+                    "code": code,
+                    "date": confirm_date,
+                    "ok": bool(visibility.get("source_ok")) and count > 0 and not visibility.get("conflict_rows"),
+                    "rows": count,
+                    "latest_datetime": latest,
+                    "source": visibility.get("source", ""),
+                    "visibility_status": visibility.get("status", ""),
+                    "main_rows": int(visibility.get("main_rows") or 0),
+                    "stage_rows": int(visibility.get("stage_rows") or 0),
+                    "recovered_rows": int(visibility.get("recovered_rows") or 0),
+                    "conflict_rows": int(visibility.get("conflict_rows") or 0),
+                }
+            )
         except Exception as exc:
             rows.append({"code": code, "date": confirm_date, "ok": False, "reason": str(exc)})
     return rows
@@ -201,8 +221,8 @@ def _contract_checks(contract: dict[str, Any]) -> dict[str, Any]:
         "slots": int(portfolio.get("slots") or 0) == 2,
         "slot_pct": abs(float(portfolio.get("slot_pct") or 0) - 0.50) < 1e-9,
         "institutional_position": abs(float(portfolio.get("institutional_mainwave_position_pct") or 0) - 0.50) < 1e-9,
-        "hard_stop": abs(float(hard_stop.get("loss_pct") or 0) - 0.12) < 1e-9 and hard_stop.get("action") == "sell_all",
-        "take_profit": abs(float(take_profit.get("profit_pct") or 0) - 0.12) < 1e-9 and abs(float(take_profit.get("sell_ratio") or 0) - 0.50) < 1e-9,
+        "hard_stop": abs(float(hard_stop.get("loss_pct") or 0) - 0.10) < 1e-9 and hard_stop.get("action") == "sell_all",
+        "take_profit": abs(float(take_profit.get("profit_pct") or 0) - 0.10) < 1e-9 and abs(float(take_profit.get("sell_ratio") or 0) - 0.50) < 1e-9,
         "max_single_loss": float(risk_limits.get("max_single_trade_account_loss_pct") or 9) <= 0.065,
         "formal_disabled": not _truthy((contract.get("guardrails") or {}).get("formal_buy_signal"))
         and not _truthy((contract.get("guardrails") or {}).get("auto_order_allowed"))
@@ -232,10 +252,10 @@ def _ticket_contract_issues(tickets: pd.DataFrame) -> list[dict[str, Any]]:
             if ref is None or ref <= 0:
                 row_issues.append("missing_reference_close")
             else:
-                if hard is None or abs(hard - ref * 0.88) / ref > 0.003:
-                    row_issues.append("hard_stop_not_near_minus_12pct")
-                if take is None or abs(take - ref * 1.12) / ref > 0.003:
-                    row_issues.append("take_profit_not_near_plus_12pct")
+                if hard is None or abs(hard - ref * 0.90) / ref > 0.003:
+                    row_issues.append("hard_stop_not_near_minus_10pct")
+                if take is None or abs(take - ref * 1.10) / ref > 0.003:
+                    row_issues.append("take_profit_not_near_plus_10pct")
                 if structure is None or structure <= 0 or structure > ref:
                     row_issues.append("structure_stop_invalid")
             if sell_ratio is None or abs(sell_ratio - 0.50) > 1e-9:
@@ -273,6 +293,55 @@ def _ledger_status(tickets: pd.DataFrame, ledger: pd.DataFrame) -> dict[str, Any
         "active_exposure": exposure,
         "active_codes": active.get("code", pd.Series(dtype=str)).astype(str).tolist() if not active.empty else [],
     }
+
+
+def _summary_source_data_walls(summary: dict[str, Any], *, live_confirmation_window: bool) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in summary.get("source_data_wall_rows") or []:
+        if isinstance(item, dict):
+            rows.append(item)
+    for meta in summary.get("sources") or []:
+        if not isinstance(meta, dict):
+            continue
+        source = str(meta.get("source") or "")
+        status = str(meta.get("status") or "").strip().lower()
+        if status == "retired_from_runtime":
+            continue
+        reason = ""
+        if status in {"failed", "error", "builder_failed", "source_failed"}:
+            reason = status
+        snapshot = meta.get("candidate_snapshot") if isinstance(meta.get("candidate_snapshot"), dict) else {}
+        snapshot_status = str(snapshot.get("status") or "").strip().lower()
+        snapshot_write = snapshot.get("write") if isinstance(snapshot.get("write"), dict) else {}
+        snapshot_write_status = str(snapshot_write.get("status") or "").strip().lower()
+        if snapshot_status in {"snapshot_read_failed", "snapshot_empty_or_invalid"}:
+            reason = snapshot_status
+        if snapshot_write_status == "snapshot_write_failed":
+            reason = snapshot_write_status
+        if live_confirmation_window and bool(meta.get("candidate_snapshot_required")) and not bool(meta.get("candidate_snapshot_loaded")):
+            reason = snapshot_status or "candidate_snapshot_required_not_loaded"
+        if not reason:
+            continue
+        rows.append(
+            {
+                "source": source,
+                "status": status,
+                "reason": reason,
+                "rows": int(meta.get("rows") or 0),
+                "candidate_snapshot_required": bool(meta.get("candidate_snapshot_required")),
+                "candidate_snapshot_loaded": bool(meta.get("candidate_snapshot_loaded")),
+                "candidate_snapshot_status": snapshot_status,
+            }
+        )
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for item in rows:
+        key = (str(item.get("source") or ""), str(item.get("status") or ""), str(item.get("reason") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def _write_report(payload: dict[str, Any]) -> None:
@@ -319,12 +388,14 @@ def run(entry_date: str | None = None, refresh: bool = False) -> dict[str, Any]:
     ledger_path = STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"
     contract_path = STATE_ALPHA_RUNTIME_DIR / "latest_strategy_contract.json"
     diagnostics_path = STATE_ROUTER_RUNTIME_DIR / "latest_route_diagnostics.csv"
+    all_source_path = STATE_ROUTER_RUNTIME_DIR / "latest_all_source_candidates.csv"
 
     summary = _read_json(summary_path)
     contract = _read_json(contract_path)
     tickets = _read_csv(tickets_path)
     ledger = _read_csv(ledger_path)
     diagnostics = _read_csv(diagnostics_path)
+    all_source = _read_csv(all_source_path)
     qualified = tickets[tickets.get("qualified_shadow_buy", pd.Series(False, index=tickets.index)).map(_truthy)].copy() if not tickets.empty else pd.DataFrame()
 
     gate = GateBook()
@@ -362,6 +433,96 @@ def run(entry_date: str | None = None, refresh: bool = False) -> dict[str, Any]:
     gate.add("qualified_ticket_30m_confirmed", qualified.empty or qualified.get("m30_confirmed", pd.Series(False, index=qualified.index)).map(_truthy).all(), "block", "qualified tickets must have 30m confirmation", {"qualified_count": int(len(qualified))})
     gate.add("qualified_ticket_30m_data", not minute_rows or all(x.get("ok") for x in minute_rows), "block", "qualified tickets have 30m rows on confirm date", {"coverage": minute_rows})
 
+    live_confirmation_window = bool(entry and summary.get("live_confirmation_window"))
+    if not live_confirmation_window:
+        now = datetime.now(BUSINESS_TZ)
+        live_confirmation_window = bool(
+            entry
+            and now.strftime("%Y-%m-%d") == entry
+            and (now.hour, now.minute) >= FIRST_COMPLETED_30M_TIME
+        )
+    summary_source_failures = _summary_source_data_walls(summary, live_confirmation_window=live_confirmation_window)
+    source_failures: list[dict[str, Any]] = []
+    if not all_source.empty:
+        for item in all_source.to_dict("records"):
+            m30_status = str(item.get("m30_status") or "")
+            visibility_status = str(item.get("m30_visibility_status") or "")
+            if is_confirmation_data_wall(m30_status) or is_confirmation_data_wall(visibility_status):
+                source_failures.append(
+                    {
+                        "code": item.get("code") or item.get("code_raw") or "",
+                        "m30_status": m30_status,
+                        "m30_visibility_status": visibility_status,
+                        "block_reason": item.get("block_reason") or "",
+                        "m30_main_rows": item.get("m30_main_rows"),
+                        "m30_stage_rows": item.get("m30_stage_rows"),
+                        "m30_conflict_rows": item.get("m30_conflict_rows"),
+                    }
+                )
+    summary_minute_failure_rows = int(summary.get("minute_data_failure_rows") or 0)
+    diagnosis_code = str(summary.get("diagnosis_code") or "")
+    data_wall_diagnosis = diagnosis_code in {
+        "SOURCE_BUILDER_UNAVAILABLE",
+        "BUILDER_OR_CANDIDATE_SNAPSHOT_UNAVAILABLE",
+        "MINUTE_DATA_UNAVAILABLE",
+        "PENDING_CONFIRMATION_RETRY_REQUIRED",
+    }
+    now = datetime.now(BUSINESS_TZ)
+    pending = _truthy(summary.get("pending_next_session_confirmation"))
+    pending_after_first_bar = bool(
+        pending
+        and now.strftime("%Y-%m-%d") == entry
+        and (now.hour, now.minute) >= FIRST_COMPLETED_30M_TIME
+    )
+    gate.add(
+        "source_builder_visibility",
+        not bool(summary_source_failures),
+        "block",
+        "active source builders and frozen candidate snapshots must remain visible",
+        {
+            "live_confirmation_window": live_confirmation_window,
+            "source_data_wall_count": int(summary.get("source_data_wall_count") or len(summary_source_failures)),
+            "failures": summary_source_failures[:20],
+        },
+    )
+    gate.add(
+        "minute_source_visibility",
+        not (bool(source_failures) or summary_minute_failure_rows > 0 or data_wall_diagnosis),
+        "block",
+        "30m data failures cannot be downgraded to a normal no-trade result",
+        {
+            "live_confirmation_window": live_confirmation_window,
+            "summary_minute_data_failure_rows": summary_minute_failure_rows,
+            "diagnosis_code": diagnosis_code,
+            "source_failure_count": int(len(source_failures)),
+            "failures": source_failures[:20],
+        },
+    )
+    gate.add(
+        "pending_confirmation_window",
+        not pending_after_first_bar,
+        "block",
+        "pending next-session candidates must be re-evaluated after the first completed 30m bar",
+        {
+            "pending_next_session_confirmation": pending,
+            "entry_date": entry,
+            "now": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "first_completed_30m_time": "10:00",
+        },
+    )
+    gate.add(
+        "candidate_ticket_reconciliation",
+        not (live_confirmation_window and bool(source_failures) and not qualified.empty),
+        "block",
+        "source candidates and qualified tickets must remain explainably reconcilable",
+        {
+            "source_rows": int(summary.get("source_rows") or len(all_source)),
+            "selected_rows": int(summary.get("selected_rows") or 0),
+            "qualified_ticket_count": int(len(qualified)),
+            "source_failure_count": int(len(source_failures)),
+        },
+    )
+
     formal_rows = int(summary.get("formal_buy_signal_rows") or 0)
     auto_rows = int(summary.get("auto_order_allowed_rows") or 0)
     order_rows = int(summary.get("order_path_enabled_rows") or 0)
@@ -374,7 +535,7 @@ def run(entry_date: str | None = None, refresh: bool = False) -> dict[str, Any]:
 
     ledger_status = _ledger_status(qualified, ledger)
     gate.add("shadow_ledger_consistency", bool(ledger_status["ok"]), "block", "ledger covers tickets and respects 2-slot exposure", ledger_status)
-    gate.add("daily_open_limit", len(qualified) <= 1, "block", "daily new qualified buys must not exceed 1", {"qualified_count": int(len(qualified))})
+    gate.add("daily_open_limit", len(qualified) <= 2, "block", "daily new qualified buys must not exceed the 2-slot limit", {"qualified_count": int(len(qualified))})
 
     promotion = _promotion_gate_status()
     gate.add("promotion_self_test", bool(promotion.get("ok")), "warn", "latest promotion self-test gates are green", promotion)
@@ -382,8 +543,13 @@ def run(entry_date: str | None = None, refresh: bool = False) -> dict[str, Any]:
     ticket_records = json.loads(qualified.astype(object).where(pd.notna(qualified), None).to_json(orient="records", force_ascii=False)) if not qualified.empty else []
     blockers = gate.blockers()
     warnings = gate.warnings()
-    trade_action = "buy_review" if ticket_records else "no_trade"
     verdict = "blocked" if blockers else ("shadow_ready_with_warnings" if warnings else "shadow_ready")
+    if ticket_records:
+        trade_action = "buy_review"
+    elif blockers:
+        trade_action = "blocked_data"
+    else:
+        trade_action = "no_trade"
     payload = {
         "schema_version": 1,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

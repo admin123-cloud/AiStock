@@ -25,10 +25,10 @@ SOURCES = [
     {
         "mode": "institutional_mainwave",
         "label": "机构主升浪",
-        "path": report_path("gen3_score120_core_strategy_v1", "g3_route_execution_mandate_candidate_closed_trades.csv"),
+        "path": report_path("gen3_score120_formal_institutional_source_v1", "closed_trades.csv"),
         "ret_cols": ["stress_net_ret", "policy_net_ret", "net_ret"],
         "date_cols": ["entry_date", "policy_exit_date"],
-        "score_cols": ["score", "selected_score", "rank_key"],
+        "score_cols": ["score", "wave_style_score", "rank_key"],
     },
     {
         "mode": "panic_repair",
@@ -71,6 +71,14 @@ SOURCES = [
         "score_cols": ["score"],
     },
 ]
+
+REQUIRED_SOURCE_MODES = {
+    "institutional_mainwave",
+    "panic_repair",
+    "range_weak_rebound",
+    "strong_volume5",
+    "old_g3_guarded",
+}
 
 
 def _first_col(df: pd.DataFrame, cols: list[str]) -> str | None:
@@ -141,6 +149,22 @@ def _load_one(src: dict[str, Any]) -> pd.DataFrame:
     out = out[out["policy_exit_date"].ge(out["entry_date"])].copy()
     out["net_ret"] = out["net_ret"].clip(lower=-0.95, upper=2.0)
     return out
+
+
+def audit_sources() -> pd.DataFrame:
+    rows = []
+    for src in SOURCES:
+        path = Path(src["path"])
+        rows.append(
+            {
+                "mode": src["mode"],
+                "path": str(path),
+                "required": src["mode"] in REQUIRED_SOURCE_MODES,
+                "exists": path.exists(),
+                "bytes": int(path.stat().st_size) if path.exists() else 0,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def load_trades() -> pd.DataFrame:
@@ -309,6 +333,8 @@ def rolling_router(all_trades: pd.DataFrame, calendar: list[pd.Timestamp], lookb
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    source_audit = audit_sources()
+    source_audit.to_csv(OUT_DIR / "source_audit.csv", index=False, encoding="utf-8-sig")
     all_trades = load_trades()
     start = pd.Timestamp("2020-01-01")
     end = max(pd.Timestamp("2026-06-17"), all_trades["policy_exit_date"].max())
@@ -405,6 +431,9 @@ def main() -> None:
         "mode_count": int(all_trades["mode"].nunique()),
         "trade_rows": int(len(all_trades)),
         "router_trades": int(len(router_closed)),
+        "required_source_count": int(source_audit["required"].sum()),
+        "missing_required_sources": source_audit[source_audit["required"] & ~source_audit["exists"]]["mode"].astype(str).tolist(),
+        "missing_optional_sources": source_audit[~source_audit["required"] & ~source_audit["exists"]]["mode"].astype(str).tolist(),
     }
     (OUT_DIR / "summary.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(meta, ensure_ascii=False))

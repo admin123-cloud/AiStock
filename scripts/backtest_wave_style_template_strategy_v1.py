@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.research_main_wave_sector_score import _code6, _load_members  # noqa: E402
+from scripts.research_main_wave_sector_score import _canonical_code, _code6, _load_members  # noqa: E402
 from utils.market_warehouse import clickhouse_query_df  # noqa: E402
 from utils.paths import report_path  # noqa: E402
 
@@ -22,6 +22,7 @@ from utils.paths import report_path  # noqa: E402
 OUT_DIR = report_path("wave_style_template_strategy_backtest_v1")
 LEARN_DIR = report_path("profitable_wave_stock_style_learning_v1")
 INDEX_CODE = "999999.SH"
+INDEX_FALLBACK_CODES = ["000001.SH", "000300.SH", "399001.SZ"]
 INITIAL_CAPITAL = 1_000_000.0
 
 
@@ -57,9 +58,10 @@ def _load_stocks() -> pd.DataFrame:
         raise RuntimeError("stocks table has no active stock rows")
     df["code_raw"] = df["code"].astype(str)
     df["code6"] = df["code"].map(_code6)
+    df["code_key"] = df["code"].map(_canonical_code)
     df["stock_name"] = df["name"].astype(str)
     df["industry"] = df["industry"].fillna("").astype(str)
-    return df[["code_raw", "code6", "stock_name", "industry"]].drop_duplicates("code6")
+    return df[["code_raw", "code6", "code_key", "stock_name", "industry"]].drop_duplicates("code_key")
 
 
 def _load_daily(start_date: str, end_date: str) -> pd.DataFrame:
@@ -69,8 +71,6 @@ def _load_daily(start_date: str, end_date: str) -> pd.DataFrame:
         FROM kline_daily
         WHERE trade_date BETWEEN ? AND ?
           AND close > 0
-          AND change_pct > -50
-          AND change_pct < 50
         ORDER BY code, trade_date
         """,
         [start_date, end_date],
@@ -79,13 +79,14 @@ def _load_daily(start_date: str, end_date: str) -> pd.DataFrame:
         raise RuntimeError("kline_daily query returned no rows")
     df["code_raw"] = df["code"].astype(str)
     df["code6"] = df["code"].map(_code6)
+    df["code_key"] = df["code"].map(_canonical_code)
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.normalize()
     for col in ["open", "high", "low", "close", "volume", "amount", "change_pct", "turnover_rate"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["code6", "trade_date", "open", "high", "low", "close"])
-    df = df.sort_values(["code6", "trade_date", "amount"])
-    df = df.groupby(["code6", "trade_date"], as_index=False).tail(1)
-    return df.sort_values(["code6", "trade_date"]).reset_index(drop=True)
+    df = df.dropna(subset=["code_key", "trade_date", "open", "high", "low", "close"])
+    df = df.sort_values(["code_key", "trade_date", "amount"])
+    df = df.groupby(["code_key", "trade_date"], as_index=False).tail(1)
+    return df.sort_values(["code_key", "trade_date"]).reset_index(drop=True)
 
 
 def _trade_calendar(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
@@ -104,18 +105,31 @@ def _trade_calendar(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp
 
 
 def _load_index(start_date: str, end_date: str) -> pd.DataFrame:
+    codes = [INDEX_CODE, *INDEX_FALLBACK_CODES]
     df = clickhouse_query_df(
         """
-        SELECT trade_date, close
+        SELECT code, trade_date, close
         FROM kline_daily
-        WHERE code = ?
+        WHERE code IN ?
           AND trade_date BETWEEN ? AND ?
-        ORDER BY trade_date
+        ORDER BY code, trade_date
         """,
-        [INDEX_CODE, start_date, end_date],
+        [codes, start_date, end_date],
     )
     if df.empty:
         return pd.DataFrame()
+    coverage = (
+        df.groupby("code", as_index=False)
+        .agg(rows=("trade_date", "count"), first_date=("trade_date", "min"), last_date=("trade_date", "max"))
+        .sort_values(["rows", "last_date"], ascending=[False, False])
+    )
+    selected = str(coverage.iloc[0]["code"])
+    if INDEX_CODE in set(df["code"].astype(str)):
+        primary = coverage[coverage["code"].astype(str).eq(INDEX_CODE)]
+        if not primary.empty and int(primary.iloc[0]["rows"]) >= int(coverage.iloc[0]["rows"]) * 0.95:
+            selected = INDEX_CODE
+    df = df[df["code"].astype(str).eq(selected)].copy()
+    df["index_code"] = selected
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.normalize()
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df = df.dropna(subset=["trade_date", "close"]).sort_values("trade_date")
@@ -141,7 +155,24 @@ def _load_learned_sector_focus() -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=["l2_sector_name", "learned_count", "learned_avg_return"])
     d = pd.read_csv(path, encoding="utf-8-sig")
-    if d.empty or "l2_sector_name" not in d.columns:
+    if d.empty:
+        return pd.DataFrame(columns=["l2_sector_name", "learned_count", "learned_avg_return"])
+    if "code6" in d.columns:
+        try:
+            members = _load_members([2], 8)
+            current = (
+                members.sort_values(["stock_code6", "sector_code"])
+                .drop_duplicates("stock_code6")[["stock_code6", "sector_name"]]
+                .rename(columns={"stock_code6": "code6", "sector_name": "l2_sector_name"})
+            )
+            qmt = d.copy()
+            qmt["code6"] = qmt["code6"].astype(str).str.zfill(6).str[-6:]
+            qmt = qmt.drop(columns=["l2_sector_name"], errors="ignore").merge(current, on="code6", how="left")
+            if qmt["l2_sector_name"].fillna("").astype(str).str.len().gt(0).any():
+                d = qmt
+        except Exception:
+            pass
+    if "l2_sector_name" not in d.columns:
         return pd.DataFrame(columns=["l2_sector_name", "learned_count", "learned_avg_return"])
     d["wave_return"] = pd.to_numeric(d.get("wave_return"), errors="coerce")
     out = (
@@ -153,9 +184,14 @@ def _load_learned_sector_focus() -> pd.DataFrame:
 
 
 def _add_features(daily: pd.DataFrame, max_hold: int) -> pd.DataFrame:
-    d = daily.copy().sort_values(["code6", "trade_date"]).reset_index(drop=True)
-    g = d.groupby("code6", group_keys=False)
+    d = daily.copy().sort_values(["code_key", "trade_date"]).reset_index(drop=True)
+    g = d.groupby("code_key", group_keys=False)
+    # Warehouse ``change_pct`` is not consistently a one-session return for
+    # all historical imports.  Derive the signal from adjacent closes so a
+    # malformed provider field cannot delete an otherwise valid stock history
+    # or fabricate limit-up frequency.
     d["ret1"] = d["close"] / g["close"].shift(1) - 1.0
+    d["change_pct"] = d["ret1"] * 100.0
     d["ma20"] = g["close"].rolling(20, min_periods=15).mean().reset_index(level=0, drop=True)
     d["ma60"] = g["close"].rolling(60, min_periods=40).mean().reset_index(level=0, drop=True)
     d["high60"] = g["high"].rolling(60, min_periods=30).max().reset_index(level=0, drop=True)
@@ -191,12 +227,12 @@ def _add_features(daily: pd.DataFrame, max_hold: int) -> pd.DataFrame:
 def _attach_sector(daily: pd.DataFrame) -> pd.DataFrame:
     members = _load_members([2], 8)
     l2 = members[members["level"].astype("Int64").eq(2)].copy()
-    l2 = l2.sort_values(["stock_code6", "sector_code"]).drop_duplicates("stock_code6")
+    l2 = l2.sort_values(["stock_code_key", "sector_code"]).drop_duplicates("stock_code_key")
     out = daily.merge(
-        l2[["stock_code6", "sector_code", "sector_name"]].rename(
-            columns={"stock_code6": "code6", "sector_code": "l2_sector_code", "sector_name": "l2_sector_name"}
+        l2[["stock_code_key", "sector_code", "sector_name"]].rename(
+            columns={"stock_code_key": "code_key", "sector_code": "l2_sector_code", "sector_name": "l2_sector_name"}
         ),
-        on="code6",
+        on="code_key",
         how="left",
     )
     learned = _load_learned_sector_focus()
@@ -501,7 +537,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     stocks = _load_stocks()
     raw = _load_daily(load_start, load_end)
-    raw = raw.merge(stocks[["code6", "stock_name", "industry"]], on="code6", how="inner")
+    raw = raw.merge(stocks[["code_key", "stock_name", "industry"]], on="code_key", how="inner")
     feat = _attach_sector(_add_features(raw, max_hold=max_hold))
     index_df = _load_index(args.start_date, args.end_date)
 

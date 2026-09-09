@@ -80,6 +80,21 @@ def _code6(value: Any) -> str:
     return str(value or "").split(".")[0].zfill(6)[-6:]
 
 
+def _canonical_code(value: Any) -> str:
+    """Keep the exchange suffix when joining securities.
+
+    A-share six-digit prefixes are not globally unique: ``000001.SH`` is the
+    SSE Composite while ``000001.SZ`` is a listed equity.  Sector membership
+    is supplied with QMT canonical codes, so a prefix-only join can attach an
+    index bar to an equity and corrupt sector returns.
+    """
+    raw = str(value or "").strip().upper()
+    if "." not in raw:
+        return raw.zfill(6)[-6:]
+    code, exchange = raw.rsplit(".", 1)
+    return f"{code.zfill(6)[-6:]}.{exchange}"
+
+
 def _parse_levels(text: str) -> list[int]:
     levels: list[int] = []
     for item in str(text).split(","):
@@ -134,17 +149,18 @@ def _load_members(levels: list[int], min_members: int) -> pd.DataFrame:
         """
     )
     if df.empty:
-        raise RuntimeError("sector_stocks/sectors has no industry membership")
+        raise RuntimeError("sector_stocks/sectors has no real industry membership; qmt market sectors are not valid industry opportunities")
     df["stock_code_raw"] = df["stock_code"].astype(str)
     df["stock_code6"] = df["stock_code"].map(_code6)
+    df["stock_code_key"] = df["stock_code"].map(_canonical_code)
     df["level"] = pd.to_numeric(df["level"], errors="coerce").astype("Int64")
     df["stock_count"] = pd.to_numeric(df["stock_count"], errors="coerce")
     counts = df.groupby(["level", "sector_code"])["stock_code"].nunique().rename("member_count").reset_index()
     df = df.merge(counts, on=["level", "sector_code"], how="left")
     df = df[pd.to_numeric(df["member_count"], errors="coerce").fillna(0) >= int(min_members)].copy()
     if df.empty:
-        raise RuntimeError("no sector membership left after min_members filter")
-    return df.drop_duplicates(["stock_code_raw", "sector_code", "level"]).reset_index(drop=True)
+        raise RuntimeError("no industry sector membership left after min_members filter")
+    return df.drop_duplicates(["stock_code_key", "sector_code", "level"]).reset_index(drop=True)
 
 
 def _load_daily(start_date: str, target_date: str) -> pd.DataFrame:
@@ -164,17 +180,24 @@ def _load_daily(start_date: str, target_date: str) -> pd.DataFrame:
         raise RuntimeError("kline_daily query returned no stock rows")
     df["code_raw"] = df["code"].astype(str)
     df["code6"] = df["code"].map(_code6)
+    df["code_key"] = df["code"].map(_canonical_code)
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
     for col in ["open", "high", "low", "close", "volume", "amount", "change_pct"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["code", "trade_date", "close", "change_pct"]).copy()
+    # The warehouse has a small number of unadjusted corporate-action rows.
+    # They can show 40%+ one-day moves for ordinary SH/SZ equities and make an
+    # equal-weight sector return unusable.  Keep the broader North-Exchange
+    # band, but exclude impossible SH/SZ daily changes from research inputs.
+    max_abs_change = np.where(df["code_key"].str.endswith(".BJ"), 35.0, 22.0)
+    df = df[df["change_pct"].abs() <= max_abs_change].copy()
     df["ret"] = df["change_pct"] / 100.0
-    return df.sort_values(["code6", "trade_date"]).reset_index(drop=True)
+    return df.sort_values(["code_key", "trade_date"]).reset_index(drop=True)
 
 
 def _add_stock_features(daily: pd.DataFrame) -> pd.DataFrame:
     d = daily.copy()
-    g = d.groupby("code6", group_keys=False)
+    g = d.groupby("code_key", group_keys=False)
     d["ma20"] = g["close"].rolling(20, min_periods=15).mean().reset_index(level=0, drop=True)
     d["ma60"] = g["close"].rolling(60, min_periods=40).mean().reset_index(level=0, drop=True)
     d["high60"] = g["close"].rolling(60, min_periods=40).max().reset_index(level=0, drop=True)
@@ -192,8 +215,8 @@ def _add_stock_features(daily: pd.DataFrame) -> pd.DataFrame:
 def _build_sector_daily(daily: pd.DataFrame, members: pd.DataFrame) -> pd.DataFrame:
     merged = daily.merge(
         members,
-        left_on="code6",
-        right_on="stock_code6",
+        left_on="code_key",
+        right_on="stock_code_key",
         how="inner",
         validate="many_to_many",
     )
@@ -203,7 +226,8 @@ def _build_sector_daily(daily: pd.DataFrame, members: pd.DataFrame) -> pd.DataFr
     merged["strong3"] = merged["ret"] >= 0.03
     keys = ["level", "sector_code", "sector_name", "trade_date"]
     agg = merged.groupby(keys, as_index=False).agg(
-        member_bars=("code6", "nunique"),
+        member_bars=("code_key", "nunique"),
+        configured_member_count=("member_count", "max"),
         sector_ret=("ret", "mean"),
         median_ret=("ret", "median"),
         amount=("amount", "sum"),
@@ -216,6 +240,11 @@ def _build_sector_daily(daily: pd.DataFrame, members: pd.DataFrame) -> pd.DataFr
         stock_mom60_median=("mom60", "median"),
         amount_ratio5_20_median=("stock_amount_ratio5_20", "median"),
     )
+    # A sector synthesized from one surviving bar is not a breadth signal.
+    # Require at least three valid members and at least one quarter of the
+    # configured QMT membership after the daily quality screen.
+    min_daily_members = np.maximum(3, np.ceil(agg["configured_member_count"].fillna(0) * 0.25))
+    agg = agg[agg["member_bars"] >= min_daily_members].copy()
     top5 = (
         merged.dropna(subset=["mom20"])
         .sort_values(keys + ["mom20"], ascending=[True, True, True, True, False])

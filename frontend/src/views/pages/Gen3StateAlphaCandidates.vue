@@ -261,7 +261,8 @@ function tradeStrategyName(row) {
   const names = {
     range_weak_repair: '震荡弱势修复',
     panic_capitulation_repair: '恐慌出清修复',
-    institutional_score120_mainwave: '机构主升Score120',
+    institutional_mainwave_score88: '机构主升Score88',
+    institutional_score120_mainwave: '机构主升Score120（历史）',
     old_g3_strong_breakout: '强势突破',
     mainwave_breakout_offense: '主升/突破进攻',
     volume_runup_supplement: '量能续强补位'
@@ -278,7 +279,7 @@ function opportunityText(row) {
   const label = row.sector_diffusion_label || (Number.isFinite(diffusion)
     ? (diffusion >= 80 ? '强扩散' : diffusion >= 65 ? '有效扩散' : diffusion >= 50 ? '观察扩散' : '扩散不足')
     : '扩散未知')
-  if (route === 'institutional_mainwave' || route === 'institutional_score120_mainwave') {
+  if (route === 'institutional_mainwave' || route === 'institutional_mainwave_score88' || route === 'institutional_score120_mainwave') {
     const details = [`机构主升机会落在${sector}`, label]
     if (Number.isFinite(diffusion)) details.push(`扩散分${diffusion.toFixed(1)}`)
     if (row.sector_candidate_count !== undefined && row.sector_candidate_count !== null) details.push(`同板块候选${Number(row.sector_candidate_count).toFixed(0)}只`)

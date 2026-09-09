@@ -32,7 +32,9 @@ OUT_DIR = report_path("gen3_full_candidate_2slot_backtest_v1")
 ALL_CANDIDATES = ROUTER_DIR / "state_router_all_candidates.csv"
 SELECTED_CANDIDATES = ROUTER_DIR / "state_router_selected_candidates.csv"
 CONTRACT_NAME = "g3_2slot_50_default_stop12_take12_prevlow"
-FINAL_G3_PROFILE = "g3_final_top2_mainwave_sector_exempt_v1"
+AUDIT_PROFILE = "g3_final_top2_mainwave_sector_exempt_v1"
+AUDIT_SCOPE = "legacy_mainwave_only_candidate_audit"
+FORMAL_G3_PROFILE = "g3_final_with_g2_gap_supplement"
 FINAL_G3_VARIANT = "eligible_top2_sector_guard_mainwave_exempt_sector_for_distinct"
 
 
@@ -322,8 +324,10 @@ def _write_report(payload: dict[str, Any]) -> None:
         f"- Generated at: `{payload['generated_at']}`",
         f"- All candidates: `{payload['source']['all_candidates']}`",
         "- Contract: 2 slots / 50% per slot / 12% hard stop / 12% half take-profit / previous-low protection",
-        f"- Final G3 profile: `{FINAL_G3_PROFILE}`",
-        f"- Final G3 variant: `{FINAL_G3_VARIANT}`",
+        f"- Audit scope: `{AUDIT_SCOPE}`",
+        f"- Audited legacy profile: `{AUDIT_PROFILE}`",
+        f"- Formal G3 profile: `{FORMAL_G3_PROFILE}`",
+        f"- Audited variant: `{FINAL_G3_VARIANT}`",
         "",
         "## Summary",
         "",
@@ -344,6 +348,7 @@ def _write_report(payload: dict[str, Any]) -> None:
             "- `eligible_top2_distinct_sector_for_distinct` blocks duplicated sector exposure.",
             "- `eligible_top2_sector_guard_mainwave_exempt_sector_for_distinct` blocks duplicated sector exposure except when both candidates are institutional-mainwave names.",
             "- Sector fields are enriched from current ClickHouse sector membership, not point-in-time historical sector membership; use this as a routing-policy audit rather than a strict sector-history simulation.",
+            "- This report is not a formal `g3_final_with_g2_gap_supplement` replay. It only audits the legacy/mainwave candidate lane.",
         ]
     )
     (OUT_DIR / "REPORT_CN.md").write_text("\n".join(lines), encoding="utf-8")
@@ -394,8 +399,10 @@ def run() -> dict[str, Any]:
         "schema_version": 1,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": {
-            "final_profile": FINAL_G3_PROFILE,
-            "final_variant": FINAL_G3_VARIANT,
+            "audit_scope": AUDIT_SCOPE,
+            "audited_profile": AUDIT_PROFILE,
+            "formal_profile": FORMAL_G3_PROFILE,
+            "audited_variant": FINAL_G3_VARIANT,
             "all_candidates": str(ALL_CANDIDATES),
             "selected_candidates": str(SELECTED_CANDIDATES),
             "all_candidate_rows": int(len(all_candidates)),

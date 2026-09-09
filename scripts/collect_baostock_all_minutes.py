@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.fetch_baostock_minute_to_clickhouse import fetch_one, fetch_one_timeout, normalize_code
 from utils.market_warehouse import clickhouse_client
+from utils.kline_store import filter_trading_day_rows
 
 EXPORTS_DIR = REPO_ROOT / "data" / "warehouse" / "exports"
 STATE_TABLE = "baostock_minute_sync_state"
@@ -355,6 +356,12 @@ def mark_state(code: str, frequency: str, chunk_start: str, chunk_end: str,
 def _upsert_to_ch(table: str, df: pd.DataFrame, replace: bool) -> int:
     """Insert minute bar data into target ClickHouse kline_minute_* table."""
     if df.empty:
+        return 0
+    period = table.replace("kline_minute_", "") + "m"
+    before_rows = len(df)
+    df = filter_trading_day_rows(period, df)
+    if df.empty:
+        print(f"{table} write blocked by trade_calendar guard: dropped={before_rows}", flush=True)
         return 0
     ch = _ch()
     if replace and not df.empty:

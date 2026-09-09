@@ -2,21 +2,55 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
+from urllib.request import urlopen
 
 import pandas as pd
 
 
-DEFAULT_QMT_ROOT = Path(os.getenv("AISTOCK_QMT_ROOT", "D:\\\u56fd\u91d1\u8bc1\u5238QMT\u4ea4\u6613\u7aef"))
+DEFAULT_QMT_ROOT = Path(os.getenv("AISTOCK_QMT_ROOT", "D:\\国金QMT\\国金证券QMT交易端"))
 DEFAULT_QMT_MINI_USERDATA = DEFAULT_QMT_ROOT / "userdata_mini"
 DEFAULT_QMT_QUOTE_HOST = os.getenv("AISTOCK_QMT_QUOTE_HOST", "127.0.0.1")
 DEFAULT_QMT_QUOTE_PORT = int(os.getenv("AISTOCK_QMT_QUOTE_PORT", "58610"))
+DEFAULT_QMT_ACCOUNT_BRIDGE_URL = os.getenv("AISTOCK_QMT_ACCOUNT_BRIDGE_URL", "").strip()
 
 
 class QmtMiniError(RuntimeError):
     pass
+
+
+class QmtMiniCapabilityError(QmtMiniError):
+    def __init__(self, function_name: str, original_error: Exception):
+        self.function_name = function_name
+        self.original_error = original_error
+        super().__init__(
+            "QMT Mini service does not expose required xtdata handler "
+            f"{function_name}: {original_error}. Check broker/QMT edition, "
+            "xtquant terminal compatibility, or enable the required QMT/xtdata permission."
+        )
+
+
+def _missing_handler_function(exc: Exception) -> str | None:
+    text = str(exc)
+    if "200005" not in text and "\u672a\u627e\u5230\u5904\u7406\u51fd\u6570" not in text:
+        return None
+    marker = "func:"
+    if marker not in text:
+        return "unknown"
+    return text.split(marker, 1)[1].split(",", 1)[0].strip() or "unknown"
+
+
+def _call_xtdata(function_name: str, callback):
+    try:
+        return callback()
+    except RuntimeError as exc:
+        missing_function = _missing_handler_function(exc)
+        if missing_function:
+            raise QmtMiniCapabilityError(missing_function or function_name, exc) from exc
+        raise
 
 
 def _load_xtdata():
@@ -94,23 +128,49 @@ class QmtMiniMarketClient:
 
     def get_full_tick(self, stock_codes: list[str]) -> dict[str, Any]:
         xtdata = self._ensure_connected()
-        return xtdata.get_full_tick(stock_codes)
+        return _call_xtdata("get_full_tick", lambda: xtdata.get_full_tick(stock_codes))
 
     def get_sector_list(self) -> list[str]:
         xtdata = self._ensure_connected()
-        return list(xtdata.get_sector_list() or [])
+        return list(_call_xtdata("get_sector_list", lambda: xtdata.get_sector_list()) or [])
 
     def get_stock_list_in_sector(self, sector_name: str, real_timetag: Any = -1) -> list[str]:
         xtdata = self._ensure_connected()
-        return list(xtdata.get_stock_list_in_sector(sector_name, real_timetag) or [])
+        return list(
+            _call_xtdata(
+                "get_stock_list_in_sector",
+                lambda: xtdata.get_stock_list_in_sector(sector_name, real_timetag),
+            )
+            or []
+        )
 
     def get_instrument_detail(self, stock_code: str, iscomplete: bool = False) -> dict[str, Any]:
         xtdata = self._ensure_connected()
-        return dict(xtdata.get_instrument_detail(stock_code, iscomplete) or {})
+        return dict(
+            _call_xtdata(
+                "get_instrument_detail",
+                lambda: xtdata.get_instrument_detail(stock_code, iscomplete),
+            )
+            or {}
+        )
 
     def get_instrument_detail_list(self, stock_list: list[str], iscomplete: bool = False) -> dict[str, Any]:
         xtdata = self._ensure_connected()
-        return dict(xtdata.get_instrument_detail_list(stock_list, iscomplete) or {})
+        return dict(
+            _call_xtdata(
+                "get_instrument_detail_list",
+                lambda: xtdata.get_instrument_detail_list(stock_list, iscomplete),
+            )
+            or {}
+        )
+
+    def download_history_contracts(self, incrementally: bool = True) -> None:
+        """Populate QMT's local expired/delisted-contract metadata cache."""
+        xtdata = self._ensure_connected()
+        _call_xtdata(
+            "download_history_contracts",
+            lambda: xtdata.download_history_contracts(incrementally=incrementally),
+        )
 
     def download_history_data(
         self,
@@ -120,7 +180,10 @@ class QmtMiniMarketClient:
         end_time: str = "",
     ) -> None:
         xtdata = self._ensure_connected()
-        xtdata.download_history_data(stock_code, period, start_time, end_time)
+        _call_xtdata(
+            "download_history_data",
+            lambda: xtdata.download_history_data(stock_code, period, start_time, end_time),
+        )
 
     def download_history_data2(
         self,
@@ -137,7 +200,10 @@ class QmtMiniMarketClient:
             kwargs["callback"] = callback
         if incrementally is not None:
             kwargs["incrementally"] = incrementally
-        return xtdata.download_history_data2(stock_list, period, start_time, end_time, **kwargs)
+        return _call_xtdata(
+            "download_history_data2",
+            lambda: xtdata.download_history_data2(stock_list, period, start_time, end_time, **kwargs),
+        )
 
     def get_market_data(
         self,
@@ -151,15 +217,18 @@ class QmtMiniMarketClient:
         fill_data: bool = False,
     ) -> dict[str, pd.DataFrame]:
         xtdata = self._ensure_connected()
-        return xtdata.get_market_data(
-            field_list=field_list or [],
-            stock_list=stock_list or [],
-            period=period,
-            start_time=start_time,
-            end_time=end_time,
-            count=count,
-            dividend_type=dividend_type,
-            fill_data=fill_data,
+        return _call_xtdata(
+            "get_market_data",
+            lambda: xtdata.get_market_data(
+                field_list=field_list or [],
+                stock_list=stock_list or [],
+                period=period,
+                start_time=start_time,
+                end_time=end_time,
+                count=count,
+                dividend_type=dividend_type,
+                fill_data=fill_data,
+            ),
         )
 
     def get_market_data_tdx_shape(
@@ -211,11 +280,61 @@ class QmtMiniMarketClient:
         count: int = -1,
     ) -> list[Any]:
         xtdata = self._ensure_connected()
-        return list(xtdata.get_trading_dates(market, start_time, end_time, count) or [])
+        return list(
+            _call_xtdata(
+                "get_trading_dates",
+                lambda: xtdata.get_trading_dates(market, start_time, end_time, count),
+            )
+            or []
+        )
 
     def get_market_last_trade_date(self, market: str = "SH") -> Any:
         xtdata = self._ensure_connected()
-        return xtdata.get_market_last_trade_date(market)
+        return _call_xtdata(
+            "get_market_last_trade_date",
+            lambda: xtdata.get_market_last_trade_date(market),
+        )
+
+    def probe_capabilities(self, stock_code: str = "600519.SH") -> dict[str, Any]:
+        result: dict[str, Any] = {"ok": True, "stock_code": stock_code, "capabilities": {}}
+
+        def record(name: str, callback) -> None:
+            try:
+                value = callback()
+                item: dict[str, Any] = {"ok": True, "type": type(value).__name__}
+                try:
+                    item["length"] = len(value)
+                except Exception:
+                    pass
+                result["capabilities"][name] = item
+            except Exception as exc:
+                result["ok"] = False
+                item = {
+                    "ok": False,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+                if isinstance(exc, QmtMiniCapabilityError):
+                    item["missing_handler"] = exc.function_name
+                result["capabilities"][name] = item
+
+        record("full_tick", lambda: self.get_full_tick([stock_code]))
+        record("instrument_detail", lambda: self.get_instrument_detail(stock_code))
+        record("sector_list", self.get_sector_list)
+        record("trading_dates", lambda: self.get_trading_dates("SH", "", "", 5))
+        record("market_last_trade_date", lambda: self.get_market_last_trade_date("SH"))
+        record(
+            "market_data_1d",
+            lambda: self.get_market_data_tdx_shape(
+                field_list=["open", "high", "low", "close", "volume", "amount"],
+                stock_list=[stock_code],
+                period="1d",
+                count=5,
+                dividend_type="none",
+                fill_data=False,
+            ),
+        )
+        return result
 
     def history_summary(self, stock_code: str, periods: list[str], start_time: str, end_time: str) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -242,9 +361,28 @@ class QmtMiniTradingClient:
         self.config = config or QmtMiniConfig.from_env()
         self.session_id = int(session_id if session_id is not None else time.time()) % 100000000
         self._trader = None
+        self._bridge_snapshot: dict[str, Any] | None = None
+
+    def _load_bridge_snapshot(self) -> dict[str, Any]:
+        if not DEFAULT_QMT_ACCOUNT_BRIDGE_URL:
+            raise QmtMiniError("QMT account bridge is not configured")
+        try:
+            with urlopen(DEFAULT_QMT_ACCOUNT_BRIDGE_URL, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            raise QmtMiniError(f"QMT account bridge request failed: {exc}") from exc
+        snapshot = payload.get("snapshot") if isinstance(payload, dict) else None
+        if not isinstance(snapshot, dict) or not payload.get("ok") or not snapshot.get("ok"):
+            message = payload.get("message") if isinstance(payload, dict) else "invalid response"
+            raise QmtMiniError(f"QMT account bridge returned no usable snapshot: {message}")
+        return snapshot
 
     def connect(self) -> dict[str, Any]:
-        XtQuantTrader, _ = _load_xttrader()
+        try:
+            XtQuantTrader, _ = _load_xttrader()
+        except QmtMiniError:
+            self._bridge_snapshot = self._load_bridge_snapshot()
+            return {"ok": True, "mode": "read_only_account_bridge", "session_id": self.session_id}
         if not self.config.userdata_dir.exists():
             raise QmtMiniError(f"QMT Mini userdata directory not found: {self.config.userdata_dir}")
         trader = XtQuantTrader(str(self.config.userdata_dir), self.session_id)
@@ -273,13 +411,20 @@ class QmtMiniTradingClient:
         self.close()
 
     def _ensure_trader(self):
+        if self._bridge_snapshot is not None:
+            raise QmtMiniError("QMT account bridge is read-only and cannot submit orders")
         if self._trader is None:
             status = self.connect()
             if not status["ok"]:
                 raise QmtMiniError(f"QMT Mini trading connect failed: {status}")
+            if self._bridge_snapshot is not None:
+                raise QmtMiniError("QMT account bridge is read-only and cannot submit orders")
         return self._trader
 
     def query_account_infos(self, masked: bool = True) -> list[dict[str, Any]]:
+        if self._bridge_snapshot is not None:
+            account_id = str(self._bridge_snapshot.get("account_id") or "")
+            return [{"account_id": _mask_account(account_id) if masked else account_id, "account_type": None}] if account_id else []
         trader = self._ensure_trader()
         infos = trader.query_account_infos() or []
         rows: list[dict[str, Any]] = []
@@ -304,6 +449,15 @@ class QmtMiniTradingClient:
         return StockAccount(account_id or self._first_account_id(), self.config.account_type)
 
     def account_snapshot(self, include_sensitive: bool = False) -> dict[str, Any]:
+        if self._bridge_snapshot is not None:
+            snapshot = dict(self._bridge_snapshot)
+            if not include_sensitive:
+                snapshot["account_id"] = _mask_account(str(snapshot.get("account_id") or ""))
+                snapshot.pop("asset", None)
+                snapshot.pop("positions", None)
+                snapshot.pop("orders", None)
+                snapshot.pop("trades", None)
+            return snapshot
         trader = self._ensure_trader()
         account_id = self._first_account_id()
         account = self._stock_account(account_id)
@@ -354,3 +508,33 @@ class QmtMiniTradingClient:
                 ["stock_code", "traded_id", "traded_time", "traded_price", "traded_volume", "traded_amount", "order_type"],
             )
         return data
+
+    def submit_stock_order(
+        self,
+        stock_code: str,
+        order_type: int,
+        volume: int,
+        price_type: int,
+        price: float = 0.0,
+        strategy_name: str = "AiStockG3",
+        order_remark: str = "",
+        account_id: Optional[str] = None,
+    ) -> int:
+        """Submit one QMT stock order and return QMT's order id.
+
+        Callers must enforce trading/risk/idempotency policy before this method.
+        """
+        trader = self._ensure_trader()
+        account = self._stock_account(account_id)
+        return int(
+            trader.order_stock(
+                account,
+                str(stock_code).upper(),
+                int(order_type),
+                int(volume),
+                int(price_type),
+                float(price),
+                str(strategy_name),
+                str(order_remark),
+            )
+        )

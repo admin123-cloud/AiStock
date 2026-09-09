@@ -1,5 +1,5 @@
 <template>
-  <div class="kline-chart-shell" :style="{ height: `${chartHeight}px` }">
+  <div class="kline-chart-shell" :class="{ compact }" :style="{ height: `${chartHeight}px` }">
     <div class="chart-toolbar">
       <div class="chart-title-group">
         <h3 class="chart-title">{{ title }}</h3>
@@ -57,8 +57,29 @@
         <button type="button" class="zoom-btn" @click="resetZoom">重置</button>
       </div>
       <div class="chart-badges">
+        <div class="metric-toggle" role="group" aria-label="柱状图指标">
+          <button
+            type="button"
+            class="metric-btn"
+            :class="{ active: histogramMode === 'amount' }"
+            :aria-pressed="histogramMode === 'amount'"
+            @click="setHistogramMode('amount')"
+          >
+            额
+          </button>
+          <button
+            type="button"
+            class="metric-btn"
+            :class="{ active: histogramMode === 'volume' }"
+            :aria-pressed="histogramMode === 'volume'"
+            @click="setHistogramMode('volume')"
+          >
+            量
+          </button>
+        </div>
         <span class="badge">本地数据</span>
         <span class="badge badge-secondary">{{ intervalLabel }}</span>
+        <span v-if="latestBar?.isProvisional" class="badge badge-provisional">盘中临时K · {{ latestBar.asOf || '更新中' }}</span>
         <span class="badge badge-line">MA5</span>
         <span class="badge badge-line-alt">MA10</span>
       </div>
@@ -80,6 +101,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  trendLine: {
+    type: Array,
+    default: () => []
+  },
   title: {
     type: String,
     default: 'K线图'
@@ -91,6 +116,10 @@ const props = defineProps({
   height: {
     type: Number,
     default: 760
+  },
+  compact: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -100,15 +129,19 @@ const chartRef = ref(null)
 const chart = ref(null)
 const candleSeries = ref(null)
 const volumeSeries = ref(null)
+const volumeMa5Series = ref(null)
+const volumeMa10Series = ref(null)
 const ma5Series = ref(null)
 const ma10Series = ref(null)
+const trendLineSeries = ref(null)
 const resizeObserver = ref(null)
 const bars = ref([])
 const legendIndex = ref(-1)
 const lastRangeEdgeAt = ref(0)
 const currentBarSpacing = ref(12)
+const histogramMode = ref('amount')
 
-const chartHeight = computed(() => Math.max(Number(props.height) || 760, 520))
+const chartHeight = computed(() => Math.max(Number(props.height) || 760, props.compact ? 300 : 520))
 const latestBar = computed(() => (bars.value.length ? bars.value[bars.value.length - 1] : null))
 const activeBar = computed(() => {
   if (legendIndex.value >= 0 && bars.value[legendIndex.value]) {
@@ -181,6 +214,11 @@ const summaryStats = computed(() => {
       label: '成交量',
       value: formatLargeNumber(latest.volume),
       tone: 'neutral'
+    },
+    {
+      label: '成交额',
+      value: formatLargeNumber(latest.amount),
+      tone: 'neutral'
     }
   ]
 })
@@ -190,15 +228,23 @@ function parseChartTime(value, interval) {
   const text = String(value).trim()
   if (!text) return null
 
-  if (['1d', '1w', '1mon', '1q'].includes(interval) && /^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    const [year, month, day] = text.split('-').map(Number)
+  // Daily and higher bars may be serialized either as a date or as midnight
+  // ISO text. Always use BusinessDay here: lightweight-charts rejects a
+  // series that mixes BusinessDay values with Unix timestamps.
+  const dateMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T].*)?$/)
+  if (['1d', '1w', '1mon', '1q'].includes(interval) && dateMatch) {
+    const [, year, month, day] = dateMatch
     return { year, month, day }
   }
 
-  const normalized = text.replace(' ', 'T')
-  const date = new Date(normalized)
-  if (!Number.isNaN(date.getTime())) {
-    return Math.floor(date.getTime() / 1000)
+  // Do not depend on the browser's non-standard Date parsing for values such
+  // as "2026-07-08 13:25:00".  This is especially important in the embedded
+  // browser where that format may become Invalid Date and silently remove all
+  // intraday bars.
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (match) {
+    const [, year, month, day, hour, minute, second = '0'] = match
+    return Math.floor(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)) / 1000)
   }
 
   return null
@@ -360,10 +406,13 @@ function buildTradeMarkers(groups) {
 }
 
 function buildBars(data, interval) {
-  return (Array.isArray(data) ? data : [])
+  const normalized = (Array.isArray(data) ? data : [])
     .map((item) => {
       const label = item.date || item.datetime || item.time
-      const time = parseChartTime(label, interval)
+      const explicitTime = Number(item.chartTime ?? item.unix_time)
+      const time = !['1d', '1w', '1mon', '1q'].includes(interval) && Number.isFinite(explicitTime) && explicitTime > 0
+        ? explicitTime
+        : parseChartTime(label, interval)
       const open = Number(item.open)
       const high = Number(item.high)
       const low = Number(item.low)
@@ -383,21 +432,38 @@ function buildBars(data, interval) {
         close,
         volume,
         amount,
+        isProvisional: Boolean(item.is_provisional),
+        asOf: item.as_of || item.snapshot_at || '',
         color: close >= open ? '#ff4d4f' : '#22c55e',
         label: formatLabel(label, interval)
       }
     })
     .filter(Boolean)
+
+  // lightweight-charts requires strictly ascending, unique timestamps. The
+  // market-data API may contain a duplicate latest bar after an incremental
+  // refresh, so retain its later value and keep the chart renderable.
+  const byTime = new Map()
+  normalized
+    .sort((left, right) => compareBarTime(left.time, right.time))
+    .forEach((bar) => byTime.set(serializeBarTime(bar.time, interval), bar))
+
+  return [...byTime.values()].sort((left, right) => compareBarTime(left.time, right.time))
 }
 
-function createMovingAverage(data, period) {
+function compareBarTime(left, right) {
+  if (typeof left === 'number' && typeof right === 'number') return left - right
+  return String(serializeBarTime(left, props.interval)).localeCompare(String(serializeBarTime(right, props.interval)))
+}
+
+function createMovingAverage(data, period, valueKey = 'close') {
   const result = []
   let sum = 0
 
   data.forEach((item, index) => {
-    sum += item.close
+    sum += Number(item[valueKey] || 0)
     if (index >= period) {
-      sum -= data[index - period].close
+      sum -= Number(data[index - period][valueKey] || 0)
     }
     if (index >= period - 1) {
       result.push({
@@ -408,6 +474,20 @@ function createMovingAverage(data, period) {
   })
 
   return result
+}
+
+function buildTrendLineData(points, interval) {
+  const byTime = new Map()
+  ;(Array.isArray(points) ? points : []).forEach((item) => {
+    const time = parseChartTime(item?.time, interval)
+    const value = Number(item?.value)
+    if (!time || !Number.isFinite(value)) return
+    // A daily source can contain a repeated latest trade date after an
+    // incremental refresh. lightweight-charts requires strictly increasing
+    // line-series times just as it does for candlesticks.
+    byTime.set(serializeBarTime(time, interval), { time, value })
+  })
+  return [...byTime.values()].sort((left, right) => compareBarTime(left.time, right.time))
 }
 
 function destroyChart() {
@@ -423,6 +503,8 @@ function destroyChart() {
 
   candleSeries.value = null
   volumeSeries.value = null
+  volumeMa5Series.value = null
+  volumeMa10Series.value = null
   ma5Series.value = null
   ma10Series.value = null
 }
@@ -481,11 +563,18 @@ function resetZoom() {
   chart.value?.timeScale().fitContent()
 }
 
+function setHistogramMode(mode) {
+  if (!['amount', 'volume'].includes(mode) || histogramMode.value === mode) return
+  histogramMode.value = mode
+  syncChartData()
+}
+
 function syncChartData() {
   if (!chart.value || !candleSeries.value || !volumeSeries.value) return
 
   bars.value = buildBars(props.data, props.interval)
   legendIndex.value = -1
+  const histogramKey = histogramMode.value
 
   candleSeries.value.setData(
     bars.value.map((item) => ({
@@ -500,13 +589,16 @@ function syncChartData() {
   volumeSeries.value.setData(
     bars.value.map((item) => ({
       time: item.time,
-      value: item.volume,
+      value: item[histogramKey],
       color: item.color
     }))
   )
 
+  volumeMa5Series.value.setData(createMovingAverage(bars.value, 5, histogramKey))
+  volumeMa10Series.value.setData(createMovingAverage(bars.value, 10, histogramKey))
   ma5Series.value.setData(createMovingAverage(bars.value, 5))
   ma10Series.value.setData(createMovingAverage(bars.value, 10))
+  trendLineSeries.value?.setData(buildTrendLineData(props.trendLine, props.interval))
   if (typeof candleSeries.value?.setMarkers === 'function') {
     candleSeries.value.setMarkers(buildTradeMarkers(markerGroups.value))
   }
@@ -521,7 +613,7 @@ function initChart() {
 
   chart.value = createChart(chartRef.value, {
     width: chartRef.value.clientWidth,
-    height: chartHeight.value - 96,
+    height: chartRef.value.clientHeight,
     layout: {
       background: { type: ColorType.Solid, color: '#ffffff' },
       textColor: '#475569',
@@ -578,17 +670,40 @@ function initChart() {
     priceFormat: {
       type: 'volume'
     },
-    priceScaleId: '',
     lastValueVisible: false,
     priceLineVisible: false
-  })
+  }, 1)
   volumeSeries.value.priceScale().applyOptions({
+    // The volume pane owns its own linear auto scale. This preserves the
+    // actual relationship between ordinary and high-volume days.
+    autoScale: true,
+    mode: 0,
     scaleMargins: {
-      top: 0.72,
-      bottom: 0
-    },
-    mode: 2  // 对数比例，避免巨量日压扁小量柱
+      top: 0.08,
+      bottom: 0.08
+    }
   })
+
+  volumeMa5Series.value = chart.value.addSeries(LineSeries, {
+    color: '#facc15',
+    lineWidth: 1,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false
+  }, 1)
+
+  volumeMa10Series.value = chart.value.addSeries(LineSeries, {
+    color: '#e2e8f0',
+    lineWidth: 1,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false
+  }, 1)
+
+  // Keep price and volume as separate panes, like mainstream terminal charts.
+  // The volume pane is deliberately large enough for routine daily turnover.
+  chart.value.panes()[0]?.setStretchFactor(0.66)
+  chart.value.panes()[1]?.setStretchFactor(0.34)
 
   ma5Series.value = chart.value.addSeries(LineSeries, {
     color: '#2563eb',
@@ -603,6 +718,14 @@ function initChart() {
     lineWidth: 2,
     priceLineVisible: false,
     lastValueVisible: false,
+    crosshairMarkerVisible: false
+  })
+
+  trendLineSeries.value = chart.value.addSeries(LineSeries, {
+    color: '#ef4444',
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: true,
     crosshairMarkerVisible: false
   })
 
@@ -622,7 +745,7 @@ function initChart() {
     if (!chart.value || !chartRef.value) return
     chart.value.applyOptions({
       width: chartRef.value.clientWidth,
-      height: chartHeight.value - 96,
+      height: chartRef.value.clientHeight,
       timeScale: {
         timeVisible: !['1d', '1w', '1mon', '1q'].includes(props.interval),
         barSpacing: currentBarSpacing.value
@@ -660,6 +783,8 @@ watch(
   },
   { deep: true }
 )
+
+watch(() => props.trendLine, syncChartData, { deep: true })
 
 onMounted(() => {
   initChart()
@@ -859,6 +984,33 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
 }
 
+.metric-toggle {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.metric-btn {
+  min-width: 28px;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.metric-btn + .metric-btn {
+  border-left: 1px solid #e2e8f0;
+}
+
+.metric-btn.active {
+  background: #2563eb;
+  color: #ffffff;
+}
+
 .chart-zoom-controls {
   display: flex;
   gap: 8px;
@@ -905,12 +1057,74 @@ onBeforeUnmount(() => {
   color: #b45309;
 }
 
+.badge-provisional {
+  color: #b45309;
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
 .kline-chart {
   position: relative;
   z-index: 1;
   width: 100%;
   height: calc(100% - 70px);
   min-height: 420px;
+}
+
+.kline-chart-shell.compact {
+  padding: 12px 14px 6px;
+  border-radius: 12px;
+}
+
+.compact .chart-toolbar {
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.compact .chart-title {
+  margin-bottom: 5px;
+  font-size: 18px;
+}
+
+.compact .summary-strip {
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.compact .summary-card {
+  min-width: 80px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.compact .summary-label {
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.compact .summary-value {
+  font-size: 13px;
+}
+
+.compact .chart-legend {
+  gap: 3px 8px;
+  font-size: 11px;
+}
+
+.compact .chart-zoom-controls,
+.compact .chart-badges {
+  gap: 5px;
+}
+
+.compact .zoom-btn,
+.compact .badge {
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.compact .kline-chart {
+  height: 220px;
+  min-height: 220px;
 }
 
 @media (max-width: 900px) {

@@ -25,6 +25,9 @@ OUT_DIR = report_path("gen3_score120_core_strategy_v1")
 PROFILE = "g3_score120_core_mom60_le005"
 BASE_PROFILE = "score120_diff65_m30_ma20_base"
 STRATEGY_ID = "g3_score120_core_strategy_v1"
+POSITION_SLOTS = 2
+SLOT_PCT = 0.50
+DAILY_OPEN_LIMIT = 2
 
 
 def _pct(value: Any) -> str:
@@ -108,10 +111,10 @@ def _simulate(selected: pd.DataFrame, calendar: list[pd.Timestamp]) -> tuple[pd.
         if todays is not None:
             todays = todays.sort_values(["rank_key", "amount_rank"], ascending=[False, False])
             for row in todays.itertuples(index=False):
-                if opened >= 1 or len(open_pos) >= 4:
+                if opened >= DAILY_OPEN_LIMIT or len(open_pos) >= POSITION_SLOTS:
                     break
                 equity_before = cash + sum(float(p["stake"]) for p in open_pos)
-                stake = equity_before * 0.25
+                stake = equity_before * SLOT_PCT
                 if stake <= 0 or cash < stake:
                     break
                 pos = row._asdict()
@@ -239,8 +242,8 @@ def _decorate_for_g3(closed: pd.DataFrame) -> pd.DataFrame:
     out["activation_gate"] = "sig_index_mom60 <= 0.05"
     out["sector_gate"] = "sector_diffusion_score >= 65"
     out["m30_gate"] = "m30_close_above_ma20 >= 0"
-    out["position_slots"] = 4
-    out["slot_pct"] = 0.25
+    out["position_slots"] = POSITION_SLOTS
+    out["slot_pct"] = SLOT_PCT
     for col in ["trade_date", "entry_date", "policy_exit_date"]:
         out[col] = out[col].dt.strftime("%Y-%m-%d")
     return out
@@ -343,7 +346,7 @@ def main() -> None:
             {"field": "sector_gate", "value": "sector_diffusion_score >= 65"},
             {"field": "m30_gate", "value": "signal-day 30m close >= 30m MA20"},
             {"field": "activation_gate", "value": "signal-day index_mom60 <= 0.05"},
-            {"field": "position", "value": "4 slots, 25% per slot, max 1 new position per day"},
+            {"field": "position", "value": "2 slots, 50% per slot, max 2 new positions per day"},
             {"field": "exit", "value": "research policy hold_days from source, current package uses historical policy_exit_date"},
         ]
     )
@@ -378,6 +381,9 @@ def main() -> None:
         "formal_buy_signal": False,
         "order_path_enabled": False,
         "auto_order_allowed": False,
+        "position_slots": POSITION_SLOTS,
+        "slot_pct": SLOT_PCT,
+        "daily_open_limit": DAILY_OPEN_LIMIT,
         "source_report": str(SOURCE_DIR),
         "activation_gate_table_rows": int(len(gates)),
         "next_step": "接入当日候选池生成和分钟线新鲜度校验后，才可从 shadow-only 升级为正式买点。",

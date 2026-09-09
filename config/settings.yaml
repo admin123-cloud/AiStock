@@ -95,12 +95,12 @@ data_sync:
   - tushare
   qmt_xtquant:
     enabled: true
-    qmt_root: D:\国金证券QMT交易端
+    qmt_root: D:\国金QMT\国金证券QMT交易端
     quote_host: 127.0.0.1
     quote_port: 58610
-    userdata_dir: D:\国金证券QMT交易端\userdata_mini
+    userdata_dir: D:\国金QMT\国金证券QMT交易端\userdata_mini
     daily_batch_size: 80
-    minute_batch_size: 30
+    minute_batch_size: 1
     minute_phase: fetch-validate
     minute_periods:
     - 5m
@@ -109,7 +109,7 @@ data_sync:
     - 60m
     max_retries: 2
     retry_sleep_sec: 1.0
-    minute_batch_timeout_sec: 180
+    minute_batch_timeout_sec: 240
     timeout_sec: 10800
     single_quote_subscription_limit: 50
     whole_quote_markets:

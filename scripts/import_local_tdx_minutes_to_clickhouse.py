@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
+from zoneinfo import ZoneInfo
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.market_warehouse import clickhouse_client  # noqa: E402
+from utils.kline_store import filter_trading_day_tuples  # noqa: E402
 
 
 LC_RECORD = struct.Struct("<HHfffffII")
@@ -37,6 +39,7 @@ TABLE_BY_PERIOD = {
     "15m": "kline_minute_15",
 }
 COLUMNS = ["code", "datetime", "open", "high", "low", "close", "volume", "amount", "created_at", "id"]
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,6 +67,15 @@ def _full_code_from_path(path: Path) -> Optional[str]:
     if not raw.isdigit() or len(raw) != 6:
         return None
     return f"{raw}.{suffix}"
+
+
+def _tdx_volume_to_lots(code: str, volume: int) -> float:
+    """TDX lc5 stock volume is shares; persist the common minute contract in lots."""
+    if code.endswith(".SH") and code.startswith("000"):
+        return float(volume)
+    if code.endswith(".SZ") and code.startswith("399"):
+        return float(volume)
+    return float(volume) / 100.0
 
 
 def _decode_tdx_datetime(raw_date: int, raw_time: int) -> Optional[datetime]:
@@ -108,11 +120,13 @@ def _iter_lc5_rows(path: Path, start_local: Optional[datetime], end_local: Optio
                 continue
             if open_ <= 0 or high <= 0 or low <= 0 or close <= 0:
                 continue
-            # Keep amount unit consistent with existing TdxQuant rows in ClickHouse.
-            amount = round(float(amount_raw) / 10000.0, 4)
-            volume = int(volume_raw or 0)
-            row_id = abs(hash((code, int(local_dt.timestamp()), "5m"))) % (2**63)
-            yield (code, local_dt, float(open_), float(high), float(low), float(close), volume, amount, now, row_id)
+            amount = float(amount_raw or 0.0)
+            volume = _tdx_volume_to_lots(code, int(volume_raw or 0))
+            # clickhouse-connect serializes naive datetimes as UTC. Preserve the
+            # China-market wall clock by carrying the explicit business timezone.
+            market_dt = local_dt.replace(tzinfo=CN_TZ)
+            row_id = abs(hash((code, int(market_dt.timestamp()), "5m"))) % (2**63)
+            yield (code, market_dt, float(open_), float(high), float(low), float(close), volume, amount, now, row_id)
 
 
 def _aggregate_15m(rows: Iterable[tuple]) -> list[tuple]:
@@ -170,6 +184,13 @@ def _find_files(root: Path, markets: set[str], codes: set[str], limit_files: int
 def _flush(client, table: str, rows: list[tuple], dry_run: bool) -> int:
     if not rows:
         return 0
+    period = next((key for key, value in TABLE_BY_PERIOD.items() if value == table), "")
+    if period:
+        before_rows = len(rows)
+        rows = filter_trading_day_tuples(period, rows, COLUMNS)
+        if not rows:
+            print(f"{table} write blocked by trade_calendar guard: dropped={before_rows}", flush=True)
+            return 0
     if dry_run:
         return len(rows)
     client.insert(table, rows, column_names=COLUMNS)
@@ -186,6 +207,14 @@ def _delete_range(
 ) -> None:
     if not start_local or not end_local:
         raise SystemExit("--delete-range requires --start-date and --end-date")
+    partition_key = client.query(
+        "SELECT partition_key FROM system.tables WHERE database = currentDatabase() AND name = %(table)s",
+        parameters={"table": table},
+    ).result_rows
+    if not partition_key or "toYYYYMM(datetime)" not in str(partition_key[0][0] or ""):
+        raise RuntimeError(
+            f"refusing DELETE on unpartitioned minute table {table}; use append-only repair or rebuild into a monthly-partitioned table"
+        )
     start_dt = start_local
     end_dt = end_local
     code_filter = ""

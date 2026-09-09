@@ -294,6 +294,57 @@ export function getGen3StateAlphaBrokerHoldings(params) {
   })
 }
 
+export function getGen3StateAlphaHoldingTickAnalysis(params) {
+  return request({
+    url: '/gen3-state-alpha/holding-tick-analysis',
+    method: 'get',
+    params,
+    timeout: 30000
+  })
+}
+
+export function getGen3StateAlphaHoldingTickWatchlist() {
+  return request({
+    url: '/gen3-state-alpha/holding-tick-watchlist',
+    method: 'get'
+  })
+}
+
+export function saveGen3StateAlphaHoldingTickWatchlist(codes) {
+  return request({
+    url: '/gen3-state-alpha/holding-tick-watchlist',
+    method: 'put',
+    data: { codes }
+  })
+}
+
+export function getGen3StateAlphaHoldingTickChart(code) {
+  return request({
+    url: `/gen3-state-alpha/holding-tick-analysis/chart/${encodeURIComponent(code)}`,
+    method: 'get'
+  })
+}
+
+export function getGen3HoldingTReview(params) {
+  return request({
+    url: '/gen3-state-alpha/holding-t/review',
+    method: 'get',
+    params
+  })
+}
+
+export function recordGen3HoldingTManualExecution(data) {
+  return request({
+    url: '/gen3-state-alpha/holding-t/manual-execution',
+    method: 'post',
+    data
+  })
+}
+
+export function getGen3HoldingTPortfolioState() { return request({ url: '/gen3-state-alpha/holding-t/portfolio-state', method: 'get' }) }
+export function confirmGen3HoldingTPortfolio(data) { return request({ url: '/gen3-state-alpha/holding-t/portfolio-confirmation', method: 'post', data }) }
+export function saveGen3HoldingTPortfolioState(state) { return request({ url: '/gen3-state-alpha/holding-t/portfolio-state', method: 'put', data: { state } }) }
+
 export function getGen3StateAlphaBrokerHoldingsSyncPreflight(params) {
   return request({
     url: '/gen3-state-alpha/broker/holdings/sync-ths-preflight',

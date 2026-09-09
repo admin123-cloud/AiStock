@@ -14,6 +14,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import json
+import csv
 import os
 import re
 import requests
@@ -22,6 +23,7 @@ import smtplib
 import threading
 import subprocess
 import sys
+import importlib.util
 from pathlib import Path
 from pathlib import PureWindowsPath
 from sqlalchemy import desc, func, text
@@ -29,7 +31,7 @@ import yaml
 
 from utils.logger import get_logger
 from utils.config import config as app_config
-from utils.paths import report_path
+from utils.paths import report_path, runtime_path
 
 router = APIRouter(prefix="/system", tags=["系统配置"])
 logger = get_logger("system_config")
@@ -41,6 +43,8 @@ _emotion_scheduler_lock = threading.Lock()
 _emotion_job_id = "emotion_cycle_auto_fix_5m"
 _core_maintenance_scheduler = None
 _core_maintenance_scheduler_lock = threading.Lock()
+_homepage_integrity_scheduler = None
+_homepage_integrity_scheduler_lock = threading.Lock()
 _core_maintenance_job_ids = {
     "trade_calendar": "core_trade_calendar_sync",
     "stock_list_sync": "core_stock_list_sync",
@@ -48,11 +52,16 @@ _core_maintenance_job_ids = {
     "sector_list_sync": "core_sector_list_sync",
     "stock_intraday": "core_market_intraday_daily_snapshot",
     "market_intraday_minutes": "core_market_intraday_minute_snapshot",
+    "market_sentiment_snapshot": "core_market_sentiment_snapshot",
+    "market_sentiment_after_close": "core_market_sentiment_after_close",
     "market_intraday_kline_refresh": "core_market_intraday_kline_refresh",
     "minute_kline_daily_repair_validate": "core_minute_kline_daily_repair_validate",
     "sector_intraday_stats_refresh": "core_sector_intraday_stats_refresh",
     "official_daily": "core_official_daily_close_sync",
+    "emotion_cycle_after_close": "core_emotion_cycle_after_close_repair",
+    "emotion_cycle_overnight": "core_emotion_cycle_overnight_repair",
     "repair_daily": "core_repair_previous_daily_kline",
+    "daily_coverage": "core_daily_kline_coverage_maintenance",
 }
 _core_maintenance_task_map = {
     "trade_calendar": "update_trade_calendar",
@@ -61,13 +70,18 @@ _core_maintenance_task_map = {
     "sector_list_sync": "sync_sectors",
     "stock_intraday": "update_stock_today_data",
     "market_intraday_minutes": "update_market_today_minute_data",
+    "market_sentiment_snapshot": "refresh_market_sentiment_snapshot",
+    "market_sentiment_after_close": "refresh_market_sentiment_snapshot",
     "market_intraday_kline_refresh": "sync_today_intraday_kline",
     "minute_kline_daily_repair_validate": "minute_kline_daily_repair_validate",
     "market_minute_history_repair": "market_minute_history_repair",
     "data_source_date_repair": "data_source_date_repair",
     "sector_intraday_stats_refresh": "update_sector_intraday_stats",
     "official_daily": "official_daily_close_sync",
+    "emotion_cycle_after_close": "repair_emotion_cycle_latest",
+    "emotion_cycle_overnight": "repair_emotion_cycle_latest",
     "repair_daily": "repair_previous_daily_kline",
+    "daily_coverage": "daily_kline_coverage_maintenance",
 }
 _core_maintenance_bootstrap_lock = threading.Lock()
 _core_maintenance_bootstrap_thread = None
@@ -87,6 +101,93 @@ EMOTION_KLINE_COMPLETE_RATIO = 0.8
 
 def _now_iso() -> str:
     return datetime.now().isoformat()
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {}
+
+
+def _latest_qmt_after_close_execution() -> Dict[str, Any]:
+    """Return host-collector artifacts; never infer success from legacy scheduler state."""
+    root = runtime_path()
+    runs = [item for item in root.glob("qmt_xtquant_collector_after-close_*") if item.is_dir()]
+    if not runs:
+        return {"available": False, "source": "qmt_xtquant"}
+    run_dir = max(runs, key=lambda item: item.stat().st_mtime)
+    validation = _read_json_file(run_dir / "final_validation.json")
+    collector = _read_json_file(run_dir / "collector_summary.json")
+    fullpush = _read_json_file(run_dir / "after_close_daily_fullpush.json")
+    day = (validation.get("days") or [{}])[0]
+    queue_rows: List[Dict[str, str]] = []
+    try:
+        with (run_dir / "issues.csv").open("r", encoding="utf-8-sig", newline="") as handle:
+            queue_rows = list(csv.DictReader(handle))
+    except Exception:
+        pass
+    worker_summary = (collector.get("minute") or {}).get("worker_summary") or {}
+    initial_records = collector.get("initial_issue_count", worker_summary.get("initial_issue_count", worker_summary.get("issue_count")))
+    initial_unique = worker_summary.get("initial_unique_issue_codes")
+    if initial_unique is None and queue_rows:
+        initial_unique = len({str(row.get("code") or "") for row in queue_rows if row.get("code")})
+    final_period_records = sum(int(item.get("issue_codes") or 0) for item in (day.get("periods") or []))
+    return {
+        "available": True,
+        "source": "qmt_xtquant",
+        "run_dir": str(run_dir),
+        "updated_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+        "closed": bool(validation.get("closed")),
+        "validation_status": "closed" if validation.get("closed") else "open",
+        "trade_date": day.get("trade_date"),
+        "periods": day.get("periods") or [],
+        "remaining_period_code_records": final_period_records,
+        "initial_period_code_records": initial_records,
+        "initial_unique_codes": initial_unique,
+        "fullpush_ok": fullpush.get("ok"),
+        "fullpush_started_at": fullpush.get("started_at"),
+        "fullpush_finished_at": fullpush.get("finished_at"),
+        "schedule": {"start": "16:00", "retry_minutes": 30, "active_end": "18:30"},
+    }
+
+
+def _latest_qmt_overnight_repair_execution() -> Dict[str, Any]:
+    """Return the latest overnight rolling-repair artifact without inferring task success."""
+    root = runtime_path()
+    runs = [item for item in root.glob("qmt_xtquant_collector_history_*") if item.is_dir()]
+    if not runs:
+        return {
+            "available": False,
+            "source": "qmt_xtquant",
+            "schedule": {"start": "00:40", "active_end": "06:30"},
+        }
+    run_dir = max(runs, key=lambda item: item.stat().st_mtime)
+    collector = _read_json_file(run_dir / "collector_summary.json")
+    validation = _read_json_file(run_dir / "final_validation.json")
+    minute = collector.get("minute") or {}
+    worker_summary = minute.get("worker_summary") or {}
+    stderr_tail = str(minute.get("stderr_tail") or "")
+    execution_ok = bool(collector.get("ok"))
+    validation_closed = bool(validation.get("closed"))
+    if "EmptyDataError" in stderr_tail:
+        execution_message = "空修复队列被重复读取，执行器失败；数据校验仍已闭环。"
+    elif execution_ok:
+        execution_message = "执行与最终校验均已完成。"
+    else:
+        execution_message = str(collector.get("validation_status") or "最近一次执行未完成")
+    return {
+        "available": True,
+        "source": "qmt_xtquant",
+        "run_dir": str(run_dir),
+        "updated_at": datetime.fromtimestamp(run_dir.stat().st_mtime).isoformat(),
+        "trade_dates": validation.get("trade_dates") or worker_summary.get("trade_dates") or [],
+        "execution_ok": execution_ok,
+        "validation_closed": validation_closed,
+        "remaining_issue_count": int(worker_summary.get("issue_count") or 0),
+        "execution_message": execution_message,
+        "schedule": {"start": "00:40", "active_end": "06:30"},
+    }
 
 
 def _to_datetime(value: Any) -> Optional[datetime]:
@@ -926,6 +1027,7 @@ def _data_source_empty_row(key: str, label: str, category: str) -> Dict[str, Any
         "expected_row_count": 0,
         "missing_rows": 0,
         "extra_rows": 0,
+        "extended_rows": 0,
         "coverage_rate": 0.0,
         "latest_date": None,
         "periods": [],
@@ -941,6 +1043,14 @@ def _clickhouse_date_text(value: Any) -> Optional[str]:
     if hasattr(value, "strftime"):
         return value.strftime("%Y-%m-%d")
     return str(value)
+
+
+def _is_month_partitioned_minute_table(client, table_name: str) -> bool:
+    rows = client.query(
+        "SELECT partition_key FROM system.tables WHERE database = currentDatabase() AND name = %(table)s",
+        parameters={"table": table_name},
+    ).result_rows
+    return bool(rows and "toYYYYMM(datetime)" in str(rows[0][0] or ""))
 
 
 def _resolve_latest_data_source_count_date(client) -> str:
@@ -976,7 +1086,10 @@ def _query_data_source_counts(
     stock_side: bool,
 ) -> Dict[str, Any]:
     join_key = "k.code" if table_name == "kline_daily" else "assumeNotNull(k.code)"
-    side_filter = "s.type = 'stock'" if stock_side else "s.type = 'index'"
+    from utils.qmt_universe import bond_index_exclusion_sql
+
+    side_filter = "s.type = 'stock'" if stock_side else f"s.type = 'index' AND {bond_index_exclusion_sql('s.name')}"
+    listing_filter = f"AND (toDateOrNull(toString(s.list_date)) IS NULL OR toDateOrNull(toString(s.list_date)) <= toDate('{target_date}'))"
     rows = client.query(
         f"""
         SELECT count() AS row_count, uniqExact({join_key}) AS code_count
@@ -985,6 +1098,8 @@ def _query_data_source_counts(
         WHERE {date_expr} = toDate('{target_date}')
           AND {join_key} != ''
           AND {side_filter}
+          {listing_filter}
+          AND (k.volume > 0 OR k.amount > 0)
         """
     ).result_rows
     row = rows[0] if rows else (0, 0)
@@ -1002,10 +1117,12 @@ def _query_minute_data_source_counts(
     table_name: str,
     target_date: str,
     stock_side: bool,
+    expected_per_code: int,
 ) -> Dict[str, Any]:
     join_key = "assumeNotNull(k.code)"
-    side_filter = "s.type = 'stock'" if stock_side else "s.type = 'index'"
-    daily_volume_filter = "AND kd.volume > 0" if stock_side else ""
+    from utils.qmt_universe import bond_index_exclusion_sql
+
+    side_filter = "s.type = 'stock'" if stock_side else f"s.type = 'index' AND {bond_index_exclusion_sql('s.name')}"
     rows = client.query(
         f"""
         WITH daily_codes AS (
@@ -1014,22 +1131,34 @@ def _query_minute_data_source_counts(
             INNER JOIN stocks s ON kd.code = s.code
             WHERE kd.trade_date = toDate('{target_date}')
               AND {side_filter}
-              {daily_volume_filter}
+              AND (toDateOrNull(toString(s.list_date)) IS NULL OR toDateOrNull(toString(s.list_date)) <= toDate('{target_date}'))
+              AND (kd.volume > 0 OR kd.amount > 0)
             GROUP BY kd.code
+        ), bars_by_code AS (
+            SELECT {join_key} AS code, count() AS bars
+            FROM {table_name} k
+            WHERE k.datetime >= toDateTime('{target_date} 00:00:00')
+              AND k.datetime < toDateTime('{target_date} 00:00:00') + INTERVAL 1 DAY
+              AND {join_key} != ''
+              AND {join_key} IN (SELECT code FROM daily_codes)
+            GROUP BY {join_key}
         )
-        SELECT count() AS row_count, uniqExact({join_key}) AS code_count
-        FROM {table_name} k
-        WHERE k.datetime >= toDateTime('{target_date} 00:00:00')
-          AND k.datetime < toDateTime('{target_date} 00:00:00') + INTERVAL 1 DAY
-          AND {join_key} != ''
-          AND {join_key} IN (SELECT code FROM daily_codes)
+        SELECT
+            sum(ifNull(b.bars, 0)) AS row_count,
+            countIf(ifNull(b.bars, 0) > 0) AS code_count,
+            sum(greatest({int(expected_per_code)} - ifNull(b.bars, 0), 0)) AS missing_rows,
+            sum(greatest(ifNull(b.bars, 0) - {int(expected_per_code)}, 0)) AS extended_rows
+        FROM daily_codes d
+        LEFT JOIN bars_by_code b ON d.code = b.code
         """
     ).result_rows
-    row = rows[0] if rows else (0, 0)
+    row = rows[0] if rows else (0, 0, 0, 0)
     latest_rows = client.query(f"SELECT max(toDate(datetime)) FROM {table_name}").result_rows
     return {
         "row_count": int(row[0] or 0),
         "code_count": int(row[1] or 0),
+        "missing_rows": int(row[2] or 0),
+        "extended_rows": int(row[3] or 0),
         "latest_date": _clickhouse_date_text(latest_rows[0][0] if latest_rows else None),
     }
 
@@ -1098,29 +1227,15 @@ def _build_minute_data_source_row(
     total_rows = 0
     total_expected_rows = 0
     total_missing_rows = 0
-    total_extra_rows = 0
+    total_extended_rows = 0
     max_codes = 0
     latest_dates: List[str] = []
     detail_rows: List[Dict[str, Any]] = []
     expected_code_count = 0
 
     if clickhouse_table_exists("kline_daily"):
-        if stock_side:
-            daily_baseline_rows = client.query(
-                f"""
-                SELECT count() AS row_count, uniqExact(k.code) AS code_count
-                FROM kline_daily k
-                INNER JOIN stocks s ON k.code = s.code
-                WHERE k.trade_date = toDate('{target_date}')
-                  AND s.type = 'stock'
-                  AND k.volume > 0
-                  AND k.code != ''
-                """
-            ).result_rows
-            expected_code_count = int((daily_baseline_rows[0][1] if daily_baseline_rows else 0) or 0)
-        else:
-            daily_baseline = _query_data_source_counts(client, "kline_daily", "k.trade_date", target_date, stock_side)
-            expected_code_count = int(daily_baseline.get("code_count") or 0)
+        daily_baseline = _query_data_source_counts(client, "kline_daily", "k.trade_date", target_date, stock_side)
+        expected_code_count = int(daily_baseline.get("code_count") or 0)
 
     for period, table_name, expected_per_code in periods:
         if not clickhouse_table_exists(table_name):
@@ -1133,6 +1248,7 @@ def _build_minute_data_source_row(
                 "expected_row_count": 0,
                 "missing_rows": 0,
                 "extra_rows": 0,
+                "extended_rows": 0,
                 "coverage_rate": 0.0,
                 "latest_date": None,
                 "ok": False,
@@ -1140,21 +1256,20 @@ def _build_minute_data_source_row(
                 "message": "table missing",
             })
             continue
-        result = _query_minute_data_source_counts(client, table_name, target_date, stock_side)
+        result = _query_minute_data_source_counts(client, table_name, target_date, stock_side, expected_per_code)
         expected_row_count = expected_code_count * expected_per_code
-        missing_rows = max(expected_row_count - int(result["row_count"] or 0), 0)
-        extra_rows = max(int(result["row_count"] or 0) - expected_row_count, 0)
-        coverage_rate = (float(result["row_count"]) / expected_row_count) if expected_row_count > 0 else 0.0
+        missing_rows = int(result.get("missing_rows") or 0)
+        extended_rows = int(result.get("extended_rows") or 0)
+        coverage_rate = (float(expected_row_count - missing_rows) / expected_row_count) if expected_row_count > 0 else 0.0
         complete = (
             expected_row_count > 0
             and int(result["code_count"] or 0) == expected_code_count
             and missing_rows == 0
-            and extra_rows == 0
         )
         total_rows += result["row_count"]
         total_expected_rows += expected_row_count
         total_missing_rows += missing_rows
-        total_extra_rows += extra_rows
+        total_extended_rows += extended_rows
         max_codes = max(max_codes, expected_code_count, result["code_count"])
         if result.get("latest_date"):
             latest_dates.append(result["latest_date"])
@@ -1166,7 +1281,8 @@ def _build_minute_data_source_row(
             "expected_per_code": expected_per_code,
             "expected_row_count": expected_row_count,
             "missing_rows": missing_rows,
-            "extra_rows": extra_rows,
+            "extra_rows": 0,
+            "extended_rows": extended_rows,
             "coverage_rate": round(coverage_rate, 6),
             "ok": result["row_count"] > 0 and result["code_count"] > 0,
             "complete": complete,
@@ -1178,13 +1294,14 @@ def _build_minute_data_source_row(
         "code_count": max_codes,
         "expected_row_count": total_expected_rows,
         "missing_rows": total_missing_rows,
-        "extra_rows": total_extra_rows,
-        "coverage_rate": round(float(total_rows) / total_expected_rows, 6) if total_expected_rows > 0 else 0.0,
+        "extra_rows": 0,
+        "extended_rows": total_extended_rows,
+        "coverage_rate": round(float(total_expected_rows - total_missing_rows) / total_expected_rows, 6) if total_expected_rows > 0 else 0.0,
         "latest_date": max(latest_dates) if latest_dates else None,
         "periods": detail_rows,
     })
     row["ok"] = total_rows > 0 and max_codes > 0
-    row["complete"] = row["ok"] and total_expected_rows > 0 and total_missing_rows == 0 and total_extra_rows == 0
+    row["complete"] = row["ok"] and total_expected_rows > 0 and total_missing_rows == 0
     row["message"] = "complete" if row["complete"] else ("incomplete" if row["ok"] else "missing for date")
     return row
 
@@ -1239,6 +1356,13 @@ def _cleanup_incomplete_stock_minute_rows_for_date(target_date: str) -> Dict[str
     summary: Dict[str, Any] = {}
     for period, table_name, expected_count in periods:
         if not clickhouse_table_exists(table_name):
+            continue
+        if not _is_month_partitioned_minute_table(client, table_name):
+            summary[period] = {
+                "table": table_name,
+                "skipped": True,
+                "reason": "unpartitioned_target_append_only",
+            }
             continue
         rows = client.query(
             f"""
@@ -1317,6 +1441,16 @@ def data_source_date_repair_task(trade_date: str, task_already_started: bool = F
 
         preferred_source = str(app_config.get("data_sync.preferred_source", "qmt_xtquant") or "qmt_xtquant").strip().lower()
         if preferred_source in {"qmt", "qmtmini", "qmt_xtquant", "xtquant"}:
+            if not _runtime_has_xtquant():
+                _mark_qmt_host_collector_delegated(
+                    task_name,
+                    scenario="manual-date-repair",
+                    target_date=normalized_date,
+                    periods=["1d", "5m", "15m", "30m", "60m"],
+                    extra={"preferred_source": preferred_source},
+                )
+                return
+
             qmt_script = REPO_ROOT / "scripts" / "qmt_xtquant_data_source_task.py"
             if not qmt_script.exists():
                 raise RuntimeError(f"script_not_found:{qmt_script}")
@@ -1403,6 +1537,8 @@ def data_source_date_repair_task(trade_date: str, task_already_started: bool = F
                     or f"{result['message']}; coverage_summary={coverage_summary}",
                 )
             return
+
+        raise RuntimeError("Legacy TDX data-source repair is disabled; use data_sync.preferred_source=qmt_xtquant")
 
         daily_script = REPO_ROOT / "scripts" / "backfill_tqcenter_daily_to_clickhouse.py"
         minute_script = REPO_ROOT / "scripts" / "build_tdx_minute_periods.py"
@@ -1662,15 +1798,55 @@ def _filter_ready_intraday_minute_periods(periods: List[str], task_name: str) ->
 
 def _get_recent_complete_kline_dates(session, limit: int = 30) -> List[Any]:
     """
-    Return recent trade dates whose daily K-line coverage is close to normal.
+    Return recent trade dates whose stock-daily coverage is close to the active
+    stock universe.
     Intraday sync can create a partial latest date; those rows must not drive
     emotion-cycle repair or the home chart's last points will jump to bad dates.
     """
-    from models.stock_models import KlineDaily
+    from utils.market_warehouse import clickhouse_available, clickhouse_query_df, clickhouse_scalar
+
+    # ClickHouse is the canonical daily-bar warehouse.  The legacy SQL mirror
+    # can lag it by a session, which previously made an already-complete day
+    # invisible to the emotion-cycle repair job.
+    if clickhouse_available():
+        try:
+            scan_limit = max(int(limit) * 3, 60)
+            rows_df = clickhouse_query_df(
+                """
+                SELECT k.trade_date, count() AS row_count
+                FROM kline_daily AS k FINAL
+                INNER JOIN stocks s ON s.code = k.code
+                WHERE s.type = 'stock'
+                GROUP BY k.trade_date
+                ORDER BY k.trade_date DESC
+                LIMIT ?
+                """,
+                [scan_limit],
+            )
+            universe_count = int(clickhouse_scalar("SELECT count() FROM stocks WHERE type = 'stock'") or 0)
+            min_count = max(MIN_EMOTION_KLINE_ROWS, int(universe_count * EMOTION_KLINE_COMPLETE_RATIO))
+            if rows_df is not None and not rows_df.empty:
+                dates: List[Any] = []
+                for row in rows_df.itertuples(index=False):
+                    if not row.trade_date or int(row.row_count or 0) < min_count:
+                        continue
+                    value = row.trade_date
+                    # pandas returns a timezone-naive Timestamp for ClickHouse
+                    # Date columns.  EmotionCycle requires a pure calendar day.
+                    if hasattr(value, "date"):
+                        value = value.date()
+                    dates.append(value)
+                return dates[: int(limit)]
+        except Exception as exc:
+            logger.warning("ClickHouse emotion-cycle coverage audit fallback to SQL mirror: %s", exc)
+
+    from models.stock_models import KlineDaily, Stock
 
     scan_limit = max(int(limit) * 3, 60)
     rows = (
         session.query(KlineDaily.trade_date, func.count(KlineDaily.id).label("row_count"))
+        .join(Stock, Stock.code == KlineDaily.code)
+        .filter(Stock.type == "stock")
         .group_by(KlineDaily.trade_date)
         .order_by(desc(KlineDaily.trade_date))
         .limit(scan_limit)
@@ -1679,8 +1855,13 @@ def _get_recent_complete_kline_dates(session, limit: int = 30) -> List[Any]:
     if not rows:
         return []
 
-    max_count = max(int(row_count or 0) for _, row_count in rows)
-    min_count = max(MIN_EMOTION_KLINE_ROWS, int(max_count * EMOTION_KLINE_COMPLETE_RATIO))
+    universe_count = (
+        session.query(func.count(Stock.id))
+        .filter(Stock.type == "stock")
+        .scalar()
+        or 0
+    )
+    min_count = max(MIN_EMOTION_KLINE_ROWS, int(int(universe_count) * EMOTION_KLINE_COMPLETE_RATIO))
     dates = [trade_date for trade_date, row_count in rows if trade_date and int(row_count or 0) >= min_count]
     return dates[: int(limit)]
 
@@ -1690,7 +1871,7 @@ def _repair_emotion_for_dates(dates: List[Any]):
     from sqlalchemy import func
     from utils.database import db
     from models.stock_models import EmotionCycle
-    from scripts.generate_emotion_cycle import EmotionCycleGenerator
+    from scripts.generate_emotion_cycle import EmotionCycleGenerator, publish_emotion_cycle_to_clickhouse
 
     session = next(db.get_session())
     try:
@@ -1711,6 +1892,7 @@ def _repair_emotion_for_dates(dates: List[Any]):
             if ec:
                 session.add(ec)
                 session.commit()
+                publish_emotion_cycle_to_clickhouse(ec)
                 saved += 1
             else:
                 skipped += 1
@@ -2278,6 +2460,13 @@ class SystemTaskManager:
                 "results": None,
                 "error": None
             },
+            "daily_kline_coverage_maintenance": {
+                "is_running": False,
+                "started_at": None,
+                "progress": {"current": 0, "total": 0, "message": ""},
+                "results": None,
+                "error": None
+            },
             "minute_kline_daily_repair_validate": {
                 "is_running": False,
                 "started_at": None,
@@ -2442,6 +2631,247 @@ task_manager = SystemTaskManager()
 # 重量级数据更新任务互斥锁，避免并发触发导致内存暴?
 data_update_lock = threading.Lock()
 
+_QMT_HOST_DELEGATED_TASK_KEYS = {
+    "stock_list_sync",
+    "index_list_sync",
+    "official_daily",
+    "repair_daily",
+    "market_intraday_kline_refresh",
+    "minute_kline_daily_repair_validate",
+    "stock_intraday",
+    "market_intraday_minutes",
+    "sector_intraday_stats_refresh",
+    "sector_list_sync",
+    "today_full_market_refresh",
+}
+_QMT_TRANSITION_ERROR_MARKERS = (
+    "xtquant is not installed",
+    "/app/scripts/qmt_xtquant",
+    "qmt minute fetch has failed batches",
+    "collect_baostock_all_minutes.py",
+    "股票列表为空",
+    "所有数据源都失败",
+)
+
+
+def _runtime_has_xtquant() -> bool:
+    try:
+        return importlib.util.find_spec("xtquant") is not None
+    except Exception:
+        return False
+
+
+def _probe_qmt_host_intraday_coverage(target_date: Optional[str], periods: Optional[List[str]]) -> Dict[str, Any]:
+    normalized_date = (target_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized_date):
+        normalized_date = datetime.now().strftime("%Y-%m-%d")
+    normalized_periods = [str(item).strip().lower() for item in (periods or []) if str(item).strip()]
+    min_codes = int(app_config.get("data_sync.qmt_xtquant.intraday_min_covered_codes", 100) or 100)
+    result: Dict[str, Any] = {
+        "target_date": normalized_date,
+        "min_covered_codes": min_codes,
+        "checks": {},
+        "ok": False,
+    }
+    try:
+        from utils.market_warehouse import clickhouse_client, clickhouse_table_exists
+
+        client = clickhouse_client()
+        universe_rows = client.query("SELECT count() FROM stocks WHERE type = 'stock'").result_rows
+        result["stock_universe_codes"] = int(universe_rows[0][0] or 0) if universe_rows else 0
+        if any(period in {"1d", "day", "daily"} for period in normalized_periods):
+            if clickhouse_table_exists("kline_daily"):
+                daily_rows = client.query(
+                    f"""
+                    SELECT uniqExact(code), max(trade_date)
+                    FROM kline_daily
+                    WHERE trade_date = toDate('{normalized_date}')
+                    """
+                ).result_rows
+                result["checks"]["daily_1d"] = {
+                    "covered_codes": int(daily_rows[0][0] or 0) if daily_rows else 0,
+                    "max_trade_date": str(daily_rows[0][1]) if daily_rows and daily_rows[0][1] is not None else None,
+                }
+            else:
+                result["checks"]["daily_1d"] = {"covered_codes": 0, "max_trade_date": None, "missing_table": "kline_daily"}
+        if clickhouse_table_exists("qmt_intraday_latest_5m"):
+            latest_rows = client.query(
+                f"""
+                SELECT uniqExact(code), max(datetime)
+                FROM qmt_intraday_latest_5m
+                WHERE trade_date = toDate('{normalized_date}')
+                """
+            ).result_rows
+            if latest_rows:
+                result["checks"]["latest_5m"] = {
+                    "covered_codes": int(latest_rows[0][0] or 0),
+                    "max_datetime": str(latest_rows[0][1]) if latest_rows[0][1] is not None else None,
+                }
+        for period in normalized_periods:
+            if period not in {"5m", "15m", "30m", "60m"}:
+                continue
+            table_name = f"kline_minute_{period[:-1]}"
+            if not clickhouse_table_exists(table_name):
+                result["checks"][period] = {"covered_codes": 0, "max_datetime": None, "missing_table": table_name}
+                continue
+            rows = client.query(
+                f"""
+                SELECT uniqExact(code), max(datetime)
+                FROM {table_name}
+                WHERE toDate(datetime) = toDate('{normalized_date}')
+                """
+            ).result_rows
+            result["checks"][period] = {
+                "covered_codes": int(rows[0][0] or 0) if rows else 0,
+                "max_datetime": str(rows[0][1]) if rows and rows[0][1] is not None else None,
+            }
+        covered_values = [
+            int(item.get("covered_codes") or 0)
+            for item in result["checks"].values()
+            if isinstance(item, dict) and "covered_codes" in item
+        ]
+        result["ok"] = bool(covered_values) and max(covered_values) >= min_codes
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _compact_recent_daily_kline_duplicates(days: int = 14) -> Dict[str, Any]:
+    """Validate and compact ReplacingMergeTree daily rows before night repair ends."""
+    result: Dict[str, Any] = {"ok": False, "days": int(days), "raw_rows": 0, "unique_keys": 0, "duplicate_rows": 0}
+    try:
+        from utils.market_warehouse import clickhouse_client, clickhouse_table_exists
+
+        if not clickhouse_table_exists("kline_daily"):
+            result["error"] = "kline_daily_missing"
+            return result
+        client = clickhouse_client()
+        audit_sql = f"""
+            SELECT
+                count() AS raw_rows,
+                uniqExact(concat(code, '|', toString(trade_date))) AS unique_keys
+            FROM kline_daily
+            WHERE trade_date >= today() - INTERVAL {max(1, int(days))} DAY
+        """
+        before = client.query(audit_sql).result_rows[0]
+        result["raw_rows"] = int(before[0] or 0)
+        result["unique_keys"] = int(before[1] or 0)
+        result["duplicate_rows"] = max(0, result["raw_rows"] - result["unique_keys"])
+        if result["duplicate_rows"]:
+            client.command("OPTIMIZE TABLE kline_daily FINAL")
+            after = client.query(audit_sql).result_rows[0]
+            result["raw_rows_after"] = int(after[0] or 0)
+            result["unique_keys_after"] = int(after[1] or 0)
+            result["duplicate_rows_after"] = max(0, result["raw_rows_after"] - result["unique_keys_after"])
+            result["compacted"] = True
+            result["ok"] = result["duplicate_rows_after"] == 0
+        else:
+            result["compacted"] = False
+            result["duplicate_rows_after"] = 0
+            result["ok"] = True
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _mark_qmt_host_collector_delegated(
+    task_name: str,
+    *,
+    scenario: str,
+    target_date: Optional[str] = None,
+    periods: Optional[List[str]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    message = "QMT/xtquant 采集已委派给 Windows 主机统一采集器；后端容器不再直接调用 xtquant"
+    result: Dict[str, Any] = {
+        "message": message,
+        "active_source": "qmt_xtquant_host_collector",
+        "provider": "qmt_xtquant_host_collector",
+        "scenario": scenario,
+        "target_date": target_date,
+        "periods": periods or [],
+        "delegated": True,
+        "validation_status": "delegated_to_host_collector",
+        "validation_reason": "xtquant_not_available_in_backend_runtime",
+        "host_entry": "scripts/qmt_xtquant_data_source_task.py",
+        "host_runner": "scripts/run_qmt_xtquant_collector.ps1",
+    }
+    if extra:
+        result.update(extra)
+    if scenario.startswith("intraday"):
+        coverage = _probe_qmt_host_intraday_coverage(target_date, periods)
+        result["host_coverage"] = coverage
+        if coverage.get("ok"):
+            result["validation_status"] = "host_coverage_passed"
+        else:
+            result["validation_status"] = "host_coverage_failed"
+            result["validation_reason"] = "delegated_host_collector_has_insufficient_clickhouse_coverage"
+            message = "QMT/xtquant 已委派给 Windows 主机采集器，但 ClickHouse 覆盖不足"
+            result["message"] = message
+    task_manager.update_progress(task_name, {"current": 0, "total": 0, "message": message})
+    ok = result.get("validation_status") != "host_coverage_failed"
+    task_manager.set_results(task_name, result, mark_success=ok)
+    if not ok:
+        task_manager.set_error(task_name, message)
+    return result
+
+
+def _table_row_count(table_name: str, where_sql: str = "1=1") -> int:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_name):
+        return 0
+    try:
+        from utils.database import db
+
+        with db.engine.connect() as conn:
+            value = conn.execute(text(f"SELECT COUNT(*) FROM {table_name} WHERE {where_sql}")).scalar()
+        return int(value or 0)
+    except Exception as exc:
+        logger.warning(f"failed to count {table_name}: {exc}")
+        return 0
+
+
+def _mark_reference_cache_success(
+    task_name: str,
+    *,
+    source_error: Exception,
+    counts: Dict[str, int],
+    minimums: Dict[str, int],
+) -> bool:
+    failed = [key for key, minimum in minimums.items() if int(counts.get(key) or 0) < int(minimum)]
+    if failed:
+        return False
+    message = "外部基础资料源本次不可用，已沿用本地缓存；QMT 主机采集器将在后续窗口刷新"
+    task_manager.set_results(
+        task_name,
+        {
+            "message": message,
+            "active_source": "local_reference_cache",
+            "validation_status": "degraded_using_existing_cache",
+            "validation_reason": str(source_error),
+            "counts": counts,
+            "minimums": minimums,
+        },
+        mark_success=True,
+    )
+    return True
+
+
+def _is_qmt_transition_failure(task_key: str, task: Dict[str, Any]) -> bool:
+    if task_key not in _QMT_HOST_DELEGATED_TASK_KEYS:
+        return False
+    status = str(task.get("status") or "").strip().lower()
+    if status in {"failed", "error"} and not _runtime_has_xtquant():
+        return True
+    message = " ".join(
+        str(value or "")
+        for value in (
+            task.get("last_error"),
+            task.get("error"),
+            (task.get("progress") or {}).get("message"),
+        )
+    )
+    return any(marker in message for marker in _QMT_TRANSITION_ERROR_MARKERS)
+
 
 def update_stock_list_task():
     task_name = "update_stock_list"
@@ -2472,6 +2902,13 @@ def update_stock_list_task():
         logger.info("股票列表更新完成")
     except Exception as e:
         logger.error(f"更新股票列表失败: {e}")
+        if _mark_reference_cache_success(
+            task_name,
+            source_error=e,
+            counts={"stocks": _table_row_count("stocks", "type = 'stock'")},
+            minimums={"stocks": 1000},
+        ):
+            return
         task_manager.set_error(task_name, str(e))
 
 
@@ -2503,6 +2940,13 @@ def update_index_list_task():
         logger.info("指数列表更新完成")
     except Exception as e:
         logger.error(f"更新指数列表失败: {e}")
+        if _mark_reference_cache_success(
+            task_name,
+            source_error=e,
+            counts={"indices": _table_row_count("stocks", "type = 'index'")},
+            minimums={"indices": 3},
+        ):
+            return
         task_manager.set_error(task_name, str(e))
 
 
@@ -2696,6 +3140,16 @@ def sync_sectors_task():
 
     except Exception as e:
         logger.error(f"同步行业板块失败: {e}")
+        if _mark_reference_cache_success(
+            task_name,
+            source_error=e,
+            counts={
+                "sectors": _table_row_count("sectors"),
+                "sector_stocks": _table_row_count("sector_stocks"),
+            },
+            minimums={"sectors": 100, "sector_stocks": 1000},
+        ):
+            return
         task_manager.set_error(task_name, str(e))
 
 
@@ -2726,7 +3180,7 @@ def sync_sector_history_task(days=90):
         
         # 确保TdxQuant已初始化
         if False:
-            raise Exception("TdxQuant鏈垵濮嬪寲")
+            raise Exception("TdxQuant is not initialized")
         
         # 1. 从数据库获取扢有一二三级行业板?
         task_manager.update_progress(task_name, {"message": "从数据库获取行业板块列表..."})
@@ -2818,7 +3272,7 @@ def sync_sector_history_task(days=90):
                             
                             # 璁＄畻娑ㄨ穼骞?
                             change_pct = Decimal('0.00')
-                            if idx > 0:  # 涓嶆槸绗竴澶?
+                            if idx > 0:  # skip the first row
                                 prev_close = float(kline_data_sorted.iloc[idx - 1]['close'])
                                 if prev_close > 0:
                                     change_pct = Decimal(str(round((close_price - prev_close) / prev_close * 100, 2)))
@@ -2971,7 +3425,7 @@ def repair_daily_klines_task():
     
     try:
         from utils.database import db
-        from models.stock_models import KlineDaily
+        from models.stock_models import EmotionCycle
         import pandas as pd
         
         logger.info("task message")
@@ -3006,7 +3460,7 @@ def repair_daily_klines_task():
                 ).order_by(KlineDaily.trade_date).all()
                 
                 if len(klines) > 1:
-                    # 杞崲涓篋ataFrame杩涜璁＄畻
+                    # Convert the result to a DataFrame before calculating metrics.
                     data = []
                     for kline in klines:
                         data.append({
@@ -3306,6 +3760,16 @@ def update_today_data_task(periods=None, force: bool = False):
         if requested_periods and not filtered_periods:
             return
         periods = filtered_periods if requested_periods else periods
+        normalized_periods_for_delegate = [str(item).strip().lower() for item in (periods or []) if str(item).strip()]
+        if normalized_periods_for_delegate and all(item in {"1d", "day", "daily"} for item in normalized_periods_for_delegate) and not _runtime_has_xtquant():
+            _mark_qmt_host_collector_delegated(
+                task_name,
+                scenario="intraday-daily",
+                target_date=datetime.now().strftime("%Y-%m-%d"),
+                periods=normalized_periods_for_delegate,
+                extra={"universe": "stock,index"},
+            )
+            return
 
         import gc
         import math
@@ -3525,6 +3989,13 @@ def update_today_data_task(periods=None, force: bool = False):
                 "code", "trade_date", "open", "high", "low", "close", "volume", "amount",
                 "amplitude", "change_pct", "change_amount", "turnover_rate", "created_at",
             ]
+            from utils.kline_store import filter_trading_day_rows
+
+            rows = filter_trading_day_rows("1d", pd.DataFrame(rows)).to_dict("records")
+            if not rows:
+                logger.warning("index daily batch write blocked by trade_calendar guard: no trading-day rows")
+                return {"used": True, "completed": completed, "success": 0, "failed": failed, "blocked": blocked}
+
             numeric_columns = {
                 "open", "high", "low", "close", "volume", "amount",
                 "amplitude", "change_pct", "change_amount", "turnover_rate",
@@ -4174,6 +4645,7 @@ def _build_intraday_minute_index_pool(indices: List[Dict[str, Any]]) -> List[Dic
         "999999.SH",  # Shanghai Composite in this project
         "399001.SZ",  # Shenzhen Component
         "399006.SZ",  # ChiNext
+        "000680.SH",  # SSE STAR composite shown on home page
         "000300.SH",  # CSI 300
         "000905.SH",  # CSI 500
         "000852.SH",  # CSI 1000
@@ -4417,7 +4889,17 @@ def sync_today_intraday_kline_task(
         except Exception as exc:
             logger.warning(f"failed to validate intraday minute K-line trade date {normalized_date}: {exc}")
 
-        script_path = REPO_ROOT / "scripts" / "qmt_xtquant_minute_backfill_validate.py"
+        if not _runtime_has_xtquant():
+            _mark_qmt_host_collector_delegated(
+                task_name,
+                scenario="intraday",
+                target_date=normalized_date,
+                periods=normalized_periods,
+                extra={"universe": "stock,index"},
+            )
+            return
+
+        script_path = REPO_ROOT / "scripts" / "qmt_xtquant_data_source_task.py"
         if not script_path.exists():
             raise RuntimeError(f"script_not_found:{script_path}")
 
@@ -4430,25 +4912,42 @@ def sync_today_intraday_kline_task(
         ]
         target_codes = list(dict.fromkeys(target_codes))
 
+        report_dir = report_path(
+            "system_intraday_qmt_minute_gap_repair",
+            f"{normalized_date}_{datetime.now():%Y%m%d_%H%M%S}",
+        )
         cmd = [
             sys.executable,
             str(script_path),
-            "--phase",
-            "all",
+            "--mode",
+            "minute-gap-repair",
+            "--scenario",
+            "intraday",
             "--start-date",
             normalized_date,
             "--end-date",
             normalized_date,
-            "--periods",
+            "--minute-periods",
             ",".join(normalized_periods),
-            "--batch-size",
-            "30",
-            "--reset-stage",
+            "--universe",
+            "stock,index",
+            "--repair-code-chunk-size",
+            "1",
+            "--minute-batch-size",
+            "1",
+            "--minute-batch-timeout-sec",
+            "240",
+            "--max-retries",
+            "1",
+            "--retry-sleep",
+            "1",
+            "--minute-report-dir",
+            str(report_dir),
         ]
         if target_codes:
             cmd.extend(["--codes", ",".join(target_codes)])
         else:
-            cmd.append("--include-index")
+            cmd.extend(["--universe", "index"])
         task_manager.update_progress(
             task_name,
             {
@@ -4477,12 +4976,18 @@ def sync_today_intraday_kline_task(
         if tail_lines:
             task_manager.update_progress(task_name, {"message": tail_lines[-1]})
         parsed_summary: Dict[str, Any] = {}
+        summary_file = report_dir / "collector_summary.json"
+        if summary_file.exists():
+            try:
+                parsed_summary = json.loads(summary_file.read_text(encoding="utf-8"))
+            except Exception:
+                parsed_summary = {}
         json_start = stdout_tail.rfind("\n{")
         if json_start >= 0:
             json_text = stdout_tail[json_start + 1 :]
         else:
             json_text = stdout_tail[stdout_tail.find("{") :] if "{" in stdout_tail else ""
-        if json_text:
+        if json_text and not parsed_summary:
             try:
                 parsed_summary = json.loads(json_text)
             except Exception:
@@ -4495,6 +5000,8 @@ def sync_today_intraday_kline_task(
             "periods": normalized_periods,
             "returncode": int(proc.returncode or 0),
             "cmd": cmd,
+            "report_dir": str(report_dir),
+            "report_path": str(summary_file),
             "summary": parsed_summary,
             "stdout_tail": stdout_tail,
             "stderr_tail": stderr_tail,
@@ -4530,6 +5037,16 @@ def update_stock_today_data_task(periods=None, force: bool = False):
         if requested_periods and not filtered_periods:
             return
         periods = filtered_periods if requested_periods else periods
+        normalized_periods_for_delegate = [str(item).strip().lower() for item in (periods or []) if str(item).strip()]
+        if normalized_periods_for_delegate and all(item in {"1d", "day", "daily"} for item in normalized_periods_for_delegate) and not _runtime_has_xtquant():
+            _mark_qmt_host_collector_delegated(
+                task_name,
+                scenario="intraday-daily",
+                target_date=datetime.now().strftime("%Y-%m-%d"),
+                periods=normalized_periods_for_delegate,
+                extra={"universe": "stock,index"},
+            )
+            return
 
         import gc
         import math
@@ -4773,29 +5290,34 @@ def update_stock_today_data_task(periods=None, force: bool = False):
 
             for row in rows:
                 prev_close = prev_close_map.get(str(row["code"]), 0.0)
+                row["previous_close"] = prev_close if prev_close > 0 else None
                 if prev_close > 0:
                     row["change_amount"] = float(row["close"] - prev_close)
                     row["change_pct"] = float((row["close"] - prev_close) / prev_close * 100)
                     row["amplitude"] = float((row["high"] - row["low"]) / prev_close * 100)
 
-            for idx in range(0, len(rows), 500):
-                chunk = rows[idx:idx + 500]
-                code_sql = ", ".join(_quote(row["code"]) for row in chunk)
-                client.command(
-                    f"""
-                    ALTER TABLE kline_daily
-                    DELETE WHERE trade_date = toDate({_quote(query_date)})
-                      AND code IN ({code_sql})
-                    SETTINGS mutations_sync = 1
-                    """
-                )
-
             columns = [
                 "code", "trade_date", "open", "high", "low", "close", "volume", "amount",
-                "amplitude", "change_pct", "change_amount", "turnover_rate", "created_at",
+                "previous_close", "amplitude", "change_pct", "change_amount", "turnover_rate",
+                "snapshot_at", "source", "is_provisional",
             ]
+            from utils.kline_store import filter_trading_day_rows
+
+            rows = filter_trading_day_rows("1d", pd.DataFrame(rows)).to_dict("records")
+            if not rows:
+                logger.warning(f"daily batch write blocked by trade_calendar guard: date={query_date}")
+                return {
+                    "used": True,
+                    "completed": completed + total_codes,
+                    "success": 0,
+                    "failed": total_codes,
+                    "failed_codes": [str(code) for code in code_list],
+                    "skip_reason": "non_trading_day",
+                }
+
+            snapshot_at = datetime.now(timezone(timedelta(hours=8)))
             client.insert(
-                "kline_daily",
+                "kline_daily_intraday",
                 [
                     (
                         row["code"],
@@ -4806,11 +5328,14 @@ def update_stock_today_data_task(periods=None, force: bool = False):
                         row["close"],
                         row["volume"],
                         row["amount"],
+                        row.get("previous_close"),
                         row["amplitude"],
                         row["change_pct"],
                         row["change_amount"],
                         row["turnover_rate"],
-                        row["created_at"],
+                        snapshot_at,
+                        "qmtmini:intraday_daily_snapshot",
+                        1,
                     )
                     for row in rows
                 ],
@@ -4820,7 +5345,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
             failed_codes = [str(code) for code in code_list if str(code) not in written_codes]
             failed_count = len(failed_codes)
             logger.info(
-                f"daily batch ClickHouse upsert done: total={total_codes}, written={saved}, "
+                f"provisional daily snapshot write done: total={total_codes}, written={saved}, "
                 f"failed={failed_count}, fetch_errors={fetch_errors}, date={query_date}"
             )
             return {
@@ -5428,6 +5953,15 @@ def official_daily_close_sync_task(task_already_started: bool = False):
                 mark_success=True,
             )
             return
+        if not _runtime_has_xtquant():
+            _mark_qmt_host_collector_delegated(
+                task_name,
+                scenario="after-close-daily",
+                target_date=now_dt.strftime("%Y-%m-%d"),
+                periods=["1d"],
+                extra={"universe": "stock,index"},
+            )
+            return
         task_manager.update_progress(task_name, {"message": "弢始执行盘后正式日线落?.."})
 
         syncer = KlineSyncer()
@@ -5547,6 +6081,101 @@ def minute_kline_daily_repair_validate_task(
         periods = [item for item in requested_periods if item in table_map]
         if not periods:
             periods = ["5m", "15m", "30m", "60m"]
+
+        if not _runtime_has_xtquant():
+            _mark_qmt_host_collector_delegated(
+                task_name,
+                scenario="after-close",
+                target_date=f"{start_date}~{end_date}",
+                periods=periods,
+                extra={"trade_dates": trade_dates},
+            )
+            return
+
+        qmt_collector_script = Path(__file__).resolve().parents[1] / "scripts" / "qmt_xtquant_data_source_task.py"
+        if not qmt_collector_script.exists():
+            raise RuntimeError(f"script_not_found:{qmt_collector_script}")
+
+        qmt_report_dir = report_path(
+            "system_minute_kline_repair",
+            f"qmt_gap_repair_{start_date}_{end_date}_{datetime.now():%Y%m%d_%H%M%S}",
+        )
+        qmt_cmd = [
+            sys.executable,
+            str(qmt_collector_script),
+            "--mode",
+            "minute-gap-repair",
+            "--scenario",
+            "after-close",
+            "--start-date",
+            str(start_date)[:10],
+            "--end-date",
+            str(end_date)[:10],
+            "--minute-periods",
+            ",".join(periods),
+            "--universe",
+            "stock,index",
+            "--audit-code-chunk-size",
+            "400",
+            "--repair-code-chunk-size",
+            "1",
+            "--minute-batch-size",
+            "1",
+            "--minute-batch-timeout-sec",
+            "240",
+            "--minute-chunk-timeout-sec",
+            "900",
+            "--max-retries",
+            "1",
+            "--retry-sleep",
+            "1",
+            "--minute-report-dir",
+            str(qmt_report_dir),
+        ]
+        task_manager.update_progress(
+            task_name,
+            {
+                "current": 0,
+                "total": max(1, len(trade_dates) * len(periods)),
+                "message": f"repairing minute K-lines from QMT gap audit: {start_date}~{end_date}",
+            },
+        )
+        proc = subprocess.run(
+            qmt_cmd,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45 * 60,
+        )
+        summary_file = qmt_report_dir / "collector_summary.json"
+        qmt_summary: Dict[str, Any] = {}
+        if summary_file.exists():
+            try:
+                qmt_summary = json.loads(summary_file.read_text(encoding="utf-8"))
+            except Exception:
+                qmt_summary = {}
+        ok = proc.returncode == 0 and bool(qmt_summary.get("ok", proc.returncode == 0))
+        result = {
+            "message": f"QMT minute gap repair validation completed for last {len(trade_dates)} trading days",
+            "trade_dates": trade_dates,
+            "periods": periods,
+            "provider": "qmt_xtquant_gap_repair",
+            "returncode": proc.returncode,
+            "cmd": qmt_cmd,
+            "report_dir": str(qmt_report_dir),
+            "report_path": str(summary_file),
+            "summary": qmt_summary,
+            "stdout_tail": (proc.stdout or "")[-4000:],
+            "stderr_tail": (proc.stderr or "")[-4000:],
+            "validation_status": "passed" if ok else "failed",
+        }
+        result["coverage_alert"] = _maybe_send_minute_kline_coverage_alert(result, threshold=0.95)
+        task_manager.set_results(task_name, result, mark_success=ok)
+        if not ok:
+            task_manager.set_error(task_name, result["stderr_tail"] or result["stdout_tail"] or result["message"])
+        return
 
         syncer = KlineSyncer()
         assets = []
@@ -5780,18 +6409,21 @@ def minute_kline_daily_repair_validate_task(
             if not codes:
                 continue
             table = table_map[period]
-            for idx in range(0, len(codes), 500):
-                chunk = codes[idx:idx + 500]
-                quoted = ", ".join("'" + code.replace("\\", "\\\\").replace("'", "\\'") + "'" for code in chunk)
-                client.command(
-                    f"""
-                    ALTER TABLE {table}
-                    DELETE WHERE code IN ({quoted})
-                      AND toDate(datetime) >= toDate('{start_date}')
-                      AND toDate(datetime) <= toDate('{end_date}')
-                    SETTINGS mutations_sync = 1
-                    """
-                )
+            if _is_month_partitioned_minute_table(client, table):
+                for idx in range(0, len(codes), 500):
+                    chunk = codes[idx:idx + 500]
+                    quoted = ", ".join("'" + code.replace("\\", "\\\\").replace("'", "\\'") + "'" for code in chunk)
+                    client.command(
+                        f"""
+                        ALTER TABLE {table}
+                        DELETE WHERE code IN ({quoted})
+                          AND toDate(datetime) >= toDate('{start_date}')
+                          AND toDate(datetime) <= toDate('{end_date}')
+                        SETTINGS mutations_sync = 1
+                        """
+                    )
+            else:
+                logger.warning("skip destructive minute replacement on unpartitioned table: %s", table)
 
             for code in codes:
                 asset = asset_by_code.get(code)
@@ -5947,6 +6579,20 @@ def repair_previous_daily_kline_task(task_already_started: bool = False):
             if not task_manager.start_task(task_name):
                 task_manager.set_error(task_name, "task is already running")
                 return
+        deduplication = _compact_recent_daily_kline_duplicates(days=14)
+        if not deduplication.get("ok"):
+            task_manager.set_results(task_name, {"message": "daily_kline_duplicate_compaction_failed", "daily_deduplication": deduplication})
+            task_manager.set_error(task_name, f"daily_kline_duplicate_compaction_failed: {deduplication.get('error') or deduplication}")
+            return
+        if not _runtime_has_xtquant():
+            _mark_qmt_host_collector_delegated(
+                task_name,
+                scenario="next-day-daily-repair",
+                target_date=datetime.now().strftime("%Y-%m-%d"),
+                periods=["1d"],
+                extra={"universe": "stock,index", "daily_deduplication": deduplication},
+            )
+            return
         task_manager.update_progress(task_name, {"message": "弢始次日巡棢并修复上丢交易日日?.."})
 
         syncer = KlineSyncer()
@@ -5960,6 +6606,49 @@ def repair_previous_daily_kline_task(task_already_started: bool = False):
             )
     except Exception as exc:
         logger.error(f"次日巡检修复失败: {exc}")
+        task_manager.set_error(task_name, str(exc))
+    finally:
+        if data_update_lock.locked():
+            data_update_lock.release()
+
+
+def daily_kline_coverage_maintenance_task(task_already_started: bool = False):
+    """Publish the host-side QMT daily-coverage repair result without importing xtquant in the container."""
+    task_name = "daily_kline_coverage_maintenance"
+    if not data_update_lock.acquire(blocking=False):
+        task_manager.set_error(task_name, "another data update task is running")
+        return
+    try:
+        if not task_already_started and not task_manager.start_task(task_name):
+            task_manager.set_error(task_name, "task is already running")
+            return
+        task_manager.update_progress(task_name, {"message": "reading Windows QMT host daily-coverage repair report"})
+        artifact = runtime_path("daily_kline_coverage", "latest.json")
+        report: Dict[str, Any] = {}
+        if artifact.exists():
+            try:
+                report = json.loads(artifact.read_text(encoding="utf-8-sig"))
+            except Exception as exc:
+                report = {"read_error": str(exc)}
+        checked_at = str(report.get("checked_at") or "")
+        current_day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+        repair = report.get("repair") if isinstance(report.get("repair"), dict) else {}
+        result = {"execution_source": "qmt_xtquant_host_collector", "coverage": report}
+        task_manager.set_results(task_name, result)
+        if not report or not checked_at.startswith(current_day):
+            task_manager.set_error(task_name, "host daily coverage report is missing or stale")
+        elif repair.get("status") != "completed":
+            task_manager.set_error(task_name, f"host daily coverage repair failed: {repair.get('error') or 'missing repair result'}")
+        else:
+            unit_audit = report.get("unit_audit") if isinstance(report.get("unit_audit"), dict) else {}
+            unresolved_units = int(unit_audit.get("unresolved_mismatch_rows") or 0)
+            if unresolved_units > 0:
+                task_manager.set_error(
+                    task_name,
+                    f"daily unit audit has {unresolved_units} unresolved volume/amount mismatches",
+                )
+    except Exception as exc:
+        logger.exception("daily K-line coverage maintenance failed")
         task_manager.set_error(task_name, str(exc))
     finally:
         if data_update_lock.locked():
@@ -5980,7 +6669,7 @@ def repair_all_history_klines_task():
         
         # 调用修复日K线数据的函数
         from utils.database import db
-        from models.stock_models import KlineDaily
+        from models.stock_models import EmotionCycle
         import pandas as pd
         
         # 获取扢有股票代?
@@ -6012,7 +6701,7 @@ def repair_all_history_klines_task():
                 ).order_by(KlineDaily.trade_date).all()
                 
                 if len(klines) > 1:
-                    # 杞崲涓篋ataFrame杩涜璁＄畻
+                    # Convert the result to a DataFrame before calculating metrics.
                     data = []
                     for kline in klines:
                         data.append({
@@ -6110,10 +6799,10 @@ def repair_emotion_cycle_30d_task(days: int = 30):
     task_name = "repair_emotion_cycle_30d"
     try:
         from utils.database import db
-        from models.stock_models import KlineDaily
+        from models.stock_models import EmotionCycle
 
         if data_update_lock.locked():
-            # 閬垮厤涓庡叾瀹冮噸浠诲姟骞跺彂
+            # Avoid concurrent execution with other heavy data-maintenance tasks.
             raise Exception("数据更新任务繁忙，请稍后重试")
 
         data_update_lock.acquire()
@@ -6124,6 +6813,37 @@ def repair_emotion_cycle_30d_task(days: int = 30):
             dates = _get_recent_complete_kline_dates(session, int(days))
         finally:
             session.close()
+
+        metric_repair_result = None
+        if dates:
+            try:
+                from scripts.repair_kline_daily_metrics import repair_metrics
+
+                metric_repair_result = repair_metrics(str(min(dates)), str(max(dates)))
+                logger.info(f"emotion repair preflight kline metric repair: {metric_repair_result}")
+            except Exception as exc:
+                logger.warning(f"emotion repair preflight kline metric repair failed: {exc}")
+
+        stale_deleted = 0
+        if dates:
+            session = next(db.get_session())
+            try:
+                stale_rows = (
+                    session.query(EmotionCycle)
+                    .filter(
+                        EmotionCycle.date >= min(dates),
+                        EmotionCycle.date <= max(dates),
+                        ~EmotionCycle.date.in_(dates),
+                    )
+                    .all()
+                )
+                stale_deleted = len(stale_rows)
+                for row in stale_rows:
+                    session.delete(row)
+                if stale_rows:
+                    session.commit()
+            finally:
+                session.close()
 
         task_manager.update_progress(task_name, {"total": len(dates), "current": 0})
 
@@ -6140,7 +6860,13 @@ def repair_emotion_cycle_30d_task(days: int = 30):
             task_name,
             {
                 "message": f"emotion cycle repair completed for last {len(dates)} trading days",
-                "stats": {"days": len(dates), "saved": saved_total, "skipped": skipped_total},
+                "stats": {
+                    "days": len(dates),
+                    "saved": saved_total,
+                    "skipped": skipped_total,
+                    "stale_deleted": stale_deleted,
+                    "metric_repair": metric_repair_result,
+                },
             },
         )
     except Exception as e:
@@ -6156,38 +6882,74 @@ def repair_emotion_cycle_30d_task(days: int = 30):
 
 def repair_emotion_cycle_latest_task():
     """
-    手动：根据最新日线数据重算最新交易日情绪周期?
+    Repair the latest emotion cycle and every recent complete-date gap.
+
+    A one-day task is not sufficient: if the scheduler is unavailable at a
+    single execution window, that date used to remain absent indefinitely and
+    the home-page timeline silently connected the surrounding sessions.
     """
     task_name = "repair_emotion_cycle_latest"
     try:
         from utils.database import db
         from sqlalchemy import func
-        from models.stock_models import KlineDaily
+        from models.stock_models import EmotionCycle
 
         if data_update_lock.locked():
             raise Exception("数据更新任务繁忙，请稍后重试")
 
         data_update_lock.acquire()
-        task_manager.update_progress(task_name, {"message": "弢始重算最新交易日情绪周期..."})
+        task_manager.update_progress(task_name, {"message": "审计最近完整交易日的情绪周期覆盖..."})
 
         session = next(db.get_session())
         try:
-            dates = _get_recent_complete_kline_dates(session, 1)
+            # The limit is deliberately wider than the chart window.  This
+            # makes the next successful run self-heal missed after-close jobs
+            # instead of assuming that yesterday was the only possible gap.
+            dates = _get_recent_complete_kline_dates(session, 60)
             latest_date = dates[0] if dates else None
+            existing_dates = {
+                row[0]
+                for row in session.query(EmotionCycle.date)
+                .filter(EmotionCycle.date.in_(dates))
+                .all()
+                if row[0]
+            } if dates else set()
         finally:
             session.close()
 
         if not latest_date:
             raise Exception("required data not available")
 
-        task_manager.update_progress(task_name, {"total": 1, "current": 1, "message": f"重算情绪周期: {latest_date}"})
-        r = _repair_emotion_for_dates([latest_date])
+        missing_dates = sorted(date_value for date_value in dates if date_value not in existing_dates)
+        # Always rebuild the latest complete date in case its official daily
+        # bars were corrected; additionally repair every discovered hole.
+        repair_dates = sorted(set(missing_dates + [latest_date]))
+        saved_total = 0
+        skipped_total = 0
+        for index, trade_date in enumerate(repair_dates, start=1):
+            task_manager.update_progress(
+                task_name,
+                {
+                    "total": len(repair_dates),
+                    "current": index,
+                    "message": f"重算情绪周期: {trade_date} ({index}/{len(repair_dates)})",
+                },
+            )
+            result = _repair_emotion_for_dates([trade_date])
+            saved_total += int(result.get("saved", 0))
+            skipped_total += int(result.get("skipped", 0))
 
         task_manager.set_results(
             task_name,
             {
-                "message": "task message",
-                "stats": {"date": str(latest_date), "saved": r.get("saved", 0), "skipped": r.get("skipped", 0)},
+                "message": "情绪周期完整性修复完成",
+                "stats": {
+                    "latest_date": str(latest_date),
+                    "missing_dates": [str(date_value) for date_value in missing_dates],
+                    "repaired_dates": [str(date_value) for date_value in repair_dates],
+                    "saved": saved_total,
+                    "skipped": skipped_total,
+                },
             },
         )
     except Exception as e:
@@ -6199,6 +6961,145 @@ def repair_emotion_cycle_latest_task():
                 data_update_lock.release()
             except Exception:
                 pass
+
+
+def _run_scheduled_repair_emotion_cycle_latest():
+    task_name = "repair_emotion_cycle_latest"
+    if not task_manager.start_task(task_name):
+        logger.info("scheduled emotion-cycle repair skipped: task is already running")
+        return
+    repair_emotion_cycle_latest_task()
+
+
+def refresh_market_sentiment_snapshot_task():
+    """Pre-aggregate the homepage's provisional intraday market snapshot."""
+    try:
+        from services.market_sentiment_cache import refresh_daily_history, refresh_intraday_snapshot
+
+        daily_rows = refresh_daily_history()
+        intraday_written = refresh_intraday_snapshot()
+        logger.info(
+            "market sentiment snapshot refreshed: daily_rows=%s intraday_written=%s",
+            daily_rows,
+            intraday_written,
+        )
+    except Exception as exc:
+        logger.warning("market sentiment snapshot refresh failed: %s", exc)
+
+
+def refresh_confirmed_market_sentiment_snapshot_task():
+    """Publish post-close turnover from daily bars, or a complete 15:00 minute close."""
+    try:
+        from services.market_sentiment_cache import refresh_daily_history, refresh_intraday_snapshot
+
+        daily_rows = refresh_daily_history(force=True)
+        final_minute_written = refresh_intraday_snapshot(finalize_if_closed=True)
+        logger.info(
+            "confirmed market sentiment snapshot refresh: daily_rows=%s final_minute_written=%s",
+            daily_rows,
+            final_minute_written,
+        )
+    except Exception as exc:
+        logger.warning("confirmed market sentiment snapshot refresh failed: %s", exc)
+
+
+def _run_homepage_integrity_after_close():
+    """Finalize market turnover first, then repair all completed emotion gaps."""
+    refresh_confirmed_market_sentiment_snapshot_task()
+    repair_emotion_cycle_latest_task()
+    try:
+        from services.margin_sentiment import refresh_margin_sentiment
+
+        result = refresh_margin_sentiment(days=30)
+        logger.info("homepage margin sentiment refresh: %s", result)
+        if result.get("stale"):
+            logger.warning("homepage margin sentiment source is stale: %s", result)
+    except Exception as exc:
+        logger.warning("homepage margin sentiment refresh failed: %s", exc)
+
+
+def _run_homepage_margin_refresh():
+    """Retry delayed exchange margin reports without rerunning other jobs."""
+    try:
+        from services.margin_sentiment import refresh_margin_sentiment
+
+        result = refresh_margin_sentiment(days=30)
+        logger.info("scheduled homepage margin refresh: %s", result)
+        if result.get("stale"):
+            logger.warning("scheduled homepage margin refresh remains stale: %s", result)
+    except Exception as exc:
+        logger.warning("scheduled homepage margin refresh failed: %s", exc)
+
+
+def start_homepage_integrity_scheduler():
+    """Run homepage-derived data jobs even when core ingestion scheduling is off.
+
+    This scheduler only reads the QMT/ClickHouse warehouse and writes display
+    snapshots plus emotion-cycle derivatives.  It deliberately never invokes
+    stock, minute, or daily data collection, so it remains safe alongside the
+    Windows host collector.
+    """
+    global _homepage_integrity_scheduler
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    with _homepage_integrity_scheduler_lock:
+        if _homepage_integrity_scheduler is None:
+            _homepage_integrity_scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+            _homepage_integrity_scheduler.start()
+        scheduler = _homepage_integrity_scheduler
+
+    scheduler.add_job(
+        refresh_market_sentiment_snapshot_task,
+        CronTrigger(day_of_week="mon-fri", hour="9-11,13-14", minute="4/5"),
+        id="homepage_market_intraday_snapshot",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_homepage_integrity_after_close,
+        CronTrigger(day_of_week="mon-fri", hour="15-17", minute="35,40,45,50,55"),
+        id="homepage_after_close_integrity",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_homepage_margin_refresh,
+        CronTrigger(day_of_week="mon-fri", hour="15-18", minute="*/20"),
+        id="homepage_margin_sentiment_refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    threading.Thread(
+        target=_recover_homepage_market_cache_after_start,
+        name="homepage-integrity-startup-recovery",
+        daemon=True,
+    ).start()
+    return {"enabled": True, "jobs": ["homepage_market_intraday_snapshot", "homepage_after_close_integrity", "homepage_margin_sentiment_refresh"]}
+
+
+def _recover_homepage_market_cache_after_start():
+    """Catch up missed homepage snapshots after a backend restart.
+
+    APScheduler coalesces missed cron executions, so a process that was down
+    after close must explicitly rebuild confirmed history on its next start.
+    Without this, a complete daily bar can exist while the homepage turnover
+    curve remains stale until the next scheduled window.
+    """
+    # Reconcile both daily homepage contracts before any intraday append is
+    # shown.  A restart must not leave a missed after-close job undiscovered.
+    repair_emotion_cycle_latest_task()
+    refresh_confirmed_market_sentiment_snapshot_task()
+    refresh_market_sentiment_snapshot_task()
+    try:
+        from services.margin_sentiment import refresh_margin_sentiment
+
+        refresh_margin_sentiment(days=30)
+    except Exception as exc:
+        logger.warning("homepage margin sentiment startup recovery failed: %s", exc)
 
 
 def _emotion_auto_job():
@@ -6619,6 +7520,10 @@ def maybe_run_startup_reference_sync() -> bool:
 
 
 def start_core_data_maintenance_scheduler():
+    enabled = str(os.environ.get("AISTOCK_CORE_DATA_MAINTENANCE_SCHEDULER_ENABLED", "1")).strip().lower()
+    if enabled in {"0", "false", "no", "off"}:
+        logger.info("Core ingestion scheduler disabled; starting homepage integrity scheduler only")
+        return start_homepage_integrity_scheduler()
     scheduler = _ensure_core_maintenance_scheduler()
     from apscheduler.triggers.cron import CronTrigger
 
@@ -6713,8 +7618,45 @@ def start_core_data_maintenance_scheduler():
             "minute_kline_daily_repair_validate",
             minute_kline_daily_repair_validate_task,
         ),
-        CronTrigger(day_of_week="mon-fri", hour=19, minute=10),
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=45),
         id=_core_maintenance_job_ids["minute_kline_daily_repair_validate"],
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_market_sentiment_snapshot_task,
+        # Run one minute after the QMT 5-minute source refresh.  This shifts
+        # full-market aggregation out of the homepage request path.
+        CronTrigger(day_of_week="mon-fri", hour="9-11,13-14", minute="4/5"),
+        id=_core_maintenance_job_ids["market_sentiment_snapshot"],
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_confirmed_market_sentiment_snapshot_task,
+        # Daily ingestion can still be writing at 15:40.  A rejected partial
+        # batch is never published; the retry window self-heals once coverage
+        # is complete instead of preserving a false low-turnover bar.
+        CronTrigger(day_of_week="mon-fri", hour=15, minute="40,45,50,55"),
+        id=_core_maintenance_job_ids["market_sentiment_after_close"],
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_confirmed_market_sentiment_snapshot_task,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute="0,5,10,15,20,25,30"),
+        id="core_market_sentiment_after_close_retry",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        refresh_confirmed_market_sentiment_snapshot_task,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute="0,5"),
+        id="core_market_sentiment_after_close_final_retry",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -6724,8 +7666,16 @@ def start_core_data_maintenance_scheduler():
             "official_daily_close_sync",
             official_daily_close_sync_task,
         ),
-        CronTrigger(day_of_week="mon-fri", hour=18, minute=30),
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=35),
         id=_core_maintenance_job_ids["official_daily"],
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_scheduled_repair_emotion_cycle_latest,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=45),
+        id=_core_maintenance_job_ids["emotion_cycle_after_close"],
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -6741,7 +7691,33 @@ def start_core_data_maintenance_scheduler():
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        lambda: _run_core_data_update_after_trade_calendar(
+            "daily_kline_coverage_maintenance",
+            daily_kline_coverage_maintenance_task,
+        ),
+        # Start after the next-day single-date repair.  The worker audits the
+        # current-year SH calendar and safely repairs at most 60 incomplete codes.
+        CronTrigger(day_of_week="tue-sat", hour=1, minute=10),
+        id=_core_maintenance_job_ids["daily_coverage"],
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_scheduled_repair_emotion_cycle_latest,
+        CronTrigger(day_of_week="tue-sat", hour=0, minute=45),
+        id=_core_maintenance_job_ids["emotion_cycle_overnight"],
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     _set_core_maintenance_status(True, "core maintenance enabled")
+    threading.Thread(
+        target=_recover_homepage_market_cache_after_start,
+        name="homepage-market-cache-recovery",
+        daemon=True,
+    ).start()
     results = task_manager.tasks["core_data_maintenance"].get("results") or {}
     results["jobs"] = _core_scheduler_jobs_status()
     task_manager.tasks["core_data_maintenance"]["results"] = results
@@ -6845,6 +7821,19 @@ def _build_core_data_maintenance_payload(timeline_limit: int = 20, include_histo
             progress = dict(normalized_task.get("progress") or {})
             progress["message"] = "after-close validation is not due yet; waiting for 15:05"
             normalized_task["progress"] = progress
+        elif _is_qmt_transition_failure(key, normalized_task):
+            normalized_task["status"] = "pending"
+            normalized_task["suppressed_last_error"] = normalized_task.get("last_error")
+            normalized_task["suppressed_last_error_at"] = normalized_task.get("last_error_at")
+            normalized_task["last_error"] = None
+            normalized_task["last_error_at"] = None
+            progress = dict(normalized_task.get("progress") or {})
+            progress["message"] = "QMT/xtquant 已切到 Windows 主机统一采集器；旧链路失败不再计入自动维护成功率"
+            normalized_task["progress"] = progress
+            results_payload = dict(normalized_task.get("results") or {})
+            results_payload.setdefault("validation_status", "delegated_to_host_collector")
+            results_payload.setdefault("validation_reason", "legacy_backend_qmt_transition_failure")
+            normalized_task["results"] = results_payload
         task_status_normalized[key] = normalized_task
     enabled = bool(results.get("enabled"))
     running_task = next((key for key, task in task_status.items() if task.get("is_running")), None)
@@ -6939,6 +7928,13 @@ async def get_startup_reference_sync_setting():
             "takes_effect_on_restart": True,
         },
     }
+
+
+@router.get("/qmt-after-close-execution")
+async def get_qmt_after_close_execution():
+    data = _latest_qmt_after_close_execution()
+    data["overnight_repair"] = _latest_qmt_overnight_repair_execution()
+    return {"success": True, "data": data}
 
 
 @router.post("/startup-reference-sync-setting")
@@ -7036,7 +8032,7 @@ async def run_official_daily_close_now(background_tasks: BackgroundTasks):
 
     if not task_manager.start_task(task_name, trigger_source="manual"):
         raise HTTPException(status_code=400, detail="task is already running")
-    task_manager.update_progress(task_name, {"message": "浠诲姟宸插叆闃燂紝鍑嗗鎵ц..."})
+    task_manager.update_progress(task_name, {"message": "Task queued and ready to execute..."})
 
     thread = threading.Thread(target=official_daily_close_sync_task, args=(True,), daemon=True)
     thread.start()
@@ -7132,6 +8128,13 @@ async def run_core_maintenance_task_now(
             ).start(),
             "message": "task message",
         },
+        "daily_coverage": {
+            "task_name": "daily_kline_coverage_maintenance",
+            "runner": lambda force=False: threading.Thread(
+                target=daily_kline_coverage_maintenance_task, args=(True,), daemon=True
+            ).start(),
+            "message": "daily K-line calendar coverage audit and bounded repair started",
+        },
     }
 
     force_tasks = {"stock_intraday", "market_intraday_minutes", "market_intraday_kline_refresh", "sector_intraday_stats_refresh"}
@@ -7148,7 +8151,7 @@ async def run_core_maintenance_task_now(
 
     if not task_manager.start_task(task_name, trigger_source="manual"):
         raise HTTPException(status_code=400, detail="task is already running")
-    task_manager.update_progress(task_name, {"message": "浠诲姟宸插叆闃燂紝鍑嗗鎵ц..."})
+    task_manager.update_progress(task_name, {"message": "Task queued and ready to execute..."})
 
     config["runner"](force=force_for_task)
     return {
@@ -7161,81 +8164,64 @@ async def run_core_maintenance_task_now(
 
 @router.post("/tdx-gateway/initialize")
 async def initialize_tdx_gateway():
-    init_result = _tdx_gateway_request("POST", "/initialize", timeout=45)
-    init_body = init_result.get("body") if isinstance(init_result, dict) else {}
-    init_ok = bool(init_result.get("ok") and isinstance(init_body, dict) and init_body.get("ok"))
     return {
-        "success": init_ok,
-        "message": "TDX Gateway initialize request finished",
+        "success": False,
+        "message": "TDX Gateway is a legacy diagnostics path; QMT/xtquant is the active market-data source.",
         "data": {
-            "initialize": init_result,
-            "diagnostics": _build_tdx_gateway_diagnostics(run_probe=True),
+            "deprecated": True,
+            "replacement": "QMT/xtquant data source maintenance",
+            "active_source": "qmt_xtquant",
         },
     }
 
 
 @router.get("/tdx-gateway/diagnostics")
 async def get_tdx_gateway_diagnostics(run_probe: bool = True):
-    diagnostics = _build_tdx_gateway_diagnostics(run_probe=run_probe)
     return {
         "success": True,
-        "message": "TDX Gateway diagnostics refreshed",
+        "message": "TDX Gateway diagnostics are legacy and disabled; use QMT/xtquant data-source diagnostics.",
         "data": {
-            "diagnostics": diagnostics,
+            "deprecated": True,
+            "requested_run_probe": run_probe,
+            "active_source": "qmt_xtquant",
+            "replacement": "core-data-maintenance and QMT minute gap repair tasks",
         },
     }
 
 
 @router.post("/tdx-gateway/probe")
 async def probe_tdx_gateway():
-    diagnostics = _build_tdx_gateway_diagnostics(run_probe=True)
     return {
-        "success": _tdx_gateway_is_ready(diagnostics),
-        "message": (
-            "TDX Gateway market data probe passed"
-            if _tdx_gateway_is_ready(diagnostics)
-            else "TDX Gateway market data probe failed; review diagnostics"
-        ),
+        "success": False,
+        "message": "TDX Gateway probe is legacy and disabled; QMT/xtquant is the active market-data source.",
         "data": {
-            "diagnostics": diagnostics,
+            "deprecated": True,
+            "active_source": "qmt_xtquant",
         },
     }
 
 
 @router.post("/tdx-gateway/recover")
 async def recover_tdx_gateway(allow_restart: bool = True):
-    result = _run_tdx_gateway_recovery(allow_restart=allow_restart)
     return {
-        "success": bool(result.get("ok")),
-        "message": (
-            "TDX Gateway recovered"
-            if result.get("recovered")
-            else "TDX Gateway restart requested; wait and refresh diagnostics"
-            if result.get("restart_requested")
-            else "TDX Gateway recovery finished; review diagnostics"
-        ),
-        "data": result,
+        "success": False,
+        "message": "TDX Gateway recovery is legacy and disabled; use QMT/xtquant repair paths.",
+        "data": {
+            "deprecated": True,
+            "allow_restart_requested": allow_restart,
+            "active_source": "qmt_xtquant",
+        },
     }
 
 
 @router.post("/tdx-gateway/restart")
 async def restart_tdx_gateway():
-    restart_result = _tdx_gateway_request("POST", "/admin/restart", timeout=10)
-    if not restart_result.get("ok"):
-        return {
-            "success": False,
-            "message": "TDX Gateway restart request failed; use scripts/start_tdx_gateway.bat or Windows scheduled task if Gateway is fully down.",
-            "data": {
-                "restart": restart_result,
-                "diagnostics": _build_tdx_gateway_diagnostics(run_probe=False),
-            },
-        }
     return {
-        "success": True,
-        "message": "TDX Gateway restart has been requested. Wait a few seconds and refresh diagnostics.",
+        "success": False,
+        "message": "TDX Gateway restart is legacy and disabled; QMT/xtquant is the active market-data source.",
         "data": {
-            "restart": restart_result,
-            "diagnostics": _build_tdx_gateway_diagnostics(run_probe=False),
+            "deprecated": True,
+            "active_source": "qmt_xtquant",
         },
     }
 
@@ -7651,7 +8637,7 @@ async def start_emotion_cycle_auto_5m():
     try:
         from apscheduler.triggers.cron import CronTrigger
 
-        # 鑻ュ凡瀛樺湪浠诲姟锛屽厛绉婚櫎鍐嶆坊鍔狅紙閬垮厤閲嶅锛?
+        # Remove an existing task before adding it again to prevent duplicates.
         try:
             sched.remove_job(_emotion_job_id)
         except Exception:

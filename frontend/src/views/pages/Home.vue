@@ -4,7 +4,7 @@
       <div class="header">
         <h1>大盘情绪概览</h1>
         <div class="header-actions">
-          <p class="date">{{ marketData.trading_date || '加载中...' }}</p>
+          <p class="date">{{ marketData.sentiment?.date || marketData.trading_date || '加载中...' }}</p>
         </div>
       </div>
 
@@ -140,7 +140,22 @@
               </div>
             </div>
             <div class="curve-card-subtitle">涨跌家数 / 涨跌停 / 5%家数按各自30日区间归一化</div>
-            <div class="emotion-curve-chart" ref="sentimentCurveChart"></div>
+            <div class="emotion-curve-chart" ref="sentimentCurveChart" @click="selectSentimentPoint"></div>
+            <div v-if="selectedSentimentSnapshot" class="sentiment-click-details">
+              <div class="sentiment-click-details-header">
+                <strong>{{ selectedSentimentSnapshot.date }}</strong>
+                <span>当天情绪数据</span>
+                <button type="button" @click="clearSelectedSentimentPoint">关闭</button>
+              </div>
+              <div class="sentiment-click-details-grid">
+                <span>上涨 {{ selectedSentimentSnapshot.up }}</span>
+                <span>下跌 {{ selectedSentimentSnapshot.down }}</span>
+                <span>涨停 {{ selectedSentimentSnapshot.limitUp }}</span>
+                <span>跌停 {{ selectedSentimentSnapshot.limitDown }}</span>
+                <span>涨幅≥5% {{ selectedSentimentSnapshot.up5 }}</span>
+                <span>跌幅≤-5% {{ selectedSentimentSnapshot.down5 }}</span>
+              </div>
+            </div>
           </div>
 
           <div class="distribution-wrapper" v-if="sentimentDistribution.length > 0">
@@ -170,6 +185,74 @@
 
 
       <!-- 情绪周期 -->
+      <section class="margin-sentiment-section">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">融资客情绪</h2>
+            <p class="margin-sentiment-note">交易所盘后确认数据，统计沪深两市融资余额与融资净买入</p>
+          </div>
+          <span v-if="marginSentiment.available" class="margin-sentiment-date">{{ marginSentiment.latest?.date }}</span>
+        </div>
+        <div v-if="marginSentiment.available" class="margin-sentiment-card">
+          <div class="margin-sentiment-metrics">
+            <div>
+              <span>融资余额</span>
+              <strong>{{ formatMarginTrillion(marginSentiment.latest?.financing_balance) }}</strong>
+            </div>
+            <div>
+              <span>融券余额</span>
+              <strong>{{ formatMarginBillions(marginSentiment.latest?.securities_lending_balance) }}</strong>
+            </div>
+            <div :class="marginNetBuyClass">
+              <span>融资余额日变动</span>
+              <strong>{{ formatMarginBillions(marginSentiment.latest?.financing_net_buy) }}</strong>
+            </div>
+            <div :class="securitiesLendingChangeClass">
+              <span>融券余额日变动</span>
+              <strong>{{ formatMarginBillions(marginSentiment.latest?.securities_lending_balance_change) }}</strong>
+            </div>
+          </div>
+          <div class="margin-chart-title"><span>余额趋势</span><span>融资余额 / 融券余额</span></div>
+          <svg class="margin-balance-chart" viewBox="0 0 800 150" preserveAspectRatio="none" role="img" aria-label="近30日融资余额和融券余额趋势" @mousemove="updateMarginHover" @mouseleave="clearMarginHover">
+            <line x1="36" x2="782" y1="126" y2="126" class="margin-axis-line" />
+            <polyline :points="financingBalancePoints" class="financing-balance-line" fill="none" />
+            <polyline :points="securitiesLendingBalancePoints" class="securities-lending-line" fill="none" />
+            <line v-if="hoveredMarginIndex !== null" :x1="marginHoverX" :x2="marginHoverX" y1="12" y2="126" class="margin-hover-line" />
+            <rect x="36" y="12" width="746" height="114" class="margin-hover-surface" />
+            <text x="4" y="22">融资</text>
+            <text x="764" y="22">融券</text>
+          </svg>
+          <div class="margin-chart-legend"><span class="financing">融资余额</span><span class="lending">融券余额</span></div>
+          <div class="margin-chart-title"><span>每日余额变动</span><span>柱体向上为增加，向下为减少</span></div>
+          <svg class="margin-change-chart" viewBox="0 0 800 150" preserveAspectRatio="none" role="img" aria-label="近30日融资和融券余额每日变动" @mousemove="updateMarginHover" @mouseleave="clearMarginHover">
+            <line x1="36" x2="782" y1="75" y2="75" class="margin-zero-line" />
+            <rect v-for="bar in financingChangeBars" :key="`financing-${bar.index}`" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" :class="bar.value >= 0 ? 'margin-bar-up' : 'margin-bar-down'" />
+            <rect v-for="bar in securitiesLendingChangeBars" :key="`lending-${bar.index}`" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" :class="bar.value >= 0 ? 'lending-bar-up' : 'lending-bar-down'" />
+            <line v-if="hoveredMarginIndex !== null" :x1="marginHoverX" :x2="marginHoverX" y1="12" y2="138" class="margin-hover-line" />
+            <rect x="36" y="12" width="746" height="126" class="margin-hover-surface" />
+            <text x="4" y="22">增加</text>
+            <text x="4" y="142">减少</text>
+          </svg>
+          <div class="margin-chart-legend"><span class="financing">融资变动</span><span class="lending">融券变动</span></div>
+          <div class="margin-sentiment-axis">
+            <span>{{ marginSentiment.dates?.[0] }}</span>
+            <span>{{ marginSentiment.dates?.[marginSentiment.dates.length - 1] }}</span>
+          </div>
+          <div v-if="marginHoverData" class="margin-hover-tooltip" :style="marginHoverStyle">
+            <div class="margin-hover-date">{{ marginHoverData.date }} 当日两融明细</div>
+            <div class="margin-hover-grid">
+              <span>融资余额 <b>{{ formatMarginTrillion(marginHoverData.financingBalance) }}</b></span>
+              <span>融券余额 <b>{{ formatMarginBillions(marginHoverData.securitiesLendingBalance) }}</b></span>
+              <span :class="marginHoverData.financingChange >= 0 ? 'positive' : 'negative'">融资日变动 <b>{{ formatMarginBillions(marginHoverData.financingChange) }}</b></span>
+              <span :class="marginHoverData.securitiesLendingChange >= 0 ? 'positive' : 'negative'">融券日变动 <b>{{ formatMarginBillions(marginHoverData.securitiesLendingChange) }}</b></span>
+              <span>两融余额 <b>{{ formatMarginTrillion(marginHoverData.marginBalance) }}</b></span>
+              <span>融资买入额 <b>{{ formatMarginBillions(marginHoverData.financingBuy) }}</b></span>
+            </div>
+          </div>
+        </div>
+        <div v-else class="margin-sentiment-empty">两融汇总数据等待收盘后同步</div>
+      </section>
+
       <div class="emotion-cycle-section">
         <div class="section-header">
           <h2 class="section-title">情绪周期</h2>
@@ -190,6 +273,7 @@
             情绪周期日期与行情日期不一致，请先执行“更新最新情绪”。
           </div>
         </div>
+        <div v-if="intradayEmotionHint" class="emotion-intraday-note">{{ intradayEmotionHint }}</div>
         <div class="emotion-cycle-chart">
           <div class="emotion-cycle-topbar">
             <div class="emotion-cycle-legend-items">
@@ -391,6 +475,55 @@
           </div>
         </div>
       </div>
+      <section class="turnover-trend-section">
+        <div class="turnover-trend-header">
+          <div>
+            <h2 class="section-title">市场成交额趋势</h2>
+            <p>两市成交额低于 2 万亿元，说明交易冷清，赚钱难度极大。</p>
+          </div>
+          <div class="turnover-trend-status" :class="turnoverIsActive ? 'active' : 'cold'">
+            {{ latestTurnoverText }}
+          </div>
+        </div>
+        <div v-if="intradayTurnoverForecast.available" class="turnover-forecast-row">
+          <span>盘中累计 {{ formatTurnoverTrillion(intradayTurnoverForecast.current_amounts?.total) }}（截至 {{ intradayTurnoverForecast.time_bucket }}）</span>
+          <strong>预计全天 {{ formatTurnoverTrillion(intradayTurnoverForecast.forecast_amount) }}</strong>
+          <span>区间 {{ formatTurnoverTrillion(intradayTurnoverForecast.forecast_interval?.lower) }} - {{ formatTurnoverTrillion(intradayTurnoverForecast.forecast_interval?.upper) }}</span>
+          <span>置信度 {{ Math.round((intradayTurnoverForecast.confidence || 0) * 100) }}%</span>
+          <span v-if="intradayTurnoverForecast.fallback">临时估算，5分钟历史样本就绪后自动切换为数据驱动预测</span>
+          <span>浅黄虚线段＝预计剩余成交额</span>
+        </div>
+        <div v-else-if="intradayTurnoverForecast.reason" class="turnover-forecast-row unavailable">
+          盘中全天成交额预测：{{ intradayTurnoverForecast.reason }}
+        </div>
+        <div class="turnover-trend-chart-wrap" @mousemove.capture="handleTurnoverHover" @mouseleave.capture="clearTurnoverHover">
+          <div ref="turnoverTrendChart" class="turnover-trend-chart"></div>
+          <div v-if="turnoverTooltipData" class="turnover-chart-tooltip" :style="turnoverTooltipStyle">
+            <div class="turnover-tooltip-title">{{ turnoverTooltipData.date }}</div>
+            <div class="turnover-tooltip-row total">
+              <span>三市合计</span>
+              <strong>{{ turnoverTooltipData.total }}</strong>
+            </div>
+            <div v-if="turnoverTooltipData.forecast" class="turnover-tooltip-row forecast">
+              <span>预计全天</span>
+              <strong>{{ turnoverTooltipData.forecast }}</strong>
+            </div>
+            <div class="turnover-tooltip-row">
+              <span><i class="turnover-tooltip-marker sh"></i>沪市</span>
+              <strong>{{ turnoverTooltipData.sh }}</strong>
+            </div>
+            <div class="turnover-tooltip-row">
+              <span><i class="turnover-tooltip-marker sz"></i>深市</span>
+              <strong>{{ turnoverTooltipData.sz }}</strong>
+            </div>
+            <div class="turnover-tooltip-row">
+              <span><i class="turnover-tooltip-marker bj"></i>北交所</span>
+              <strong>{{ turnoverTooltipData.bj }}</strong>
+            </div>
+            <div class="turnover-tooltip-change" :class="turnoverTooltipData.changeClass">{{ turnoverTooltipData.changeText }}</div>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 </template>
@@ -417,10 +550,21 @@ const loading = ref(false)
 const calculating = ref(false)
 const sentimentCurveChart = ref(null)
 const sentimentCurveInstance = ref(null)
+const turnoverTrendChart = ref(null)
+const turnoverTrendInstance = ref(null)
+const hoveredTurnoverIndex = ref(null)
+const turnoverTooltipPosition = ref({ x: 12, y: 12 })
+const selectedSentimentIndex = ref(null)
 const emotionCycleChart = ref(null)
 const emotionCycleData = ref(null)
+const marginSentiment = ref({ available: false, dates: [], latest: null })
+const hoveredMarginIndex = ref(null)
+const marginHoverPosition = ref({ x: 12, y: 12 })
 const emotionCycleInstance = ref(null)
 const emotionGranularity = ref('daily')
+let emotionRefreshTimer = null
+let marketDataRetryTimer = null
+let marketRefreshTimer = null
 const showAllIndices = ref(false)
 const emotionLegendPage = ref(0)
 const hoveredEmotionIndex = ref(null)
@@ -486,7 +630,7 @@ const displayIndices = computed(() => {
     return marketData.value.allIndices
   } else {
     // 主要指数列表
-    const mainIndices = ["999999.SH", "399001.SZ", "399006.SZ", "000680.SH"]
+    const mainIndices = ["000001.SH", "399001.SZ", "399006.SZ", "000680.SH"]
     return marketData.value.allIndices.filter(index => mainIndices.includes(index.code))
   }
 })
@@ -512,6 +656,160 @@ const emotionCurve30d = computed(() => {
     normalized: curve.normalized_series || {},
     latest: curve.latest_snapshot || {}
   }
+})
+
+const selectedSentimentSnapshot = computed(() => {
+  const index = selectedSentimentIndex.value
+  const { days, raw } = emotionCurve30d.value
+  if (!Number.isInteger(index) || index < 0 || index >= days.length) return null
+  const value = (key) => Number(raw[key]?.[index] || 0)
+  return {
+    date: days[index],
+    up: value('up_count_series'),
+    down: value('down_count_series'),
+    limitUp: value('limit_up_count_series'),
+    limitDown: value('limit_down_count_series'),
+    up5: value('up_5_count_series'),
+    down5: value('down_5_count_series')
+  }
+})
+
+const turnoverTrend = computed(() => {
+  const raw = marketData.value?.sentiment?.turnover_trend_30d || {}
+  return {
+    days: Array.isArray(raw.trade_dates) ? raw.trade_dates : [],
+    amounts: Array.isArray(raw.amounts) ? raw.amounts.map((value) => Number(value || 0)) : [],
+    shAmounts: Array.isArray(raw.sh_amounts) ? raw.sh_amounts.map((value) => Number(value || 0)) : [],
+    szAmounts: Array.isArray(raw.sz_amounts) ? raw.sz_amounts.map((value) => Number(value || 0)) : [],
+    bjAmounts: Array.isArray(raw.bj_amounts) ? raw.bj_amounts.map((value) => Number(value || 0)) : [],
+    threshold: Number(raw.threshold_amount || 2_000_000_000_000),
+    latestIsProvisional: Boolean(raw.latest_is_provisional),
+    latestAsOf: raw.latest_as_of || ''
+  }
+})
+
+const intradayTurnoverForecast = computed(() => (
+  marketData.value?.sentiment?.turnover_forecast_intraday || { available: false, reason: '' }
+))
+
+const formatMarginTrillion = (amount) => `${(Number(amount || 0) / 1_000_000_000_000).toFixed(2)} 万亿`
+const formatMarginBillions = (amount) => {
+  const value = Number(amount || 0) / 100_000_000
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)} 亿`
+}
+const marginNetBuyClass = computed(() => Number(marginSentiment.value.latest?.financing_net_buy || 0) >= 0 ? 'positive' : 'negative')
+const securitiesLendingChangeClass = computed(() => Number(marginSentiment.value.latest?.securities_lending_balance_change || 0) >= 0 ? 'positive' : 'negative')
+const marginBalancePoints = (values) => {
+  if (!values.length) return ''
+  const minimum = Math.min(...values)
+  const maximum = Math.max(...values)
+  const range = Math.max(maximum - minimum, 1)
+  const width = 746
+  return values.map((value, index) => {
+    const x = 36 + (values.length === 1 ? width / 2 : index * width / (values.length - 1))
+    const y = 118 - (Number(value || 0) - minimum) / range * 94
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+}
+const financingBalancePoints = computed(() => marginBalancePoints((marginSentiment.value.financing_balance || []).map(Number)))
+const securitiesLendingBalancePoints = computed(() => marginBalancePoints((marginSentiment.value.securities_lending_balance || []).map(Number)))
+const marginChangeBars = (values, offset) => {
+  if (!values.length) return []
+  const maxAbs = Math.max(...values.map((value) => Math.abs(Number(value || 0))), 1)
+  const step = 746 / values.length
+  const width = Math.max(2, Math.min(8, step * 0.32))
+  return values.map((value, index) => {
+    const amount = Number(value || 0)
+    const height = Math.abs(amount) / maxAbs * 57
+    return { index, value: amount, x: 36 + index * step + offset * width, y: amount >= 0 ? 75 - height : 75, width, height }
+  })
+}
+const financingChangeBars = computed(() => marginChangeBars(marginSentiment.value.financing_net_buy || [], 0))
+const securitiesLendingChangeBars = computed(() => marginChangeBars(marginSentiment.value.securities_lending_balance_change || [], 1.15))
+const marginHoverX = computed(() => {
+  const count = marginSentiment.value.dates?.length || 0
+  if (hoveredMarginIndex.value === null || !count) return 36
+  return 36 + (count === 1 ? 373 : hoveredMarginIndex.value * 746 / (count - 1))
+})
+const marginHoverData = computed(() => {
+  const index = hoveredMarginIndex.value
+  const dates = marginSentiment.value.dates || []
+  if (!Number.isInteger(index) || !dates[index]) return null
+  const value = (key) => Number(marginSentiment.value[key]?.[index] || 0)
+  return {
+    date: dates[index],
+    financingBalance: value('financing_balance'),
+    securitiesLendingBalance: value('securities_lending_balance'),
+    financingChange: value('financing_net_buy'),
+    securitiesLendingChange: value('securities_lending_balance_change'),
+    marginBalance: value('margin_balance'),
+    financingBuy: value('financing_buy')
+  }
+})
+const marginHoverStyle = computed(() => ({
+  left: `${marginHoverPosition.value.x}px`,
+  top: `${marginHoverPosition.value.y}px`
+}))
+const updateMarginHover = (event) => {
+  const dates = marginSentiment.value.dates || []
+  if (!dates.length) return
+  const svgRect = event.currentTarget.getBoundingClientRect()
+  const chartRatio = Math.max(0, Math.min(1, (event.clientX - svgRect.left - svgRect.width * 0.045) / (svgRect.width * 0.9325)))
+  hoveredMarginIndex.value = Math.round(chartRatio * (dates.length - 1))
+  const cardRect = event.currentTarget.closest('.margin-sentiment-card').getBoundingClientRect()
+  marginHoverPosition.value = {
+    x: Math.max(8, Math.min(cardRect.width - 262, event.clientX - cardRect.left + 14)),
+    y: Math.max(8, Math.min(cardRect.height - 142, event.clientY - cardRect.top + 14))
+  }
+}
+const clearMarginHover = () => {
+  hoveredMarginIndex.value = null
+}
+
+const formatTurnoverTrillion = (amount) => `${(Number(amount || 0) / 1_000_000_000_000).toFixed(2)} 万亿`
+
+const turnoverTooltipData = computed(() => {
+  const index = hoveredTurnoverIndex.value
+  if (index === null || !turnoverTrend.value.days[index]) return null
+  const total = Number(turnoverTrend.value.amounts[index] || 0)
+  const previous = index > 0 ? Number(turnoverTrend.value.amounts[index - 1] || 0) : null
+  const change = previous === null ? 0 : total - previous
+  const changePercent = previous ? change / previous * 100 : 0
+  const isLatestIntraday = index === turnoverTrend.value.days.length - 1 && intradayTurnoverForecast.value.available
+  return {
+    date: turnoverTrend.value.days[index],
+    total: formatTurnoverTrillion(total),
+    sh: formatTurnoverTrillion(turnoverTrend.value.shAmounts[index]),
+    sz: formatTurnoverTrillion(turnoverTrend.value.szAmounts[index]),
+    bj: formatTurnoverTrillion(turnoverTrend.value.bjAmounts[index]),
+    forecast: isLatestIntraday ? formatTurnoverTrillion(intradayTurnoverForecast.value.forecast_amount) : '',
+    changeClass: change > 0 ? 'up' : (change < 0 ? 'down' : 'flat'),
+    changeText: previous === null
+      ? '首个统计日，无前日对比'
+      : `较前日${change > 0 ? '放量' : (change < 0 ? '缩量' : '持平')} ${formatTurnoverTrillion(Math.abs(change))}（${change > 0 ? '+' : ''}${changePercent.toFixed(2)}%）`
+  }
+})
+
+const turnoverTooltipStyle = computed(() => ({
+  left: `${turnoverTooltipPosition.value.x}px`,
+  top: `${turnoverTooltipPosition.value.y}px`
+}))
+
+const latestTurnoverAmount = computed(() => {
+  const amounts = turnoverTrend.value.amounts
+  return amounts.length ? amounts[amounts.length - 1] : 0
+})
+
+const turnoverIsActive = computed(() => latestTurnoverAmount.value >= turnoverTrend.value.threshold)
+
+const latestTurnoverText = computed(() => {
+  if (!latestTurnoverAmount.value) return '成交额数据待更新'
+  const amountInTrillion = latestTurnoverAmount.value / 1_000_000_000_000
+  if (turnoverTrend.value.latestIsProvisional) {
+    const asOf = String(turnoverTrend.value.latestAsOf).slice(11, 16)
+    return `${amountInTrillion.toFixed(2)} 万亿 · 盘中累计${asOf ? `（截至 ${asOf}）` : ''}`
+  }
+  return `${amountInTrillion.toFixed(2)} 万亿 · ${turnoverIsActive.value ? '交易活跃' : '交易冷清'}`
 })
 
 const emotionLegendPageCount = computed(() => (
@@ -823,7 +1121,14 @@ const currentEmotionPhase = computed(() => {
     : point
 
   const fallbackStatus = emotionGranularity.value === 'daily'
-    ? marketData.value.sentiment?.emotion_phase?.data_status
+    ? (ec?.intraday_snapshot
+        ? {
+            emotion_cycle_date: ec.intraday_snapshot.date,
+            trade_date: ec.intraday_snapshot.date,
+            is_stale: false,
+            is_temporary: true
+          }
+        : marketData.value.sentiment?.emotion_phase?.data_status)
     : null
 
   return resolveEmotionPhaseDetail(point, prevPoint, emotionGranularity.value, fallbackStatus)
@@ -891,7 +1196,7 @@ const toggleShowAllIndices = async () => {
 const loadAllIndices = async () => {
   try {
     const response = await axios.get(`${API_BASE}/market/indices`, {
-      params: { all: true }
+      params: { all: true, _ts: Date.now() }
     })
     marketData.value.allIndices = response.data.indices || []
   } catch (error) {
@@ -900,14 +1205,18 @@ const loadAllIndices = async () => {
 }
 
 // 加载大盘数据
-const loadMarketData = async () => {
+const loadMarketData = async (retryCount = 0) => {
   loading.value = true
   try {
+    const refreshParams = { _ts: Date.now() }
     // 并行请求指数数据和涨跌统计数据
-    const [indicesRes, sentimentRes] = await Promise.all([
-      axios.get(`${API_BASE}/market/indices`, { params: { all: true } }),
-      axios.get(`${API_BASE}/market/sentiment`)
+    const [indicesRes, sentimentRes, marginRes] = await Promise.all([
+      axios.get(`${API_BASE}/market/indices`, { params: { all: true, ...refreshParams } }),
+      axios.get(`${API_BASE}/market/sentiment`, { params: refreshParams }),
+      axios.get(`${API_BASE}/market/margin-sentiment`, { params: { days: 30, ...refreshParams } })
     ])
+
+    marginSentiment.value = marginRes.data || { available: false, dates: [], latest: null }
 
     marketData.value = {
       indices: indicesRes.data.indices || [],
@@ -924,12 +1233,24 @@ const loadMarketData = async () => {
       await nextTick()
       setTimeout(() => renderSentimentCurveChart(), 60)
     }
+    if (turnoverTrend.value.days.length) {
+      await nextTick()
+      setTimeout(() => renderTurnoverTrendChart(), 60)
+    }
 
     // 加载情绪周期数据
     await loadEmotionCycle()
 
   } catch (error) {
     console.error('加载大盘数据失败:', error)
+    // 前后端容器同时重启时，前端可能比后端更早就绪；短暂重试避免首页图表永久空白。
+    if (retryCount < 3) {
+      if (marketDataRetryTimer) window.clearTimeout(marketDataRetryTimer)
+      marketDataRetryTimer = window.setTimeout(() => {
+        marketDataRetryTimer = null
+        loadMarketData(retryCount + 1)
+      }, 2_000)
+    }
   } finally {
     loading.value = false
   }
@@ -954,6 +1275,14 @@ const loadEmotionCycle = async () => {
     console.error('加载情绪周期失败:', error)
   }
 }
+
+const intradayEmotionHint = computed(() => {
+  const snapshot = emotionCycleData.value?.intraday_snapshot
+  if (!snapshot?.is_temporary) return ''
+  const asOf = String(snapshot.as_of || '').slice(0, 16)
+  const total = Number(snapshot.total_stocks || 0).toLocaleString()
+  return `\u76d8\u4e2d\u4e34\u65f6\u60c5\u7eea\uff1a${asOf}\uff0c${total}\u53ea\u80a1\u7968\uff0c\u57fa\u4e8eQMT 5\u5206\u949f\u884c\u60c5\uff1b\u6536\u76d8\u540e\u4ee5\u6b63\u5f0f\u65e5\u7ebf\u7ed3\u679c\u4e3a\u51c6\u3002`
+})
 
 const changeEmotionGranularity = async (granularity) => {
   if (emotionGranularity.value === granularity) return
@@ -1000,6 +1329,24 @@ const clearEmotionHover = () => {
   hoveredEmotionIndex.value = null
 }
 
+const selectSentimentPoint = (event) => {
+  const days = emotionCurve30d.value.days
+  if (!days.length) return
+  const rect = event.currentTarget.getBoundingClientRect()
+  const plotLeft = 44
+  const plotRight = 18
+  const usableWidth = Math.max(1, rect.width - plotLeft - plotRight)
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - plotLeft) / usableWidth))
+  const dataIndex = Math.round(ratio * (days.length - 1))
+  selectedSentimentIndex.value = dataIndex
+  sentimentCurveInstance.value?.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex })
+}
+
+const clearSelectedSentimentPoint = () => {
+  selectedSentimentIndex.value = null
+  sentimentCurveInstance.value?.dispatchAction({ type: 'hideTip' })
+}
+
 const renderSentimentCurveChart = () => {
   if (!sentimentCurveChart.value || !emotionCurve30d.value.days.length) return
 
@@ -1026,12 +1373,15 @@ const renderSentimentCurveChart = () => {
     animation: false,
     tooltip: {
       trigger: 'axis',
+      // 点击曲线后保留当天数据，便于逐日复盘；移动到其他日期时同步切换。
+      triggerOn: 'mousemove|click',
+      alwaysShowContent: true,
       backgroundColor: 'rgba(13, 18, 29, 0.94)',
       borderColor: '#26324d',
       textStyle: { color: '#eef3ff' },
       formatter: (params) => {
         const idx = params?.[0]?.dataIndex ?? 0
-        const lines = [`<div style="margin-bottom:6px;font-weight:700;">${formatTrendDate(days[idx])}</div>`]
+        const lines = [`<div style="margin-bottom:6px;font-weight:700;">${days[idx]}</div>`]
         params.forEach((item) => {
           const rawSeries = raw[item.seriesId] || []
           const rawVal = rawSeries[idx] ?? 0
@@ -1114,6 +1464,164 @@ const renderSentimentCurveChart = () => {
 }
 
 // 渲染情绪周期图表
+const handleTurnoverHover = (event) => {
+  const days = turnoverTrend.value.days
+  if (!days.length) return
+  const rect = event.currentTarget.getBoundingClientRect()
+  const plotLeft = 56
+  const plotRight = 18
+  const usableWidth = Math.max(1, rect.width - plotLeft - plotRight)
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - plotLeft) / usableWidth))
+  hoveredTurnoverIndex.value = Math.round(ratio * (days.length - 1))
+
+  const tooltipWidth = 230
+  const tooltipHeight = 170
+  const pointerX = event.clientX - rect.left
+  const pointerY = event.clientY - rect.top
+  turnoverTooltipPosition.value = {
+    x: Math.max(8, Math.min(rect.width - tooltipWidth - 8, pointerX + 14)),
+    y: pointerY > rect.height * 0.56 ? Math.max(8, pointerY - tooltipHeight) : Math.min(rect.height - tooltipHeight - 8, pointerY + 14)
+  }
+}
+
+const clearTurnoverHover = () => {
+  hoveredTurnoverIndex.value = null
+}
+
+const renderTurnoverTrendChart = () => {
+  if (!turnoverTrendChart.value || !turnoverTrend.value.days.length) return
+  if (turnoverTrendInstance.value) turnoverTrendInstance.value.dispose()
+
+  turnoverTrendInstance.value = echarts.init(turnoverTrendChart.value)
+  const { days, amounts, shAmounts, szAmounts, bjAmounts, threshold } = turnoverTrend.value
+  const shAmountsInBillion = shAmounts.map((value) => value / 100_000_000)
+  const szAmountsInBillion = szAmounts.map((value) => value / 100_000_000)
+  const bjAmountsInBillion = bjAmounts.map((value) => value / 100_000_000)
+  const thresholdInBillion = threshold / 100_000_000
+  const forecast = intradayTurnoverForecast.value
+  const forecastAmountInBillion = forecast.available ? Number(forecast.forecast_amount || 0) / 100_000_000 : 0
+  const forecastRemainingInBillion = amounts.map((amount, index) => (
+    index === amounts.length - 1 && forecastAmountInBillion > amount / 100_000_000
+      ? forecastAmountInBillion - amount / 100_000_000
+      : 0
+  ))
+  const forecastMarkPoint = forecastRemainingInBillion.some((value) => value > 0)
+    ? [{
+        name: '预计全天',
+        coord: [days[days.length - 1], forecastAmountInBillion],
+        value: forecastAmountInBillion,
+        itemStyle: { color: '#facc15' }
+      }]
+    : []
+  const turnoverExtrema = amounts
+    .map((amount, index) => ({ index, value: Number(amount) / 100_000_000 }))
+    .filter((item) => Number.isFinite(item.value))
+  if (!turnoverExtrema.length) return
+  const minTurnover = turnoverExtrema.reduce((min, item) => item.value < min.value ? item : min, turnoverExtrema[0])
+  const maxTurnover = turnoverExtrema.reduce((max, item) => item.value > max.value ? item : max, turnoverExtrema[0])
+  const turnoverExtremaMarkPoints = [
+    { name: '最低值', coord: [days[minTurnover.index], minTurnover.value], value: minTurnover.value, itemStyle: { color: '#60a5fa' } },
+    { name: '最高值', coord: [days[maxTurnover.index], maxTurnover.value], value: maxTurnover.value, itemStyle: { color: '#fbbf24' } }
+  ]
+  const changeDirections = amounts.map((amount, index) => {
+    if (index === 0) return 'flat'
+    return amount > amounts[index - 1] ? 'up' : (amount < amounts[index - 1] ? 'down' : 'flat')
+  })
+  const segmentColors = {
+    up: ['#ef4444', '#f97316', '#fca5a5'],
+    down: ['#16a34a', '#22c55e', '#86efac'],
+    flat: ['#64748b', '#94a3b8', '#cbd5e1']
+  }
+  const segmentColor = (index, segmentIndex) => segmentColors[changeDirections[index]][segmentIndex]
+  turnoverTrendInstance.value.setOption({
+    animation: false,
+    tooltip: {
+      trigger: 'axis', backgroundColor: 'rgba(13, 18, 29, 0.94)', borderColor: '#26324d', textStyle: { color: '#eef3ff' },
+      formatter: (params) => {
+        const item = params?.[0]
+        if (!item) return ''
+        const index = item.dataIndex
+        const value = Number(amounts[index] || 0) / 100_000_000
+        const active = value >= thresholdInBillion
+        const previous = index > 0 ? Number(amounts[index - 1] || 0) : null
+        const change = previous === null ? 0 : Number(amounts[index] || 0) - previous
+        const changePercent = previous ? change / previous * 100 : 0
+        const changeText = previous === null
+          ? '首个统计日，无前日对比'
+          : `较前日${change > 0 ? '放量' : (change < 0 ? '缩量' : '持平')} ${(Math.abs(change) / 1000000000000).toFixed(2)} 万亿（${change > 0 ? '+' : ''}${changePercent.toFixed(2)}%）`
+        const changeColor = change > 0 ? '#f87171' : (change < 0 ? '#4ade80' : '#cbd5e1')
+        const markets = [
+          { label: '沪市', value: shAmounts[index], color: segmentColor(index, 0) },
+          { label: '深市', value: szAmounts[index], color: segmentColor(index, 1) },
+          { label: '北交所', value: bjAmounts[index], color: segmentColor(index, 2) }
+        ]
+        const marketLines = markets.map((market) => `
+          <div style="display:flex;justify-content:space-between;gap:26px;margin-top:4px;">
+            <span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${market.color};margin-right:6px;"></i>${market.label}</span>
+            <b>${(Number(market.value || 0) / 10000).toFixed(2)} 万亿</b>
+          </div>`).join('')
+        return `<div style="font-weight:700;margin-bottom:6px;">${formatTrendDate(days[index])}</div><div style="display:flex;justify-content:space-between;gap:26px;border-bottom:1px solid #334155;padding-bottom:6px;"><span>三市合计</span><b>${(value / 10000).toFixed(2)} 万亿</b></div>${marketLines}<div style="margin-top:7px;color:${changeColor};">${changeText}</div><div style="margin-top:4px;color:${active ? '#86efac' : '#fda4af'};">${active ? '交易活跃，可交易环境' : '低于 2 万亿：交易冷清，赚钱难度极大'}</div>`
+      }
+    },
+    grid: { left: 34, right: 18, top: 48, bottom: 30, containLabel: true },
+    xAxis: { type: 'category', data: days, axisLine: { lineStyle: { color: '#d7def2' } }, axisLabel: { color: '#8a97b8', fontSize: 10, interval: Math.max(0, Math.floor(days.length / 6) - 1), formatter: formatTrendDate } },
+    yAxis: { type: 'value', axisLabel: { color: '#8a97b8', fontSize: 10, formatter: (value) => `${(value / 10000).toFixed(1)}万亿` }, splitLine: { lineStyle: { color: 'rgba(140, 155, 187, 0.18)', type: 'dashed' } } },
+    series: [
+      {
+        name: '沪市', type: 'bar', stack: '三市成交额', barMaxWidth: 24, data: shAmountsInBillion,
+        itemStyle: { color: (item) => segmentColor(item.dataIndex, 0), borderRadius: [0, 0, 0, 0] }
+      },
+      {
+        name: '深市', type: 'bar', stack: '三市成交额', barMaxWidth: 24, data: szAmountsInBillion,
+        itemStyle: { color: (item) => segmentColor(item.dataIndex, 1), borderRadius: [0, 0, 0, 0] }
+      },
+      {
+        name: '北交所', type: 'bar', stack: '三市成交额', barMaxWidth: 24, data: bjAmountsInBillion,
+        itemStyle: { color: (item) => segmentColor(item.dataIndex, 2), borderRadius: [4, 4, 0, 0] },
+        markLine: { symbol: 'none', lineStyle: { color: '#facc15', type: 'dashed', width: 2 }, label: { color: '#fef3c7', formatter: '2万亿交易活跃底线' }, data: [{ yAxis: thresholdInBillion }] },
+        markPoint: {
+          symbol: 'circle',
+          symbolSize: 7,
+          label: {
+            show: true,
+            position: 'top',
+            distance: 7,
+            color: '#f8fafc',
+            fontSize: 11,
+            fontWeight: 700,
+            backgroundColor: 'rgba(15, 23, 42, 0.88)',
+            borderRadius: 3,
+            padding: [3, 5],
+            formatter: ({ name, value }) => `${name} ${(Number(value) / 10000).toFixed(2)}万亿`
+          },
+          data: turnoverExtremaMarkPoints
+        }
+      },
+      {
+        name: '预计剩余成交额（虚拟）', type: 'bar', stack: '三市成交额', barMaxWidth: 24, data: forecastRemainingInBillion,
+        itemStyle: { color: 'rgba(250, 204, 21, 0.26)', borderColor: '#facc15', borderType: 'dashed', borderWidth: 1, borderRadius: [4, 4, 0, 0] },
+        markPoint: {
+          symbol: 'diamond',
+          symbolSize: 9,
+          label: {
+            show: true,
+            position: 'top',
+            distance: 7,
+            color: '#fef3c7',
+            fontSize: 11,
+            fontWeight: 700,
+            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+            borderRadius: 3,
+            padding: [3, 5],
+            formatter: ({ value }) => `预计全天 ${(Number(value) / 10000).toFixed(2)}万亿`
+          },
+          data: forecastMarkPoint
+        }
+      }
+    ]
+  })
+}
+
 /* const renderEmotionCycleChart = () => {
   if (!emotionCycleChart.value || !emotionCycleData.value || emotionCycleData.value.error) return
 
@@ -1685,6 +2193,9 @@ const getScoreClass = (score) => {
 // 窗口大小变化处理
 const handleResize = () => {
   try {
+    if (turnoverTrendInstance.value) {
+      turnoverTrendInstance.value.resize()
+    }
     if (sentimentCurveInstance.value) {
       sentimentCurveInstance.value.resize()
     }
@@ -1698,11 +2209,33 @@ const handleResize = () => {
 
 onMounted(() => {
   loadMarketData()
+  marketRefreshTimer = window.setInterval(() => {
+    loadMarketData()
+  }, 60 * 1000)
+  emotionRefreshTimer = window.setInterval(() => {
+    loadEmotionCycle()
+  }, 60 * 1000)
   window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
+  if (marketRefreshTimer) {
+    window.clearInterval(marketRefreshTimer)
+    marketRefreshTimer = null
+  }
+  if (emotionRefreshTimer) {
+    window.clearInterval(emotionRefreshTimer)
+    emotionRefreshTimer = null
+  }
+  if (marketDataRetryTimer) {
+    window.clearTimeout(marketDataRetryTimer)
+    marketDataRetryTimer = null
+  }
   window.removeEventListener('resize', handleResize)
+  if (turnoverTrendInstance.value) {
+    turnoverTrendInstance.value.dispose()
+    turnoverTrendInstance.value = null
+  }
   if (emotionCycleInstance.value) {
     try {
       emotionCycleInstance.value.dispose()
@@ -2116,6 +2649,42 @@ onUnmounted(() => {
 .emotion-curve-chart {
   width: 100%;
   min-height: 220px;
+  cursor: crosshair;
+}
+
+.sentiment-click-details {
+  margin: 4px 0 2px;
+  padding: 9px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+}
+
+.sentiment-click-details-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.sentiment-click-details-header strong { color: #1e3a8a; }
+.sentiment-click-details-header span { color: #64748b; }
+.sentiment-click-details-header button {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+}
+
+.sentiment-click-details-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px 10px;
 }
 
 .distribution-wrapper {
@@ -2222,8 +2791,273 @@ onUnmounted(() => {
 }
 
 /* 情绪周期 */
+.turnover-trend-section {
+  margin: 0 0 30px;
+  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #20252f 0%, #171c26 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 40px rgba(10, 14, 24, 0.28);
+}
+
+.turnover-trend-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.turnover-trend-header p {
+  margin: 6px 0 0;
+  color: #b8c4e5;
+  font-size: 13px;
+}
+
+.turnover-trend-status {
+  white-space: nowrap;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.turnover-trend-status.active { background: rgba(22, 163, 74, 0.22); color: #86efac; }
+.turnover-trend-status.cold { background: rgba(220, 38, 38, 0.22); color: #fda4af; }
+.turnover-forecast-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 8px;
+  background: rgba(30, 64, 175, 0.12);
+  color: #bfdbfe;
+  font-size: 12px;
+}
+.turnover-forecast-row strong { color: #fef08a; }
+.turnover-forecast-row.unavailable { border-color: rgba(148, 163, 184, 0.22); background: rgba(71, 85, 105, 0.14); color: #cbd5e1; }
+.turnover-trend-chart-wrap { position: relative; height: 285px; width: 100%; }
+.turnover-trend-chart { height: 100%; width: 100%; }
+.turnover-chart-tooltip {
+  position: absolute;
+  z-index: 20;
+  min-width: 210px;
+  padding: 10px 12px;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  background: rgba(13, 18, 29, 0.97);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+  color: #e2e8f0;
+  font-size: 12px;
+  pointer-events: none;
+}
+.turnover-tooltip-title { margin-bottom: 7px; color: #fff; font-size: 13px; font-weight: 800; }
+.turnover-tooltip-row { display: flex; justify-content: space-between; gap: 24px; margin-top: 4px; }
+.turnover-tooltip-row.total { padding-bottom: 6px; border-bottom: 1px solid #334155; color: #fff; }
+.turnover-tooltip-row.forecast { color: #fef08a; font-weight: 700; }
+.turnover-tooltip-row strong { color: #f8fafc; }
+.turnover-tooltip-marker { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; }
+.turnover-tooltip-marker.sh { background: #ef4444; }
+.turnover-tooltip-marker.sz { background: #f97316; }
+.turnover-tooltip-marker.bj { background: #fca5a5; }
+.turnover-tooltip-change { margin-top: 8px; font-weight: 700; }
+.turnover-tooltip-change.up { color: #f87171; }
+.turnover-tooltip-change.down { color: #4ade80; }
+.turnover-tooltip-change.flat { color: #cbd5e1; }
+
 .emotion-cycle-section {
   margin-bottom: 30px;
+}
+
+.margin-sentiment-section {
+  margin-bottom: 22px;
+}
+
+.margin-sentiment-note {
+  margin: 4px 0 0;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 12px;
+}
+
+.margin-sentiment-date {
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.margin-sentiment-card,
+.margin-sentiment-empty {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  background: #1b2431;
+}
+
+.margin-sentiment-card {
+  position: relative;
+  padding: 14px 16px 10px;
+}
+
+.margin-sentiment-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.margin-sentiment-metrics div {
+  display: grid;
+  gap: 5px;
+}
+
+.margin-sentiment-metrics span {
+  color: #9fb0c8;
+  font-size: 12px;
+}
+
+.margin-sentiment-metrics strong {
+  color: #f8fafc;
+  font-size: 20px;
+}
+
+.margin-sentiment-metrics .positive strong { color: #fb7185; }
+.margin-sentiment-metrics .negative strong { color: #4ade80; }
+
+.margin-chart-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.margin-chart-title span:last-child {
+  color: #8191a8;
+}
+
+.margin-balance-chart,
+.margin-change-chart {
+  display: block;
+  width: 100%;
+  height: 150px;
+  margin-top: 4px;
+}
+
+.margin-balance-chart text,
+.margin-change-chart text {
+  fill: #94a3b8;
+  font-size: 11px;
+}
+
+.margin-axis-line,
+.margin-zero-line {
+  stroke: #64748b;
+}
+
+.margin-zero-line {
+  stroke-dasharray: 4 4;
+}
+
+.margin-hover-line {
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+
+.margin-hover-surface {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.financing-balance-line {
+  stroke: #fb7185;
+  stroke-width: 2.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.securities-lending-line {
+  stroke: #60a5fa;
+  stroke-width: 2.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.margin-bar-up { fill: #fb7185; }
+.margin-bar-down { fill: #4ade80; }
+.lending-bar-up { fill: #60a5fa; }
+.lending-bar-down { fill: #a78bfa; }
+
+.margin-chart-legend {
+  display: flex;
+  gap: 16px;
+  color: #b8c4d6;
+  font-size: 11px;
+}
+
+.margin-chart-legend span::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  background: currentColor;
+}
+
+.margin-chart-legend .financing { color: #fb7185; }
+.margin-chart-legend .lending { color: #60a5fa; }
+
+.margin-hover-tooltip {
+  position: absolute;
+  z-index: 4;
+  width: 250px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.97);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.36);
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.margin-hover-date {
+  margin-bottom: 7px;
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.margin-hover-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 12px;
+}
+
+.margin-hover-grid span {
+  display: flex;
+  flex-direction: column;
+  color: #9fb0c8;
+}
+
+.margin-hover-grid b {
+  color: #f8fafc;
+  font-size: 13px;
+}
+
+.margin-hover-grid .positive b { color: #fb7185; }
+.margin-hover-grid .negative b { color: #4ade80; }
+
+.margin-sentiment-axis {
+  display: flex;
+  justify-content: space-between;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.margin-sentiment-empty {
+  padding: 18px;
+  color: #94a3b8;
+  font-size: 13px;
 }
 
 .emotion-phase-card {
@@ -2271,6 +3105,16 @@ onUnmounted(() => {
   margin-top: 6px;
   font-size: 12px;
   color: #fef08a;
+}
+
+.emotion-intraday-note {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(96, 165, 250, 0.6);
+  border-radius: 7px;
+  background: rgba(30, 64, 175, 0.24);
+  color: #dbeafe;
+  font-size: 12px;
 }
 
 .phase-ice {
@@ -2692,6 +3536,16 @@ onUnmounted(() => {
 }
 
 @media (max-width: 900px) {
+  .margin-sentiment-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .margin-chart-title {
+    flex-direction: column;
+    gap: 2px;
+  }
+
   .trend-bars {
     grid-template-columns: repeat(4, minmax(44px, 1fr));
     row-gap: 10px;

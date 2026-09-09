@@ -126,7 +126,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 
@@ -305,14 +305,14 @@ const formatChangePct = (pct) => {
 const formatAmount = (amount) => {
   if (amount === null || amount === undefined) return '-'
   const value = parseFloat(amount)
-  // 后端返回的成交额单位是万元，需要转换为亿元
-  const amountInYuan = value * 10000 // 转换为元
-  if (amountInYuan >= 100000000) {
-    return (amountInYuan / 100000000).toFixed(2) + '亿'
-  } else if (amountInYuan >= 10000) {
-    return (amountInYuan / 10000).toFixed(2) + '万'
+  if (!Number.isFinite(value)) return '-'
+  // 股票列表接口返回的成交额单位为元，直接按元换算展示。
+  if (value >= 100000000) {
+    return (value / 100000000).toFixed(2) + '亿'
+  } else if (value >= 10000) {
+    return (value / 10000).toFixed(2) + '万'
   }
-  return amountInYuan.toFixed(2)
+  return value.toFixed(2)
 }
 
 // 获取涨跌样式类
@@ -325,8 +325,19 @@ const getChangeClass = (pct) => {
 }
 
 // 组件挂载时加载数据
+let intradayRefreshTimer = null
+
 onMounted(() => {
   loadStocks()
+  // The list is backed by five-minute bars during the trading session.  Keep
+  // an open page fresh without requiring the user to manually refresh it.
+  intradayRefreshTimer = window.setInterval(loadStocks, 60 * 1000)
+})
+
+onUnmounted(() => {
+  if (intradayRefreshTimer) {
+    window.clearInterval(intradayRefreshTimer)
+  }
 })
 </script>
 

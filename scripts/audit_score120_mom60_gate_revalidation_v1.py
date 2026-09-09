@@ -55,6 +55,8 @@ def _load_signals(start: str, end: str) -> pd.DataFrame:
         d[col] = pd.to_numeric(d.get(col), errors="coerce")
     d = d[(d["entry_date"] >= pd.Timestamp(start)) & (d["entry_date"] <= pd.Timestamp(end))].copy()
     signal = d[(d["sector_diffusion_score"] >= 65.0) & (d["m30_close_above_ma20"] >= 0.0)].copy()
+    signal["sector_gate_source"] = "diff65"
+    signal["sector_gate_rule"] = "sector_diffusion>=65"
     signal = signal.dropna(subset=["entry_date", "policy_exit_date", "net_ret", "index_mom60"])
     return signal.sort_values(["entry_date", "rank_key", "amount_rank"], ascending=[True, False, False]).reset_index(drop=True)
 

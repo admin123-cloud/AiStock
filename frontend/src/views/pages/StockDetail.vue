@@ -175,16 +175,16 @@
           <tbody>
             <tr v-for="(item, index) in klineData.data.slice(-20).reverse()" :key="index">
               <td>{{ formatTradeDate(item.date || item.datetime) }}</td>
-              <td>{{ item.open }}</td>
-              <td>{{ item.high }}</td>
-              <td>{{ item.low }}</td>
+              <td>{{ formatPrice(item.open) }}</td>
+              <td>{{ formatPrice(item.high) }}</td>
+              <td>{{ formatPrice(item.low) }}</td>
               <td
                 :class="{
                   'up': item.change_pct > 0,
                   'down': item.change_pct < 0
                 }"
               >
-                {{ item.close }}
+                {{ formatPrice(item.close) }}
               </td>
               <td>{{ formatNumber(item.volume) }}</td>
               <td>{{ formatNumber(item.amount) }}</td>
@@ -195,7 +195,7 @@
                 }"
               >
                 <template v-if="item.change_pct !== undefined && item.change_pct !== null && item.change_pct !== 0">
-                  {{ item.change_pct.toFixed(2) + '%' }}
+                  {{ formatPercent(item.change_pct) }}
                 </template>
                 <template v-else-if="item.open && item.close">
                   {{ ((item.close - item.open) / item.open * 100).toFixed(2) + '%' }}
@@ -249,7 +249,6 @@ const previousRoute = ref(null)
 const loading = ref(false)
 const stockInfo = ref(null)
 const loadingNav = ref(false)
-const stockList = ref([])
 
 const klineStatsLoading = ref(false)
 const klineStats = ref(null)
@@ -310,17 +309,20 @@ const loadTradeMarkersFromRoute = () => {
 
 // 加载股票基本信息
 const loadStockInfo = async () => {
+  const targetCode = code.value
   loading.value = true
   try {
-    const response = await axios.get(`${API_BASE}/stocks/${code.value}`)
+    const response = await axios.get(`${API_BASE}/stocks/${targetCode}`)
+    if (targetCode !== code.value) return
     stockInfo.value = response.data
     console.log('股票信息:', response.data)
     console.log('股票状态:', response.data.status)
   } catch (error) {
+    if (targetCode !== code.value) return
     console.error('加载股票信息失败:', error)
     stockInfo.value = null
   } finally {
-    loading.value = false
+    if (targetCode === code.value) loading.value = false
   }
 }
 
@@ -444,14 +446,30 @@ const formatDate = (date) => {
   return date.toISOString().substring(0, 10)
 }
 
+const toFiniteNumber = (value) => {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
+const formatPrice = (value) => {
+  const num = toFiniteNumber(value)
+  return num === null ? '-' : num.toFixed(2)
+}
+
+const formatPercent = (value) => {
+  const num = toFiniteNumber(value)
+  return num === null ? '-' : `${num.toFixed(2)}%`
+}
+
 const formatNumber = (num) => {
-  if (num === null || num === undefined) return '-'
-  if (num >= 100000000) {
-    return (num / 100000000).toFixed(2) + '亿'
-  } else if (num >= 10000) {
-    return (num / 10000).toFixed(2) + '万'
+  const value = toFiniteNumber(num)
+  if (value === null) return '-'
+  if (Math.abs(value) >= 100000000) {
+    return (value / 100000000).toFixed(2) + '亿'
+  } else if (Math.abs(value) >= 10000) {
+    return (value / 10000).toFixed(2) + '万'
   }
-  return num.toFixed(2)
+  return value.toFixed(2)
 }
 
 // 返回上一页
@@ -502,59 +520,13 @@ const syncData = async () => {
   }
 }
 
-// 加载股票列表用于导航
-const loadStockList = async () => {
-  try {
-    console.log('开始加载股票列表...')
-    const response = await axios.get(`${API_BASE}/stocks/`, {
-      params: {
-        limit: 10000, // 加载足够多的股票
-        stock_type: 'stock'
-      }
-    })
-    console.log('股票列表加载完成，共', response.data.length, '只股票')
-    // 后端已经按股票代码排序，前端不需要再排序
-    stockList.value = response.data
-    console.log('股票列表排序完成，前10只:', stockList.value.slice(0, 10).map(s => s.code))
-  } catch (error) {
-    console.error('加载股票列表失败:', error)
-  }
-}
-
-// 导航到上一只股票
-const navigateToPrev = async () => {
+const navigateToAdjacent = async (direction) => {
   if (loadingNav.value) return
-  
   loadingNav.value = true
   try {
-    // 确保股票列表已加载
-    if (stockList.value.length === 0) {
-      await loadStockList()
-    }
-    
-    // 查找当前股票在列表中的索引
-    const currentIndex = stockList.value.findIndex(item => item.code === code.value)
-    console.log('当前股票代码:', code.value, '当前索引:', currentIndex, '股票总数:', stockList.value.length)
-    
-    // 确保找到了当前股票
-    if (currentIndex === -1) {
-      console.error('当前股票不在股票列表中:', code.value)
-      return
-    }
-    
-    if (currentIndex > 0) {
-      const prevStock = stockList.value[currentIndex - 1]
-      console.log('切换到上一只股票:', prevStock.code, prevStock.name)
-      // 确保路由跳转能够正确执行
-      try {
-        await router.push(`/stock/${prevStock.code}`)
-        console.log('路由跳转成功')
-      } catch (routerError) {
-        console.error('路由跳转失败:', routerError)
-      }
-    } else {
-      console.log('已经是第一只股票')
-    }
+    const response = await axios.get(`${API_BASE}/stocks/${code.value}/navigation`)
+    const target = response.data?.[direction]
+    if (target?.code) await router.push(`/stock/${target.code}`)
   } catch (error) {
     console.error('导航失败:', error)
   } finally {
@@ -562,46 +534,8 @@ const navigateToPrev = async () => {
   }
 }
 
-// 导航到下一只股票
-const navigateToNext = async () => {
-  if (loadingNav.value) return
-  
-  loadingNav.value = true
-  try {
-    // 确保股票列表已加载
-    if (stockList.value.length === 0) {
-      await loadStockList()
-    }
-    
-    // 查找当前股票在列表中的索引
-    const currentIndex = stockList.value.findIndex(item => item.code === code.value)
-    console.log('当前股票代码:', code.value, '当前索引:', currentIndex, '股票总数:', stockList.value.length)
-    
-    // 确保找到了当前股票
-    if (currentIndex === -1) {
-      console.error('当前股票不在股票列表中:', code.value)
-      return
-    }
-    
-    if (currentIndex < stockList.value.length - 1) {
-      const nextStock = stockList.value[currentIndex + 1]
-      console.log('切换到下一只股票:', nextStock.code, nextStock.name)
-      // 确保路由跳转能够正确执行
-      try {
-        await router.push(`/stock/${nextStock.code}`)
-        console.log('路由跳转成功')
-      } catch (routerError) {
-        console.error('路由跳转失败:', routerError)
-      }
-    } else {
-      console.log('已经是最后一只股票')
-    }
-  } catch (error) {
-    console.error('导航失败:', error)
-  } finally {
-    loadingNav.value = false
-  }
-}
+const navigateToPrev = () => navigateToAdjacent('previous')
+const navigateToNext = () => navigateToAdjacent('next')
 
 // 股票所属板块
 const stockBoards = ref([])
@@ -637,8 +571,6 @@ onMounted(() => {
 
   // 监听窗口大小变化，调整图表尺寸
 
-  // 加载股票列表用于导航（在组件挂载时就加载，避免点击切换时的延迟）
-  loadStockList()
   loadTradeMarkersFromRoute()
   
   loadStockInfo()

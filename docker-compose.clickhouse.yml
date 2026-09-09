@@ -2,7 +2,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: aistock-clickhouse
-    restart: "no"
+    restart: unless-stopped
     cpus: "1.5"
     mem_limit: 4g
     memswap_limit: 4g

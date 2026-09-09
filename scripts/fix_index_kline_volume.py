@@ -25,6 +25,8 @@ if project_root not in sys.path:
 
 from data_fetcher.sources.tdxquant import TdxQuantDataSource
 from utils.market_warehouse import clickhouse_client
+from utils.kline_store import filter_trading_day_tuples
+from utils.kline_units import normalize_tdxquant_daily_units
 from utils.logger import get_logger
 
 logger = get_logger("FixIndexKlineVolume")
@@ -94,6 +96,7 @@ def fetch_correct_kline(tdx: TdxQuantDataSource, code: str, start_date: str, end
         if "trade_date" in df.columns:
             # 确保 trade_date 是 date 类型
             df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+        df = normalize_tdxquant_daily_units(df, instrument_type="index")
 
         return df
     except Exception as e:
@@ -177,10 +180,14 @@ def delete_and_insert(client, code: str, df: pd.DataFrame):
 
     if insert_rows:
         try:
+            column_names = ["code", "trade_date", "open", "high", "low", "close", "volume", "amount"]
+            insert_rows = filter_trading_day_tuples("1d", [tuple(row) for row in insert_rows], column_names)
+            if not insert_rows:
+                return 0
             client.insert(
                 "stock.kline_daily",
                 insert_rows,
-                column_names=["code", "trade_date", "open", "high", "low", "close", "volume", "amount"]
+                column_names=column_names
             )
             logger.info(f"  {code}: INSERT {len(insert_rows)} 条")
         except Exception as e:

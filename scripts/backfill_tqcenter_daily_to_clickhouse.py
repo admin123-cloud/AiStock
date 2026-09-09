@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from clickhouse_connect import get_client
 
+from utils.kline_units import normalize_tdxquant_daily_units
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STAGE_TABLE = "kline_daily_tqcenter_2010_stage"
@@ -108,6 +109,16 @@ def load_codes(client, codes_arg: str, limit: int) -> list[str]:
     return codes
 
 
+def load_instrument_types(client, codes: list[str]) -> dict[str, str]:
+    if not codes:
+        return {}
+    code_sql = ",".join(quote_sql(code) for code in codes)
+    rows = client.query(
+        f"SELECT code, type FROM stocks WHERE code IN ({code_sql})"
+    ).result_rows
+    return {str(code).upper(): str(type_ or "stock").lower() for code, type_ in rows}
+
+
 def existing_stage_codes(client, stage_table: str) -> set[str]:
     try:
         rows = client.query(f"SELECT DISTINCT code FROM {stage_table}").result_rows
@@ -123,7 +134,12 @@ def frame_for(data: dict[str, Any], field: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def rows_from_market_data(data: dict[str, Any], batch_codes: list[str], created_at: datetime) -> tuple[list[tuple], dict[str, int]]:
+def rows_from_market_data(
+    data: dict[str, Any],
+    batch_codes: list[str],
+    created_at: datetime,
+    instrument_types: dict[str, str] | None = None,
+) -> tuple[list[tuple], dict[str, int]]:
     close_df = frame_for(data, "Close")
     if close_df.empty:
         return [], {code: 0 for code in batch_codes}
@@ -163,6 +179,10 @@ def rows_from_market_data(data: dict[str, Any], batch_codes: list[str], created_
         one.index = pd.to_datetime(one.index, errors="coerce")
         one = one[~one.index.isna()].sort_index()
         one = one[~one.index.duplicated(keep="last")]
+        one = normalize_tdxquant_daily_units(
+            one,
+            instrument_type=(instrument_types or {}).get(str(code).upper(), "stock"),
+        )
         prev_close = one["close"].shift(1)
         change_amount = (one["close"] - prev_close).fillna(0.0)
         change_pct = ((change_amount / prev_close.replace(0, pd.NA)) * 100).fillna(0.0)
@@ -199,6 +219,7 @@ def fetch_to_stage(args: argparse.Namespace) -> dict[str, Any]:
         client.command(f"TRUNCATE TABLE {args.stage_table}")
 
     codes = load_codes(client, args.codes, args.limit)
+    instrument_types = load_instrument_types(client, codes)
     done_codes = existing_stage_codes(client, args.stage_table) if args.resume else set()
     target_codes = [code for code in codes if code not in done_codes]
     log(f"fetch target codes={len(target_codes)} skipped_existing={len(done_codes)} batch_size={args.batch_size}")
@@ -227,7 +248,12 @@ def fetch_to_stage(args: argparse.Namespace) -> dict[str, Any]:
                 empty_codes.extend(batch_codes)
                 log(f"batch {batch_no}: empty response codes={len(batch_codes)}")
                 continue
-            rows, counts = rows_from_market_data(data, batch_codes, created_at)
+            rows, counts = rows_from_market_data(
+                data,
+                batch_codes,
+                created_at,
+                instrument_types=instrument_types,
+            )
             empty_codes.extend([code for code, count in counts.items() if count == 0])
             if rows:
                 client.insert(args.stage_table, rows, column_names=COLUMNS)
@@ -324,13 +350,25 @@ def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
         client.command(
             f"""
             INSERT INTO kline_daily ({", ".join(COLUMNS)})
-            SELECT {", ".join(COLUMNS)}
-            FROM {args.stage_table}
-            WHERE code IN ({code_sql})
+            SELECT {", ".join("s." + col for col in COLUMNS)}
+            FROM {args.stage_table} AS s
+            INNER JOIN trade_calendar AS c
+                ON c.market = 'SH'
+               AND c.is_trading = 1
+               AND c.trade_date = s.trade_date
+            WHERE s.code IN ({code_sql})
             """
         )
         inserted = client.query(
-            f"SELECT count() FROM {args.stage_table} WHERE code IN ({code_sql})"
+            f"""
+            SELECT count()
+            FROM {args.stage_table} AS s
+            INNER JOIN trade_calendar AS c
+                ON c.market = 'SH'
+               AND c.is_trading = 1
+               AND c.trade_date = s.trade_date
+            WHERE s.code IN ({code_sql})
+            """
         ).first_row[0]
         total_inserted += int(inserted or 0)
         log(f"apply chunk {chunk_no}: inserted={inserted} total_inserted={total_inserted}")

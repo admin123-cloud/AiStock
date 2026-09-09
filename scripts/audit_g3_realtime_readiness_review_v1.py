@@ -4640,7 +4640,11 @@ def _action_checklist_markdown(checklist: pd.DataFrame) -> str:
     return "\n".join(parts).strip()
 
 
-def _ticket_issues(row: dict[str, Any], open_codes: set[str]) -> tuple[list[str], list[str], list[str]]:
+def _ticket_issues(
+    row: dict[str, Any],
+    real_open_codes: set[str],
+    shadow_open_codes: set[str] | None = None,
+) -> tuple[list[str], list[str], list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
     notes: list[str] = []
@@ -4669,8 +4673,11 @@ def _ticket_issues(row: dict[str, Any], open_codes: set[str]) -> tuple[list[str]
         blockers.append("30m 确认未通过或缺失")
     if str(row.get("natural_action") or "") == "skip":
         blockers.append("自然纪律 N1/Nx 标记为跳过")
-    if code in open_codes:
-        blockers.append("真实/影子持仓中已有同票，禁止伪装成独立二槽")
+    shadow_open_codes = shadow_open_codes or set()
+    if code in real_open_codes:
+        blockers.append("真实账户中已有同票，禁止伪装成独立二槽")
+    elif code in shadow_open_codes:
+        warnings.append("影子账户中已有同票；真实账户空仓时不阻断实盘买入提醒，仅提示复核")
 
     if contract_block:
         blockers.append(contract_block)
@@ -4720,10 +4727,14 @@ def _ticket_issues(row: dict[str, Any], open_codes: set[str]) -> tuple[list[str]
     return blockers, warnings, notes
 
 
-def _review_tickets(rows: list[dict[str, Any]], open_codes: set[str]) -> pd.DataFrame:
+def _review_tickets(
+    rows: list[dict[str, Any]],
+    real_open_codes: set[str],
+    shadow_open_codes: set[str] | None = None,
+) -> pd.DataFrame:
     out: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
-        blockers, warnings, notes = _ticket_issues(row, open_codes)
+        blockers, warnings, notes = _ticket_issues(row, real_open_codes, shadow_open_codes)
         item = {
             "rank": idx,
             "code": row.get("code"),
@@ -4889,10 +4900,11 @@ def run() -> dict[str, Any]:
     broker = _broker_snapshot()
     real_holdings = broker.get("holdings") if isinstance(broker.get("holdings"), list) else []
     shadow_holdings = current.get("shadow_ledger") if isinstance(current.get("shadow_ledger"), list) else []
-    open_codes = {str(x.get("code") or "").strip() for x in [*real_holdings, *shadow_holdings] if str(x.get("code") or "").strip()}
+    real_open_codes = {str(x.get("code") or "").strip() for x in real_holdings if str(x.get("code") or "").strip()}
+    shadow_open_codes = {str(x.get("code") or "").strip() for x in shadow_holdings if str(x.get("code") or "").strip()}
 
     next_trade_tickets = current.get("next_trade_buy_tickets") or []
-    ticket_review = _review_tickets(next_trade_tickets, open_codes)
+    ticket_review = _review_tickets(next_trade_tickets, real_open_codes, shadow_open_codes)
     ticket_checklist = _build_ticket_review_checklist(next_trade_tickets, ticket_review)
     holding_review = _review_holdings(real_holdings, shadow_holdings)
     holding_checklist = _build_holding_exit_checklist(holding_review)

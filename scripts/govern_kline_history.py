@@ -379,6 +379,14 @@ def _delete_range(client: Any, table: str, col: str, start_date: date, end_date:
     )
 
 
+def _is_month_partitioned_minute_table(client: Any, table: str) -> bool:
+    row = _query_one(
+        client,
+        f"SELECT partition_key FROM system.tables WHERE database = currentDatabase() AND name = '{_safe_table(table)}'",
+    )
+    return bool(row and "toYYYYMM(datetime)" in str(row[0] or ""))
+
+
 def _repair_bad_ohlc(client: Any, period: str, start_date: date, end_date: date) -> int:
     spec = PERIODS[period]
     table = _safe_table(spec["table"])
@@ -504,6 +512,10 @@ def _delete_partial_zero_source_days(client: Any, start_date: date, end_date: da
 
 def _rebuild_derived(client: Any, period: str, start_date: date, end_date: date, use_final: bool) -> int:
     target = _safe_table(PERIODS[period]["table"])
+    if not _is_month_partitioned_minute_table(client, target):
+        raise RuntimeError(
+            f"refusing to mutate unpartitioned {target}; rebuild it into a monthly-partitioned table first"
+        )
     _delete_range(client, target, "datetime", start_date, end_date)
     source_sql = _derived_aggregate_sql(period, start_date, end_date, use_final)
     client.command(

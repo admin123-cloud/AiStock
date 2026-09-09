@@ -21,6 +21,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -28,21 +29,28 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import APIRouter, Body, Query
 
 from scheduler.trading_calendar import TradingCalendar
+from services.daily_trend_exit_monitor import evaluate_daily_rising_trend_exit, evaluate_intraday_rising_trend_line
+from services.g3_holding_t_daily_review import REVIEW_DIR as HOLDING_T_REVIEW_DIR
+from services.g3_holding_t_daily_review import record_manual_execution, run_daily_review
+from services.g3_holding_t_portfolio_state import confirm_position_action, load_state as load_holding_t_portfolio_state, save_state as save_holding_t_portfolio_state
+from services.runtime_health import read_snapshot
 from utils.config import config as app_config
 from utils.logger import get_logger
 from utils.paths import report_path, runtime_path
+from utils.strategy_contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata
 
 
 router = APIRouter(prefix="/gen3-state-alpha", tags=["G3 State Alpha"])
 logger = get_logger("gen3_state_alpha")
 
-STRATEGY_ID = "g3_final_with_g2_gap_supplement"
-STRATEGY_NAME = "G3 Full Formal Policy"
-STRATEGY_NAME_CN = "G3最终版"
-FINAL_G3_PROFILE = "g3_final_with_g2_gap_supplement"
+FORMAL_G3_CONTRACT = formal_g3_score88_contract()
+STRATEGY_ID = FORMAL_G3_CONTRACT["strategy_id"]
+STRATEGY_NAME = "G3 Institutional Mainwave 30m Volume Breakout and Cash"
+STRATEGY_NAME_CN = "G3机构主升 + 空仓"
+FINAL_G3_PROFILE = STRATEGY_ID
 FINAL_G3_FORMAL_POLICY = "mainwave_hard_le_5_50"
 FINAL_G3_PROFILE_NAME = "G3最终版：二槽主升 + G2空档补位"
-FINAL_G3_PROFILE_NAME = "G3 Full Formal Policy: mainwave_hard_le_5_50"
+FINAL_G3_PROFILE_NAME = "G3机构主升 + 空仓"
 FINAL_G3_LEGACY_BASE_PROFILE = "g3_final_top2_mainwave_sector_exempt_v1"
 FULL_G3_DISABLED_REPLAY_ROUTES = {"panic_repair", "old_g3_route_v3", "g2_gap_supplement"}
 G2_GAP_SUPPLEMENT_LIVE_ENABLED = False
@@ -59,20 +67,33 @@ CURRENT_WAVE_SCAN_DIR = report_path("current_wave_style_candidate_scan_v1")
 PROMOTION_REPORT_DIR = report_path("gen3_promotion_self_test_v1")
 FULL_G3_BACKTEST_ROOT = report_path("g3_final_mom60_position_policy_v1")
 FINAL_G3_BACKTEST_DIR = FULL_G3_BACKTEST_ROOT / FINAL_G3_FORMAL_POLICY
+FINAL_G3_REPLAY_DIR = report_path("g3_formal_unified_five_strategy_contract_v1")
+CURRENT_G3_HISTORICAL_REVIEW_DIR = report_path("g3_mainwave_breakout_historical_review_v1")
 LATEST_G3_PROFILE = FINAL_G3_PROFILE
-HISTORICAL_TRADES_PATH = FINAL_G3_BACKTEST_DIR / "closed_trades.csv"
-SCORE120_CORE_TRADES_PATH = report_path("gen3_score120_core_strategy_v1", "g3_route_execution_mandate_candidate_closed_trades.csv")
+HISTORICAL_TRADES_BASE_PATH = CURRENT_G3_HISTORICAL_REVIEW_DIR / "historical_trades.csv"
+HISTORICAL_TRADES_WITH_OPEN_PATH = report_path(
+    "g3_historical_trades_with_open_positions_v1",
+    "historical_trades_with_open_positions.csv",
+)
+HISTORICAL_TRADES_PATH = HISTORICAL_TRADES_BASE_PATH
+SCORE120_CORE_TRADES_PATH = report_path("gen3_score120_formal_institutional_source_v1", "closed_trades.csv")
 SCORE120_ENTRY_TIMING_DIR = report_path("score120_entry_timing_variants_v1")
 SCORE120_ENTRY_SOURCE_SIGNALS_PATH = SCORE120_ENTRY_TIMING_DIR / "source_signals.csv"
-EQUITY_CURVE_PATH = FINAL_G3_BACKTEST_DIR / "equity_curve.csv"
-MTM_EQUITY_CURVE_PATH = FINAL_G3_BACKTEST_DIR / "mtm_equity_curve.csv"
-PROMOTION_SUMMARY_PATH = FULL_G3_BACKTEST_ROOT / "summary.json"
+SCORE88_REPLAY_DIR = report_path(
+    "g3_recalled_mainwave_contract_v1",
+    "20200101_20260630_breakout_score88_sector2_stop10%_top10",
+)
+SCORE88_REPLAY_SUMMARY_PATH = SCORE88_REPLAY_DIR / "summary.json"
+QMT_NEW_HIGH_BREADTH_PATH = report_path("qmt_new_high_breadth_v1", "new_high_breadth_daily.parquet")
+EQUITY_CURVE_PATH = CURRENT_G3_HISTORICAL_REVIEW_DIR / "two_slot_realised_proxy_curve.csv"
+MTM_EQUITY_CURVE_PATH = CURRENT_G3_HISTORICAL_REVIEW_DIR / "mtm_not_available.csv"
+PROMOTION_SUMMARY_PATH = CURRENT_G3_HISTORICAL_REVIEW_DIR / "summary.json"
 PROMOTION_SUMMARY_CSV_PATH = FULL_G3_BACKTEST_ROOT / "summary.csv"
-FINAL_G3_WINDOW_SUMMARY_PATH = FULL_G3_BACKTEST_ROOT / "window_summary.csv"
+FINAL_G3_WINDOW_SUMMARY_PATH = CURRENT_G3_HISTORICAL_REVIEW_DIR / "window_summary.csv"
 PROMOTION_GATES_PATH = PROMOTION_REPORT_DIR / "gates.csv"
 STRATEGY_REDUCTION_RECOVERY_DIR = report_path("g3_strategy_reduction_recovery_v1")
 NATIVE_BRIDGE_BACKTEST_DIR = report_path("g3_five_strategies_native_bridge_v1")
-FORMAL_UNIFIED_CONTRACT_DIR = report_path("g3_formal_unified_five_strategy_contract_v1")
+FORMAL_UNIFIED_CONTRACT_DIR = FINAL_G3_REPLAY_DIR
 PRACTICAL_FUSION_CONTRACT_DIR = report_path("g3_practical_fusion_contract_v1")
 FIVE_STRATEGY_DISPATCH_CONTRACT_DIR = report_path("g3_formal_five_strategy_dispatch_contract_v1")
 FIVE_STRATEGY_OVERFIT_AUDIT_DIR = report_path("g3_formal_five_strategy_overfit_audit_v1")
@@ -89,6 +110,7 @@ GATE_LAYER_AUDIT_REPORT_PATH = GATE_LAYER_AUDIT_DIR / "REPORT_CN.md"
 OPERATIONS_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "operations_state.json"
 MONITOR_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_monitor_state.json"
 EXIT_MONITOR_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_exit_monitor_state.json"
+DAILY_TREND_EXIT_MONITOR_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "daily_trend_exit_monitor_state.json"
 OBSERVATION_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "observation_scheduler_state.json"
 VERIFICATION_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_verifications.json"
 MONITOR_EVENTS_PATH = STATE_ALPHA_RUNTIME_DIR / "shadow_monitor_events.json"
@@ -107,6 +129,8 @@ PREMARKET_ACTION_ATTEMPTS_PATH = STATE_ALPHA_RUNTIME_DIR / "premarket_action_att
 STRATEGY_TUNING_TASK_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "strategy_tuning_task_reviews.json"
 BROKER_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_state.json"
 BROKER_SYNC_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_sync_state.json"
+HOLDING_TICK_WATCHLIST_PATH = STATE_ALPHA_RUNTIME_DIR / "holding_tick_watchlist.json"
+HOLDING_TICK_ALERT_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "holding_tick_alert_state.json"
 PRETRADE_SMOKE_DIR = report_path("gen3_pretrade_smoke_test_v1")
 PRETRADE_SMOKE_PATH = PRETRADE_SMOKE_DIR / "latest_pretrade_smoke.json"
 PRETRADE_SMOKE_GATES_PATH = PRETRADE_SMOKE_DIR / "latest_pretrade_gates.csv"
@@ -122,11 +146,16 @@ REALTIME_READINESS_REVIEW_SCRIPT = PROJECT_ROOT / "scripts" / "audit_g3_realtime
 LIVE_LAUNCH_PACKET_SCRIPT = PROJECT_ROOT / "scripts" / "build_g3_live_launch_packet_v1.py"
 REFRESH_TASKS: dict[str, dict[str, Any]] = {}
 REFRESH_TASK_LOCK = threading.Lock()
+SHADOW_ENTRY_LOCK = threading.Lock()
+MONITOR_EVENTS_LOCK = threading.Lock()
 _monitor_scheduler: BackgroundScheduler | None = None
 _monitor_job_id = "g3_state_alpha_shadow_monitor"
 _exit_monitor_job_id = "g3_state_alpha_shadow_exit_monitor"
+_daily_trend_exit_monitor_job_id = "g3_state_alpha_daily_trend_exit_monitor"
 _observation_job_id = "g3_state_alpha_observation_snapshot"
+_observation_retry_job_id = "g3_state_alpha_observation_first_bar_retry"
 _broker_sync_job_id = "g3_state_alpha_broker_sync"
+_auto_order_job_id = "g3_state_alpha_auto_order_30m"
 
 
 def _startup_schedulers_enabled() -> bool:
@@ -165,6 +194,11 @@ def _path_status(path: Path) -> dict[str, Any]:
 def _date_text(value: Any) -> str:
     ts = pd.to_datetime(value, errors="coerce")
     return "" if pd.isna(ts) else ts.strftime("%Y-%m-%d")
+
+
+def _formal_observation_date(requested_date: str | None = None) -> str:
+    """Use the actual Shanghai observation day unless an explicit backfill date is supplied."""
+    return _date_text(requested_date) or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
 def _clean_review_text(value: Any, default: str = "") -> str:
@@ -337,9 +371,92 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _qmt_new_high_breadth_environment(summary: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a read-only prior-session breadth annotation for the current batch.
+
+    This deliberately never mutates candidate eligibility, ranking, ticket count,
+    position size, or order permission.  The signal-date/entry-date split makes
+    the data-availability rule explicit: intraday entry may use only the fully
+    completed QMT breadth value from the preceding trading day.
+    """
+    summary = summary if isinstance(summary, dict) else {}
+    entry_date = _date_text(summary.get("entry_date"))
+    observation_date = _date_text(summary.get("decision_date"))
+    base = {
+        "mode": "observation_only",
+        "source": "QMT canonical A-share daily kline breadth",
+        "lag_rule": "use_previous_completed_trade_day_for_intraday_entry",
+        "entry_date": entry_date or None,
+        "observation_date": observation_date or None,
+        "candidate_eligibility_changed": False,
+        "ranking_changed": False,
+        "position_size_changed": False,
+        "order_permission_changed": False,
+        "artifact": _path_status(QMT_NEW_HIGH_BREADTH_PATH),
+    }
+    if not observation_date:
+        return {
+            **base,
+            "available": False,
+            "status": "missing_observation_date",
+            "message": "当前批次缺少信号日，未应用新高扩散度观察。",
+        }
+    if not QMT_NEW_HIGH_BREADTH_PATH.exists():
+        return {
+            **base,
+            "available": False,
+            "status": "missing_breadth_artifact",
+            "message": "QMT 全A新高扩散度产物缺失，未应用环境观察。",
+        }
+    try:
+        frame = pd.read_parquet(QMT_NEW_HIGH_BREADTH_PATH)
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        row = frame.loc[frame["trade_date"] == observation_date]
+        if row.empty:
+            latest = frame["trade_date"].dropna().max() if "trade_date" in frame else None
+            return {
+                **base,
+                "available": False,
+                "status": "observation_date_not_finalized",
+                "latest_finalized_trade_date": latest,
+                "message": "信号日前一交易日的QMT扩散度尚未产出；不使用更早日期替代。",
+            }
+        record = row.iloc[-1]
+        fields = (
+            "eligible_stocks", "nh20_breadth", "nh100_breadth", "nh100_ma5",
+            "nh100_change_1d", "nhall_breadth", "nhall_ma5", "nhall_change_1d",
+            "breakout_environment",
+        )
+        values = {
+            field: (bool(record[field]) if field == "breakout_environment" else _to_float_or_none(record[field]))
+            for field in fields if field in record.index
+        }
+        environment_pass = bool(values.get("breakout_environment"))
+        return {
+            **base,
+            "available": True,
+            "status": "environment_positive" if environment_pass else "environment_negative",
+            "environment_pass": environment_pass,
+            "values": values,
+            "message": (
+                "新高扩散度环境偏正向，仅作为候选解释与后续分组审计，不筛除候选。"
+                if environment_pass
+                else "新高扩散度环境偏弱，仅作为候选解释与后续分组审计，不筛除候选。"
+            ),
+        }
+    except Exception as exc:
+        logger.warning("Failed to read QMT new-high breadth artifact: %s", exc)
+        return {
+            **base,
+            "available": False,
+            "status": "breadth_artifact_read_error",
+            "message": "QMT 新高扩散度产物读取失败，未应用环境观察。",
+        }
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    os.replace(temp_path, path)
 
 
 def _load_premarket_action_attempts() -> list[dict[str, Any]]:
@@ -380,6 +497,16 @@ def _read_csv_df(path: Path) -> pd.DataFrame:
     except Exception:
         logger.exception("Failed to read csv artifact: %s", path)
         return pd.DataFrame()
+
+
+def _historical_trades_path() -> Path:
+    # The current two-mode contract owns the history page.  The integrated
+    # five-strategy/open-position file remains diagnostic evidence only.
+    if HISTORICAL_TRADES_BASE_PATH.exists():
+        return HISTORICAL_TRADES_BASE_PATH
+    if HISTORICAL_TRADES_WITH_OPEN_PATH.exists():
+        return HISTORICAL_TRADES_WITH_OPEN_PATH
+    return HISTORICAL_TRADES_BASE_PATH
 
 
 def _to_float_or_none(value: Any) -> float | None:
@@ -459,9 +586,290 @@ def _row_code(value: Any, fallback: Any = None) -> str:
     return f"{code6}{suffix}"
 
 
+def _first_mainwave_text(row: dict[str, Any], names: list[str]) -> str:
+    for name in names:
+        value = str(row.get(name) or "").strip()
+        if value and value.lower() not in {"nan", "none", "null"}:
+            return value
+    return ""
+
+
+def _is_qmt_sw_sector_text(value: str) -> bool:
+    text = str(value or "").strip()
+    return text.startswith(("qmt:SW", "SW1", "SW2", "SW3", "industry:"))
+
+
+def _is_tdx_mainline_sector_text(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text or _is_qmt_sw_sector_text(text):
+        return False
+    block_exact = {
+        "最近情绪指数",
+        "连续亏损",
+        "ST板块",
+        "退市整理",
+        "融资融券",
+        "转融券标的",
+        "沪股通",
+        "深股通",
+        "MSCI成份",
+        "MSCI中盘",
+        "QFII新进",
+        "保险重仓",
+        "私募重仓",
+        "含可转债",
+        "专精特新",
+        "主营变更",
+        "控制权变更",
+        "近期新高",
+        "历史新高",
+        "近期强势",
+        "最近异动",
+        "活跃股",
+        "昨日上榜",
+        "昨日振荡",
+        "昨高换手",
+        "昨曾跌停",
+        "最近多板",
+        "非周期股",
+        "周期股",
+        "含H股",
+        "专项贷款",
+        "股权转让",
+        "百元股",
+        "低安全分",
+        "上证指数",
+        "深证成指",
+        "创业板指",
+        "科创50",
+        "沪深300",
+        "中证500",
+        "中证1000",
+    }
+    if text in block_exact:
+        return False
+    extra_noise_exact = {
+        "高贝塔值",
+        "高市净率",
+        "低市净率",
+        "高市盈率",
+        "低市盈率",
+        "绩优股",
+        "亏损股",
+        "微利股",
+        "高分红股",
+        "回购计划",
+        "自由现金流",
+        "并购重组股",
+        "久不分红",
+        "预盈预增",
+        "股权激励",
+        "机构调研",
+    }
+    if text in extra_noise_exact:
+        return False
+    block_tokens = [
+        "昨日",
+        "涨停",
+        "跌停",
+        "减持",
+        "低价股",
+        "高价股",
+        "微盘股",
+        "小盘股",
+        "大盘股",
+        "MSCI",
+        "QFII",
+        "重仓",
+        "可转债",
+        "主营变更",
+        "控制权",
+        "专精特新",
+        "新高",
+        "强势",
+        "异动",
+        "活跃股",
+        "换手",
+        "上榜",
+        "振荡",
+        "情绪",
+        "多板",
+        "周期股",
+        "含H股",
+        "专项贷款",
+        "股权转让",
+        "百元股",
+        "安全分",
+        "成份",
+        "成分",
+        "指数",
+    ]
+    if any(token in text for token in block_tokens):
+        return False
+    extra_noise_tokens = [
+        "贝塔",
+        "市净率",
+        "市盈率",
+        "绩优",
+        "亏损股",
+        "微利股",
+        "分红",
+        "回购",
+        "现金流",
+        "并购重组",
+        "不分红",
+        "预盈",
+        "预增",
+        "股权激励",
+        "机构调研",
+    ]
+    if any(token in text for token in extra_noise_tokens):
+        return False
+    province_prefixes = [
+        "北京",
+        "上海",
+        "天津",
+        "重庆",
+        "河北",
+        "河南",
+        "山东",
+        "山西",
+        "江苏",
+        "浙江",
+        "安徽",
+        "福建",
+        "江西",
+        "湖北",
+        "湖南",
+        "广东",
+        "海南",
+        "四川",
+        "贵州",
+        "云南",
+        "陕西",
+        "甘肃",
+        "青海",
+        "内蒙",
+        "广西",
+        "西藏",
+        "宁夏",
+        "新疆",
+        "深圳",
+    ]
+    if text.endswith("板块") and any(text.startswith(prefix) for prefix in province_prefixes):
+        return False
+    return True
+
+
+def _mainwave_sector_identity(row: dict[str, Any]) -> dict[str, str]:
+    sw_name = _first_mainwave_text(row, ["sw_l2_industry_name", "l2_sector_name", "industry"])
+    sw_code = _first_mainwave_text(row, ["sw_l2_industry_code", "l2_sector_code"])
+    tdx_name = _first_mainwave_text(row, ["tdx_mainline_sector_name", "tdx_sector_name", "tdx_industry_name"])
+    tdx_code = _first_mainwave_text(row, ["tdx_mainline_sector_code", "tdx_sector_code", "tdx_industry_code"])
+    sector_source = _first_mainwave_text(row, ["sector_source", "mainline_sector_source"])
+    existing_sector = _first_mainwave_text(row, ["sector_name"])
+    existing_code = _first_mainwave_text(row, ["sector_code"])
+    if not tdx_name and sector_source == "tdx" and _is_tdx_mainline_sector_text(existing_sector):
+        tdx_name = existing_sector
+        tdx_code = existing_code or tdx_code
+    if not tdx_name:
+        tags = _first_mainwave_text(row, ["tdx_mainline_tags", "tdx_block_names", "tdx_concept_names"])
+        for token in re.split(r"[,|/，、]+", tags):
+            token = token.strip()
+            if _is_tdx_mainline_sector_text(token):
+                tdx_name = token
+                break
+    if _is_qmt_sw_sector_text(tdx_name):
+        tdx_name = ""
+        tdx_code = ""
+    return {
+        "mainline_sector_name": tdx_name,
+        "mainline_sector_code": tdx_code,
+        "mainline_sector_source": "tdx" if tdx_name else "sw_fallback",
+        "sw_industry_name": sw_name,
+        "sw_industry_code": sw_code,
+        "display_sector_name": tdx_name or "未映射TDX主线",
+        "display_sector_code": tdx_code if tdx_name else "",
+    }
+
+
+def _tdx_mainline_map_for_codes(codes: list[str]) -> dict[str, dict[str, str]]:
+    normalized = sorted({_row_code(code) for code in codes if _row_code(code)})
+    if not normalized:
+        return {}
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        if not clickhouse_table_exists("source_sector_stocks"):
+            return {}
+        quoted = _quote_sql_list(normalized)
+        if not quoted:
+            return {}
+        raw = clickhouse_query_df(
+            f"""
+            SELECT canonical_code, sector_code, sector_name, sector_type
+            FROM source_sector_stocks
+            WHERE source = 'tdx'
+              AND alias_status = 'active'
+              AND canonical_code IN ({quoted})
+              AND snapshot_date = (
+                  SELECT max(snapshot_date)
+                  FROM source_sector_stocks
+                  WHERE source = 'tdx'
+                    AND alias_status = 'active'
+                    AND canonical_code != ''
+              )
+            """
+        )
+        if raw.empty:
+            return {}
+        raw["sector_name"] = raw["sector_name"].fillna("").astype(str).str.strip()
+        raw = raw[raw["sector_name"].map(_is_tdx_mainline_sector_text)].copy()
+        if raw.empty:
+            return {}
+        raw["canonical_code"] = raw["canonical_code"].fillna("").astype(str).map(_row_code)
+        raw["sector_code"] = raw["sector_code"].fillna("").astype(str)
+        raw = raw.sort_values(["canonical_code", "sector_type", "sector_name", "sector_code"])
+        picked = raw.drop_duplicates("canonical_code", keep="first")
+        return {
+            str(row.get("canonical_code") or ""): {
+                "mainline_sector_code": str(row.get("sector_code") or ""),
+                "mainline_sector_name": str(row.get("sector_name") or ""),
+                "mainline_sector_source": "tdx",
+            }
+            for _, row in picked.iterrows()
+            if str(row.get("canonical_code") or "") and str(row.get("sector_name") or "")
+        }
+    except Exception as exc:
+        logger.warning("Failed to load TDX mainline sector map: %s", exc)
+        return {}
+
+
+def _apply_tdx_mainline_sector(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not records:
+        return records
+    missing_codes = [
+        str(item.get("code") or "")
+        for item in records
+        if str(item.get("mainline_sector_source") or "") != "tdx"
+    ]
+    sector_map = _tdx_mainline_map_for_codes(missing_codes)
+    for item in records:
+        code = _row_code(item.get("code"))
+        mapped = sector_map.get(code)
+        if mapped and str(mapped.get("mainline_sector_name") or ""):
+            item["mainline_sector_name"] = mapped["mainline_sector_name"]
+            item["mainline_sector_code"] = mapped.get("mainline_sector_code") or ""
+            item["mainline_sector_source"] = "tdx"
+            item["sector_name"] = mapped["mainline_sector_name"]
+            item["sector_code"] = mapped.get("mainline_sector_code") or ""
+    return records
+
+
 def _mainwave_candidate_from_row(row: dict[str, Any], source: str, recommended_codes: set[str]) -> dict[str, Any]:
     code = _row_code(row.get("code") or row.get("code_raw"), row.get("code6"))
-    sector = row.get("sector_name") or row.get("l2_sector_name") or row.get("industry") or "未识别行业"
+    sector_identity = _mainwave_sector_identity(row)
+    sector = sector_identity["display_sector_name"]
     score = _to_float_or_none(row.get("wave_style_score") or row.get("score"))
     diffusion = _to_float_or_none(row.get("sector_diffusion_score"))
     m30_status = str(row.get("m30_status") or ("ok" if _truthy(row.get("m30_confirmed") or row.get("m30_ok")) else "unknown"))
@@ -472,10 +880,16 @@ def _mainwave_candidate_from_row(row: dict[str, Any], source: str, recommended_c
         "code": code,
         "name": row.get("name") or row.get("stock_name") or "",
         "sector_name": sector,
+        "sector_code": sector_identity["display_sector_code"],
+        "mainline_sector_name": sector_identity["mainline_sector_name"],
+        "mainline_sector_code": sector_identity["mainline_sector_code"],
+        "mainline_sector_source": sector_identity["mainline_sector_source"],
+        "sw_industry_name": sector_identity["sw_industry_name"],
+        "sw_industry_code": sector_identity["sw_industry_code"],
         "route": row.get("route") or "institutional_mainwave",
         "route_label": row.get("route_label") or "机构主升浪",
-        "trade_strategy": row.get("trade_strategy") or "institutional_score120_mainwave",
-        "trade_strategy_label": row.get("trade_strategy_label") or "机构主升Score120",
+        "trade_strategy": row.get("trade_strategy") or "institutional_mainwave_score88",
+        "trade_strategy_label": row.get("trade_strategy_label") or "机构主升Score88",
         "template_label": row.get("template_label") or row.get("source_strategy_label") or "",
         "wave_style_score": score,
         "score": score,
@@ -514,6 +928,7 @@ def _build_mainwave_candidates(source_meta: dict[str, Any], ticket_rows: list[di
         for item in _read_csv_records(MAINWAVE_RUNTIME_DIR / "latest_candidates.csv", limit=limit):
             if isinstance(item, dict):
                 rows.append(_mainwave_candidate_from_row(item, "mainwave_latest_candidates", recommended_codes))
+    rows = _apply_tdx_mainline_sector(rows)
     by_code: dict[str, dict[str, Any]] = {}
     for item in rows:
         code = str(item.get("code") or "")
@@ -536,7 +951,8 @@ def _build_mainwave_candidates(source_meta: dict[str, Any], ticket_rows: list[di
 
 def _mainwave_watch_candidate_from_row(row: dict[str, Any], source: str, diffusion_by_sector: dict[str, float]) -> dict[str, Any]:
     code = _row_code(row.get("code") or row.get("code_raw"), row.get("code6"))
-    sector = row.get("sector_name") or row.get("l2_sector_name") or row.get("industry") or ""
+    sector_identity = _mainwave_sector_identity(row)
+    sector = sector_identity["display_sector_name"]
     score = _to_float_or_none(row.get("wave_style_score") or row.get("score"))
     diffusion = _to_float_or_none(row.get("sector_diffusion_score"))
     if diffusion is None:
@@ -553,10 +969,16 @@ def _mainwave_watch_candidate_from_row(row: dict[str, Any], source: str, diffusi
         "code": code,
         "name": row.get("name") or row.get("stock_name") or "",
         "sector_name": sector,
+        "sector_code": sector_identity["display_sector_code"],
+        "mainline_sector_name": sector_identity["mainline_sector_name"],
+        "mainline_sector_code": sector_identity["mainline_sector_code"],
+        "mainline_sector_source": sector_identity["mainline_sector_source"],
+        "sw_industry_name": sector_identity["sw_industry_name"],
+        "sw_industry_code": sector_identity["sw_industry_code"],
         "route": "institutional_mainwave",
         "route_label": "机构主升浪",
-        "trade_strategy": "institutional_score120_mainwave",
-        "trade_strategy_label": "机构主升Score120",
+        "trade_strategy": "institutional_mainwave_score88",
+        "trade_strategy_label": "机构主升Score88",
         "template_label": row.get("template_label") or "",
         "template_pass": template_pass,
         "wave_style_score": score,
@@ -585,9 +1007,10 @@ def _mainwave_watch_candidate_from_row(row: dict[str, Any], source: str, diffusi
 def _build_mainwave_watch_candidates(limit: int) -> list[dict[str, Any]]:
     sector_df = _read_csv_df(MAINWAVE_REPORT_DIR / "current_sector_diffusion.csv")
     diffusion_by_sector: dict[str, float] = {}
-    if not sector_df.empty and {"l2_sector_name", "sector_diffusion_score"}.issubset(sector_df.columns):
+    sector_key = "tdx_mainline_sector_name" if "tdx_mainline_sector_name" in sector_df.columns else "l2_sector_name"
+    if not sector_df.empty and {sector_key, "sector_diffusion_score"}.issubset(sector_df.columns):
         for _, row in sector_df.iterrows():
-            sector = str(row.get("l2_sector_name") or "")
+            sector = str(row.get(sector_key) or "")
             value = _to_float_or_none(row.get("sector_diffusion_score"))
             if sector and value is not None:
                 diffusion_by_sector[sector] = value
@@ -615,7 +1038,10 @@ def _build_mainwave_watch_candidates(limit: int) -> list[dict[str, Any]]:
             if not existing or (_to_float_or_none(item.get("wave_style_score")) or 0) > (_to_float_or_none(existing.get("wave_style_score")) or 0):
                 by_code[code] = item
 
-    rows = list(by_code.values())
+    rows = _apply_tdx_mainline_sector(list(by_code.values()))
+    for item in rows:
+        if _to_float_or_none(item.get("sector_diffusion_score")) is None:
+            item["sector_diffusion_score"] = diffusion_by_sector.get(str(item.get("sector_name") or ""))
     rows = [item for item in rows if not item.get("template_pass") or (_to_float_or_none(item.get("wave_style_score")) or 0) < 120]
     rows.sort(
         key=lambda item: (
@@ -654,9 +1080,18 @@ def _build_mainwave_sector_opportunities(candidates: list[dict[str, Any]]) -> li
         state, state_label = _mainwave_sector_state(avg_diffusion, max_score, len(rows), len(recommended))
         top_rows = sorted(rows, key=lambda item: _to_float_or_none(item.get("wave_style_score")) or 0, reverse=True)[:5]
         templates = sorted({str(item.get("template_label") or "") for item in rows if item.get("template_label")})
+        sector_code = next(
+            (
+                str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
+                for item in rows
+                if str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
+            ),
+            "",
+        )
         out.append(
             {
                 "sector_name": sector,
+                "sector_code": sector_code,
                 "state": state,
                 "state_label": state_label,
                 "candidate_count": len(rows),
@@ -703,9 +1138,18 @@ def _build_mainwave_sector_opportunities_v2(candidates: list[dict[str, Any]], wa
             state, state_label = "sector_watch", "板块观察"
         top_rows = sorted(scoring_rows, key=lambda item: _to_float_or_none(item.get("wave_style_score")) or 0, reverse=True)[:5]
         templates = sorted({str(item.get("template_label") or "") for item in scoring_rows if item.get("template_label")})
+        sector_code = next(
+            (
+                str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
+                for item in scoring_rows
+                if str(item.get("sector_code") or item.get("l2_sector_code") or "").strip()
+            ),
+            "",
+        )
         out.append(
             {
                 "sector_name": sector,
+                "sector_code": sector_code,
                 "state": state,
                 "state_label": state_label,
                 "candidate_count": len(rows),
@@ -723,6 +1167,445 @@ def _build_mainwave_sector_opportunities_v2(candidates: list[dict[str, Any]], wa
         )
     out.sort(key=lambda item: _to_float_or_none(item.get("rank_score")) or 0, reverse=True)
     return out
+
+
+def _quote_sql_text(value: Any) -> str:
+    return "'" + str(value or "").replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _quote_sql_list(values: list[str]) -> str:
+    return ",".join(_quote_sql_text(value) for value in values if str(value or "").strip())
+
+
+def _mainwave_sector_index_code(name: str) -> str | None:
+    text = str(name or "").strip()
+    if text in {"创业板", "创业板指"}:
+        return "399006.SZ"
+    if text in {"深证成指", "深市指数", "深证指数"}:
+        return "399001.SZ"
+    if text in {"上证指数", "沪市指数", "上证综指"}:
+        return "999999.SH"
+    if text in {"沪深300", "沪深指数"}:
+        return "000300.SH"
+    if text in {"中证500"}:
+        return "000905.SH"
+    if text in {"中证1000"}:
+        return "000852.SH"
+    if text in {"科创50", "科创板"}:
+        return "000688.SH"
+    return None
+
+
+def _enrich_mainwave_sector_codes(sectors: list[dict[str, Any]]) -> None:
+    names = sorted({str(item.get("sector_name") or "").strip() for item in sectors if str(item.get("sector_name") or "").strip()})
+    if not names:
+        return
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        if not clickhouse_table_exists("sectors"):
+            return
+        quoted_names = _quote_sql_list(names)
+        if not quoted_names:
+            return
+        df = clickhouse_query_df(
+            f"""
+            SELECT name, code
+            FROM sectors
+            WHERE type = 'industry'
+              AND level = 2
+              AND name IN ({quoted_names})
+            """
+        )
+        if df.empty:
+            return
+        code_by_name = {
+            str(row.get("name") or "").strip(): str(row.get("code") or "").strip()
+            for _, row in df.iterrows()
+            if str(row.get("name") or "").strip() and str(row.get("code") or "").strip()
+        }
+        for item in sectors:
+            if str(item.get("sector_code") or "").strip():
+                continue
+            code = code_by_name.get(str(item.get("sector_name") or "").strip())
+            if code:
+                item["sector_code"] = code
+    except Exception as exc:
+        logger.warning("Failed to enrich mainwave sector codes: %s", exc)
+
+
+def _build_mainwave_sector_kline_map(sectors: list[dict[str, Any]], days: int = 260) -> dict[str, list[dict[str, Any]]]:
+    names = sorted({str(item.get("sector_name") or "").strip() for item in sectors if str(item.get("sector_name") or "").strip()})
+    sector_code_to_name = {
+        str(item.get("sector_code") or item.get("mainline_sector_code") or "").strip(): str(item.get("sector_name") or "").strip()
+        for item in sectors
+        if str(item.get("sector_code") or item.get("mainline_sector_code") or "").strip()
+        and str(item.get("sector_name") or "").strip()
+    }
+    if not names and not sector_code_to_name:
+        return {}
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        out: dict[str, list[dict[str, Any]]] = {}
+        index_code_to_name = {code: name for name in names if (code := _mainwave_sector_index_code(name))}
+        if index_code_to_name and clickhouse_table_exists("kline_daily"):
+            quoted_index_codes = _quote_sql_list(sorted(index_code_to_name))
+            index_raw = clickhouse_query_df(
+                f"""
+                SELECT code, trade_date, open, high, low, close, volume, amount, change_pct
+                FROM kline_daily
+                WHERE code IN ({quoted_index_codes})
+                  AND trade_date >= today() - INTERVAL 430 DAY
+                ORDER BY code, trade_date
+                """
+            )
+            if not index_raw.empty:
+                for code, frame in index_raw.groupby(index_raw["code"].astype(str), dropna=False):
+                    sector_name = index_code_to_name.get(str(code), str(code))
+                    rows = frame.sort_values("trade_date").tail(max(int(days), 260))
+                    kline_rows: list[dict[str, Any]] = []
+                    for _, row in rows.iterrows():
+                        kline_rows.append(
+                            {
+                                "date": _date_text(row.get("trade_date")),
+                                "open": _to_float_or_none(row.get("open")),
+                                "high": _to_float_or_none(row.get("high")),
+                                "low": _to_float_or_none(row.get("low")),
+                                "close": _to_float_or_none(row.get("close")),
+                                "change_pct": _to_float_or_none(row.get("change_pct")),
+                                "volume": _to_float_or_none(row.get("volume")),
+                                "amount": _to_float_or_none(row.get("amount")),
+                                "synthetic_ohlc": False,
+                                "source": f"kline_daily:{code}",
+                            }
+                        )
+                    if kline_rows:
+                        out[sector_name] = kline_rows
+
+        code_to_name: dict[str, str] = dict(sector_code_to_name)
+        if clickhouse_table_exists("sectors"):
+            quoted_names = _quote_sql_list(names)
+            expanded_names = sorted(
+                {
+                    item
+                    for name in names
+                    for item in (
+                        name,
+                    )
+                    if item
+                }
+            )
+            quoted_expanded_names = _quote_sql_list(expanded_names)
+            sector_df = clickhouse_query_df(
+                f"""
+                SELECT code, name
+                FROM sectors
+                WHERE name IN ({quoted_expanded_names})
+                   OR code IN ({quoted_expanded_names})
+                """
+            )
+            if not sector_df.empty:
+                for _, row in sector_df.iterrows():
+                    code = str(row.get("code") or "").strip()
+                    name = str(row.get("name") or "").strip()
+                    if code and name:
+                        code_to_name[code] = name
+
+        for name in names:
+            code_to_name.setdefault(name, name)
+
+        codes = sorted(code_to_name)
+        quoted_codes = _quote_sql_list(codes)
+        if not quoted_codes:
+            return {}
+        if clickhouse_table_exists("sector_kline_daily"):
+            schema = clickhouse_query_df("DESCRIBE TABLE sector_kline_daily")
+            available_columns = set(schema["name"].astype(str).tolist()) if not schema.empty and "name" in schema.columns else set()
+            has_ohlc = {"open", "high", "low", "close"}.issubset(available_columns)
+            price_columns = "open, high, low, close," if has_ohlc else ""
+            raw = clickhouse_query_df(
+                f"""
+                SELECT code, trade_date, {price_columns} change_pct, total_volume, total_amount
+                FROM sector_kline_daily
+                WHERE code IN ({quoted_codes})
+                  AND trade_date >= today() - INTERVAL 430 DAY
+                ORDER BY code, trade_date
+                """
+            )
+            if not raw.empty:
+                for code, frame in raw.groupby(raw["code"].astype(str), dropna=False):
+                    sector_name = code_to_name.get(str(code), str(code))
+                    rows = frame.sort_values("trade_date").tail(max(int(days), 260))
+                    kline_rows: list[dict[str, Any]] = []
+                    synthetic_close = 1000.0
+                    for _, row in rows.iterrows():
+                        change_pct = _to_float_or_none(row.get("change_pct"))
+                        if has_ohlc:
+                            open_price = _to_float_or_none(row.get("open"))
+                            high_price = _to_float_or_none(row.get("high"))
+                            low_price = _to_float_or_none(row.get("low"))
+                            close_price = _to_float_or_none(row.get("close"))
+                        else:
+                            open_price = synthetic_close
+                            close_price = synthetic_close * (1.0 + ((change_pct or 0.0) / 100.0))
+                            high_price = max(open_price, close_price)
+                            low_price = min(open_price, close_price)
+                            synthetic_close = close_price
+                        kline_rows.append(
+                            {
+                                "date": _date_text(row.get("trade_date")),
+                                "open": open_price,
+                                "high": high_price,
+                                "low": low_price,
+                                "close": close_price,
+                                "change_pct": change_pct,
+                                "volume": _to_float_or_none(row.get("total_volume")),
+                                "amount": _to_float_or_none(row.get("total_amount")),
+                                "synthetic_ohlc": not has_ohlc,
+                                "source": "sector_kline_daily",
+                            }
+                        )
+                    if kline_rows and sector_name not in out:
+                        out[sector_name] = kline_rows
+
+        missing_tdx_codes = {
+            code: name
+            for code, name in code_to_name.items()
+            if code.endswith((".SH", ".SZ"))
+            and code[:3].isdigit()
+            and code.startswith("880")
+            and name
+            and name not in out
+        }
+        if missing_tdx_codes and clickhouse_table_exists("source_sector_stocks") and clickhouse_table_exists("kline_daily"):
+            for code, sector_name in missing_tdx_codes.items():
+                quoted_code = _quote_sql_text(code)
+                synthetic_raw = clickhouse_query_df(
+                    f"""
+                    SELECT
+                        m.sector_code AS sector_code,
+                        kd.trade_date AS trade_date,
+                        avg(kd.close / nullIf(bp.base_close, 0)) * 1000.0 AS close_index,
+                        avg(kd.change_pct) AS avg_change_pct,
+                        sum(kd.volume) AS total_volume,
+                        sum(kd.amount) AS total_amount,
+                        count() AS member_count
+                    FROM kline_daily AS kd
+                    INNER JOIN (
+                        SELECT DISTINCT sector_code, canonical_code
+                        FROM source_sector_stocks
+                        WHERE source = 'tdx'
+                          AND snapshot_date = (SELECT max(snapshot_date) FROM source_sector_stocks WHERE source = 'tdx')
+                          AND alias_status != 'inactive'
+                          AND sector_code = {quoted_code}
+                          AND canonical_code != ''
+                    ) AS m ON m.canonical_code = kd.code
+                    INNER JOIN (
+                        SELECT kd1.code AS code, argMin(kd1.close, kd1.trade_date) AS base_close
+                        FROM kline_daily AS kd1
+                        INNER JOIN (
+                            SELECT DISTINCT canonical_code
+                            FROM source_sector_stocks
+                            WHERE source = 'tdx'
+                              AND snapshot_date = (SELECT max(snapshot_date) FROM source_sector_stocks WHERE source = 'tdx')
+                              AND alias_status != 'inactive'
+                              AND sector_code = {quoted_code}
+                              AND canonical_code != ''
+                        ) AS cm ON cm.canonical_code = kd1.code
+                        WHERE kd1.trade_date >= today() - INTERVAL 430 DAY
+                        GROUP BY kd1.code
+                    ) AS bp ON bp.code = kd.code
+                    WHERE kd.trade_date >= today() - INTERVAL 430 DAY
+                    GROUP BY m.sector_code, kd.trade_date
+                    ORDER BY m.sector_code, kd.trade_date
+                    """
+                )
+                if synthetic_raw.empty:
+                    continue
+                rows = synthetic_raw.sort_values("trade_date").tail(max(int(days), 260))
+                kline_rows = []
+                previous_close: float | None = None
+                for _, row in rows.iterrows():
+                    close_price = _to_float_or_none(row.get("close_index"))
+                    if close_price is None:
+                        continue
+                    open_price = previous_close if previous_close is not None else close_price
+                    change_pct = _to_float_or_none(row.get("avg_change_pct"))
+                    high_price = max(open_price, close_price)
+                    low_price = min(open_price, close_price)
+                    previous_close = close_price
+                    kline_rows.append(
+                        {
+                            "date": _date_text(row.get("trade_date")),
+                            "open": open_price,
+                            "high": high_price,
+                            "low": low_price,
+                            "close": close_price,
+                            "change_pct": change_pct,
+                            "volume": _to_float_or_none(row.get("total_volume")),
+                            "amount": _to_float_or_none(row.get("total_amount")),
+                            "member_count": _to_float_or_none(row.get("member_count")),
+                            "synthetic_ohlc": True,
+                            "source": "tdx_member_equal_weight_daily",
+                        }
+                    )
+                if kline_rows:
+                    out[sector_name] = kline_rows
+        return out
+    except Exception as exc:
+        logger.warning("Failed to load mainwave sector kline data: %s", exc)
+        return {}
+
+
+def _build_mainwave_sector_component_map(sectors: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    sector_codes = sorted(
+        {
+            str(item.get("sector_code") or "").strip()
+            for item in sectors
+            if str(item.get("sector_code") or "").strip()
+        }
+    )
+    if not sector_codes:
+        return {}
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        if not clickhouse_table_exists("sector_stocks"):
+            return {}
+        quoted_codes = _quote_sql_list(sector_codes)
+        if not quoted_codes:
+            return {}
+        has_stocks = clickhouse_table_exists("stocks")
+        has_kline = clickhouse_table_exists("kline_daily")
+        name_expr = "anyOrNull(st.name)" if has_stocks else "CAST(NULL, 'Nullable(String)')"
+        latest_join = ""
+        latest_select = (
+            "CAST(NULL, 'Nullable(Date)') AS trade_date, "
+            "CAST(NULL, 'Nullable(Float64)') AS close, "
+            "CAST(NULL, 'Nullable(Float64)') AS change_pct, "
+            "CAST(NULL, 'Nullable(Float64)') AS amount"
+        )
+        if has_kline:
+            latest_join = """
+                LEFT JOIN
+                (
+                    SELECT code, trade_date, close, change_pct, amount
+                    FROM kline_daily
+                    WHERE (code, trade_date) IN
+                    (
+                        SELECT code, max(trade_date)
+                        FROM kline_daily
+                        GROUP BY code
+                    )
+                ) AS kd ON kd.code = ss.stock_code
+            """
+            latest_select = "anyOrNull(kd.trade_date) AS trade_date, anyOrNull(kd.close) AS close, anyOrNull(kd.change_pct) AS change_pct, anyOrNull(kd.amount) AS amount"
+        stock_join = "LEFT JOIN stocks AS st ON st.code = ss.stock_code" if has_stocks else ""
+        raw = clickhouse_query_df(
+            f"""
+            SELECT
+                ss.sector_code AS sector_code,
+                ss.stock_code AS code,
+                {name_expr} AS name,
+                anyOrNull(ss.weight) AS weight,
+                {latest_select}
+            FROM sector_stocks AS ss
+            {stock_join}
+            {latest_join}
+            WHERE ss.sector_code IN ({quoted_codes})
+            GROUP BY ss.sector_code, ss.stock_code
+            ORDER BY ss.sector_code, weight DESC, amount DESC, ss.stock_code
+            """
+        )
+        if raw.empty:
+            return {}
+        out: dict[str, list[dict[str, Any]]] = {}
+        for sector_code, frame in raw.groupby(raw["sector_code"].astype(str), dropna=False):
+            rows: list[dict[str, Any]] = []
+            for _, row in frame.iterrows():
+                code = str(row.get("code") or "").strip()
+                if not code:
+                    continue
+                rows.append(
+                    {
+                        "code": code,
+                        "name": str(row.get("name") or "").strip() or code,
+                        "weight": _to_float_or_none(row.get("weight")),
+                        "latest_date": _date_text(row.get("trade_date")),
+                        "latest_close": _to_float_or_none(row.get("close")),
+                        "change_pct": _to_float_or_none(row.get("change_pct")),
+                        "amount": _to_float_or_none(row.get("amount")),
+                    }
+                )
+            out[str(sector_code)] = rows
+        return out
+    except Exception as exc:
+        logger.warning("Failed to load mainwave sector component stocks: %s", exc)
+        return {}
+
+
+def _mainwave_kline_window_return(rows: list[dict[str, Any]], days: int) -> float | None:
+    if not rows:
+        return None
+    span = rows[-min(max(int(days), 2), len(rows)) :]
+    if len(span) < 2:
+        return None
+    first_close = _to_float_or_none(span[0].get("close"))
+    last_close = _to_float_or_none(span[-1].get("close"))
+    if first_close is None or first_close <= 0 or last_close is None:
+        return None
+    return (last_close / first_close) - 1.0
+
+
+def _apply_mainwave_sector_trend_adjustment(sectors: list[dict[str, Any]]) -> None:
+    for sector in sectors:
+        raw_diffusion = _to_float_or_none(sector.get("avg_sector_diffusion_score"))
+        if raw_diffusion is None:
+            continue
+        rows = sector.get("kline_daily")
+        if not isinstance(rows, list) or not rows:
+            continue
+        ret20 = _mainwave_kline_window_return(rows, 20)
+        ret60 = _mainwave_kline_window_return(rows, 60)
+        ret120 = _mainwave_kline_window_return(rows, 120)
+        latest_change = _to_float_or_none(rows[-1].get("change_pct"))
+        sector["raw_sector_diffusion_score"] = raw_diffusion
+        sector["sector_ret20"] = ret20
+        sector["sector_ret60"] = ret60
+        sector["sector_ret120"] = ret120
+        penalty = 0.0
+        reasons: list[str] = []
+        if ret20 is not None and ret20 < 0:
+            penalty += min(8.0, abs(ret20) * 100.0 * 0.8)
+            reasons.append("20日趋势为负")
+        if ret60 is not None and ret60 < 0:
+            penalty += min(12.0, abs(ret60) * 100.0 * 0.7)
+            reasons.append("60日趋势为负")
+        if ret120 is not None and ret120 < 0:
+            penalty += min(10.0, abs(ret120) * 100.0 * 0.45)
+            reasons.append("120日趋势为负")
+        if latest_change is not None and latest_change < -2.0:
+            penalty += 4.0
+            reasons.append("最新交易日明显回落")
+        adjusted = max(0.0, raw_diffusion - penalty)
+        if ret20 is not None and ret60 is not None and ret120 is not None and ret20 < 0 and ret60 < 0 and ret120 < 0:
+            adjusted = min(adjusted, 64.9)
+            reasons.append("短中长期板块趋势均退潮")
+            if not sector.get("candidate_count"):
+                sector["state"] = "sector_watch"
+                sector["state_label"] = "退潮观察"
+        sector["avg_sector_diffusion_score"] = adjusted
+        sector["sector_trend_penalty"] = penalty
+        sector["sector_trend_adjustment_reason"] = "；".join(reasons) if reasons else ""
+        sector["rank_score"] = (
+            adjusted * 0.55
+            + (_to_float_or_none(sector.get("max_wave_style_score")) or 0.0) * 0.35
+            + min(int(sector.get("candidate_count") or 0), 8) * 2.0
+            + min(int(sector.get("watch_candidate_count") or 0), 8) * 1.2
+            + int(sector.get("recommended_count") or 0) * 5.0
+        )
+    sectors.sort(key=lambda item: _to_float_or_none(item.get("rank_score")) or 0, reverse=True)
 
 
 def _read_strategy_reduction_recovery() -> dict[str, Any]:
@@ -1158,10 +2041,11 @@ def _default_monitor_state() -> dict[str, Any]:
         "interval_seconds": 120,
         "trading_hours_only": True,
         "email_enabled": True,
-        "heartbeat_enabled": True,
+        "heartbeat_enabled": False,
         "heartbeat_minutes": 30,
         "recipient_email": "",
         "run_current_refresh": True,
+        "paper_entry_enabled": True,
         "last_run_at": None,
         "last_success_at": None,
         "last_error": None,
@@ -1184,10 +2068,12 @@ def _load_monitor_state() -> dict[str, Any]:
     base["interval_seconds"] = max(120, int(base.get("interval_seconds") or 120))
     base["trading_hours_only"] = bool(base.get("trading_hours_only", True))
     base["email_enabled"] = bool(base.get("email_enabled", True))
-    base["heartbeat_enabled"] = bool(base.get("heartbeat_enabled", True))
+    # Notifications are event-driven: normal operation does not send email.
+    base["heartbeat_enabled"] = False
     base["heartbeat_minutes"] = max(30, int(base.get("heartbeat_minutes") or 30))
     base["recipient_email"] = str(base.get("recipient_email") or "").strip()
     base["run_current_refresh"] = bool(base.get("run_current_refresh", True))
+    base["paper_entry_enabled"] = bool(base.get("paper_entry_enabled", True))
     if not isinstance(base.get("last_alert_keys"), dict):
         base["last_alert_keys"] = {}
     return base
@@ -1294,11 +2180,78 @@ def _save_exit_monitor_state(state: dict[str, Any]) -> None:
     _write_json(EXIT_MONITOR_STATE_PATH, payload)
 
 
+def _default_daily_trend_exit_monitor_state() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "interval_seconds": 300,
+        "trading_hours_only": True,
+        "lookback_days": 180,
+        "pivot_window": 3,
+        "min_pivot_separation": 5,
+        "break_buffer_pct": 0.0,
+        "email_enabled": True,
+        "alerted_signal_keys": [],
+        "last_run_at": None,
+        "last_success_at": None,
+        "last_error": None,
+        "last_result": None,
+    }
+
+
+def _load_daily_trend_exit_monitor_state() -> dict[str, Any]:
+    state = _read_json(DAILY_TREND_EXIT_MONITOR_STATE_PATH)
+    base = _default_daily_trend_exit_monitor_state()
+    if isinstance(state, dict):
+        base.update(state)
+    base["enabled"] = bool(base.get("enabled"))
+    base["interval_seconds"] = min(1800, max(300, int(base.get("interval_seconds") or 300)))
+    base["trading_hours_only"] = bool(base.get("trading_hours_only", True))
+    base["hour"] = min(23, max(0, int(base.get("hour") or 15)))
+    base["minute"] = min(59, max(0, int(base.get("minute") or 10)))
+    base["lookback_days"] = min(500, max(60, int(base.get("lookback_days") or 180)))
+    base["pivot_window"] = min(10, max(1, int(base.get("pivot_window") or 3)))
+    base["min_pivot_separation"] = min(30, max(1, int(base.get("min_pivot_separation") or 5)))
+    base["break_buffer_pct"] = min(0.05, max(0.0, float(base.get("break_buffer_pct") or 0.0)))
+    base["email_enabled"] = bool(base.get("email_enabled", True))
+    keys = base.get("alerted_signal_keys")
+    base["alerted_signal_keys"] = [str(item) for item in keys[-500:]] if isinstance(keys, list) else []
+    return base
+
+
+def _save_daily_trend_exit_monitor_state(state: dict[str, Any]) -> None:
+    payload = dict(state)
+    if "last_result" in payload:
+        payload["last_result"] = _compact_monitor_last_result(payload.get("last_result"))
+    _write_json(DAILY_TREND_EXIT_MONITOR_STATE_PATH, payload)
+
+
+def _coerce_scheduler_minutes(value: Any, default: list[int]) -> list[int]:
+    if value in (None, ""):
+        items = default
+    elif isinstance(value, str):
+        items = [part.strip() for part in value.split(",") if part.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        items = [value]
+    minutes: list[int] = []
+    for item in items:
+        try:
+            minute = int(item)
+        except Exception:
+            continue
+        if 0 <= minute <= 59 and minute not in minutes:
+            minutes.append(minute)
+    return sorted(minutes)
+
+
 def _default_observation_scheduler_state() -> dict[str, Any]:
     return {
         "enabled": True,
         "hour": 15,
         "minute": 40,
+        "retry_hour": 10,
+        "retry_minutes": [1, 6, 11, 16, 31, 36],
         "trading_days_only": True,
         "run_smoke": True,
         "refresh_smoke": True,
@@ -1318,6 +2271,8 @@ def _load_observation_scheduler_state() -> dict[str, Any]:
     base["enabled"] = bool(base.get("enabled"))
     base["hour"] = min(23, max(0, int(base.get("hour") or 15)))
     base["minute"] = min(59, max(0, int(base.get("minute") or 40)))
+    base["retry_hour"] = min(23, max(0, int(base.get("retry_hour") or 10)))
+    base["retry_minutes"] = _coerce_scheduler_minutes(base.get("retry_minutes"), [1, 6, 11, 16, 31, 36])
     base["trading_days_only"] = bool(base.get("trading_days_only", True))
     base["run_smoke"] = bool(base.get("run_smoke", True))
     base["refresh_smoke"] = bool(base.get("refresh_smoke", True))
@@ -1369,17 +2324,51 @@ def _save_broker_sync_state(state: dict[str, Any]) -> None:
     _write_json(BROKER_SYNC_STATE_PATH, state)
 
 
+def _load_monitor_event_rows_with_repair() -> list[dict[str, Any]]:
+    if not MONITOR_EVENTS_PATH.exists():
+        return []
+    try:
+        data = json.loads(MONITOR_EVENTS_PATH.read_text(encoding="utf-8"))
+        rows = data.get("events") if isinstance(data, dict) else []
+        return rows if isinstance(rows, list) else []
+    except Exception:
+        # A previous non-atomic writer may have concatenated several complete
+        # JSON documents. Recover their event arrays, preserve the source for
+        # audit, then let the next append rewrite one valid document.
+        raw = MONITOR_EVENTS_PATH.read_text(encoding="utf-8", errors="replace")
+        decoder = json.JSONDecoder()
+        cursor = 0
+        recovered: list[dict[str, Any]] = []
+        while cursor < len(raw):
+            while cursor < len(raw) and raw[cursor].isspace():
+                cursor += 1
+            if cursor >= len(raw):
+                break
+            try:
+                item, cursor = decoder.raw_decode(raw, cursor)
+            except json.JSONDecodeError:
+                break
+            rows = item.get("events") if isinstance(item, dict) else []
+            if isinstance(rows, list):
+                recovered.extend(row for row in rows if isinstance(row, dict))
+        backup = MONITOR_EVENTS_PATH.with_name(
+            f"{MONITOR_EVENTS_PATH.stem}.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}{MONITOR_EVENTS_PATH.suffix}"
+        )
+        if not backup.exists():
+            backup.write_text(raw, encoding="utf-8")
+        logger.warning("Recovered %s monitor events from malformed artifact: %s", len(recovered), MONITOR_EVENTS_PATH)
+        return recovered[-300:]
+
+
 def _append_monitor_event(event: dict[str, Any]) -> None:
-    existing = _read_json(MONITOR_EVENTS_PATH)
-    rows = existing.get("events") if isinstance(existing, dict) else []
-    if not isinstance(rows, list):
-        rows = []
-    item = {
-        "created_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
-        **(event if isinstance(event, dict) else {}),
-    }
-    rows.append(item)
-    _write_json(MONITOR_EVENTS_PATH, {"events": rows[-300:]})
+    with MONITOR_EVENTS_LOCK:
+        rows = _load_monitor_event_rows_with_repair()
+        item = {
+            "created_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            **(event if isinstance(event, dict) else {}),
+        }
+        rows.append(item)
+        _write_json(MONITOR_EVENTS_PATH, {"events": rows[-300:]})
 
 
 def _recent_monitor_events(limit: int = 20) -> list[dict[str, Any]]:
@@ -1564,55 +2553,569 @@ def _should_send_heartbeat(state: dict[str, Any], now: datetime, force_send: boo
     return (now - last_dt).total_seconds() >= int(state.get("heartbeat_minutes") or 30) * 60
 
 
-def _build_shadow_buy_email_body(now_text: str, workflow: dict[str, Any], tickets: list[dict[str, Any]]) -> str:
+def _build_shadow_buy_email_body(
+    now_text: str,
+    workflow: dict[str, Any],
+    tickets: list[dict[str, Any]],
+    runtime: dict[str, Any] | None = None,
+) -> str:
+    runtime = runtime if isinstance(runtime, dict) else {}
     summary_lines = [
-        f"Generated at: {now_text}",
-        f"Strategy: {STRATEGY_NAME}",
-        f"Entry date: {workflow.get('entry_date') or '--'}",
-        f"Selected route: {workflow.get('selected_route') or '--'}",
-        f"Diagnosis: {workflow.get('diagnosis_code') or '--'}",
+        f"生成时间：{now_text}",
+        "报告范围：AiStock 全局运行快照",
+        f"G3策略：{STRATEGY_NAME_CN}（{STRATEGY_NAME}）",
+        f"买入候选日期：{workflow.get('entry_date') or '--'}",
+        f"当前选中路线：{workflow.get('selected_route') or '--'}",
+        f"诊断结果：{_email_diagnosis_label(workflow.get('diagnosis_code'))}",
         "",
-        "Shadow buy tickets:",
+        *_build_aistock_data_source_email_lines(workflow, runtime),
+        "",
+        *_build_aistock_feedback_email_lines(workflow, runtime),
+        "",
+        "影子买入候选：",
     ]
     for idx, item in enumerate(tickets, start=1):
         summary_lines.append(
             (
                 f"{idx}. {item.get('code') or item.get('code_raw') or '--'} "
                 f"{item.get('name') or item.get('stock_name') or ''} | "
-                f"route={item.get('route_label') or item.get('route') or '--'} | "
-                f"planned={item.get('planned_entry_ts') or '--'} | "
-                f"confirm={item.get('confirm_datetime') or '--'} | "
-                f"position={_fmt_num(float(item.get('position_pct') or 0) * 100, 1, '%')} | "
-                f"ref={_fmt_num(item.get('reference_close'), 2)} | "
-                f"stop={_fmt_num(item.get('structure_stop'), 2)} / hard={_fmt_num(item.get('hard_stop'), 2)} | "
-                f"30m={item.get('m30_status') or item.get('m30_confirmed') or '--'}"
+                f"路线：{item.get('route_label') or item.get('route') or '--'} | "
+                f"计划买入：{item.get('planned_entry_ts') or '--'} | "
+                f"确认时间：{item.get('confirm_datetime') or '--'} | "
+                f"建议仓位：{_fmt_num(float(item.get('position_pct') or 0) * 100, 1, '%')} | "
+                f"参考价：{_fmt_num(item.get('reference_close'), 2)} | "
+                f"结构止损/硬止损：{_fmt_num(item.get('structure_stop'), 2)} / {_fmt_num(item.get('hard_stop'), 2)} | "
+                f"30分钟确认：{item.get('m30_status') or item.get('m30_confirmed') or '--'}"
             )
         )
         exit_contract = str(item.get("exit_contract") or "").strip()
         if exit_contract:
-            summary_lines.append(f"   Exit: {exit_contract[:180]}")
-    summary_lines.extend(["", "Guardrail: shadow-only observation. No formal buy signal, no auto order."])
+            summary_lines.append(f"   卖出合同：{exit_contract[:180]}")
+    summary_lines.extend(["", "安全边界：当前仅作影子观察；没有正式买入信号，也不会自动下单。"])
     return "\n".join(summary_lines).strip() + "\n"
 
 
-def _build_blocker_email_body(now_text: str, workflow: dict[str, Any]) -> str:
-    blockers = workflow.get("blockers") if isinstance(workflow.get("blockers"), list) else []
+def _send_shadow_exit_notification(records: list[dict[str, Any]]) -> dict[str, Any]:
+    monitor = _load_monitor_state()
+    if not monitor.get("email_enabled", True):
+        return {"sent": False, "reason": "email_disabled"}
+    lines = ["影子盘卖出事件（未发送真实委托）："]
+    for item in records:
+        lines.append(
+            f"- {item.get('code') or '--'} {item.get('name') or ''} | "
+            f"原因：{item.get('exit_reason') or '--'} | "
+            f"价格：{_fmt_num(item.get('execution_price'), 2)} | "
+            f"数量：{item.get('quantity') or 0} | "
+            f"收益：{_fmt_num((_to_float(item.get('realized_ret')) or 0) * 100, 2, '%')}"
+        )
+    try:
+        return _send_shadow_email(
+            f"AiStock {datetime.now().strftime('%Y-%m-%d %H:%M')} 影子盘卖出",
+            "\n".join(lines) + "\n",
+            monitor.get("recipient_email") or None,
+        )
+    except Exception as exc:
+        _append_monitor_event({"type": "email_error", "status": "error", "message": "Shadow exit email failed", "error": str(exc)})
+        return {"sent": False, "error": str(exc)}
+
+
+def _send_exception_notification(subject: str, detail: str) -> dict[str, Any]:
+    monitor = _load_monitor_state()
+    if not monitor.get("email_enabled", True):
+        return {"sent": False, "reason": "email_disabled"}
+    try:
+        return _send_shadow_email(
+            f"AiStock 异常：{subject}",
+            f"时间：{datetime.now().isoformat(sep=' ', timespec='seconds')}\n异常：{detail}\n安全边界：未发送真实委托。\n",
+            monitor.get("recipient_email") or None,
+        )
+    except Exception as exc:
+        _append_monitor_event({"type": "email_error", "status": "error", "message": "Exception email failed", "error": str(exc)})
+        return {"sent": False, "error": str(exc)}
+
+
+def _notify_holding_tick_qmt_unavailable(
+    codes: list[str],
+    source: dict[str, Any],
+    exc: Exception,
+    *,
+    cooldown_minutes: int = 30,
+) -> dict[str, Any]:
+    monitor = _load_monitor_state()
+    now = datetime.now()
+    now_text = now.isoformat(sep=" ", timespec="seconds")
+    if not monitor.get("email_enabled", True):
+        return {"sent": False, "reason": "email_disabled"}
+    if monitor.get("trading_hours_only", True) and not _in_trading_window(now):
+        return {"sent": False, "reason": "not_trading_window", "checked_at": now_text}
+
+    state = _read_json(HOLDING_TICK_ALERT_STATE_PATH)
+    last_text = str(state.get("last_unavailable_alert_at") or state.get("last_unavailable_alert_attempt_at") or "").strip()
+    last_dt = None
+    if last_text:
+        try:
+            last_dt = datetime.fromisoformat(last_text)
+        except Exception:
+            last_dt = None
+    if last_dt is not None and (now - last_dt).total_seconds() < max(1, cooldown_minutes) * 60:
+        return {"sent": False, "reason": "cooldown", "last_sent_at": last_text}
+
+    normalized_codes = [str(code or "").strip().upper() for code in codes if str(code or "").strip()]
+    error_text = f"{type(exc).__name__}: {exc}"
+    provider = str(source.get("provider") or "QMT xtdata").strip()
+    bridge_url = str(source.get("bridge_url") or os.getenv("AISTOCK_QMT_TICK_BRIDGE_URL") or "").strip()
+    body = "\n".join(
+        [
+            "QMT Tick 行情读取失败，持仓盘口与做T确认已进入只读阻断状态。",
+            f"时间：{now_text}",
+            f"来源：{provider}",
+            f"桥接地址：{bridge_url or '--'}",
+            f"标的数量：{len(normalized_codes)}",
+            f"标的样例：{', '.join(normalized_codes[:20]) or '--'}",
+            f"错误：{error_text}",
+            "",
+            "安全边界：本通知不会发送任何真实委托；请检查 QMT、xtdata 或 host bridge 服务是否在线。",
+        ]
+    ) + "\n"
+    try:
+        send_result = _send_shadow_email(
+            f"[AiStock 异常] QMT Tick 行情不可用 {now_text[11:16]}",
+            body,
+            monitor.get("recipient_email") or None,
+        )
+        payload = {
+            "status": "unavailable",
+            "last_unavailable_alert_at": now_text,
+            "last_unavailable_error": error_text,
+            "last_codes": normalized_codes[:50],
+            "last_send_result": send_result,
+        }
+        _write_json(HOLDING_TICK_ALERT_STATE_PATH, payload)
+        result = {"sent": True, "checked_at": now_text, **send_result}
+        _append_monitor_event({"type": "qmt_tick_unavailable", "status": "alert_sent", "error": error_text, "codes": normalized_codes[:20]})
+        return result
+    except Exception as mail_exc:
+        payload = {
+            "status": "unavailable",
+            "last_unavailable_alert_attempt_at": now_text,
+            "last_unavailable_error": error_text,
+            "last_send_error": str(mail_exc),
+            "last_codes": normalized_codes[:50],
+        }
+        _write_json(HOLDING_TICK_ALERT_STATE_PATH, payload)
+        result = {"sent": False, "error": str(mail_exc), "checked_at": now_text}
+        _append_monitor_event({"type": "qmt_tick_unavailable", "status": "email_error", "error": error_text, "email_error": str(mail_exc)})
+        return result
+
+
+def _mark_holding_tick_qmt_available(codes: list[str], source: dict[str, Any]) -> None:
+    state = _read_json(HOLDING_TICK_ALERT_STATE_PATH)
+    if state.get("status") != "unavailable":
+        return
+    now_text = datetime.now().isoformat(sep=" ", timespec="seconds")
+    normalized_codes = [str(code or "").strip().upper() for code in codes if str(code or "").strip()]
+    recovery_email: dict[str, Any] | None = None
+    recovery_email_error: str | None = None
+    monitor = _load_monitor_state()
+    if state.get("last_unavailable_alert_at") and monitor.get("email_enabled", True):
+        body = "\n".join(
+            [
+                "QMT Tick 行情读取已恢复，持仓盘口与做T确认恢复只读扫描。",
+                f"恢复时间：{now_text}",
+                f"前次异常时间：{state.get('last_unavailable_alert_at') or '--'}",
+                f"来源：{source.get('provider') or 'QMT xtdata'}",
+                f"标的样例：{', '.join(normalized_codes[:20]) or '--'}",
+                "",
+                "安全边界：本通知不会发送任何真实委托；只是关闭上一条 QMT Tick 异常提醒。",
+            ]
+        ) + "\n"
+        try:
+            recovery_email = _send_shadow_email(
+                f"[AiStock 恢复] QMT Tick 行情已恢复 {now_text[11:16]}",
+                body,
+                monitor.get("recipient_email") or None,
+            )
+        except Exception as exc:
+            recovery_email_error = str(exc)
+    state["status"] = "available"
+    state["last_recovered_at"] = now_text
+    state["last_recovered_codes"] = normalized_codes[:50]
+    if recovery_email is not None:
+        state["last_recovery_email"] = recovery_email
+    if recovery_email_error:
+        state["last_recovery_email_error"] = recovery_email_error
+    _write_json(HOLDING_TICK_ALERT_STATE_PATH, state)
+    _append_monitor_event({
+        "type": "qmt_tick_recovered",
+        "status": "available",
+        "provider": source.get("provider"),
+        "codes": normalized_codes[:20],
+        "email_sent": bool(recovery_email),
+        "email_error": recovery_email_error,
+    })
+
+
+def _build_heartbeat_email_body(
+    now_text: str,
+    workflow: dict[str, Any],
+    runtime: dict[str, Any] | None = None,
+) -> str:
+    """Keep routine heartbeats short; detailed evidence belongs to alerts and the UI."""
+    runtime = runtime if isinstance(runtime, dict) else {}
+    summary = runtime.get("summary") if isinstance(runtime.get("summary"), dict) else {}
+    tickets = runtime.get("tickets") if isinstance(runtime.get("tickets"), list) else []
+    ledger = runtime.get("ledger") if isinstance(runtime.get("ledger"), list) else []
+    monitor = workflow.get("monitor") if isinstance(workflow.get("monitor"), dict) else {}
+    last_entry = monitor.get("last_entry_result") if isinstance(monitor.get("last_entry_result"), dict) else {}
+    last_refresh = monitor.get("last_result") if isinstance(monitor.get("last_result"), dict) else {}
+    repair = last_refresh.get("ledger_reconciliation") if isinstance(last_refresh.get("ledger_reconciliation"), dict) else {}
+    if not repair:
+        repair = last_entry.get("ledger_reconciliation") if isinstance(last_entry.get("ledger_reconciliation"), dict) else {}
+    status = "正常" if workflow.get("ok") else "异常"
     lines = [
-        f"Generated at: {now_text}",
-        f"Strategy: {STRATEGY_NAME}",
-        f"Entry date: {workflow.get('entry_date') or '--'}",
-        f"Selected route: {workflow.get('selected_route') or '--'}",
-        f"Diagnosis: {workflow.get('diagnosis_code') or '--'}",
-        f"Workflow ok: {bool(workflow.get('ok'))}",
+        f"生成时间：{now_text}",
+        f"运行：{status} | 路线：{workflow.get('selected_route') or summary.get('selected_route') or '--'} | 诊断：{_email_diagnosis_label(workflow.get('diagnosis_code') or summary.get('diagnosis_code'))}",
+        f"候选：影子票据 {len(tickets)} 张，合格影子买点 {_email_count(summary.get('qualified_shadow_buy_rows'))} 条；影子持仓 {len(ledger)} 条。",
+        "安全边界：仅纸面观察；正式买点=0，自动下单=0，真实订单=0。",
+    ]
+    if repair.get("repaired_count"):
+        lines.append(f"自动修复：已从纸面成交记录补回 {repair['repaired_count']} 条影子台账。")
+    elif repair.get("unreconciled_count"):
+        lines.append(f"需关注：仍有 {repair['unreconciled_count']} 条纸面成交未能写入影子台账。")
+    if workflow.get("blockers"):
+        lines.append(f"阻断：{len(workflow['blockers'])} 项，详见系统页面。")
+    return "\n".join(lines) + "\n"
+
+
+def _email_count(value: Any) -> int:
+    try:
+        return int(float(value or 0))
+    except Exception:
+        return 0
+
+
+def _email_bool_label(value: Any) -> str:
+    return "是" if bool(value) else "否"
+
+
+def _email_diagnosis_label(value: Any) -> str:
+    text = str(value or "").strip()
+    labels = {
+        "NO_STATE_ROUTER_CANDIDATE": "无状态路由候选",
+        "HAS_STATE_ROUTER_SHADOW_CANDIDATE": "有状态路由影子候选",
+        "NO_FORMAL_BUY_SIGNAL": "无正式买点",
+        "FORMAL_BUY_SIGNAL_LOCKED": "正式买点已锁定",
+    }
+    return f"{labels[text]}（{text}）" if text in labels else (text or "--")
+
+
+def _email_status_label(value: Any) -> str:
+    text = str(value or "").strip()
+    labels = {
+        "validated": "已验证",
+        "pending": "待处理",
+        "issue_found": "发现问题",
+        "continue_watch": "继续观察",
+        "manual_approved": "人工放行",
+        "paper_watch": "纸面观察",
+        "wait_refresh": "等待刷新",
+        "skip": "跳过",
+        "reject": "否决",
+        "paper_exit_submitted": "纸面卖出已提交",
+        "paper_buy_submitted": "纸面买入已提交",
+        "submitted": "已提交",
+        "error": "异常",
+        "unknown": "未知",
+    }
+    return f"{labels[text]}（{text}）" if text in labels else (text or "--")
+
+
+def _email_source_label(value: Any) -> str:
+    text = str(value or "").strip()
+    labels = {
+        "qmtmini_readonly_snapshot": "QMT Mini只读快照",
+        "qmtmini_trade_snapshot": "QMT Mini成交快照",
+        "ths_export_file": "同花顺导出文件",
+        "ths_ui_export_file": "同花顺界面导出文件",
+        "ths_clipboard": "同花顺剪贴板",
+        "tdx_gateway_ths_bridge": "TDX网关转接同花顺",
+    }
+    return f"{labels[text]}（{text}）" if text in labels else (text or "--")
+
+
+def _count_dict_values(rows: dict[str, Any], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in rows.values():
+        if not isinstance(item, dict):
+            continue
+        value = _email_status_label(item.get(field) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _format_count_map(counts: dict[str, int], limit: int = 6) -> str:
+    if not counts:
+        return "--"
+    items = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:limit]
+    return ", ".join(f"{key}={value}" for key, value in items)
+
+
+def _build_aistock_data_source_email_lines(workflow: dict[str, Any], runtime: dict[str, Any]) -> list[str]:
+    summary = runtime.get("summary") if isinstance(runtime.get("summary"), dict) else {}
+    target_date = (
+        _date_text(workflow.get("decision_date"))
+        or _date_text(summary.get("decision_date"))
+        or _date_text(workflow.get("entry_date"))
+        or _date_text(summary.get("entry_date"))
+    )
+    lines = ["AiStock 数据源录入情况："]
+    try:
+        source_cfg = app_config.get("data_sources", default={}, config_file="settings.yaml") or {}
+        preferred = source_cfg.get("preferred_source") or source_cfg.get("primary") or "qmt_xtquant"
+        lines.append(f"- 主数据源：{preferred}")
+    except Exception:
+        lines.append("- 主数据源：qmt_xtquant")
+    try:
+        from utils.market_warehouse import clickhouse_available, clickhouse_client, clickhouse_table_exists
+
+        if not clickhouse_available():
+            lines.append("- ClickHouse：不可用")
+            return lines
+        client = clickhouse_client()
+        if not target_date:
+            latest_candidates: list[str] = []
+            for table_name, column in [
+                ("kline_daily", "trade_date"),
+                ("kline_minute_5", "toDate(datetime)"),
+                ("kline_minute_15", "toDate(datetime)"),
+                ("kline_minute_30", "toDate(datetime)"),
+            ]:
+                if not clickhouse_table_exists(table_name):
+                    continue
+                rows = client.query(f"SELECT max({column}) FROM {table_name}").result_rows
+                if rows and rows[0][0] is not None:
+                    latest_candidates.append(str(rows[0][0])[:10])
+            target_date = max(latest_candidates) if latest_candidates else ""
+        lines.append(f"- 统计日期：{target_date or '--'}")
+        if clickhouse_table_exists("stocks"):
+            rows = client.query("SELECT count(), countIf(type = 'stock'), countIf(type != 'stock') FROM stocks").result_rows
+            if rows:
+                lines.append(f"- 股票池/指数池：总数 {int(rows[0][0] or 0)}，股票 {int(rows[0][1] or 0)}，指数或其他 {int(rows[0][2] or 0)}")
+        if target_date and clickhouse_table_exists("kline_daily"):
+            rows = client.query(
+                f"""
+                SELECT uniqExact(code), count(), max(trade_date)
+                FROM kline_daily
+                WHERE trade_date = toDate('{target_date}')
+                """
+            ).result_rows
+            if rows:
+                row_count = int(rows[0][1] or 0)
+                latest = str(rows[0][2])[:10] if row_count > 0 and rows[0][2] is not None else "--"
+                lines.append(f"- 日线1d：覆盖 {int(rows[0][0] or 0)} 个代码，记录 {row_count} 行，最新日期 {latest}")
+        for period, table_name in [("5m", "kline_minute_5"), ("15m", "kline_minute_15"), ("30m", "kline_minute_30"), ("60m", "kline_minute_60")]:
+            if not clickhouse_table_exists(table_name):
+                lines.append(f"- 分钟线{period}：表不存在（{table_name}）")
+                continue
+            if not target_date:
+                continue
+            rows = client.query(
+                f"""
+                SELECT uniqExact(code), count(), max(datetime)
+                FROM {table_name}
+                WHERE toDate(datetime) = toDate('{target_date}')
+                """
+            ).result_rows
+            if rows:
+                row_count = int(rows[0][1] or 0)
+                latest = str(rows[0][2]) if row_count > 0 and rows[0][2] is not None else "--"
+                lines.append(f"- 分钟线{period}：覆盖 {int(rows[0][0] or 0)} 个代码，记录 {row_count} 行，最新时间 {latest}")
+        if target_date and clickhouse_table_exists("sector_kline_daily"):
+            rows = client.query(
+                f"""
+                SELECT count(), max(trade_date)
+                FROM sector_kline_daily
+                WHERE trade_date = toDate('{target_date}')
+                """
+            ).result_rows
+            if rows:
+                row_count = int(rows[0][0] or 0)
+                latest = str(rows[0][1])[:10] if row_count > 0 and rows[0][1] is not None else "--"
+                lines.append(f"- 板块日线：记录 {row_count} 行，最新日期 {latest}")
+        if target_date and clickhouse_table_exists("qmt_intraday_latest_5m"):
+            rows = client.query(
+                f"""
+                SELECT uniqExact(code), max(datetime)
+                FROM qmt_intraday_latest_5m
+                WHERE trade_date = toDate('{target_date}')
+                """
+            ).result_rows
+            if rows:
+                code_count = int(rows[0][0] or 0)
+                latest = str(rows[0][1]) if code_count > 0 and rows[0][1] is not None else "--"
+                lines.append(f"- QMT盘中最新5分钟：覆盖 {code_count} 个代码，最新时间 {latest}")
+    except Exception as exc:
+        lines.append(f"- 覆盖检查异常：{type(exc).__name__}: {exc}")
+    return lines
+
+
+def _build_aistock_feedback_email_lines(workflow: dict[str, Any], runtime: dict[str, Any]) -> list[str]:
+    summary = runtime.get("summary") if isinstance(runtime.get("summary"), dict) else {}
+    tickets = runtime.get("tickets") if isinstance(runtime.get("tickets"), list) else []
+    ledger = runtime.get("ledger") if isinstance(runtime.get("ledger"), list) else []
+    broker_state = _read_json(BROKER_STATE_PATH)
+    broker_capital = broker_state.get("capital") if isinstance(broker_state.get("capital"), dict) else {}
+    broker_holdings = broker_state.get("holdings") if isinstance(broker_state.get("holdings"), list) else []
+    pretrade_review_data = _read_json(PRETRADE_TICKET_REVIEWS_PATH)
+    formal_review_data = _read_json(FORMAL_ACTION_REVIEWS_PATH)
+    paper_execution_data = _read_json(PAPER_EXECUTIONS_PATH)
+    pretrade_reviews = pretrade_review_data.get("reviews") if isinstance(pretrade_review_data, dict) else {}
+    formal_reviews = formal_review_data.get("reviews") if isinstance(formal_review_data, dict) else {}
+    pretrade_reviews = pretrade_reviews if isinstance(pretrade_reviews, dict) else {}
+    formal_reviews = formal_reviews if isinstance(formal_reviews, dict) else {}
+    paper_executions = paper_execution_data.get("executions") if isinstance(paper_execution_data, dict) else []
+    paper_executions = paper_executions if isinstance(paper_executions, list) else []
+    pretrade_smoke = _read_json(PRETRADE_SMOKE_PATH)
+    smoke_summary = pretrade_smoke.get("summary") if isinstance(pretrade_smoke.get("summary"), dict) else {}
+    lines = [
+        "AiStock 买卖点反馈：",
+        (
+            "- 买入候选："
+            f"票据 {len(tickets)} 条，"
+            f"合格影子买点 {_email_count(summary.get('qualified_shadow_buy_rows'))} 条，"
+            f"正式买点 {_email_count(summary.get('formal_buy_signal_rows'))} 条，"
+            f"自动下单许可 {_email_count(summary.get('auto_order_allowed_rows'))} 条"
+        ),
+        (
+            "- 路由状态："
+            f"诊断 {_email_diagnosis_label(workflow.get('diagnosis_code') or summary.get('diagnosis_code'))}，"
+            f"选中路线 {workflow.get('selected_route') or summary.get('selected_route') or '--'}，"
+            f"影子持仓 {len(ledger)} 条"
+        ),
+        (
+            "- 逐票盘前复盘："
+            f"共 {len(pretrade_reviews)} 条，"
+            f"动作分布：{_format_count_map(_count_dict_values(pretrade_reviews, 'review_action'))}"
+        ),
+        (
+            "- 正式动作复盘："
+            f"共 {len(formal_reviews)} 条，"
+            f"状态分布：{_format_count_map(_count_dict_values(formal_reviews, 'review_status'))}"
+        ),
+        (
+            "- 纸面执行反馈："
+            f"记录 {len(paper_executions)} 条，"
+            f"最新状态 {_email_status_label(paper_executions[-1].get('status') if paper_executions and isinstance(paper_executions[-1], dict) else '--')}"
+        ),
+        (
+            "- 券商/QMT资金持仓快照："
+            f"更新时间 {broker_state.get('updated_at') or '--'}，"
+            f"来源 {_email_source_label(broker_state.get('holding_source'))}，"
+            f"持仓 {len(broker_holdings)} 条，"
+            f"可用现金 {_fmt_num(broker_capital.get('available_cash'), 2)}，"
+            f"总资产 {_fmt_num(broker_capital.get('total_capital'), 2)}"
+        ),
+        (
+            "- 盘前冒烟检查："
+            f"生成时间 {pretrade_smoke.get('generated_at') or smoke_summary.get('generated_at') or '--'}，"
+            f"是否就绪 {_email_bool_label(pretrade_smoke.get('ready') if 'ready' in pretrade_smoke else smoke_summary.get('ready')) if ('ready' in pretrade_smoke or 'ready' in smoke_summary) else '--'}，"
+            f"正式就绪 {smoke_summary.get('pretrade_review_formal_ready_count', '--')} 条，"
+            f"待处理动作 {smoke_summary.get('pretrade_action_pending_count', '--')} 条"
+        ),
+    ]
+    return lines
+
+
+def _build_strategy_result_email_body(
+    now_text: str,
+    workflow: dict[str, Any],
+    runtime: dict[str, Any] | None = None,
+) -> list[str]:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    summary = runtime.get("summary") if isinstance(runtime.get("summary"), dict) else {}
+    tickets = runtime.get("tickets") if isinstance(runtime.get("tickets"), list) else []
+    ledger = runtime.get("ledger") if isinstance(runtime.get("ledger"), list) else []
+    diagnostics = runtime.get("route_diagnostics") if isinstance(runtime.get("route_diagnostics"), list) else []
+    last_result = workflow.get("last_result") if isinstance(workflow.get("last_result"), dict) else {}
+    monitor = workflow.get("monitor") if isinstance(workflow.get("monitor"), dict) else {}
+    exit_monitor = workflow.get("exit_monitor") if isinstance(workflow.get("exit_monitor"), dict) else {}
+    generated_at = summary.get("generated_at") or last_result.get("finished_at") or workflow.get("checked_at") or now_text
+    lines = [
+        "G3 策略结果明细：",
+        f"- 生成时间：{generated_at}",
+        f"- 买入候选日期：{workflow.get('entry_date') or summary.get('entry_date') or '--'}",
+        f"- 决策/采集日期：{workflow.get('decision_date') or summary.get('decision_date') or '--'}",
+        f"- 诊断结果：{_email_diagnosis_label(workflow.get('diagnosis_code') or summary.get('diagnosis_code'))}",
+        f"- 选中路线：{workflow.get('selected_route') or summary.get('selected_route') or '--'}",
+        (
+            "- 候选统计："
+            f"源数据 {_email_count(summary.get('source_rows'))} 行，"
+            f"可进入路由 {_email_count(summary.get('eligible_source_rows'))} 行，"
+            f"被阻断 {_email_count(summary.get('blocked_source_rows'))} 行，"
+            f"选中 {_email_count(summary.get('selected_rows'))} 行，"
+            f"票据 {len(tickets)} 条，"
+            f"合格影子买点 {_email_count(summary.get('qualified_shadow_buy_rows'))} 条"
+        ),
+        (
+            "- 下单闸门："
+            f"正式买点 {_email_count(summary.get('formal_buy_signal_rows'))} 条，"
+            f"自动许可 {_email_count(summary.get('auto_order_allowed_rows'))} 条，"
+            f"下单通道 {_email_count(summary.get('order_path_enabled_rows'))} 条，"
+            f"实盘下单开关 {_email_bool_label(summary.get('live_order_enabled'))}"
+        ),
+        (
+            "- 监控任务："
+            f"影子买入监控 {_email_bool_label(monitor.get('scheduler_enabled'))}，"
+            f"卖出监控 {_email_bool_label(exit_monitor.get('scheduler_enabled'))}，"
+            f"最近刷新状态 {_email_status_label(last_result.get('status') or '--')}，"
+            f"耗时 {last_result.get('duration_seconds') or '--'} 秒"
+        ),
+        f"- 当前影子持仓：{len(ledger)} 条",
+    ]
+    if diagnostics:
+        lines.extend(["", "路由诊断："])
+        for item in diagnostics[:5]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                (
+                    f"- {item.get('route') or '--'}: "
+                    f"总行数 {_email_count(item.get('rows'))}，"
+                    f"可用 {_email_count(item.get('eligible_rows'))}，"
+                    f"阻断 {_email_count(item.get('blocked_rows'))}，"
+                    f"主要阻断原因 {item.get('top_block_reason') or '--'}"
+                )
+            )
+    return lines
+
+
+def _build_blocker_email_body(now_text: str, workflow: dict[str, Any], runtime: dict[str, Any] | None = None) -> str:
+    blockers = workflow.get("blockers") if isinstance(workflow.get("blockers"), list) else []
+    runtime = runtime if isinstance(runtime, dict) else {}
+    summary = runtime.get("summary") if isinstance(runtime.get("summary"), dict) else {}
+    lines = [
+        f"生成时间：{now_text}",
+        "报告范围：AiStock 全局运行快照",
+        f"G3策略：{STRATEGY_NAME_CN}（{STRATEGY_NAME}）",
+        f"买入候选日期：{workflow.get('entry_date') or summary.get('entry_date') or '--'}",
+        f"当前选中路线：{workflow.get('selected_route') or summary.get('selected_route') or '--'}",
+        f"诊断结果：{_email_diagnosis_label(workflow.get('diagnosis_code') or summary.get('diagnosis_code'))}",
+        f"工作流是否正常：{_email_bool_label(workflow.get('ok'))}",
         "",
-        "Blockers:",
+        *_build_aistock_data_source_email_lines(workflow, runtime),
+        "",
+        *_build_aistock_feedback_email_lines(workflow, runtime),
+        "",
+        *_build_strategy_result_email_body(now_text, workflow, runtime),
+        "",
+        "阻断项：",
     ]
     if blockers:
         for idx, item in enumerate(blockers[:10], start=1):
             lines.append(f"{idx}. {item.get('name') or '--'} | {item.get('message') or '--'}")
     else:
-        lines.append("- no blocker, heartbeat only")
-    lines.extend(["", "Guardrail: shadow-only observation. No formal buy signal, no auto order."])
+        lines.append("- 当前没有阻断项；上方已包含策略结果快照。")
+    lines.extend(["", "安全边界：当前仅作影子观察；没有正式买入信号，也不会自动下单。"])
     return "\n".join(lines).strip() + "\n"
 
 
@@ -1643,8 +3146,8 @@ def _run_shadow_notifications(
     recipient = state.get("recipient_email") or None
     try:
         if new_tickets:
-            subject = f"G3 State Alpha shadow buy {entry_date or '--'} {now_text[11:16]}"
-            sent.append(_send_shadow_email(subject, _build_shadow_buy_email_body(now_text, workflow, new_tickets), recipient))
+            subject = f"AiStock全局运行摘要 {entry_date or '--'} {now_text[11:16]} 买入候选"
+            sent.append(_send_shadow_email(subject, _build_shadow_buy_email_body(now_text, workflow, new_tickets, runtime), recipient))
             for item in new_tickets:
                 last_alert_keys[_ticket_alert_key(item, entry_date)] = now_text
             state["last_email_sent_at"] = now_text
@@ -1658,15 +3161,12 @@ def _run_shadow_notifications(
                     last_blocker_dt = None
                 should_send_blocker = last_blocker_dt is None or (now - last_blocker_dt).total_seconds() >= 30 * 60
             if should_send_blocker:
-                subject = f"G3 State Alpha blocker {entry_date or '--'} {now_text[11:16]}"
-                sent.append(_send_shadow_email(subject, _build_blocker_email_body(now_text, workflow), recipient))
+                subject = f"AiStock全局运行摘要 {entry_date or '--'} {now_text[11:16]} 阻断"
+                sent.append(_send_shadow_email(subject, _build_blocker_email_body(now_text, workflow, runtime), recipient))
                 state["last_blocker_alert_at"] = now_text
                 state["last_email_sent_at"] = now_text
-        elif _should_send_heartbeat(state, now, force_send=force_send):
-            subject = f"G3 State Alpha heartbeat {entry_date or '--'} {now_text[11:16]}"
-            sent.append(_send_shadow_email(subject, _build_blocker_email_body(now_text, workflow), recipient))
-            state["last_heartbeat_sent_at"] = now_text
-            state["last_email_sent_at"] = now_text
+        # Routine heartbeat mail is deliberately suppressed.  Only new buy
+        # candidates, blockers, sell events, and repair failures notify users.
         if len(last_alert_keys) > 1000:
             last_alert_keys = dict(list(last_alert_keys.items())[-1000:])
         state["last_alert_keys"] = last_alert_keys
@@ -1741,9 +3241,19 @@ def _directory_writable_check(name: str, path: Path) -> dict[str, Any]:
 def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     summary_path = STATE_ALPHA_RUNTIME_DIR / "latest_summary.json"
     tickets_path = STATE_ALPHA_RUNTIME_DIR / "latest_shadow_tickets.csv"
+    afterhours_summary_path = STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_summary.json"
+    afterhours_tickets_path = STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_shadow_tickets.csv"
     ledger_path = STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"
     diagnostics_path = STATE_ROUTER_RUNTIME_DIR / "latest_route_diagnostics.csv"
     summary = _read_json(summary_path) or _read_json(STATE_ROUTER_RUNTIME_DIR / "latest_summary.json")
+    afterhours_summary = _read_json(afterhours_summary_path)
+    use_afterhours_pair = bool(
+        isinstance(afterhours_summary, dict)
+        and afterhours_summary.get("pending_next_session_confirmation")
+    )
+    if use_afterhours_pair:
+        summary = afterhours_summary
+        tickets_path = afterhours_tickets_path
     tickets = _enrich_trade_strategy_records(_read_csv_records(tickets_path, limit=limit))
     broker_snapshot = _broker_snapshot()
     broker_trades = broker_snapshot.get("broker_trades") if isinstance(broker_snapshot.get("broker_trades"), list) else []
@@ -1758,6 +3268,7 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     return {
         "summary": summary,
         "tickets": tickets,
+        "runtime_pair": "afterhours_pending_confirmation" if use_afterhours_pair else "current",
         "ledger": ledger,
         "route_diagnostics": diagnostics,
         "pipeline": _build_pipeline(summary, tickets, diagnostics),
@@ -1783,14 +3294,15 @@ def _build_workflow_status() -> dict[str, Any]:
     formal_rows = int(summary.get("formal_buy_signal_rows") or 0)
     auto_rows = int(summary.get("auto_order_allowed_rows") or 0)
     order_rows = int(summary.get("order_path_enabled_rows") or 0)
-    qualified_ok = qualified_rows == len(tickets) if tickets else qualified_rows == 0
-    m30_ok = all(_truthy(item.get("m30_confirmed")) for item in tickets) if tickets else True
+    pending_next_session = bool(summary.get("pending_next_session_confirmation"))
+    qualified_ok = True if pending_next_session else (qualified_rows == len(tickets) if tickets else qualified_rows == 0)
+    m30_ok = True if pending_next_session else (all(_truthy(item.get("m30_confirmed")) for item in tickets) if tickets else True)
     business_checks = [
         {
             "name": "qualified_shadow_buy",
             "ok": qualified_ok,
             "status": "pass" if qualified_ok else "blocked",
-            "message": f"qualified_shadow_buy_rows={qualified_rows}, tickets={len(tickets)}",
+            "message": "next-session candidates are pending first completed 30m confirmation" if pending_next_session else f"qualified_shadow_buy_rows={qualified_rows}, tickets={len(tickets)}",
         },
         {
             "name": "formal_gate_locked",
@@ -1871,7 +3383,24 @@ def _run_refresh_task(
     monitor["last_refresh_task_id"] = task_id
     _save_monitor_state(monitor)
     result = _run_state_router_refresh(entry_date)
+    reconciliation = _reconcile_shadow_ledger_from_paper_executions() if result.get("ok") else {
+        "skipped": True,
+        "reason": "refresh_failed",
+    }
     workflow = _build_workflow_status()
+    if not result.get("ok"):
+        workflow["ok"] = False
+        blockers = workflow.get("blockers") if isinstance(workflow.get("blockers"), list) else []
+        blockers.append({"name": "state_router_refresh", "message": result.get("error") or result.get("stderr_tail") or "State router refresh failed."})
+        workflow["blockers"] = blockers
+    if int(reconciliation.get("unreconciled_count") or 0) > 0:
+        workflow["ok"] = False
+        blockers = workflow.get("blockers") if isinstance(workflow.get("blockers"), list) else []
+        blockers.append({
+            "name": "shadow_ledger_reconciliation",
+            "message": f"{reconciliation['unreconciled_count']} paper executions could not be restored to the shadow ledger.",
+        })
+        workflow["blockers"] = blockers
     finished_at = datetime.now()
     ok = bool(result.get("ok")) and bool(workflow.get("ok"))
     final = {
@@ -1884,6 +3413,7 @@ def _run_refresh_task(
         "finished_at": finished_at.isoformat(sep=" ", timespec="seconds"),
         "duration_seconds": round((finished_at - started_at).total_seconds(), 1),
         "refresh": result,
+        "ledger_reconciliation": reconciliation,
         "workflow": workflow,
         "message": "G3 State Alpha refresh completed" if ok else "G3 State Alpha refresh finished with blockers",
     }
@@ -2694,6 +4224,18 @@ def _load_paper_executions() -> list[dict[str, Any]]:
     return rows if isinstance(rows, list) else []
 
 
+def _formal_score88_paper_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep old paper records auditable without letting them prove Score88 fills."""
+    return [
+        row for row in rows
+        if (
+            isinstance(row, dict)
+            and str(row.get("strategy_id") or "") == STRATEGY_ID
+            and str(row.get("contract") or "") == LATEST_G3_PROFILE
+        )
+    ]
+
+
 def _save_paper_executions(rows: list[dict[str, Any]]) -> None:
     _write_json(PAPER_EXECUTIONS_PATH, {"executions": rows[-1000:]})
 
@@ -2801,8 +4343,12 @@ def _submit_paper_order(payload: dict[str, Any]) -> dict[str, Any]:
         "notes": str(payload.get("notes") or "").strip(),
     }
     rows = _load_paper_executions()
+    formal_rows = _formal_score88_paper_rows(rows)
+    if any(_paper_execution_matches_ticket(ticket, item) and _paper_execution_side(item) == "BUY" for item in formal_rows):
+        return {"ok": False, "message": "Paper buy already exists for this shadow ticket.", "ticket": ticket}
     rows.append(record)
     _save_paper_executions(rows)
+    ledger_updated = _update_shadow_ledger_for_entry(ticket, record)
     _append_monitor_event(
         {
             "type": "paper_execution",
@@ -2812,7 +4358,229 @@ def _submit_paper_order(payload: dict[str, Any]) -> dict[str, Any]:
             "message": "G3 State Alpha paper execution recorded.",
         }
     )
-    return {"ok": True, "record": record, "execution_count": len(rows)}
+    return {"ok": True, "record": record, "execution_count": len(rows), "ledger_updated": ledger_updated}
+
+
+def _reconcile_shadow_ledger_from_paper_executions() -> dict[str, Any]:
+    """Restore open paper fills after a candidate refresh rewrites the ledger.
+
+    This remains strictly inside the shadow/paper boundary: it only rehydrates
+    the CSV ledger from already-recorded paper executions and never calls an
+    order API.
+    """
+    paper_rows = _formal_score88_paper_rows(_load_paper_executions())
+    runtime = _load_current_runtime(limit=200)
+    tickets = [item for item in (runtime.get("tickets") or []) if isinstance(item, dict)]
+    ticket_by_key = {
+        str(item.get("ticket_key") or item.get("candidate_key") or item.get("trade_key") or "").strip(): item
+        for item in tickets
+    }
+    ledger_records = _read_shadow_ledger_records(STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv", limit=None)
+    repaired: list[dict[str, Any]] = []
+    unreconciled: list[dict[str, Any]] = []
+    for record in paper_rows:
+        if not isinstance(record, dict) or _paper_execution_side(record) != "BUY":
+            continue
+        ticket_key = str(record.get("ticket_key") or "").strip()
+        code = str(record.get("code") or record.get("code_raw") or "").strip().upper()
+        if _paper_open_quantity(ticket_key, code, paper_rows) <= 0:
+            continue
+        matching = [
+            row for row in ledger_records
+            if str(row.get("ticket_key") or row.get("candidate_key") or row.get("trade_key") or "").strip() == ticket_key
+            or (
+                not ticket_key
+                and str(row.get("code") or row.get("code_raw") or "").strip().upper() == code
+            )
+        ]
+        # Contract migrations can change the ticket prefix while retaining the
+        # same symbol, route and entry date.  Match that stable identity before
+        # treating a historical paper buy as an orphan.
+        if not matching:
+            matching = [
+                row for row in ledger_records
+                if _ledger_match_mask(pd.DataFrame([row]), record).iloc[0]
+            ]
+        ticket = ticket_by_key.get(ticket_key)
+        # A later no-candidate refresh has no current ticket for an earlier
+        # paper fill.  Its ledger record remains the authoritative ticket
+        # envelope for reconciliation, so do not silently skip that fill.
+        if not ticket and matching:
+            ticket = matching[-1]
+        if not ticket:
+            unreconciled.append({"ticket_key": ticket_key, "code": code, "execution_id": record.get("execution_id"), "reason": "ticket_missing"})
+            continue
+        current = matching[-1] if matching else None
+        if str((current or {}).get("trade_status") or "").strip() == "closed" or str((current or {}).get("position_status") or "").strip() == "closed":
+            continue
+        current_is_open = bool(current and current in _filter_open_shadow_ledger_records([current]))
+        already_linked = str((current or {}).get("paper_execution_id") or "").strip() == str(record.get("execution_id") or "").strip()
+        if current_is_open and already_linked:
+            continue
+        if _update_shadow_ledger_for_entry(ticket, record):
+            repaired.append({"ticket_key": ticket_key, "code": code, "execution_id": record.get("execution_id")})
+            ledger_records = _read_shadow_ledger_records(STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv", limit=None)
+        else:
+            unreconciled.append({"ticket_key": ticket_key, "code": code, "execution_id": record.get("execution_id")})
+    result = {
+        "checked_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "open_paper_execution_count": sum(
+            1 for row in paper_rows
+            if isinstance(row, dict)
+            and _paper_execution_side(row) == "BUY"
+            and _paper_open_quantity(str(row.get("ticket_key") or ""), str(row.get("code") or row.get("code_raw") or ""), paper_rows) > 0
+        ),
+        "repaired_count": len(repaired),
+        "repaired": repaired,
+        "unreconciled_count": len(unreconciled),
+        "unreconciled": unreconciled,
+    }
+    if repaired or unreconciled:
+        _append_monitor_event({"type": "shadow_ledger_reconciliation", **result})
+    return result
+
+
+def _update_shadow_ledger_for_entry(ticket: dict[str, Any], record: dict[str, Any]) -> bool:
+    """Promote a planned ticket to an open shadow holding after a paper buy."""
+    ledger_path = STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"
+    if not ledger_path.exists():
+        return False
+    try:
+        df = pd.read_csv(ledger_path, low_memory=False)
+    except (pd.errors.EmptyDataError, OSError):
+        return False
+    if df.empty:
+        return False
+    df = _ensure_ledger_columns(
+        df,
+        [
+            "trade_status", "position_status", "last_state", "shadow_status",
+            "entry_price", "entry_datetime", "entry_quantity", "entry_notional",
+            "entry_position_pct", "paper_execution_id", "repair_tag", "repair_updated_at",
+        ],
+    )
+    # Fresh CSV columns that are entirely blank are inferred as float by
+    # pandas; make the mixed execution fields explicit objects before writing.
+    execution_columns = [
+        "trade_status", "position_status", "last_state", "shadow_status",
+        "entry_price", "entry_datetime", "entry_quantity", "entry_notional",
+        "entry_position_pct", "paper_execution_id", "repair_tag", "repair_updated_at",
+    ]
+    df[execution_columns] = df[execution_columns].astype(object)
+    mask = _ledger_match_mask(df, ticket)
+    if not bool(mask.any()):
+        return False
+    idx = list(df.index[mask])[-1]
+    now_text = datetime.now().isoformat(sep=" ", timespec="seconds")
+    df.at[idx, "trade_status"] = "open_shadow"
+    df.at[idx, "position_status"] = "open_shadow"
+    df.at[idx, "last_state"] = "open_shadow"
+    df.at[idx, "shadow_status"] = "open_shadow"
+    df.at[idx, "entry_price"] = record.get("execution_price")
+    df.at[idx, "entry_datetime"] = record.get("created_at") or now_text
+    df.at[idx, "entry_quantity"] = record.get("quantity")
+    df.at[idx, "entry_notional"] = record.get("notional")
+    df.at[idx, "entry_position_pct"] = record.get("position_pct")
+    df.at[idx, "paper_execution_id"] = record.get("execution_id")
+    df.at[idx, "repair_tag"] = "shadow_entry_monitor"
+    df.at[idx, "repair_updated_at"] = now_text
+    temp_path = ledger_path.with_suffix(ledger_path.suffix + ".tmp")
+    df.to_csv(temp_path, index=False, encoding="utf-8-sig")
+    os.replace(temp_path, ledger_path)
+    return True
+
+
+def _buyable_tick(tick: dict[str, Any], now: datetime) -> tuple[float | None, str]:
+    if not isinstance(tick, dict):
+        return None, "tick_missing"
+    timetag = str(tick.get("timetag") or "").strip()
+    if not timetag.startswith(now.strftime("%Y%m%d")):
+        return None, "tick_not_from_today"
+    last_price = _as_float(tick.get("lastPrice"), 0.0) or 0.0
+    if last_price <= 0 or (_as_float(tick.get("volume"), 0.0) or 0.0) <= 0:
+        return None, "tick_has_no_trade"
+    asks = tick.get("askPrice") if isinstance(tick.get("askPrice"), list) else []
+    ask_volumes = tick.get("askVol") if isinstance(tick.get("askVol"), list) else []
+    ask_price = _as_float(asks[0], 0.0) if asks else 0.0
+    ask_volume = _as_float(ask_volumes[0], 0.0) if ask_volumes else 0.0
+    if not ask_price or ask_price <= 0 or not ask_volume or ask_volume <= 0:
+        return None, "tick_not_buyable_no_best_ask"
+    return ask_price, "best_ask_tick"
+
+
+def _run_shadow_entry_monitor_once(source: str = "manual") -> dict[str, Any]:
+    """Fill today's qualified planned tickets on their first executable QMT Tick.
+
+    This is strictly a paper-ledger operation. It never calls the QMT order API.
+    """
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if not _in_trading_window(now):
+        return {"ok": True, "status": "skipped", "reason": "not_trading_window", "checked_at": now.isoformat(sep=" ", timespec="seconds")}
+    if not SHADOW_ENTRY_LOCK.acquire(blocking=False):
+        return {"ok": True, "status": "skipped", "reason": "entry_monitor_already_running", "checked_at": now.isoformat(sep=" ", timespec="seconds")}
+    try:
+        reconciliation = _reconcile_shadow_ledger_from_paper_executions()
+        runtime = _load_current_runtime(limit=200)
+        tickets = [item for item in (runtime.get("tickets") or []) if isinstance(item, dict)]
+        ledger_records = _read_shadow_ledger_records(STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv", limit=None)
+        paper_rows = _load_paper_executions()
+        open_rows = _filter_open_shadow_ledger_records(ledger_records)
+        open_codes = {str(row.get("code") or row.get("code_raw") or "").strip().upper() for row in open_rows}
+        max_slots = max([int(_as_float(item.get("portfolio_slot_count"), 2) or 2) for item in tickets] or [2])
+        candidates: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for ticket in tickets:
+            code = str(ticket.get("code") or ticket.get("code_raw") or "").strip().upper()
+            if _date_text(ticket.get("entry_date")) != today:
+                continue
+            if not _truthy(ticket.get("qualified_shadow_buy")) or not _truthy(ticket.get("m30_confirmed")):
+                continue
+            if code in open_codes:
+                skipped.append({"code": code, "reason": "already_open_shadow"})
+                continue
+            if any(_paper_execution_matches_ticket(ticket, row) and _paper_execution_side(row) == "BUY" for row in paper_rows if isinstance(row, dict)):
+                skipped.append({"code": code, "reason": "paper_execution_exists"})
+                continue
+            matching = [row for row in ledger_records if _ledger_match_mask(pd.DataFrame([row]), ticket).iloc[0]]
+            if not matching or str(matching[-1].get("last_state") or "").strip().lower() != "planned":
+                skipped.append({"code": code, "reason": "ledger_not_planned"})
+                continue
+            candidates.append(ticket)
+        available_slots = max(0, max_slots - len(open_rows))
+        candidates = candidates[:available_slots]
+        tick_source: dict[str, Any] = {}
+        ticks = _read_qmt_ticks([str(item.get("code") or item.get("code_raw") or "") for item in candidates], tick_source) if candidates else {}
+        saved: list[dict[str, Any]] = []
+        for ticket in candidates:
+            code = str(ticket.get("code") or ticket.get("code_raw") or "").strip().upper()
+            execution_price, price_source = _buyable_tick(ticks.get(code, {}) if isinstance(ticks, dict) else {}, now)
+            if execution_price is None:
+                skipped.append({"code": code, "reason": price_source})
+                continue
+            result = _submit_paper_order({
+                "ticket_key": ticket.get("ticket_key"), "code": code,
+                "execution_price": execution_price, "position_pct": ticket.get("position_pct"),
+                "source": "g3_shadow_entry_tick_monitor",
+                "notes": f"First buyable QMT Tick fill at best ask; tick={now.strftime('%Y-%m-%d %H:%M:%S')}; source={price_source}.",
+            })
+            if result.get("ok"):
+                saved.append(result.get("record") or {})
+                open_codes.add(code)
+            else:
+                skipped.append({"code": code, "reason": result.get("message") or "paper_order_failed"})
+        result = {
+            "ok": True, "mode": "g3_shadow_entry_tick_monitor", "source": source,
+            "checked_at": now.isoformat(sep=" ", timespec="seconds"), "candidate_count": len(candidates),
+            "filled_count": len(saved), "saved_entries": saved, "skipped": skipped,
+            "tick_source": tick_source, "formal_order_status": "paper_only_no_real_order",
+            "ledger_reconciliation": reconciliation,
+        }
+        for item in saved:
+            _append_monitor_event({"type": "shadow_entry", "status": "open_shadow", "source": source, "code": item.get("code"), "message": "Qualified G3 ticket filled from first buyable QMT Tick; paper only."})
+        return result
+    finally:
+        SHADOW_ENTRY_LOCK.release()
 
 
 def _paper_execution_side(row: dict[str, Any]) -> str:
@@ -3101,7 +4869,7 @@ def _run_shadow_exit_monitor_once(
         row for row in advised_rows
         if isinstance(row, dict) and str(row.get("exit_action") or "") in {"sell_all", "sell_half"}
     ]
-    paper_rows = _load_paper_executions()
+    paper_rows = _formal_score88_paper_rows(_load_paper_executions())
     saved: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     updated_df = ledger_df.copy()
@@ -3197,6 +4965,7 @@ def _run_shadow_exit_monitor_once(
                 "message": "G3 shadow exit monitor recorded a paper sell.",
             }
         )
+    exit_email = _send_shadow_exit_notification(saved) if saved else {"sent": False, "reason": "no_exit"}
 
     finished_at = datetime.now()
     return {
@@ -3210,6 +4979,7 @@ def _run_shadow_exit_monitor_once(
         "triggered_exit_count": len(saved),
         "skipped_count": len(skipped),
         "saved_exits": saved,
+        "exit_email": exit_email,
         "skipped": skipped,
         "artifacts": {
             "shadow_ledger": _path_status(ledger_path),
@@ -3290,11 +5060,33 @@ def _save_observation_snapshots(rows: list[dict[str, Any]]) -> None:
 
 
 def _accepted_observation_dates(rows: list[dict[str, Any]]) -> list[str]:
+    """Count only observations produced under the frozen formal Score88 contract.
+
+    Historical G3 snapshots are retained for audit, but must never advance the
+    30-trading-day evidence window after a strategy-contract switch.
+    """
     return sorted({
         str(item.get("observation_date") or "")[:10]
         for item in rows
-        if isinstance(item, dict) and item.get("accepted") and str(item.get("observation_date") or "").strip()
+        if (
+            isinstance(item, dict)
+            and item.get("accepted")
+            and str(item.get("strategy_id") or "") == STRATEGY_ID
+            and str(item.get("contract") or "") == STRATEGY_ID
+            and str(item.get("observation_date") or "").strip()
+        )
     })
+
+
+def _formal_score88_observation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item for item in rows
+        if (
+            isinstance(item, dict)
+            and str(item.get("strategy_id") or "") == STRATEGY_ID
+            and str(item.get("contract") or "") == STRATEGY_ID
+        )
+    ]
 
 
 def _observation_freshness_audit(
@@ -3686,7 +5478,7 @@ def _current_paper_execution_audit() -> dict[str, Any]:
     tickets = runtime.get("tickets") if isinstance(runtime, dict) else []
     tickets = [item for item in tickets if isinstance(item, dict)]
     qualified_tickets = [item for item in tickets if _truthy(item.get("qualified_shadow_buy"))]
-    paper_rows = _load_paper_executions()
+    paper_rows = _formal_score88_paper_rows(_load_paper_executions())
     missing: list[dict[str, Any]] = []
     matched: list[dict[str, Any]] = []
 
@@ -3915,7 +5707,7 @@ def _build_observation_snapshot(
     runtime = _load_current_runtime(limit=500)
     tickets = runtime.get("tickets") if isinstance(runtime, dict) else []
     tickets = [item for item in tickets if isinstance(item, dict)]
-    paper_rows = _load_paper_executions()
+    paper_rows = _formal_score88_paper_rows(_load_paper_executions())
     smoke = _latest_pretrade_smoke()
     repair_attempts: list[dict[str, Any]] = []
     repair_targets = _ticket_minute30_repair_targets(tickets, runtime.get("summary") or {})
@@ -3931,14 +5723,10 @@ def _build_observation_snapshot(
         runtime = _load_current_runtime(limit=500)
         tickets = runtime.get("tickets") if isinstance(runtime, dict) else []
         tickets = [item for item in tickets if isinstance(item, dict)]
-        paper_rows = _load_paper_executions()
+        paper_rows = _formal_score88_paper_rows(_load_paper_executions())
         smoke = _latest_pretrade_smoke()
 
-    observation_date = (
-        str(entry_date or "").strip()
-        or str((runtime.get("summary") or {}).get("entry_date") or "").strip()
-        or datetime.now().strftime("%Y-%m-%d")
-    )[:10]
+    observation_date = _formal_observation_date(entry_date)
     ticket_count = len(tickets)
     qualified_tickets = [item for item in tickets if _truthy(item.get("qualified_shadow_buy"))]
     m30_unconfirmed = [
@@ -4076,6 +5864,13 @@ def _monitor_job_wrapper() -> None:
     if not state.get("enabled"):
         return
     now = datetime.now()
+    if state.get("trading_hours_only") and not _in_trading_window(now):
+        return
+    if state.get("paper_entry_enabled", True):
+        entry_result = _run_shadow_entry_monitor_once(source="scheduler")
+        state = _load_monitor_state()
+        state["last_entry_result"] = entry_result
+        _save_monitor_state(state)
     if state.get("trading_hours_only") and not _in_trading_window(now):
         state["last_run_at"] = now.isoformat(sep=" ", timespec="seconds")
         state["last_result"] = {
@@ -4295,6 +6090,39 @@ def _exit_monitor_job_wrapper() -> None:
                 "error": str(exc),
             }
         )
+        _send_exception_notification("影子盘卖出监控失败", str(exc))
+
+
+def _daily_trend_exit_monitor_job_wrapper() -> None:
+    state = _load_daily_trend_exit_monitor_state()
+    if not state.get("enabled"):
+        return
+    now = datetime.now()
+    if state.get("trading_hours_only") and not _in_trading_window(now):
+        return
+    try:
+        if not TradingCalendar.is_trading_day(now):
+            return
+    except Exception:
+        logger.exception("Failed to check trading day for G3 daily trend exit monitor.")
+    try:
+        _run_daily_trend_exit_monitor_once(source="scheduler")
+    except Exception as exc:
+        logger.exception("G3 daily trend exit monitor scheduler failed.")
+        state = _load_daily_trend_exit_monitor_state()
+        state["last_run_at"] = now.isoformat(sep=" ", timespec="seconds")
+        state["last_error"] = str(exc)
+        state["last_result"] = {"ok": False, "error": str(exc)}
+        _save_daily_trend_exit_monitor_state(state)
+        _append_monitor_event(
+            {
+                "type": "daily_trend_exit",
+                "status": "error",
+                "source": "scheduler",
+                "message": "G3 daily trend exit monitor scheduler failed",
+                "error": str(exc),
+            }
+        )
 
 
 def configure_shadow_monitor_scheduler() -> dict[str, Any]:
@@ -4369,22 +6197,60 @@ def configure_shadow_exit_monitor_scheduler() -> dict[str, Any]:
     }
 
 
+def configure_daily_trend_exit_monitor_scheduler() -> dict[str, Any]:
+    state = _load_daily_trend_exit_monitor_state()
+    if not _startup_schedulers_enabled():
+        if _monitor_scheduler is not None:
+            try:
+                if _monitor_scheduler.get_job(_daily_trend_exit_monitor_job_id):
+                    _monitor_scheduler.remove_job(_daily_trend_exit_monitor_job_id)
+            except Exception:
+                logger.exception("Failed to remove G3 daily trend exit monitor job")
+        return _scheduler_disabled_result(state, _daily_trend_exit_monitor_job_id)
+    scheduler = _ensure_monitor_scheduler()
+    try:
+        if scheduler.get_job(_daily_trend_exit_monitor_job_id):
+            scheduler.remove_job(_daily_trend_exit_monitor_job_id)
+    except Exception:
+        logger.exception("Failed to remove G3 daily trend exit monitor job")
+    if state.get("enabled"):
+        scheduler.add_job(
+            _daily_trend_exit_monitor_job_wrapper,
+            "interval",
+            seconds=int(state.get("interval_seconds") or 300),
+            id=_daily_trend_exit_monitor_job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+    job = scheduler.get_job(_daily_trend_exit_monitor_job_id)
+    return {
+        **state,
+        "scheduler_enabled": bool(job),
+        "scheduler_wired": True,
+        "job_id": _daily_trend_exit_monitor_job_id,
+        "next_run_time": job.next_run_time.isoformat() if job and job.next_run_time else None,
+    }
+
+
 def configure_observation_scheduler() -> dict[str, Any]:
     state = _load_observation_scheduler_state()
     if not _startup_schedulers_enabled():
         if _monitor_scheduler is not None:
-            try:
-                if _monitor_scheduler.get_job(_observation_job_id):
-                    _monitor_scheduler.remove_job(_observation_job_id)
-            except Exception:
-                logger.exception("Failed to remove existing G3 observation job")
+            for job_id in (_observation_job_id, _observation_retry_job_id):
+                try:
+                    if _monitor_scheduler.get_job(job_id):
+                        _monitor_scheduler.remove_job(job_id)
+                except Exception:
+                    logger.exception("Failed to remove existing G3 observation job")
         return _scheduler_disabled_result(state, _observation_job_id)
     scheduler = _ensure_monitor_scheduler()
-    try:
-        if scheduler.get_job(_observation_job_id):
-            scheduler.remove_job(_observation_job_id)
-    except Exception:
-        logger.exception("Failed to remove existing G3 observation job")
+    for job_id in (_observation_job_id, _observation_retry_job_id):
+        try:
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+        except Exception:
+            logger.exception("Failed to remove existing G3 observation job")
     if state.get("enabled"):
         scheduler.add_job(
             _observation_job_wrapper,
@@ -4397,13 +6263,37 @@ def configure_observation_scheduler() -> dict[str, Any]:
             max_instances=1,
             coalesce=True,
         )
-    job = scheduler.get_job(_observation_job_id)
+        retry_minutes = _coerce_scheduler_minutes(state.get("retry_minutes"), [])
+        if retry_minutes:
+            scheduler.add_job(
+                _observation_job_wrapper,
+                "cron",
+                day_of_week="mon-fri",
+                hour=int(state.get("retry_hour") or 10),
+                minute=",".join(str(item) for item in retry_minutes),
+                id=_observation_retry_job_id,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+    jobs = [job for job in (scheduler.get_job(_observation_job_id), scheduler.get_job(_observation_retry_job_id)) if job]
+    next_run_times = [job.next_run_time for job in jobs if job.next_run_time]
+    next_run_time = min(next_run_times).isoformat() if next_run_times else None
     return {
         **state,
-        "scheduler_enabled": bool(job),
+        "scheduler_enabled": bool(jobs),
         "scheduler_wired": True,
         "job_id": _observation_job_id,
-        "next_run_time": job.next_run_time.isoformat() if job and job.next_run_time else None,
+        "job_ids": [job.id for job in jobs],
+        "retry_job_id": _observation_retry_job_id,
+        "next_run_time": next_run_time,
+        "scheduled_jobs": [
+            {
+                "job_id": job.id,
+                "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+            }
+            for job in jobs
+        ],
     }
 
 
@@ -4445,12 +6335,98 @@ def configure_broker_sync_scheduler() -> dict[str, Any]:
     }
 
 
+def _auto_order_30m_job_wrapper() -> None:
+    """Refresh same-day G3 tickets, then run the closed-by-default executor."""
+    try:
+        now = datetime.now()
+        hhmm = now.strftime("%H:%M")
+        if not (("09:30" <= hhmm <= "11:30") or ("13:00" <= hhmm <= "14:57")):
+            return
+        from execution.gen3_auto_order_executor import refresh_current_30m_router, run_exit_once, run_once
+
+        exit_result = run_exit_once(source="scheduler_30m")
+        refresh = refresh_current_30m_router()
+        result = run_once(source="scheduler_30m") if refresh.get("ok") else {
+            "ok": False,
+            "skipped": True,
+            "reason": "router_refresh_failed",
+            "router_refresh": refresh,
+        }
+        result["exit_cycle"] = exit_result
+        _append_monitor_event(
+            {
+                "type": "auto_order_30m",
+                "status": "ok" if result.get("ok") else "error",
+                "source": "scheduler",
+                "message": "G3 30m auto-order cycle completed",
+                "result": _compact_monitor_value(result),
+            }
+        )
+    except Exception as exc:
+        logger.exception("G3 30m auto-order scheduler failed.")
+        _append_monitor_event(
+            {
+                "type": "auto_order_30m",
+                "status": "error",
+                "source": "scheduler",
+                "message": "G3 30m auto-order scheduler failed",
+                "error": str(exc),
+            }
+        )
+
+
+def configure_auto_order_scheduler() -> dict[str, Any]:
+    """Wire the post-bar execution cycle without arming it by default."""
+    from execution.gen3_auto_order_executor import load_state
+
+    state = load_state()
+    if not _startup_schedulers_enabled():
+        if _monitor_scheduler is not None:
+            try:
+                if _monitor_scheduler.get_job(_auto_order_job_id):
+                    _monitor_scheduler.remove_job(_auto_order_job_id)
+            except Exception:
+                logger.exception("Failed to remove G3 auto-order job")
+        return _scheduler_disabled_result(state, _auto_order_job_id)
+    scheduler = _ensure_monitor_scheduler()
+    try:
+        if scheduler.get_job(_auto_order_job_id):
+            scheduler.remove_job(_auto_order_job_id)
+    except Exception:
+        logger.exception("Failed to remove existing G3 auto-order job")
+    if state.get("enabled"):
+        # A 30m confirmation is usable only after the bar closes.  :01 avoids
+        # treating a still-forming bar as confirmation and has no fixed 10:30 assumption.
+        scheduler.add_job(
+            _auto_order_30m_job_wrapper,
+            "cron",
+            day_of_week="mon-fri",
+            hour="10-11,13-14",
+            minute="1,31",
+            id=_auto_order_job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+    job = scheduler.get_job(_auto_order_job_id)
+    return {
+        **state,
+        "scheduler_enabled": bool(job),
+        "scheduler_wired": True,
+        "job_id": _auto_order_job_id,
+        "schedule": "post_completed_30m_bar_at_minute_01_or_31",
+        "next_run_time": job.next_run_time.isoformat() if job and job.next_run_time else None,
+    }
+
+
 def init_gen3_state_alpha_monitor_scheduler_from_config() -> dict[str, Any]:
     return {
         "shadow_monitor": configure_shadow_monitor_scheduler(),
         "shadow_exit_monitor": configure_shadow_exit_monitor_scheduler(),
+        "daily_trend_exit_monitor": configure_daily_trend_exit_monitor_scheduler(),
         "observation_scheduler": configure_observation_scheduler(),
         "broker_sync": configure_broker_sync_scheduler(),
+        "auto_order_30m": configure_auto_order_scheduler(),
     }
 
 
@@ -4600,6 +6576,7 @@ ROUTE_STRATEGY_TO_FAMILY = {
 }
 
 TRADE_STRATEGY_LABELS = {
+    "institutional_mainwave_score88": "机构主升Score88",
     "range_weak_repair": "震荡弱势修复",
     "panic_capitulation_repair": "恐慌出清修复",
     "institutional_score120_mainwave": "机构主升Score120",
@@ -4615,7 +6592,7 @@ ROUTE_STRATEGY_TO_TRADE_STRATEGY = {
     "old_g3_down_panic": "panic_capitulation_repair",
     "panic_repair_downtrend": "panic_capitulation_repair",
     "institutional_score120_core": "institutional_score120_mainwave",
-    "institutional_institutional_mainwave": "institutional_score120_mainwave",
+    "institutional_institutional_mainwave": "institutional_mainwave_score88",
     "old_g3_strong_main": "old_g3_strong_breakout",
     "g2_g2_gap_supplement": "volume_runup_supplement",
     "g2_volume5_keep80_runup_sector_bonus": "volume_runup_supplement",
@@ -4693,9 +6670,18 @@ def _with_route_strategy_fields(df: pd.DataFrame) -> pd.DataFrame:
     strategy_family = strategy_key.map(ROUTE_STRATEGY_TO_FAMILY).fillna("other")
     out["route_strategy_family"] = strategy_family
     out["route_strategy_family_label"] = strategy_family.map(ROUTE_STRATEGY_FAMILY_LABELS).fillna("其他策略")
-    trade_strategy = strategy_key.map(ROUTE_STRATEGY_TO_TRADE_STRATEGY).fillna("other")
+    inferred_trade_strategy = strategy_key.map(ROUTE_STRATEGY_TO_TRADE_STRATEGY).fillna("other")
+    existing_trade_strategy = _first_text_series(out, ["trade_strategy"], "")
+    # A route is a portfolio bucket, not necessarily a single entry mode.
+    # Preserve the two current G3 modes when rebuilding historical evidence.
+    current_modes = {"institutional_mainwave_score88", "institutional_score120_mainwave", "mainwave_breakout_initiation"}
+    trade_strategy = existing_trade_strategy.where(existing_trade_strategy.isin(current_modes), inferred_trade_strategy)
     out["trade_strategy"] = trade_strategy
-    out["trade_strategy_label"] = trade_strategy.map(TRADE_STRATEGY_LABELS).fillna("其他策略")
+    existing_trade_label = _first_text_series(out, ["trade_strategy_label"], "")
+    out["trade_strategy_label"] = existing_trade_label.where(
+        existing_trade_label.str.len() > 0,
+        trade_strategy.map(TRADE_STRATEGY_LABELS).fillna("其他策略"),
+    )
     out["route_parent"] = route_parent
     out["route_parent_label"] = route_parent.map(ROUTE_PARENT_LABELS).fillna(route_parent)
     out["route_label"] = out["route_parent_label"]
@@ -4889,7 +6875,12 @@ def _normalize_latest_g3_closed_trades(df: pd.DataFrame) -> pd.DataFrame:
             out.loc[missing_exit_date, "exit_ts"],
             errors="coerce",
         ).dt.strftime("%Y-%m-%d")
-    out["source_type"] = "historical_closed_trade"
+    if "source_type" not in out.columns:
+        out["source_type"] = "historical_closed_trade"
+    else:
+        out["source_type"] = out["source_type"].fillna("historical_closed_trade")
+        blank_source = out["source_type"].astype(str).str.strip().eq("")
+        out.loc[blank_source, "source_type"] = "historical_closed_trade"
     out["position_slots"] = 2
     if "slot_pct" not in out.columns:
         stake = pd.to_numeric(out.get("stake"), errors="coerce")
@@ -5268,8 +7259,8 @@ def _recent_replay_audit(sample_size: int = 30) -> dict[str, Any]:
         "decision_after_or_equal_entry": int(((decision >= entry) & decision.notna()).sum()),
         "context_after_or_equal_entry": int(((context >= entry) & context.notna()).sum()),
     }
-    hard_stop_match = int((hard_stop.dropna().round(4) == 0.12).sum()) if len(hard_stop.dropna()) else 0
-    take_profit_match = int((take_profit.dropna().round(4) == 0.12).sum()) if len(take_profit.dropna()) else 0
+    hard_stop_match = int(hard_stop.dropna().round(4).isin({0.04, 0.10, 0.12}).sum()) if len(hard_stop.dropna()) else 0
+    take_profit_match = int(take_profit.dropna().round(4).isin({0.10, 0.12}).sum()) if len(take_profit.dropna()) else 0
     max_account_loss = float(account_loss.min()) if len(account_loss.dropna()) else None
     avg_slot_pct = float(slot_pct.dropna().mean()) if len(slot_pct.dropna()) else None
     max_slot_pct = float(slot_pct.dropna().max()) if len(slot_pct.dropna()) else None
@@ -5471,6 +7462,88 @@ def _current_shadow_trade_rows() -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def _current_broker_open_trade_rows() -> pd.DataFrame:
+    try:
+        snapshot = _broker_snapshot()
+    except Exception:
+        logger.exception("Failed to read broker open holdings for historical trades")
+        return pd.DataFrame()
+    holdings = snapshot.get("holdings") if isinstance(snapshot.get("holdings"), list) else []
+    if not holdings:
+        return pd.DataFrame()
+    df = pd.DataFrame(holdings)
+    if df.empty:
+        return df
+    shares = pd.to_numeric(df.get("shares"), errors="coerce")
+    df = df[shares.fillna(0) > 0].copy()
+    if df.empty:
+        return df
+    updated_at = str(snapshot.get("updated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    out = pd.DataFrame(index=df.index)
+    entry_raw = df["entry_date"] if "entry_date" in df.columns else pd.Series(updated_at, index=df.index)
+    out["entry_date"] = pd.to_datetime(entry_raw, errors="coerce").dt.strftime("%Y-%m-%d")
+    out["entry_date"] = out["entry_date"].fillna(updated_at[:10])
+    out["policy_exit_date"] = ""
+    out["decision_date"] = ""
+    out["confirm_datetime"] = ""
+    out["entry_ts"] = ""
+    out["exit_ts"] = ""
+    out["exit_date"] = ""
+    out["exit_datetime"] = ""
+    out["code"] = df.get("code", "").map(_row_code) if "code" in df.columns else ""
+    out["name"] = df.get("name", out["code"])
+    out["route"] = "broker_real_position"
+    out["route_label"] = "real broker holding"
+    out["mode_label"] = "current open holding"
+    out["score"] = pd.NA
+    out["raw_score"] = pd.NA
+    out["score_source"] = "broker_position"
+    out["score_scale"] = "not_applicable"
+    out["net_ret"] = pd.to_numeric(df.get("pnl_ratio"), errors="coerce")
+    out["stress_net_ret"] = pd.NA
+    out["policy_net_ret"] = pd.NA
+    out["entry_price"] = pd.to_numeric(df.get("entry_price", df.get("cost_price")), errors="coerce")
+    out["reference_close"] = pd.to_numeric(df.get("reference_close", df.get("current_price")), errors="coerce")
+    out["stake"] = pd.to_numeric(df.get("market_value"), errors="coerce")
+    out["exit_value"] = pd.NA
+    out["realized_pnl"] = pd.NA
+    out["market_style"] = ""
+    out["policy"] = "broker_open_position"
+    out["confirm_rule"] = ""
+    out["live_ready"] = True
+    out["shadow_action"] = "broker_open_holding"
+    out["formal_buy_signal"] = False
+    out["auto_order_allowed"] = False
+    out["order_path_enabled"] = False
+    out["block_reason"] = ""
+    out["position_slots"] = pd.NA
+    out["slot_pct"] = pd.to_numeric(df.get("position_pct"), errors="coerce")
+    out["position_pct"] = pd.to_numeric(df.get("position_pct"), errors="coerce")
+    out["trade_key"] = "broker_open|" + out["code"].astype(str)
+    out["candidate_key"] = out["trade_key"]
+    out["trade_status"] = "open_shadow"
+    out["shadow_status"] = "broker_open"
+    out["last_state"] = "open"
+    out["planned_entry_ts"] = ""
+    out["structure_stop"] = pd.NA
+    out["hard_stop"] = pd.to_numeric(df.get("hard_stop"), errors="coerce")
+    out["take_profit_1"] = pd.to_numeric(df.get("take_profit_1"), errors="coerce")
+    out["exit_contract"] = "managed_by_g3_exit_contract"
+    out["source_type"] = "broker_state_open_holding"
+    return out.reset_index(drop=True)
+
+
+def _current_open_trade_rows() -> pd.DataFrame:
+    frames = [_current_shadow_trade_rows(), _current_broker_open_trade_rows()]
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True, sort=False)
+    if "trade_key" in out.columns:
+        out = out.drop_duplicates(subset=["trade_key"], keep="last")
+    return out
+
+
 def _read_historical_trades(
     limit: int,
     route: str | None,
@@ -5478,10 +7551,11 @@ def _read_historical_trades(
     sort_by: str,
     sort_order: str,
 ) -> dict[str, Any]:
+    historical_path = _historical_trades_path()
     curve_df, curve_path = _read_equity_curve_df(window)
-    shadow_df = _current_shadow_trade_rows()
+    shadow_df = _current_open_trade_rows()
     natural_policy_shadow = _read_natural_policy_shadow()
-    if not HISTORICAL_TRADES_PATH.exists():
+    if not historical_path.exists():
         if not shadow_df.empty and route and route != "all" and "route" in shadow_df.columns:
             shadow_df = shadow_df[shadow_df["route"].astype(str) == route]
         if not shadow_df.empty:
@@ -5508,7 +7582,9 @@ def _read_historical_trades(
                 "limit": limit,
             },
             "artifacts": {
-                "closed_trades": _path_status(HISTORICAL_TRADES_PATH),
+                "closed_trades": _path_status(historical_path),
+                "integrated_historical_trades": _path_status(HISTORICAL_TRADES_WITH_OPEN_PATH),
+                "base_closed_trades": _path_status(HISTORICAL_TRADES_BASE_PATH),
                 "runtime_shadow_ledger": _path_status(STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"),
                 "equity_curve": _path_status(curve_path),
                 "mtm_equity_curve": _path_status(MTM_EQUITY_CURVE_PATH),
@@ -5519,11 +7595,11 @@ def _read_historical_trades(
             "natural_policy_shadow": natural_policy_shadow,
         }
     try:
-        df = pd.read_csv(HISTORICAL_TRADES_PATH, low_memory=False)
+        df = pd.read_csv(historical_path, low_memory=False)
     except pd.errors.EmptyDataError:
         df = pd.DataFrame()
     except Exception:
-        logger.exception("Failed to read historical trades: %s", HISTORICAL_TRADES_PATH)
+        logger.exception("Failed to read historical trades: %s", historical_path)
         df = pd.DataFrame()
 
     df = _normalize_latest_g3_closed_trades(df)
@@ -5579,6 +7655,10 @@ def _read_historical_trades(
         "route_strategy_label",
         "trade_strategy",
         "trade_strategy_label",
+        "entry_mode",
+        "review_contract",
+        "evidence_level",
+        "historical_status",
         "route_strategy_family",
         "route_strategy_family_label",
         "route_parent",
@@ -5630,9 +7710,20 @@ def _read_historical_trades(
         "reference_close",
         "structure_stop",
         "hard_stop",
+        "hard_stop_pct",
         "take_profit_1",
+        "take_profit_1_pct",
+        "take_profit_1_sell_ratio",
         "exit_contract",
         "source_type",
+        "tdx_topic_names",
+        "sector_families",
+        "tdx_topic_count",
+        "historical_sector_for_distinct",
+        "sector_family",
+        "replay_contract",
+        "replay_price_granularity",
+        "replay_source",
         "trade_key",
         "candidate_key",
     ]
@@ -5658,7 +7749,9 @@ def _read_historical_trades(
             "limit": limit,
         },
         "artifacts": {
-            "closed_trades": _path_status(HISTORICAL_TRADES_PATH),
+            "closed_trades": _path_status(historical_path),
+            "integrated_historical_trades": _path_status(HISTORICAL_TRADES_WITH_OPEN_PATH),
+            "base_closed_trades": _path_status(HISTORICAL_TRADES_BASE_PATH),
             "runtime_shadow_ledger": _path_status(STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"),
             "equity_curve": _path_status(curve_path),
             "mtm_equity_curve": _path_status(MTM_EQUITY_CURVE_PATH),
@@ -6335,8 +8428,8 @@ def _historical_candidate_replay_rows(
 
     candidates["route"] = "institutional_mainwave"
     candidates["route_label"] = "机构主升浪"
-    candidates["trade_strategy"] = "institutional_score120_mainwave"
-    candidates["trade_strategy_label"] = "机构主升Score120"
+    candidates["trade_strategy"] = "institutional_mainwave_score88"
+    candidates["trade_strategy_label"] = "机构主升Score88"
     candidates["source_type"] = "historical_score120_source_signal"
     candidates["confirm_rule"] = "score>=120 + sector_diffusion>=65 + 30m MA20 + index_mom60<=5%"
     candidates["score"] = pd.to_numeric(candidates.get("wave_style_score"), errors="coerce")
@@ -6505,7 +8598,7 @@ def _natural_context_tag_for_row(row: pd.Series) -> str:
     style = str(row.get("market_style") or "")
     route = str(row.get("route") or "")
     down_risk = _truthy(row.get("down_risk"))
-    if strategy == "institutional_score120_mainwave" or route in {"institutional_mainwave", "score120_core"}:
+    if strategy in {"institutional_mainwave_score88", "institutional_score120_mainwave"} or route in {"institutional_mainwave", "score120_core"}:
         return "market_aligned_mainwave" if style == "standard_uptrend" else "stock_leads_market_mainwave"
     if strategy == "old_g3_strong_breakout" or route == "strong_main":
         return "market_aligned_breakout" if style == "standard_uptrend" else "stock_leads_market_breakout"
@@ -6583,7 +8676,7 @@ def _natural_trade_key_from_record(row: dict[str, Any]) -> str:
     entry_date = _date_text(row.get("entry_date") or row.get("planned_entry_ts") or row.get("confirm_datetime"))
     route = str(row.get("route") or row.get("mode") or "").strip()
     strategy = str(row.get("trade_strategy") or "").strip()
-    if not route and strategy == "institutional_score120_mainwave":
+    if not route and strategy in {"institutional_mainwave_score88", "institutional_score120_mainwave"}:
         route = "institutional_mainwave"
     if route == "score120_core":
         route = "institutional_mainwave"
@@ -7186,6 +9279,11 @@ def _build_replacement_assessment(historical: dict[str, Any] | None = None) -> d
     runtime = _load_current_runtime(limit=500)
     trade_permission = _strategy_trade_permission_audit(runtime)
     runtime_ledger = runtime.get("ledger") if isinstance(runtime, dict) else []
+    score88_runtime_ledger = [
+        item for item in runtime_ledger
+        if isinstance(item, dict) and str(item.get("strategy_id") or "") == STRATEGY_ID
+    ]
+    score88_paper_execution_count = len(_formal_score88_paper_rows(_load_paper_executions()))
     live_shadow_dates = sorted({
         str(item.get("entry_date") or "")[:10]
         for item in runtime_ledger
@@ -7477,6 +9575,9 @@ def _build_replacement_assessment(historical: dict[str, Any] | None = None) -> d
             "next_primary_action": (daily_action_plan[0] or {}).get("title") if daily_action_plan else None,
             "g2_fallback_required": not can_replace,
             "daily_action_count": len(daily_action_plan),
+            "historical_reference_closed_trade_count": closed_count,
+            "score88_formal_paper_execution_count": score88_paper_execution_count,
+            "score88_formal_shadow_ledger_count": len(score88_runtime_ledger),
             "closed_trade_count": closed_count,
             "open_shadow_count": open_shadow_count,
             "active_days": active_days,
@@ -7636,8 +9737,8 @@ def _default_contract() -> dict[str, Any]:
         },
         "trade_strategy_policy": [
             {
-                "trade_strategy": "institutional_score120_mainwave",
-                "label_cn": "机构主升Score120",
+                "trade_strategy": "institutional_mainwave_score88",
+                "label_cn": "机构主升Score88",
                 "source_routes": ["institutional_mainwave"],
                 "source_strategies": ["机构主升浪Score120核心"],
                 "trading_assumption": "机构主线扩散和 Score120 强确认后的主升延续。",
@@ -7693,12 +9794,12 @@ def _default_contract() -> dict[str, Any]:
             "source": "g2_stop_structure_cooldown_migrated",
             "hard_stop": {
                 "type": "m30_hard_stop",
-                "loss_pct": 0.12,
+                "loss_pct": 0.10,
                 "action": "sell_all",
             },
             "take_profit": {
                 "type": "m30_take_profit_partial",
-                "profit_pct": 0.12,
+                "profit_pct": 0.10,
                 "sell_ratio": 0.50,
             },
             "structure_exit": {
@@ -7721,6 +9822,10 @@ def _default_contract() -> dict[str, Any]:
                 "mtm_drawdown_reduce_risk_pct": 0.15,
                 "mtm_drawdown_pause_new_buy_pct": 0.18,
                 "institutional_mainwave_cooldown_trigger": "consecutive_closed_institutional_mainwave_loss_count>=2",
+            },
+            "entry_mode_overrides": {
+                "mainwave_continuation": {"hard_stop_pct": 0.10, "take_profit_pct": 0.10},
+                "breakout_initiation": {"hard_stop_pct": 0.04, "take_profit_pct": 0.10, "entry_requires": "first_completed_entry_day_30m_close_ge_ma20"},
             },
         },
         "contract_modes": [
@@ -7781,14 +9886,49 @@ def _contract() -> dict[str, Any]:
         contract["trade_strategy_policy"] = [policy_by_key[str(item.get("trade_strategy") or "")] for item in default_policies if str(item.get("trade_strategy") or "") in policy_by_key]
     else:
         contract["trade_strategy_policy"] = default_policies
+    contract["strategy_id"] = STRATEGY_ID
+    contract["strategy_name"] = STRATEGY_NAME
+    contract["strategy_name_cn"] = STRATEGY_NAME_CN
+    contract["profile"] = FINAL_G3_PROFILE
+    contract["profile_name"] = FINAL_G3_PROFILE_NAME
+    contract["trade_strategy_policy"] = [{
+        "trade_strategy": FORMAL_G3_CONTRACT["trade_strategy"],
+        "label_cn": FORMAL_G3_CONTRACT["display_name"],
+        "source_routes": ["institutional_mainwave"],
+        "entry_contract": "wave_style_score>=88 && index_mom60<=5% && same_day_industry_mainwave_count>=2 && first_completed_30m_volume_breakout_prior20_high",
+        "position_contract": "two slots; 50% per slot; at most two new buys per day; -10% hard stop; +10% sell half; remaining exits on previous-day low break confirmed by 30m",
+        "shadow_only": True,
+    }]
+    contract["route_priority"] = [
+        item for item in contract.get("route_priority", [])
+        if str(item.get("route") or "") == "institutional_mainwave"
+    ]
     portfolio = contract.setdefault("portfolio_contract", {})
     default_portfolio = default.get("portfolio_contract") or {}
-    portfolio.setdefault("trade_strategy_framework", default_portfolio.get("trade_strategy_framework"))
-    portfolio.setdefault("trade_strategy_count", default_portfolio.get("trade_strategy_count"))
+    portfolio["trade_strategy_framework"] = "institutional_mainwave_score88_plus_cash"
+    portfolio["trade_strategy_count"] = 1
+    portfolio["observation_strategy_count"] = 0
+    portfolio["g2_gap_supplement_position_pct"] = 0.0
+    portfolio["cash_is_valid_decision"] = True
+    portfolio["cash_policy"] = "no qualified institutional_mainwave candidate means no new position"
+    if False and not any(str(item.get("trade_strategy")) == "mainwave_breakout_initiation" for item in contract["trade_strategy_policy"]):
+        contract["trade_strategy_policy"].append({
+            "trade_strategy": "mainwave_breakout_initiation",
+            "label_cn": "前高突破启动",
+            "source_routes": ["institutional_mainwave"],
+            "entry_contract": "前高突破、主线扩散>=65、突破后首根满足条件的已完成30m收盘不低于MA20、index_mom60<=5%。",
+            "exit_contract": "-4%硬止损、+10%先减半、余仓以前一日低点30m确认退出。",
+            "default_position_pct": 0.50,
+            "shadow_only": True,
+        })
+    contract["canonical_contract"] = formal_g3_score88_contract_metadata()
     return contract
 
 
 def _wrap_guardrails(payload: dict[str, Any]) -> dict[str, Any]:
+    runtime_health = read_snapshot(runtime_path("health", "latest.json"))
+    payload["runtime_health"] = runtime_health
+    payload["data_freshness_blocked"] = not bool(runtime_health.get("strategy_actionable"))
     payload["strategy_id"] = STRATEGY_ID
     payload["name"] = STRATEGY_NAME
     payload["name_cn"] = STRATEGY_NAME_CN
@@ -8024,6 +10164,12 @@ def _normalize_broker_capital(
 def _normalize_broker_holding(row: dict[str, Any], capital: dict[str, Any] | None = None) -> dict[str, Any]:
     code = _normalize_code6(row.get("code"))
     shares = int(_parse_broker_number(row.get("shares")) or 0)
+    available_shares = int(
+        _parse_broker_number(
+            row.get("available_shares") if row.get("available_shares") is not None else row.get("can_use_volume")
+        )
+        or 0
+    )
     cost_price = _parse_broker_number(row.get("cost_price"))
     current_price = _parse_broker_number(row.get("current_price"))
     market_value = _parse_broker_number(row.get("market_value"))
@@ -8035,6 +10181,7 @@ def _normalize_broker_holding(row: dict[str, Any], capital: dict[str, Any] | Non
         "code": code,
         "name": row.get("name") or code,
         "shares": shares,
+        "available_shares": available_shares,
         "cost_price": cost_price,
         "current_price": current_price,
         "market_value": market_value,
@@ -8318,6 +10465,151 @@ def _exit_advice_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _load_daily_trend_bars(codes: list[str], lookback_days: int) -> dict[str, list[dict[str, Any]]]:
+    clean_codes = sorted({str(code or "").strip().upper() for code in codes if str(code or "").strip()})
+    clean_codes = [code for code in clean_codes if re.fullmatch(r"[0-9A-Z.]+", code)]
+    if not clean_codes:
+        return {}
+    quoted_codes = ", ".join(f"'{code}'" for code in clean_codes)
+    try:
+        from utils.market_warehouse import clickhouse_query_df
+
+        frame = clickhouse_query_df(
+            f"""
+            SELECT code, trade_date, low, close
+            FROM kline_daily FINAL
+            WHERE code IN ({quoted_codes})
+              AND trade_date >= today() - INTERVAL {int(lookback_days)} DAY
+            ORDER BY code, trade_date
+            """
+        )
+    except Exception:
+        logger.exception("Failed to load daily bars for G3 daily trend exit monitor.")
+        return {}
+    rows_by_code: dict[str, list[dict[str, Any]]] = {}
+    for item in frame.to_dict(orient="records") if not frame.empty else []:
+        code = str(item.get("code") or "").strip().upper()
+        if code:
+            rows_by_code.setdefault(code, []).append(item)
+    return rows_by_code
+
+
+def _daily_trend_monitor_positions() -> list[dict[str, Any]]:
+    state = _load_broker_state()
+    broker_rows = state.get("holdings") if isinstance(state.get("holdings"), list) else []
+    ledger_rows = _filter_open_shadow_ledger_records(_read_shadow_ledger_records(STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv", limit=None))
+    rows: list[dict[str, Any]] = []
+    # Broker holdings take priority.  A matching shadow ticket is supporting
+    # evidence, not a second position that should receive a duplicate alert.
+    seen: set[str] = set()
+    for source, source_rows in (("broker_real_position", broker_rows), ("shadow_ledger", ledger_rows)):
+        for item in source_rows:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or item.get("code_raw") or "").strip().upper()
+            if not code:
+                continue
+            if code in seen:
+                continue
+            seen.add(code)
+            rows.append({
+                "code": code,
+                "name": item.get("name") or item.get("stock_name") or "",
+                "position_source": source,
+                "ticket_key": item.get("ticket_key") or item.get("candidate_key") or item.get("trade_key"),
+                "shares": item.get("shares") or item.get("quantity") or item.get("available_shares"),
+                "entry_price": item.get("entry_price") or item.get("cost_price") or item.get("execution_price"),
+            })
+    return rows
+
+
+def _send_daily_trend_exit_email(signals: list[dict[str, Any]]) -> dict[str, Any]:
+    lines = ["以下持仓已在日线收盘有效跌破上升趋势线，下一交易日执行卖出计划；本通知不发送真实委托。", ""]
+    for item in signals:
+        lines.append(
+            f"- {item.get('code')} {item.get('name') or ''}: 收盘 {_fmt_num(item.get('daily_close'))}，"
+            f"趋势线 {_fmt_num(item.get('trend_line_price'))}，"
+            f"跌破幅度 {_fmt_num((_to_float(item.get('distance_to_trend_pct')) or 0.0) * 100, 2, '%')}，"
+            f"锚点 {((item.get('anchor_low_1') or {}).get('trade_date') or '--')} / {((item.get('anchor_low_2') or {}).get('trade_date') or '--')}"
+        )
+    return _send_shadow_email(
+        f"G3 日线趋势跌破卖出计划 {datetime.now().strftime('%Y-%m-%d')}",
+        "\n".join(lines),
+    )
+
+
+def _run_daily_trend_exit_monitor_once(source: str = "manual") -> dict[str, Any]:
+    started_at = datetime.now()
+    state = _load_daily_trend_exit_monitor_state()
+    positions = _daily_trend_monitor_positions()
+    bars_by_code = _load_daily_trend_bars([item["code"] for item in positions], state["lookback_days"])
+    tick_source: dict[str, Any] = {}
+    ticks: dict[str, Any] = {}
+    if positions:
+        try:
+            ticks = _read_qmt_ticks([item["code"] for item in positions], tick_source)
+        except Exception as exc:
+            logger.warning("G3 intraday trend monitor tick unavailable: {}", exc)
+    rows: list[dict[str, Any]] = []
+    for position in positions:
+        raw_tick = ticks.get(position["code"], {}) if isinstance(ticks, dict) else {}
+        last_price = _parse_broker_number(raw_tick.get("lastPrice")) if isinstance(raw_tick, dict) else None
+        analysis = evaluate_intraday_rising_trend_line(
+            bars_by_code.get(position["code"], []),
+            last_price,
+            pivot_window=state["pivot_window"],
+            min_pivot_separation=state["min_pivot_separation"],
+            break_buffer_pct=state["break_buffer_pct"],
+        )
+        rows.append({**position, **analysis})
+
+    triggered = [item for item in rows if bool(item.get("intraday_trend_broken"))]
+    known = set(state.get("alerted_signal_keys") or [])
+    new_signals = [
+        item for item in triggered
+        if f"{item.get('position_source')}|{item.get('code')}|{item.get('signal_date')}" not in known
+    ]
+    email_result: dict[str, Any] | None = None
+    if new_signals and state.get("email_enabled"):
+        try:
+            email_result = _send_daily_trend_exit_email(new_signals)
+        except Exception as exc:
+            logger.exception("G3 daily trend exit email failed.")
+            email_result = {"sent": False, "error": str(exc)}
+    if new_signals:
+        known.update(f"{item.get('position_source')}|{item.get('code')}|{item.get('signal_date')}" for item in new_signals)
+    result = {
+        "ok": True,
+        "mode": "g3_daily_trend_exit_monitor",
+        "contract": "intraday_daily_rising_trend_line_exit_v1",
+        "source": source,
+        "checked_at": started_at.isoformat(sep=" ", timespec="seconds"),
+        "position_count": len(positions),
+        "triggered_count": len(triggered),
+        "new_triggered_count": len(new_signals),
+        "signals": rows,
+        "next_trade_action": "sell_or_switch_review_for_triggered_positions" if triggered else "hold_or_wait_for_qualified_replacement",
+        "formal_order_status": "manual_or_paper_only",
+        "email": email_result,
+    }
+    state["alerted_signal_keys"] = list(known)[-500:]
+    state["last_run_at"] = result["checked_at"]
+    state["last_success_at"] = result["checked_at"]
+    state["last_error"] = None
+    state["last_result"] = result
+    _save_daily_trend_exit_monitor_state(state)
+    for item in new_signals:
+        _append_monitor_event({
+            "type": "daily_trend_exit",
+            "status": "sell_next_open",
+            "source": source,
+            "code": item.get("code"),
+            "signal_date": item.get("signal_date"),
+            "message": "Daily close broke the confirmed rising trend line; sell is planned for next open.",
+        })
+    return result
+
+
 def _broker_snapshot() -> dict[str, Any]:
     state = _load_broker_state()
     broker_trades = state.get("broker_trades") or []
@@ -8343,6 +10635,9 @@ def _broker_snapshot() -> dict[str, Any]:
 
 def _broker_holdings_sync_preflight() -> dict[str, Any]:
     gateway_url = str(os.environ.get("AISTOCK_TDX_GATEWAY_URL") or "").strip().rstrip("/")
+    source_preference = _preferred_broker_sync_source()
+    gateway_required = source_preference in {"tdx", "ths", "tdx_gateway", "gateway"}
+    qmtmini_configured = source_preference in {"qmtmini", "qmt", "qmtmini_first"}
     sync_state = _load_broker_sync_state()
     broker = _broker_snapshot()
     updated_at = broker.get("updated_at")
@@ -8356,7 +10651,7 @@ def _broker_holdings_sync_preflight() -> dict[str, Any]:
     needs_confirmation = bool(command.get("requires_confirmation") or current_action_group == "sync_broker_holding_price")
     blockers: list[str] = []
     warnings: list[str] = []
-    if not gateway_url:
+    if gateway_required and not gateway_url:
         blockers.append("missing_gateway_url")
     if current_action_group and not is_current_action:
         blockers.append("current_action_not_broker_sync")
@@ -8369,7 +10664,8 @@ def _broker_holdings_sync_preflight() -> dict[str, Any]:
     if bool(capital.get("holdings_stale")):
         warnings.append("capital_holdings_value_mismatch")
 
-    can_prompt_manual_sync = bool(gateway_url) and (is_current_action or not current_action_group)
+    sync_source_ready = qmtmini_configured or bool(gateway_url)
+    can_prompt_manual_sync = sync_source_ready and (is_current_action or not current_action_group)
     return {
         "ok": True,
         "mode": "g3_state_alpha_broker_holdings_sync_preflight",
@@ -8377,7 +10673,10 @@ def _broker_holdings_sync_preflight() -> dict[str, Any]:
         "preflight_status": "ready_for_manual_confirmation" if can_prompt_manual_sync and not blockers else "blocked_or_watch",
         "can_prompt_manual_sync": can_prompt_manual_sync,
         "requires_confirmation": needs_confirmation,
+        "broker_sync_source": source_preference,
+        "qmtmini_configured": qmtmini_configured,
         "gateway_configured": bool(gateway_url),
+        "gateway_required": gateway_required,
         "gateway_url_hint": gateway_url[:24] + "..." if len(gateway_url) > 24 else gateway_url,
         "current_action_group": current_action_group,
         "current_action_label": command.get("action_label") or command.get("next_action"),
@@ -8438,7 +10737,7 @@ def _broker_holdings_sync_confirmation_packet() -> dict[str, Any]:
     }
     confirmation_items = [
         "current action is sync_broker_holding_price",
-        "gateway URL is configured",
+        "broker sync source is ready",
         "broker holding cache is stale or needs refresh",
         "sync failure keeps live buy locked",
         "after sync, rerun readiness review before any manual live review",
@@ -11390,6 +13689,7 @@ async def get_gen3_state_alpha_current(
         next_trade_buy_tickets,
     )
     exit_rows = [*real_exit_rows, *ledger]
+    daily_trend_exit_monitor = _load_daily_trend_exit_monitor_state()
 
     return _wrap_guardrails(
         {
@@ -11412,6 +13712,7 @@ async def get_gen3_state_alpha_current(
                 "shadow_ledger_audit_rows": len(ledger_audit),
                 "summary": _exit_advice_summary(exit_rows),
                 "contract": "realtime_exit_advice_v1",
+                "daily_trend_exit_monitor": daily_trend_exit_monitor.get("last_result"),
                 "formal_order_status": "dry_run_or_manual_only",
             },
             "selected_candidates": selected_candidates,
@@ -11459,9 +13760,20 @@ async def get_gen3_state_alpha_mainwave_opportunities(
     candidates = _build_mainwave_candidates(source_meta, ticket_rows, limit=limit)
     watch_candidates = _build_mainwave_watch_candidates(limit=max(limit * 3, 120))
     sectors = _build_mainwave_sector_opportunities_v2(candidates, watch_candidates)
+    _enrich_mainwave_sector_codes(sectors)
+    sector_kline_by_name = _build_mainwave_sector_kline_map(sectors, days=260)
+    sector_components_by_code = _build_mainwave_sector_component_map(sectors)
+    for sector in sectors:
+        name = str(sector.get("sector_name") or "")
+        code = str(sector.get("sector_code") or "")
+        sector["kline_daily"] = sector_kline_by_name.get(name, [])
+        sector["kline_day_count"] = len(sector["kline_daily"])
+        sector["component_stocks"] = sector_components_by_code.get(code, [])
+        sector["component_stock_count"] = len(sector["component_stocks"])
+    _apply_mainwave_sector_trend_adjustment(sectors)
     recommended = [item for item in candidates if item.get("is_recommended")]
-    sector_watch_candidates = [item for item in watch_candidates if _to_float_or_none(item.get("sector_diffusion_score")) is not None and (_to_float_or_none(item.get("sector_diffusion_score")) or 0) >= 65]
-    m30_ok_count = len([item for item in candidates if item.get("m30_confirmed") or str(item.get("m30_status") or "") == "ok"])
+    sector_watch_candidates = [item for item in watch_candidates if _to_int_or_zero(item.get("sector_signal_count")) >= 2]
+    m30_ok_count = len([item for item in candidates if bool(item.get("m30_confirmed"))])
     entry_date = _date_text(summary.get("entry_date") or source_meta.get("entry_date") or (recommended[0].get("entry_date") if recommended else None))
     if recommended:
         entry_date = _date_text(recommended[0].get("entry_date") or entry_date)
@@ -11478,12 +13790,12 @@ async def get_gen3_state_alpha_mainwave_opportunities(
             "strategy": {
                 "route": "institutional_mainwave",
                 "route_label": "机构主升浪",
-                "trade_strategy": "institutional_score120_mainwave",
-                "trade_strategy_label": "机构主升Score120",
+                "trade_strategy": "institutional_mainwave_score88",
+                "trade_strategy_label": "机构主升Score88",
                 "source": "institutional_mainwave_current_builder_v1",
                 "source_script": "scripts/gen3_institutional_mainwave_current_v1.py",
                 "purpose": "识别机构集体主升、板块扩散和重要行业机会，并为下一交易日候选提供来源。",
-                "ranking_basis": "wave_style_score 主升分 + sector_diffusion_score 板块扩散 + 30m确认 + 市场热度观察。",
+                "ranking_basis": "wave_style_score 主升骨架 + 同日同业主升共振计数 + 30m放量突破前20根高点确认 + 指数门槛。",
             },
             "summary": {
                 "entry_date": entry_date,
@@ -11506,8 +13818,8 @@ async def get_gen3_state_alpha_mainwave_opportunities(
                 "mainwave_dynamic_cooldown_reason": mainwave_dynamic_cooldown.get("cooldown_reason") or "",
                 "mainwave_recovery_signal_ok": bool(mainwave_dynamic_cooldown.get("recovery_signal_ok", False)),
                 "index_heat_label": "超过主升门槛，仅观察" if index_mom60 is not None and index_mom60 > 0.05 else "正常热度",
-                "min_score": _to_float_or_none(source_meta.get("min_score")) or 120.0,
-                "min_sector_diffusion": _to_float_or_none(source_meta.get("min_sector_diffusion")) or 65.0,
+                "min_score": _to_float_or_none(source_meta.get("min_score")) or 88.0,
+                "min_sector_signal_count": _to_int_or_zero(source_meta.get("min_sector_signal_count")) or 2,
                 "max_index_mom60": _to_float_or_none(source_meta.get("max_index_mom60")) or 0.05,
                 "scan_target_date": scan.get("target_date") or "",
                 "scan_source_mode": scan.get("source_mode") or "",
@@ -11515,6 +13827,7 @@ async def get_gen3_state_alpha_mainwave_opportunities(
                 "pre_confirm_rows": _to_int_or_zero(source_meta.get("pre_confirm_rows") or source_meta.get("rows")),
             },
             "sector_opportunities": sectors,
+            "sector_kline_by_name": sector_kline_by_name,
             "candidates": candidates,
             "watch_candidates": watch_candidates,
             "sector_watch_candidates": sector_watch_candidates,
@@ -11549,6 +13862,144 @@ async def get_gen3_state_alpha_mainwave_opportunities(
     )
 
 
+def _historical_reference_provenance(
+    rows: list[dict[str, Any]],
+    formal_contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep legacy backtest samples distinct from the frozen formal contract."""
+    canonical = formal_contract.get("canonical_contract") or {}
+    formal_trade_strategy = str(canonical.get("trade_strategy") or "").strip()
+    strategy_counts: dict[str, int] = {}
+    for row in rows:
+        strategy = str(row.get("trade_strategy") or row.get("route_strategy") or row.get("route") or "unknown").strip()
+        strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+
+    total_count = len(rows)
+    formal_trade_count = strategy_counts.get(formal_trade_strategy, 0) if formal_trade_strategy else 0
+    formal_history_available = formal_trade_count > 0
+    source_strategies = sorted(strategy_counts)
+    return {
+        "classification": "formal_contract_history" if formal_history_available and formal_trade_count == total_count else "legacy_reference_history",
+        "formal_trade_strategy": formal_trade_strategy or None,
+        "formal_trade_count": formal_trade_count,
+        "total_trade_count": total_count,
+        "formal_contract_history_available": formal_history_available,
+        "source_strategies": source_strategies,
+        "source_strategy_counts": strategy_counts,
+        "message": (
+            "当前筛选结果全部来自冻结的正式合同。"
+            if formal_history_available and formal_trade_count == total_count
+            else "当前历史样本用于参考归因，包含非 Score88 的旧策略记录；不得将其收益、胜率或夏普表述为 Score88 正式合同实绩。"
+        ),
+    }
+
+
+def _score88_replay_summary() -> dict[str, Any]:
+    """Expose the frozen Score88 research replay without treating it as live performance."""
+    payload = _read_json(SCORE88_REPLAY_SUMMARY_PATH) or {}
+    if not isinstance(payload, dict) or payload.get("status") != "completed":
+        return {
+            "available": False,
+            "classification": "research_replay_not_available",
+            "message": "Score88 独立历史复现工件不可用；不展示替代收益指标。",
+            "artifacts": {"summary": _path_status(SCORE88_REPLAY_SUMMARY_PATH)},
+        }
+    metrics = payload.get("two_slot") or {}
+    audit: dict[str, Any] = {"available": False}
+    closed_trades_path = SCORE88_REPLAY_DIR / "two_slot_closed_trades.csv"
+    try:
+        trades = pd.read_csv(closed_trades_path, usecols=["entry_date", "net_ret", "exit_reason"])
+        trades["entry_date"] = pd.to_datetime(trades["entry_date"], errors="coerce")
+        trades["net_ret"] = pd.to_numeric(trades["net_ret"], errors="coerce")
+        trades = trades.dropna(subset=["entry_date", "net_ret"])
+
+        def summarize(frame: pd.DataFrame) -> dict[str, Any]:
+            returns = frame["net_ret"]
+            wins = returns[returns > 0]
+            losses = returns[returns < 0]
+            return {
+                "trade_count": int(len(frame)),
+                "win_rate": float((returns > 0).mean()) if len(frame) else None,
+                "avg_trade_return": float(returns.mean()) if len(frame) else None,
+                "payoff_ratio": float(wins.mean() / -losses.mean()) if len(wins) and len(losses) else None,
+                "worst_trade": float(returns.min()) if len(frame) else None,
+            }
+
+        audit = {
+            "available": True,
+            "windows": {
+                "2020_2021": summarize(trades[trades["entry_date"] < "2022-01-01"]),
+                "2022_bear": summarize(trades[trades["entry_date"].between("2022-01-01", "2022-12-31")]),
+                "2023_2024": summarize(trades[trades["entry_date"].between("2023-01-01", "2024-12-31")]),
+                "2025_2026ytd": summarize(trades[trades["entry_date"] >= "2025-01-01"]),
+                "blind_2026ytd": summarize(trades[trades["entry_date"] >= "2026-01-01"]),
+            },
+            "exit_counts": {str(key): int(value) for key, value in trades["exit_reason"].value_counts().items()},
+        }
+    except Exception as exc:
+        logger.warning(f"Score88 replay audit unavailable: {exc}")
+    return {
+        "available": True,
+        "classification": "research_only_ohlc_proxy",
+        "strategy_id": STRATEGY_ID,
+        "trade_strategy": "institutional_mainwave_score88",
+        "contract": payload.get("contract"),
+        "metrics": {
+            "trade_count": metrics.get("trades"),
+            "win_rate": metrics.get("win_rate"),
+            "avg_trade_return": metrics.get("avg_ret"),
+            "payoff_ratio": metrics.get("payoff_ratio"),
+            "worst_trade": metrics.get("worst_trade"),
+            "slot_skipped": payload.get("slot_skipped"),
+        },
+        "limitations": payload.get("limitations"),
+        "audit": audit,
+        "message": "Score88 独立复现仅用于研究验证；采用 OHLC 代理，未包含逐笔滑点、涨跌停成交和真实订单回报。",
+        "artifacts": {
+            "summary": _path_status(SCORE88_REPLAY_SUMMARY_PATH),
+            "closed_trades": _path_status(SCORE88_REPLAY_DIR / "two_slot_closed_trades.csv"),
+            "confirmed_tickets": _path_status(SCORE88_REPLAY_DIR / "m30_confirmed_tickets.csv"),
+        },
+    }
+
+
+def _read_score88_replay_trades(limit: int, sort_order: str) -> dict[str, Any]:
+    """Rows for the history page; always labelled research-only, never live proof."""
+    path = SCORE88_REPLAY_DIR / "two_slot_closed_trades.csv"
+    if not path.exists():
+        return {"rows": [], "metrics": {"trade_count": 0}, "artifacts": {"closed_trades": _path_status(path)}}
+    frame = pd.read_csv(path, low_memory=False)
+    for column in ("entry_date", "exit_date"):
+        frame[column] = pd.to_datetime(frame.get(column), errors="coerce").dt.strftime("%Y-%m-%d")
+    frame["name"] = frame.get("stock_name", frame.get("code", "")).fillna("")
+    frame["policy_exit_date"] = frame["exit_date"]
+    frame["route"] = "institutional_mainwave_score88"
+    frame["route_label"] = "Score88 主升复现"
+    frame["route_strategy"] = "institutional_mainwave_score88"
+    frame["route_strategy_label"] = "Score88（研究复现）"
+    frame["score"] = pd.to_numeric(frame.get("wave_style_score"), errors="coerce")
+    frame["slot_pct"] = 0.50
+    frame["trade_status"] = "closed"
+    frame["formal_buy_signal"] = False
+    frame["live_ready"] = False
+    frame["block_reason"] = "Score88 历史 OHLC 研究复现；非实盘、非纸面成交"
+    frame["confirm_datetime"] = frame.get("entry_datetime")
+    frame["realized_pnl"] = None
+    frame = frame.sort_values("entry_date", ascending=sort_order == "asc")
+    returns = pd.to_numeric(frame.get("net_ret"), errors="coerce")
+    rows = frame.head(limit).where(pd.notna(frame), None).to_dict("records")
+    return {
+        "rows": rows,
+        "metrics": {
+            "trade_count": int(len(frame)),
+            "win_rate": float((returns > 0).mean()) if len(frame) else None,
+            "avg_trade_return": float(returns.mean()) if len(frame) else None,
+            "payoff_ratio": _score88_replay_summary().get("metrics", {}).get("payoff_ratio"),
+        },
+        "artifacts": {"closed_trades": _path_status(path)},
+    }
+
+
 @router.get("/historical-trades")
 async def get_gen3_state_alpha_historical_trades(
     limit: int = Query(default=200, ge=1, le=2000, description="Maximum closed trade rows returned."),
@@ -11556,7 +14007,25 @@ async def get_gen3_state_alpha_historical_trades(
     window: str | None = Query(default="all", description="Window filter: all, pre_2024_09, post_2024_09, weak_2022, valid_2024, blind_2026ytd."),
     sort_by: str = Query(default="entry_date", description="Column used for sorting."),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$", description="Sort order."),
+    dataset: str = Query(default="reference", pattern="^(reference|score88_replay)$"),
 ) -> dict[str, Any]:
+    if dataset == "score88_replay":
+        replay = _read_score88_replay_trades(limit, sort_order)
+        return _wrap_guardrails({
+            "ok": True,
+            "mode": "g3_state_alpha_score88_research_replay",
+            "dataset": "score88_replay",
+            "dataset_label": "Score88 全历史研究复现（OHLC代理）",
+            "research_only": True,
+            "historical_trades": replay["rows"],
+            "metrics": replay["metrics"],
+            "route_metrics": [], "market_style_metrics": [], "equity_curve": [],
+            "exposure_metrics": {}, "future_leak_audit": {}, "window_metrics": [],
+            "filters": {"dataset": dataset, "limit": limit, "sort_order": sort_order},
+            "score88_replay": _score88_replay_summary(),
+            "artifacts": replay["artifacts"],
+            "message": "仅研究复现：359笔闭合成交可逐笔查看，不代表实盘、纸面或正式Score88观察。",
+        })
     historical = _read_historical_trades(
         limit=limit,
         route=route.strip() if isinstance(route, str) and route.strip() else "all",
@@ -11564,6 +14033,8 @@ async def get_gen3_state_alpha_historical_trades(
         sort_by=sort_by.strip() if isinstance(sort_by, str) and sort_by.strip() else "entry_date",
         sort_order=sort_order,
     )
+    formal_contract = _contract()
+    historical_reference = _historical_reference_provenance(historical["rows"], formal_contract)
     replacement_assessment = _build_replacement_assessment(historical)
     strategy_reduction_recovery = _read_strategy_reduction_recovery()
     return _wrap_guardrails(
@@ -11581,7 +14052,9 @@ async def get_gen3_state_alpha_historical_trades(
             "future_leak_audit": historical["future_leak_audit"],
             "window_metrics": historical["window_metrics"],
             "filters": historical["filters"],
-            "strategy_contract": _contract(),
+            "strategy_contract": formal_contract,
+            "historical_reference": historical_reference,
+            "score88_replay": _score88_replay_summary(),
             "artifacts": historical["artifacts"],
             "replacement_assessment": replacement_assessment,
             "strategy_reduction_recovery": strategy_reduction_recovery,
@@ -11620,6 +14093,607 @@ async def get_gen3_state_alpha_historical_decision_replay_audit(
 @router.get("/broker/holdings")
 async def get_gen3_state_alpha_broker_holdings() -> dict[str, Any]:
     return _wrap_guardrails(_broker_snapshot())
+
+
+def _normalize_tick_code(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    if "." in text:
+        return text
+    code = _normalize_code6(text)
+    if len(code) != 6:
+        return ""
+    if code.startswith(("4", "8")):
+        return f"{code}.BJ"
+    return f"{code}.SH" if code.startswith(("5", "6", "9")) else f"{code}.SZ"
+
+
+def _tick_time_text(value: Any) -> str:
+    try:
+        numeric = float(value)
+        if numeric > 1_000_000_000_000:
+            return pd.to_datetime(numeric, unit="ms", utc=True).tz_convert("Asia/Shanghai").strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return str(value or "")
+
+
+def _tick_age_seconds(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+        if numeric > 1_000_000_000_000:
+            tick_at = pd.to_datetime(numeric, unit="ms", utc=True)
+            return round(float((pd.Timestamp.now(tz="UTC") - tick_at).total_seconds()), 1)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
+def _load_holding_tick_sector_members(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """Load a small, liquid QMT-canonical industry peer sample for each holding."""
+    if not codes:
+        return {}
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        if not (clickhouse_table_exists("sectors") and clickhouse_table_exists("sector_stocks")):
+            return {}
+        quoted_codes = _quote_sql_list(codes)
+        memberships = clickhouse_query_df(
+            f"""
+            SELECT ss.stock_code AS holding_code, ss.sector_code AS sector_code,
+                   any(s.name) AS sector_name, any(s.level) AS sector_level
+            FROM sector_stocks AS ss FINAL
+            INNER JOIN sectors AS s FINAL ON s.code = ss.sector_code
+            WHERE ss.stock_code IN ({quoted_codes})
+              AND s.type = 'industry'
+            GROUP BY ss.stock_code, ss.sector_code
+            ORDER BY holding_code, sector_level DESC, sector_name ASC
+            """
+        )
+        if memberships.empty:
+            return {}
+        picked: dict[str, dict[str, Any]] = {}
+        for _, row in memberships.iterrows():
+            holding_code = _normalize_tick_code(row.get("holding_code"))
+            sector_code = str(row.get("sector_code") or "").strip()
+            if holding_code and sector_code and holding_code not in picked:
+                picked[holding_code] = {
+                    "sector_code": sector_code,
+                    "sector_name": str(row.get("sector_name") or "").strip(),
+                    "sector_level": int(_to_float_or_none(row.get("sector_level")) or 0),
+                    "peer_codes": [],
+                    "peer_names": {},
+                }
+        sector_codes = sorted({str(item["sector_code"]) for item in picked.values()})
+        if not sector_codes:
+            return picked
+        member_counts = clickhouse_query_df(
+            f"""
+            SELECT sector_code, count() AS member_count
+            FROM sector_stocks FINAL
+            WHERE sector_code IN ({_quote_sql_list(sector_codes)})
+            GROUP BY sector_code
+            """
+        )
+        member_count_by_sector = {
+            str(row.get("sector_code") or ""): int(_to_float_or_none(row.get("member_count")) or 0)
+            for _, row in member_counts.iterrows()
+        }
+        peer_rows = clickhouse_query_df(
+            f"""
+            SELECT ss.sector_code AS sector_code, ss.stock_code AS code,
+                   anyOrNull(st.name) AS name,
+                   argMax(kd.amount, kd.trade_date) AS recent_amount
+            FROM sector_stocks AS ss FINAL
+            LEFT JOIN stocks AS st FINAL ON st.code = ss.stock_code
+            LEFT JOIN kline_daily AS kd FINAL ON kd.code = ss.stock_code
+            WHERE ss.sector_code IN ({_quote_sql_list(sector_codes)})
+            GROUP BY ss.sector_code, ss.stock_code
+            ORDER BY sector_code, recent_amount DESC, code ASC
+            LIMIT 12 BY sector_code
+            """
+        )
+        peers_by_sector: dict[str, list[dict[str, str]]] = {}
+        for _, row in peer_rows.iterrows():
+            sector_code = str(row.get("sector_code") or "").strip()
+            code = _normalize_tick_code(row.get("code"))
+            if sector_code and code:
+                peers_by_sector.setdefault(sector_code, []).append(
+                    {"code": code, "name": str(row.get("name") or "").strip()}
+                )
+        for holding_code, item in picked.items():
+            peers = [peer for peer in peers_by_sector.get(str(item["sector_code"]), []) if peer["code"] != holding_code]
+            item["peer_codes"] = [peer["code"] for peer in peers[:10]]
+            item["peer_names"] = {peer["code"]: peer["name"] for peer in peers[:10]}
+            item["sector_member_count"] = member_count_by_sector.get(str(item["sector_code"]), 0)
+        return picked
+    except Exception as exc:
+        logger.warning("Failed to load holding tick sector peers: %s", exc)
+        return {}
+
+
+def _tick_change_pct(raw: Any) -> float | None:
+    if not isinstance(raw, dict):
+        return None
+    last = _parse_broker_number(raw.get("lastPrice"))
+    previous_close = _parse_broker_number(raw.get("lastClose"))
+    if last is None or last <= 0 or previous_close is None or previous_close <= 0:
+        return None
+    return (last / previous_close - 1.0) * 100.0
+
+
+def _summarize_holding_tick_sector(
+    holding_code: str,
+    context: dict[str, Any],
+    ticks: dict[str, Any],
+) -> dict[str, Any]:
+    peer_codes = list(context.get("peer_codes") or [])
+    changes = [(code, _tick_change_pct(ticks.get(code))) for code in peer_codes]
+    usable = [(code, value) for code, value in changes if value is not None]
+    if len(usable) < 4:
+        return {
+            "sector_name": context.get("sector_name") or "未识别行业",
+            "sector_code": context.get("sector_code") or "",
+            "peer_sample_size": len(usable),
+            "sector_member_count": int(_to_float_or_none(context.get("sector_member_count")) or 0),
+            "sector_follow_state": "样本不足",
+            "sector_follow_label": "板块样本不足，不能用跟随关系判断",
+            "peer_changes": [],
+        }
+    values = [value for _, value in usable]
+    median_change = float(pd.Series(values).median())
+    positive_ratio = sum(1 for value in values if value > 0) / len(values)
+    leader_rows = sorted(usable, key=lambda item: item[1], reverse=True)[:3]
+    peer_names = context.get("peer_names") or {}
+    peer_changes = [
+        {"code": code, "name": peer_names.get(code) or code, "change_pct": value}
+        for code, value in leader_rows
+    ]
+    holding_change = _tick_change_pct(ticks.get(holding_code))
+    relative_strength = holding_change - median_change if holding_change is not None else None
+    if positive_ratio >= 0.6 and median_change >= 0:
+        state, label = "同步增强", "板块扩散偏强，可作为个股走势的确认"
+    elif positive_ratio <= 0.4 and median_change <= 0:
+        state, label = "同步走弱", "板块扩散偏弱，不支持逆势补仓"
+    else:
+        state, label = "分化", "板块内部不一致，跟随证据不足"
+    return {
+        "sector_name": context.get("sector_name") or "未识别行业",
+        "sector_code": context.get("sector_code") or "",
+        "peer_sample_size": len(usable),
+        "sector_member_count": int(_to_float_or_none(context.get("sector_member_count")) or 0),
+        "peer_positive_ratio": positive_ratio,
+        "peer_median_change_pct": median_change,
+        "relative_strength_pct": relative_strength,
+        "sector_follow_state": state,
+        "sector_follow_label": label,
+        "peer_changes": peer_changes,
+    }
+
+
+def _read_qmt_ticks(codes: list[str], source: dict[str, Any]) -> dict[str, Any]:
+    """Read ticks through the host bridge when the API runs inside Docker."""
+    bridge_url = str(os.getenv("AISTOCK_QMT_TICK_BRIDGE_URL", "http://host.docker.internal:8766/full-tick")).strip()
+    if bridge_url:
+        try:
+            response = requests.get(bridge_url, params={"codes": ",".join(codes)}, timeout=8)
+            response.raise_for_status()
+            body = response.json()
+            if not isinstance(body, dict) or not body.get("ok") or not isinstance(body.get("ticks"), dict):
+                raise RuntimeError(str((body or {}).get("message") or "invalid bridge response"))
+            source["provider"] = "QMT xtdata host bridge"
+            source["bridge_url"] = bridge_url
+            return body["ticks"]
+        except Exception as exc:
+            source["bridge_error"] = f"{type(exc).__name__}: {exc}"
+            raise RuntimeError(f"QMT Tick host bridge unavailable: {source['bridge_error']}") from exc
+    try:
+        from xtquant import xtdata  # type: ignore
+
+        host = source["host"]
+        port = source["port"]
+        xtdata.enable_hello = False
+        xtdata.connect(host, port)
+        source["provider"] = "QMT xtdata local runtime"
+        return xtdata.get_full_tick(codes) or {}
+    except Exception as exc:
+        raise RuntimeError(f"QMT Tick local runtime unavailable: {type(exc).__name__}: {exc}") from exc
+
+
+def _rsi_from_closes(closes: list[Any], period: int = 14) -> float | None:
+    values = pd.to_numeric(pd.Series(closes), errors="coerce").dropna()
+    if len(values) < period + 1:
+        return None
+    delta = values.diff()
+    gains = delta.clip(lower=0)
+    losses = (-delta.clip(upper=0))
+    average_gain = gains.ewm(alpha=1 / period, adjust=False, min_periods=period).mean().iloc[-1]
+    average_loss = losses.ewm(alpha=1 / period, adjust=False, min_periods=period).mean().iloc[-1]
+    if pd.isna(average_gain) or pd.isna(average_loss):
+        return None
+    if average_loss == 0:
+        return 100.0 if average_gain > 0 else 50.0
+    return round(float(100 - (100 / (1 + (average_gain / average_loss)))), 2)
+
+
+def _load_holding_tick_minute_metrics(codes: list[str]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, float | None]]]:
+    minute_by_code: dict[str, dict[str, Any]] = {}
+    rsi_by_code: dict[str, dict[str, float | None]] = {code: {"rsi_5m_14": None, "rsi_15m_14": None} for code in codes}
+    if not codes:
+        return minute_by_code, rsi_by_code
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        quoted = _quote_sql_list(codes)
+        if clickhouse_table_exists("kline_minute_5"):
+            frame = clickhouse_query_df(
+                f"""
+                SELECT code, max(datetime) AS latest_5m_at, argMax(close, datetime) AS last_5m_close,
+                       sum(amount) / nullIf(sum(volume), 0) AS vwap_5m
+                FROM kline_minute_5 FINAL
+                WHERE code IN ({quoted}) AND toDate(datetime) = today()
+                GROUP BY code
+                """
+            )
+            minute_by_code = {str(row.code).upper(): row._asdict() for row in frame.itertuples(index=False)}
+
+        for period_name, table_name, result_key in [
+            ("5m", "kline_minute_5", "rsi_5m_14"),
+            ("15m", "kline_minute_15", "rsi_15m_14"),
+        ]:
+            if not clickhouse_table_exists(table_name):
+                continue
+            raw = clickhouse_query_df(
+                f"""
+                SELECT code, datetime, close
+                FROM {table_name} FINAL
+                WHERE code IN ({quoted})
+                ORDER BY code, datetime DESC
+                LIMIT 80 BY code
+                """
+            )
+            if raw.empty:
+                continue
+            for code, rows in raw.groupby(raw["code"].astype(str).str.upper(), dropna=False):
+                rsi_by_code.setdefault(str(code), {})[result_key] = _rsi_from_closes(rows.sort_values("datetime")["close"].tolist())
+    except Exception as exc:
+        logger.warning("Failed to load holding tick minute metrics: %s", exc)
+    return minute_by_code, rsi_by_code
+
+
+def _load_stock_names(codes: list[str]) -> dict[str, str]:
+    if not codes:
+        return {}
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        if not clickhouse_table_exists("stocks"):
+            return {}
+        raw = clickhouse_query_df(
+            f"""
+            SELECT code, any(name) AS name
+            FROM stocks
+            WHERE code IN ({_quote_sql_list(codes)})
+            GROUP BY code
+            """
+        )
+        return {
+            _normalize_tick_code(row.get("code")): str(row.get("name") or "").strip()
+            for _, row in raw.iterrows()
+            if _normalize_tick_code(row.get("code")) and str(row.get("name") or "").strip()
+        }
+    except Exception as exc:
+        logger.warning("Failed to load holding tick stock names: %s", exc)
+        return {}
+
+
+def _holding_tick_display_name(code: str, holding: dict[str, Any], stock_names: dict[str, str]) -> str:
+    """Ignore broker placeholder names that merely repeat the stock code."""
+    candidate = str(holding.get("name") or holding.get("stock_name") or "").strip()
+    if candidate and _normalize_code6(candidate) == _normalize_code6(code):
+        candidate = ""
+    return candidate or str(stock_names.get(code) or "").strip()
+
+
+def _read_holding_tick_watchlist() -> dict[str, Any]:
+    """Return the user-entered holding Tick watchlist kept outside the repository."""
+    payload = _read_json(HOLDING_TICK_WATCHLIST_PATH)
+    codes = payload.get("codes") if isinstance(payload, dict) else []
+    normalized = list(dict.fromkeys(_normalize_tick_code(code) for code in codes if _normalize_tick_code(code))) if isinstance(codes, list) else []
+    return {
+        "codes": normalized,
+        "updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
+    }
+
+
+def _save_holding_tick_watchlist(raw_codes: Any) -> dict[str, Any]:
+    if isinstance(raw_codes, str):
+        candidates = re.split(r"[,，\s]+", raw_codes)
+    elif isinstance(raw_codes, list):
+        candidates = raw_codes
+    else:
+        candidates = []
+    codes = list(dict.fromkeys(_normalize_tick_code(code) for code in candidates if _normalize_tick_code(code)))
+    if len(codes) > 100:
+        raise ValueError("holding Tick watchlist supports at most 100 stock codes")
+    payload = {
+        "codes": codes,
+        "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
+    }
+    _write_json(HOLDING_TICK_WATCHLIST_PATH, payload)
+    return payload
+
+
+def _read_holding_tick_analysis(codes_text: str | None = None) -> dict[str, Any]:
+    broker = _broker_snapshot()
+    holdings = broker.get("holdings") if isinstance(broker.get("holdings"), list) else []
+    holding_by_code = {
+        _normalize_tick_code(row.get("code")): row
+        for row in holdings
+        if isinstance(row, dict) and _normalize_tick_code(row.get("code"))
+    }
+    requested = [item.strip() for item in str(codes_text or "").split(",") if item.strip()]
+    codes = list(dict.fromkeys(_normalize_tick_code(item) for item in requested)) if requested else list(holding_by_code)
+    codes = [code for code in codes if code]
+    payload: dict[str, Any] = {
+        "ok": True,
+        "mode": "read_only_holding_tick_analysis",
+        "order_path_enabled": False,
+        "broker_updated_at": broker.get("updated_at"),
+        "requested_codes": codes,
+        "items": [],
+        "warnings": [],
+        "source": {"provider": "QMT xtdata", "host": os.getenv("AISTOCK_QMT_TICK_HOST", "127.0.0.1"), "port": int(os.getenv("AISTOCK_QMT_TICK_PORT", "58610"))},
+    }
+    if not codes:
+        payload["warnings"].append("账户持仓快照为空；可在页面手动输入以逗号分隔的股票代码。")
+        return payload
+
+    stock_name_by_code = _load_stock_names(codes)
+    sector_context_by_code = _load_holding_tick_sector_members(codes)
+    peer_codes = sorted(
+        {
+            peer_code
+            for context in sector_context_by_code.values()
+            for peer_code in context.get("peer_codes") or []
+            if peer_code not in codes
+        }
+    )
+
+    try:
+        ticks = _read_qmt_ticks(codes + peer_codes, payload["source"])
+        _mark_holding_tick_qmt_available(codes, payload["source"])
+    except Exception as exc:
+        payload["ok"] = False
+        payload["warnings"].append(f"QMT Tick 不可用：{type(exc).__name__}: {exc}")
+        payload["alert"] = _notify_holding_tick_qmt_unavailable(codes, payload["source"], exc)
+        return payload
+
+    minute_by_code, rsi_by_code = _load_holding_tick_minute_metrics(codes)
+    daily_bars_by_code = _load_daily_trend_bars(codes, 180)
+    today_text = datetime.now().strftime("%Y-%m-%d")
+
+    for code in codes:
+        raw = ticks.get(code) if isinstance(ticks, dict) else None
+        if not isinstance(raw, dict):
+            payload["items"].append({"code": code, "available": False, "diagnosis": "行情缺失", "anomalies": ["未收到 Tick 快照"]})
+            continue
+        last = _parse_broker_number(raw.get("lastPrice")) or 0.0
+        open_price = _parse_broker_number(raw.get("open")) or 0.0
+        high = _parse_broker_number(raw.get("high")) or 0.0
+        low = _parse_broker_number(raw.get("low")) or 0.0
+        previous_close = _parse_broker_number(raw.get("lastClose")) or 0.0
+        bid_volumes = [float(item or 0) for item in (raw.get("bidVol") or [])[:5]]
+        ask_volumes = [float(item or 0) for item in (raw.get("askVol") or [])[:5]]
+        bid_total, ask_total = sum(bid_volumes), sum(ask_volumes)
+        imbalance = (bid_total - ask_total) / (bid_total + ask_total) if bid_total + ask_total else None
+        bid1 = _parse_broker_number((raw.get("bidPrice") or [None])[0])
+        ask1 = _parse_broker_number((raw.get("askPrice") or [None])[0])
+        change_pct = (last / previous_close - 1.0) * 100 if last > 0 and previous_close > 0 else None
+        tick_age_seconds = _tick_age_seconds(raw.get("time"))
+        minute = minute_by_code.get(code, {})
+        rsi = rsi_by_code.get(code, {})
+        daily_bars = daily_bars_by_code.get(code, [])
+        trend_line = evaluate_intraday_rising_trend_line(
+            daily_bars,
+            last,
+            current_session_in_daily_bars=bool(daily_bars and str(daily_bars[-1].get("trade_date") or "")[:10] == today_text),
+        )
+        sector = _summarize_holding_tick_sector(code, sector_context_by_code[code], ticks) if code in sector_context_by_code else {
+            "sector_name": "未识别行业",
+            "sector_code": "",
+            "peer_sample_size": 0,
+            "sector_follow_state": "未映射",
+            "sector_follow_label": "未找到QMT行业成分，不能判断板块跟随",
+            "peer_changes": [],
+        }
+        vwap = _parse_broker_number(minute.get("vwap_5m"))
+        near_low = last > 0 and low > 0 and last <= low * 1.003
+        below_vwap = last > 0 and vwap is not None and last < vwap
+        anomalies: list[str] = []
+        if near_low:
+            anomalies.append("价格贴近日内低点")
+        if below_vwap:
+            anomalies.append("低于5分钟VWAP")
+        if imbalance is not None and imbalance <= -0.35:
+            anomalies.append("五档卖盘显著占优")
+        if bid1 is not None and ask1 is not None and last > 0 and (ask1 - bid1) / last > 0.003:
+            anomalies.append("买卖价差异常扩大")
+        if trend_line.get("intraday_trend_broken"):
+            anomalies.append("盘中跌破日线主升趋势线")
+        sector_state = str(sector.get("sector_follow_state") or "")
+        relative_strength = _to_float_or_none(sector.get("relative_strength_pct"))
+        if tick_age_seconds is not None and tick_age_seconds > 20:
+            anomalies.append(f"Tick 已延迟 {int(tick_age_seconds)} 秒")
+            diagnosis, level = "行情过期：仅保留观察，不生成动作", "info"
+        elif sector_state == "同步走弱" and (below_vwap or near_low):
+            diagnosis, level = "风险复核：个股与板块同步偏弱", "danger"
+        elif sector_state == "同步增强" and relative_strength is not None and relative_strength >= 0.8 and last > open_price > 0:
+            diagnosis, level = "共振偏强：不因单笔Tick急于高抛", "success"
+        elif sector_state in {"分化", "同步走弱"} and relative_strength is not None and relative_strength >= 1.0:
+            diagnosis, level = "个股领先但板块未确认：关注冲高回落", "warning"
+        elif sector_state == "同步增强" and relative_strength is not None and relative_strength <= -0.8:
+            diagnosis, level = "板块偏强但个股落后：等待重新跟随", "warning"
+        elif near_low and below_vwap and (imbalance is None or imbalance <= 0):
+            diagnosis, level = "风控观察：破低后缺少承接确认", "danger"
+        elif below_vwap or (imbalance is not None and imbalance <= -0.35):
+            diagnosis, level = "弱势观察：等待5分钟结构确认", "warning"
+        elif imbalance is not None and imbalance >= 0.35 and last > open_price > 0:
+            diagnosis, level = "承接观察：尚需5分钟确认", "success"
+        else:
+            diagnosis, level = "中性观察：Tick未形成单独交易动作", "info"
+        if trend_line.get("intraday_trend_broken") and not (tick_age_seconds is not None and tick_age_seconds > 20):
+            diagnosis, level = "盘中跌破日线主升趋势线：卖出/换股复核", "danger"
+        holding = holding_by_code.get(code, {})
+        payload["items"].append(
+            {
+                "code": code,
+                "name": _holding_tick_display_name(code, holding, stock_name_by_code),
+                "available": last > 0,
+                "tick_time": _tick_time_text(raw.get("time") or raw.get("timetag")),
+                "tick_age_seconds": tick_age_seconds,
+                "tick_fresh": tick_age_seconds is None or tick_age_seconds <= 20,
+                "last_price": last or None,
+                "open": open_price or None,
+                "high": high or None,
+                "low": low or None,
+                "previous_close": previous_close or None,
+                "change_pct": change_pct,
+                "vwap_5m": vwap,
+                "last_5m_at": str(minute.get("latest_5m_at") or ""),
+                "rsi_5m_14": rsi.get("rsi_5m_14"),
+                "rsi_15m_14": rsi.get("rsi_15m_14"),
+                "bid1": bid1,
+                "ask1": ask1,
+                "bid5_volume": bid_total,
+                "ask5_volume": ask_total,
+                "order_book_imbalance": imbalance,
+                "speed_1m": _parse_broker_number(raw.get("speed1Min")),
+                "speed_5m": _parse_broker_number(raw.get("speed5Min")),
+                "daily_trend": trend_line,
+                **sector,
+                "shares": holding.get("shares"),
+                "cost_price": holding.get("cost_price"),
+                "diagnosis": diagnosis,
+                "level": level,
+                "anomalies": anomalies,
+            }
+        )
+    return payload
+
+
+@router.get("/holding-tick-watchlist")
+async def get_gen3_state_alpha_holding_tick_watchlist() -> dict[str, Any]:
+    """Load manually entered Tick symbols; quote data itself is never replayed."""
+    return _wrap_guardrails({"ok": True, **_read_holding_tick_watchlist(), "order_path_enabled": False})
+
+
+@router.put("/holding-tick-watchlist")
+async def put_gen3_state_alpha_holding_tick_watchlist(
+    payload: dict[str, Any] = Body(..., description="Manual holding Tick watchlist"),
+) -> dict[str, Any]:
+    try:
+        saved = _save_holding_tick_watchlist(payload.get("codes"))
+    except ValueError as exc:
+        return _wrap_guardrails({"ok": False, "message": str(exc), "order_path_enabled": False})
+    return _wrap_guardrails({"ok": True, **saved, "order_path_enabled": False})
+
+
+@router.get("/holding-tick-analysis")
+async def get_gen3_state_alpha_holding_tick_analysis(
+    codes: str | None = Query(default=None, description="Comma-separated QMT stock codes; defaults to the broker holdings snapshot."),
+) -> dict[str, Any]:
+    return _wrap_guardrails(_read_holding_tick_analysis(codes))
+
+
+@router.get("/holding-tick-analysis/chart/{code}")
+async def get_gen3_state_alpha_holding_tick_chart(code: str) -> dict[str, Any]:
+    normalized = _normalize_tick_code(code)
+    if not normalized:
+        return _wrap_guardrails({"ok": False, "message": "invalid stock code", "items": {}})
+    try:
+        from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists
+
+        specs = {
+            "1d": ("kline_daily", "trade_date", 180),
+            "60m": ("kline_minute_60", "datetime", 160),
+            "15m": ("kline_minute_15", "datetime", 160),
+            "5m": ("kline_minute_5", "datetime", 160),
+        }
+        charts: dict[str, list[dict[str, Any]]] = {}
+        for period, (table, time_col, limit) in specs.items():
+            if not clickhouse_table_exists(table):
+                charts[period] = []
+                continue
+            source_table = f"{table} FINAL" if period == "1d" else table
+            frame = clickhouse_query_df(
+                f"SELECT {time_col} AS time, open, high, low, close, volume FROM {source_table} "
+                f"WHERE code = '{normalized}' ORDER BY {time_col} DESC LIMIT {limit}"
+            )
+            records = list(reversed(frame.to_dict(orient="records"))) if not frame.empty else []
+            for record in records:
+                stamp = pd.Timestamp(record["time"])
+                # The chart client consumes an explicit epoch value for minute
+                # bars, avoiding browser-specific parsing of ISO DateTime.
+                record["unix_time"] = int(stamp.value // 1_000_000_000)
+                record["time"] = stamp.strftime("%Y-%m-%d" if period == "1d" else "%Y-%m-%d %H:%M:%S")
+            charts[period] = records
+        daily_trend = evaluate_intraday_rising_trend_line(charts["1d"], None)
+        return _wrap_guardrails({
+            "ok": True,
+            "mode": "read_only_holding_tick_chart",
+            "code": normalized,
+            "charts": charts,
+            "daily_trend": daily_trend,
+            "order_path_enabled": False,
+        })
+    except Exception as exc:
+        logger.warning("Failed to load holding tick charts for %s: %s", normalized, exc)
+        return _wrap_guardrails({"ok": False, "code": normalized, "charts": {}, "message": str(exc), "order_path_enabled": False})
+
+
+@router.get("/holding-t/review")
+async def get_gen3_holding_t_review(
+    trade_date: str | None = Query(default=None, description="Trading date in YYYY-MM-DD; defaults to today."),
+) -> dict[str, Any]:
+    """Return the persisted after-close review, or a read-only preview before 16:00."""
+    date_text = str(trade_date or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat())
+    path = HOLDING_T_REVIEW_DIR / f"{date_text}.json"
+    review = _read_json(path) if path.exists() else run_daily_review(date_text)
+    return _wrap_guardrails({"ok": True, **review, "order_path_enabled": False})
+
+
+@router.post("/holding-t/manual-execution")
+async def post_gen3_holding_t_manual_execution(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Store a user-entered fill for attribution; it never talks to a broker."""
+    try:
+        saved = record_manual_execution(payload)
+        review = run_daily_review(str(saved.get("trade_date") or ""))
+        return _wrap_guardrails({"ok": True, "execution": saved, "review": review, "order_path_enabled": False})
+    except ValueError as exc:
+        return _wrap_guardrails({"ok": False, "message": str(exc), "order_path_enabled": False})
+
+
+@router.get("/holding-t/portfolio-state")
+async def get_gen3_holding_t_portfolio_state() -> dict[str, Any]:
+    return _wrap_guardrails({"ok": True, "state": load_holding_t_portfolio_state(), "order_path_enabled": False})
+
+
+@router.post("/holding-t/portfolio-confirmation")
+async def post_gen3_holding_t_portfolio_confirmation(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        result = confirm_position_action(payload)
+        return _wrap_guardrails({"ok": True, **result, "order_path_enabled": False})
+    except ValueError as exc:
+        return _wrap_guardrails({"ok": False, "message": str(exc), "order_path_enabled": False})
+
+@router.put("/holding-t/portfolio-state")
+async def put_gen3_holding_t_portfolio_state(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else None
+    if state is None: return _wrap_guardrails({"ok": False, "message": "missing state", "order_path_enabled": False})
+    return _wrap_guardrails({"ok": True, "state": save_holding_t_portfolio_state(state), "order_path_enabled": False})
 
 
 @router.get("/broker/holdings/sync-ths-preflight")
@@ -11764,6 +14838,100 @@ def _read_qmtmini_capital_holdings() -> dict[str, Any]:
     }
 
 
+def _normalize_qmtmini_trade_time(value: Any) -> str | None:
+    text = str(value or "").strip()
+    digits = re.sub(r"\D", "", text)
+    try:
+        if len(digits) >= 14:
+            return pd.Timestamp(
+                f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:{digits[12:14]}"
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        if len(digits) == 8:
+            return pd.Timestamp(f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}").strftime("%Y-%m-%d 00:00:00")
+        if text:
+            return pd.Timestamp(text).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+    return None
+
+
+def _parse_qmtmini_trade_side(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"23", "stock_buy"} or "buy" in text or "买" in text:
+        return "BUY"
+    if text in {"24", "stock_sell"} or "sell" in text or "卖" in text:
+        return "SELL"
+    return _parse_trade_side(value)
+
+
+def _read_qmtmini_trades() -> dict[str, Any]:
+    try:
+        from data_fetcher.sources.qmtmini_client import QmtMiniTradingClient
+    except Exception as exc:
+        return {
+            "ok": False,
+            "source": "qmtmini_readonly_snapshot",
+            "message": f"QMT Mini client unavailable: {exc}",
+        }
+    client = QmtMiniTradingClient()
+    try:
+        connect_status = client.connect()
+        if not connect_status.get("ok"):
+            return {
+                "ok": False,
+                "source": "qmtmini_readonly_snapshot",
+                "message": f"QMT Mini trading connect failed: {connect_status}",
+                "connect": connect_status,
+            }
+        snapshot = client.account_snapshot(include_sensitive=True)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "source": "qmtmini_readonly_snapshot",
+            "message": f"Failed to read QMT Mini trades: {exc}",
+        }
+    finally:
+        client.close()
+
+    rows: list[dict[str, Any]] = []
+    for item in snapshot.get("trades") or []:
+        if not isinstance(item, dict):
+            continue
+        code = _normalize_code6(item.get("stock_code") or item.get("code"))
+        trade_time = _normalize_qmtmini_trade_time(item.get("traded_time") or item.get("trade_time"))
+        side = _parse_qmtmini_trade_side(item.get("order_type"))
+        shares = int(abs(_parse_broker_number(item.get("traded_volume") or item.get("volume")) or 0))
+        price = _parse_broker_number(item.get("traded_price") or item.get("price"))
+        amount = _parse_broker_number(item.get("traded_amount") or item.get("amount"))
+        if not code or not trade_time or side not in {"BUY", "SELL"} or shares <= 0 or not price or price <= 0:
+            continue
+        rows.append(
+            {
+                "trade_time": trade_time,
+                "trade_date": trade_time[:10],
+                "side": side,
+                "side_label": "买入" if side == "BUY" else "卖出",
+                "code": code,
+                "name": "",
+                "shares": shares,
+                "price": round(float(price), 3),
+                "amount": round(float(amount), 3) if amount is not None else round(float(price) * shares, 3),
+                "remark": str(item.get("traded_id") or item.get("order_id") or "").strip(),
+                "source": "qmtmini_trade_snapshot",
+            }
+        )
+    rows.sort(key=lambda item: str(item.get("trade_time") or ""), reverse=True)
+    return {
+        "ok": bool(snapshot.get("ok")),
+        "source": "qmtmini_readonly_snapshot",
+        "message": "QMT Mini read-only trades synced.",
+        "rows": rows,
+        "parsed_count": len(rows),
+        "raw_trades_count": len(snapshot.get("trades") or []),
+        "account_id": snapshot.get("account_id"),
+    }
+
+
 def _preferred_broker_sync_source() -> str:
     return str(os.environ.get("AISTOCK_BROKER_SYNC_SOURCE") or "qmtmini").strip().lower()
 
@@ -11866,8 +15034,22 @@ def _sync_broker_trades_from_ths(payload: dict[str, Any] | None = None) -> dict[
     data = payload if isinstance(payload, dict) else {}
     source = str(data.get("source") or "delivery_file").strip().lower()
     raw_text = str(data.get("raw_text") or "")
+    source_preference = _preferred_broker_sync_source()
     if raw_text.strip():
         raw_result = {"ok": True, "raw_text": raw_text, "source": "payload_raw_text"}
+    elif source_preference in {"qmtmini", "qmt", "qmtmini_first"}:
+        raw_result = _read_qmtmini_trades()
+        if not raw_result.get("ok"):
+            fallback_result = raw_result
+            try:
+                raw_result = _read_ths_trades_via_gateway()
+            except Exception as gateway_exc:
+                raw_result = {
+                    "ok": False,
+                    "source": "tdx_gateway_ths_bridge",
+                    "message": f"Failed to read THS trades via TDX Gateway: {gateway_exc}",
+                    "fallback_from": fallback_result,
+                }
     else:
         try:
             raw_result = _read_ths_trades_via_gateway()
@@ -12285,6 +15467,8 @@ async def set_gen3_state_alpha_shadow_monitor_config(payload: dict[str, Any] = B
             state["recipient_email"] = str(payload.get("recipient_email") or "").strip()
         if "run_current_refresh" in payload:
             state["run_current_refresh"] = bool(payload.get("run_current_refresh"))
+        if "paper_entry_enabled" in payload:
+            state["paper_entry_enabled"] = bool(payload.get("paper_entry_enabled"))
     _save_monitor_state(state)
     state = configure_shadow_monitor_scheduler()
     return _wrap_guardrails(
@@ -12301,6 +15485,11 @@ async def run_gen3_state_alpha_shadow_monitor_once(payload: dict[str, Any] = Bod
     data = dict(payload) if isinstance(payload, dict) else {}
     data["force_send"] = True
     return await run_gen3_state_alpha_refresh_once(data)
+
+
+@router.post("/shadow-entry-monitor/run-once")
+async def run_gen3_state_alpha_shadow_entry_monitor_once() -> dict[str, Any]:
+    return _wrap_guardrails(_run_shadow_entry_monitor_once(source="manual"))
 
 
 @router.get("/shadow-exit-monitor/status")
@@ -12384,6 +15573,50 @@ async def run_gen3_state_alpha_shadow_exit_monitor_once(payload: dict[str, Any] 
             "monitor": configure_shadow_exit_monitor_scheduler(),
         }
     )
+
+
+@router.get("/daily-trend-exit-monitor/status")
+async def get_gen3_state_alpha_daily_trend_exit_monitor_status() -> dict[str, Any]:
+    state = configure_daily_trend_exit_monitor_scheduler()
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_daily_trend_exit_monitor",
+            "monitor": state,
+            "contract": "intraday_daily_rising_trend_line_exit_v1",
+            "execution_policy": "five_minute_intraday_trend_break_review_manual_or_paper_only",
+            "artifacts": {"daily_trend_exit_monitor_state": _path_status(DAILY_TREND_EXIT_MONITOR_STATE_PATH)},
+        }
+    )
+
+
+@router.post("/daily-trend-exit-monitor/config")
+async def set_gen3_state_alpha_daily_trend_exit_monitor_config(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    state = _load_daily_trend_exit_monitor_state()
+    data = payload if isinstance(payload, dict) else {}
+    for key in ("enabled", "email_enabled"):
+        if key in data:
+            state[key] = bool(data.get(key))
+    for key in ("hour", "minute", "lookback_days", "pivot_window", "min_pivot_separation"):
+        if key in data:
+            state[key] = data.get(key)
+    if "break_buffer_pct" in data:
+        state["break_buffer_pct"] = data.get("break_buffer_pct")
+    _save_daily_trend_exit_monitor_state(_load_daily_trend_exit_monitor_state() | state)
+    return _wrap_guardrails(
+        {
+            "ok": True,
+            "mode": "g3_daily_trend_exit_monitor_config",
+            "monitor": configure_daily_trend_exit_monitor_scheduler(),
+        }
+    )
+
+
+@router.post("/daily-trend-exit-monitor/run-once")
+async def run_gen3_state_alpha_daily_trend_exit_monitor_once(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    result = _run_daily_trend_exit_monitor_once(source=str(data.get("source") or "manual").strip() or "manual")
+    return _wrap_guardrails({**result, "monitor": configure_daily_trend_exit_monitor_scheduler()})
 
 
 @router.post("/shadow-verification")
@@ -13088,13 +16321,15 @@ async def save_gen3_state_alpha_daily_review_checklist_review_and_run(payload: d
 async def get_gen3_state_alpha_paper_executions(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum paper execution rows returned."),
 ) -> dict[str, Any]:
-    rows = _load_paper_executions()
+    all_rows = _load_paper_executions()
+    rows = _formal_score88_paper_rows(all_rows)
     return _wrap_guardrails(
         {
             "ok": True,
             "mode": "g3_state_alpha_paper_executions",
             "paper_executions": rows[-limit:][::-1],
             "count": len(rows),
+            "legacy_execution_count": len(all_rows) - len(rows),
             "artifacts": {
                 "paper_executions": _path_status(PAPER_EXECUTIONS_PATH),
             },
@@ -13248,14 +16483,16 @@ async def get_gen3_state_alpha_observation_snapshots(
     limit: int = Query(default=100, ge=1, le=500, description="Maximum observation snapshots returned."),
 ) -> dict[str, Any]:
     rows = _load_observation_snapshots()
-    accepted_dates = _accepted_observation_dates(rows)
+    formal_rows = _formal_score88_observation_rows(rows)
+    accepted_dates = _accepted_observation_dates(formal_rows)
     scheduler_state = configure_observation_scheduler()
     return _wrap_guardrails(
         {
             "ok": True,
             "mode": "g3_state_alpha_observation_snapshots",
-            "snapshots": rows[-limit:][::-1],
-            "count": len(rows),
+            "snapshots": formal_rows[-limit:][::-1],
+            "count": len(formal_rows),
+            "legacy_snapshot_count": len(rows) - len(formal_rows),
             "accepted_observation_days": len(accepted_dates),
             "accepted_observation_dates": accepted_dates[-30:],
             "scheduler": scheduler_state,
@@ -13272,7 +16509,8 @@ async def get_gen3_state_alpha_observation_snapshots(
 @router.get("/observation-scheduler/status")
 async def get_gen3_state_alpha_observation_scheduler_status() -> dict[str, Any]:
     rows = _load_observation_snapshots()
-    accepted_dates = _accepted_observation_dates(rows)
+    formal_rows = _formal_score88_observation_rows(rows)
+    accepted_dates = _accepted_observation_dates(formal_rows)
     return _wrap_guardrails(
         {
             "ok": True,
@@ -13280,7 +16518,8 @@ async def get_gen3_state_alpha_observation_scheduler_status() -> dict[str, Any]:
             "scheduler": configure_observation_scheduler(),
             "accepted_observation_days": len(accepted_dates),
             "accepted_observation_dates": accepted_dates[-30:],
-            "latest_snapshot": rows[-1] if rows else None,
+            "latest_snapshot": formal_rows[-1] if formal_rows else None,
+            "legacy_snapshot_count": len(rows) - len(formal_rows),
             "artifacts": {
                 "observation_state": _path_status(OBSERVATION_STATE_PATH),
                 "observation_snapshots": _path_status(OBSERVATION_SNAPSHOTS_PATH),
@@ -13299,6 +16538,10 @@ async def set_gen3_state_alpha_observation_scheduler_config(payload: dict[str, A
             state["hour"] = min(23, max(0, int(payload.get("hour") or 15)))
         if "minute" in payload:
             state["minute"] = min(59, max(0, int(payload.get("minute") or 40)))
+        if "retry_hour" in payload:
+            state["retry_hour"] = min(23, max(0, int(payload.get("retry_hour") or 10)))
+        if "retry_minutes" in payload:
+            state["retry_minutes"] = _coerce_scheduler_minutes(payload.get("retry_minutes"), [])
         if "trading_days_only" in payload:
             state["trading_days_only"] = bool(payload.get("trading_days_only"))
         if "run_smoke" in payload:

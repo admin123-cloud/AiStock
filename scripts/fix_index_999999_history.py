@@ -13,6 +13,8 @@ from loguru import logger
 
 from utils.database import db
 from utils.market_warehouse import market_source
+from utils.kline_store import filter_trading_day_tuples
+from utils.kline_units import normalize_akshare_daily_units
 
 TARGET_CODE = "999999.SH"
 
@@ -55,7 +57,12 @@ def compute_kline_fields(df: pd.DataFrame) -> pd.DataFrame:
     # 重命名列
     df = df.rename(columns={"date": "trade_date", "volume": "volume"})
     # akshare 没有 amount 字段, 用 volume 填充（指数 volume 已经是成交额）
-    df["amount"] = df["volume"]
+    if "amount" not in df.columns:
+        raise ValueError(
+            "AkShare index history has no amount field; refuse to write "
+            "999999.SH kline_daily"
+        )
+    df = normalize_akshare_daily_units(df)
 
     # NaN 替换为 0（ClickHouse Float64 不接受 NaN/None）
     for col in ["amplitude", "change_pct", "change_amount"]:
@@ -126,7 +133,9 @@ def main():
                 for c in col_names
             ))
 
-        ch_client.insert(table_name, data_tuples, column_names=col_names)
+        data_tuples = filter_trading_day_tuples("1d", data_tuples, col_names)
+        if data_tuples:
+            ch_client.insert(table_name, data_tuples, column_names=col_names)
         logger.info(f"  已写入 {end}/{total} 条")
 
     logger.info(f"成功写入 {total} 条记录到 ClickHouse stock.{table_name}")

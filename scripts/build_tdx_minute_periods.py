@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
+from zoneinfo import ZoneInfo
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.market_warehouse import clickhouse_client  # noqa: E402
+from utils.kline_store import filter_trading_day_tuples  # noqa: E402
 
 
 LC5_RECORD = struct.Struct("<HHfffffII")
@@ -46,6 +48,57 @@ BASE_TABLES = {
 }
 COLUMNS = ["code", "datetime", "open", "high", "low", "close", "volume", "amount", "created_at", "id"]
 PERIOD_MINUTES = {"5m": 5, "15m": 15, "30m": 30, "60m": 60}
+A_SHARE_5M_ENDPOINTS = {
+    "09:35",
+    "09:40",
+    "09:45",
+    "09:50",
+    "09:55",
+    "10:00",
+    "10:05",
+    "10:10",
+    "10:15",
+    "10:20",
+    "10:25",
+    "10:30",
+    "10:35",
+    "10:40",
+    "10:45",
+    "10:50",
+    "10:55",
+    "11:00",
+    "11:05",
+    "11:10",
+    "11:15",
+    "11:20",
+    "11:25",
+    "11:30",
+    "13:05",
+    "13:10",
+    "13:15",
+    "13:20",
+    "13:25",
+    "13:30",
+    "13:35",
+    "13:40",
+    "13:45",
+    "13:50",
+    "13:55",
+    "14:00",
+    "14:05",
+    "14:10",
+    "14:15",
+    "14:20",
+    "14:25",
+    "14:30",
+    "14:35",
+    "14:40",
+    "14:45",
+    "14:50",
+    "14:55",
+    "15:00",
+}
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 @dataclass(frozen=True)
@@ -70,6 +123,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--markets", default="sh,sz,bj")
     parser.add_argument("--codes", default="", help="Optional full codes: 000001.SZ,600000.SH")
     parser.add_argument("--codes-file", default="", help="Optional UTF-8 file with one full code per line.")
+    parser.add_argument("--canonical-only", action="store_true", help="Only import codes present in the QMT canonical stocks table.")
     parser.add_argument("--periods", default="5m,15m,30m,60m")
     parser.add_argument("--start-date", required=True, help="Inclusive local trade date YYYY-MM-DD")
     parser.add_argument("--end-date", required=True, help="Inclusive local trade date YYYY-MM-DD")
@@ -103,6 +157,15 @@ def _full_code_from_path(path: Path) -> Optional[str]:
     if suffix and raw.isdigit() and len(raw) == 6:
         return f"{raw}.{suffix}"
     return None
+
+
+def _tdx_volume_to_lots(code: str, volume: int) -> float:
+    """TDX lc5 stores stock turnover in shares; AiStock minute rows use lots."""
+    if code.endswith(".SH") and code.startswith("000"):
+        return float(volume)
+    if code.endswith(".SZ") and code.startswith("399"):
+        return float(volume)
+    return float(volume) / 100.0
 
 
 def _decode_tdx_datetime(raw_date: int, raw_time: int) -> Optional[datetime]:
@@ -153,6 +216,17 @@ def _load_codes_file(path_value: str) -> set[str]:
     return codes
 
 
+def _load_canonical_codes(client) -> set[str]:
+    rows = client.query(
+        """
+        SELECT code
+        FROM stocks
+        WHERE type IN ('stock', 'index')
+        """
+    ).result_rows
+    return {str(row[0]).strip().upper() for row in rows if row and row[0]}
+
+
 def _iter_lc5(path: Path, start_dt: datetime, end_dt: datetime) -> Iterator[Bar]:
     code = _full_code_from_path(path)
     if not code:
@@ -177,8 +251,8 @@ def _iter_lc5(path: Path, start_dt: datetime, end_dt: datetime) -> Iterator[Bar]
                 high=float(high),
                 low=float(low),
                 close=float(close),
-                volume=int(volume_raw or 0),
-                amount=round(float(amount_raw) / 10000.0, 4),
+                volume=_tdx_volume_to_lots(code, int(volume_raw or 0)),
+                amount=float(amount_raw or 0.0),
             )
 
 
@@ -206,6 +280,7 @@ def _create_table(client, table: str) -> None:
             id UInt64
         )
         ENGINE = ReplacingMergeTree
+        PARTITION BY toYYYYMM(datetime)
         ORDER BY (code, datetime)
         SETTINGS allow_nullable_key = 1
         """
@@ -213,6 +288,14 @@ def _create_table(client, table: str) -> None:
 
 
 def _delete_range(client, table: str, start_dt: datetime, end_dt: datetime, codes: set[str], dry_run: bool) -> None:
+    partition_key = client.query(
+        "SELECT partition_key FROM system.tables WHERE database = currentDatabase() AND name = %(table)s",
+        parameters={"table": table},
+    ).result_rows
+    if not partition_key or "toYYYYMM(datetime)" not in str(partition_key[0][0] or ""):
+        raise RuntimeError(
+            f"refusing DELETE on unpartitioned minute table {table}; use append-only repair or rebuild into a monthly-partitioned table"
+        )
     code_filter = ""
     if codes:
         quoted = ", ".join("'" + code.replace("'", "''") + "'" for code in sorted(codes))
@@ -295,12 +378,17 @@ def _bucket_end(dt: datetime, period_minutes: int) -> datetime:
     return session_start + timedelta(minutes=steps * period_minutes)
 
 
+def _is_regular_a_share_5m_bar(dt: datetime) -> bool:
+    return dt.strftime("%H:%M") in A_SHARE_5M_ENDPOINTS
+
+
 def _aggregate(rows: Iterable[Bar], period: str) -> list[Bar]:
+    source_rows = [row for row in rows if _is_regular_a_share_5m_bar(row.dt)]
     if period == "5m":
-        return list(rows)
+        return source_rows
     minutes = PERIOD_MINUTES[period]
     groups: dict[tuple[str, datetime], list[Bar]] = defaultdict(list)
-    for row in rows:
+    for row in source_rows:
         groups[(row.code, _bucket_end(row.dt, minutes))].append(row)
     out: list[Bar] = []
     for (code, bucket_dt), items in groups.items():
@@ -324,21 +412,17 @@ def _aggregate(rows: Iterable[Bar], period: str) -> list[Bar]:
 def _to_insert_rows(rows: Iterable[Bar], period: str, adjust: str, created_at: datetime) -> list[tuple]:
     out: list[tuple] = []
     for row in rows:
-        # clickhouse-connect converts naive datetimes through epoch seconds for
-        # DateTime columns in this environment.  Add 8 hours so persisted values
-        # read back as the project's East-8 A-share business time.
-        storage_dt = row.dt + timedelta(hours=8)
         out.append(
             (
                 row.code,
-                storage_dt,
+                row.dt.replace(tzinfo=CN_TZ),
                 row.open,
                 row.high,
                 row.low,
                 row.close,
                 row.volume,
                 row.amount,
-                created_at + timedelta(hours=8),
+                created_at,
                 _stable_id(row.code, row.dt, period, adjust),
             )
         )
@@ -348,6 +432,13 @@ def _to_insert_rows(rows: Iterable[Bar], period: str, adjust: str, created_at: d
 def _flush(client, table: str, rows: list[tuple], dry_run: bool) -> int:
     if not rows:
         return 0
+    period = next((key for key, value in BASE_TABLES.items() if value == table), "")
+    if period:
+        before_rows = len(rows)
+        rows = filter_trading_day_tuples(period, rows, COLUMNS)
+        if not rows:
+            print(f"{table} write blocked by trade_calendar guard: dropped={before_rows}", flush=True)
+            return 0
     if not dry_run:
         client.insert(table, rows, column_names=COLUMNS)
     return len(rows)
@@ -371,6 +462,10 @@ def main() -> int:
         raise SystemExit(f"TDX root not found: {root}")
 
     client = clickhouse_client()
+    if args.canonical_only:
+        canonical_codes = _load_canonical_codes(client)
+        codes = (codes & canonical_codes) if codes else canonical_codes
+        print(f"canonical_only codes={len(codes)}", flush=True)
     tables = {period: _target_table(period, args.adjust, args.target_suffix) for period in periods}
     for table in tables.values():
         if not args.dry_run:

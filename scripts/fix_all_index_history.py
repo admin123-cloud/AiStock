@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 from loguru import logger
 from clickhouse_connect import get_client
+from utils.kline_store import filter_trading_day_tuples
+from utils.kline_units import normalize_akshare_daily_units
 
 
 def get_ch_client():
@@ -112,7 +114,11 @@ def compute_kline_fields(df: pd.DataFrame, code: str) -> pd.DataFrame:
     df = df.rename(columns={"date": "trade_date"})
     # akshare 中 volume 列是成交量，amount 列是成交额
     if "amount" not in df.columns:
-        df["amount"] = df.get("volume", 0)
+        raise ValueError(
+            "AkShare index history has no amount field; refuse to write "
+            "kline_daily until a source with OHLC/volume/amount is available"
+        )
+    df = normalize_akshare_daily_units(df)
 
     # NaN 替换为 0
     for col in ["amplitude", "change_pct", "change_amount"]:
@@ -201,7 +207,9 @@ def fix_index(client, index: dict, dry_run: bool = False) -> tuple[int, int]:
         for tup in data_tuples:
             full_data.append(tuple(list(tup) + [now]))
 
-        client.insert(table_name, full_data, column_names=full_cols)
+        full_data = filter_trading_day_tuples("1d", [tuple(row) for row in full_data], full_cols)
+        if full_data:
+            client.insert(table_name, full_data, column_names=full_cols)
         logger.info(f"    已写入 {end}/{total} 条")
 
     # 6. 验证

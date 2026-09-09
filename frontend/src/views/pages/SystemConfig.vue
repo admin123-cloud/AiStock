@@ -14,141 +14,25 @@
           <strong :class="`state-${coreMaintenance.overall_status || 'idle'}`">{{ maintenanceStatusText }}</strong>
           <span>今日成功率 {{ formatRate(coreMaintenance.today_success_rate) }}</span>
         </div>
+        <div class="runtime-health-card">
+          <div class="runtime-health-head">
+            <span>运行健康</span>
+            <strong :class="`runtime-${runtimeHealth.status}`">{{ runtimeHealthStatusText }}</strong>
+          </div>
+          <p>{{ runtimeHealth.status === 'deferred' ? '非交易日：收盘产物等待下一交易日调度刷新，未发现数据缺口；策略仍保持观察锁定。' : (runtimeHealth.strategy_actionable ? '数据链路可用；G3仍遵循既有交易闸门。' : '数据链路未就绪；策略结论已降级为观察状态。') }}</p>
+          <div class="runtime-health-items">
+            <div v-for="item in runtimeHealth.components" :key="item.name" class="runtime-health-item">
+              <span :class="`runtime-dot ${item.status}`"></span>
+              <div>
+                <strong>{{ runtimeComponentLabel(item.name) }}</strong>
+                <small>{{ runtimeComponentStatusText(item) }} · 责任：{{ item.remediation_owner || '待配置' }}</small>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="hero-meta">
           <span>最近失败：{{ latestFailedText }}</span>
           <span>刷新于：{{ formatDateTime(lastStatusRefreshAt) }}</span>
-        </div>
-      </div>
-    </section>
-
-    <section class="command-grid">
-      <article class="command-card primary-command">
-        <span class="command-kicker">推荐操作</span>
-        <h2>一键修复今日市场数据</h2>
-        <p>覆盖交易日历、股票/指数/板块基础数据、当天日线、分钟快照、15/30m分钟K线、板块统计和盘后自检。</p>
-        <button
-          class="btn hero-btn"
-          :disabled="runningTodayFullMarketRefreshNow || isTaskRunning('today_full_market_refresh')"
-          @click="refreshTodayFullMarketNow"
-        >
-          {{ runningTodayFullMarketRefreshNow || isTaskRunning('today_full_market_refresh') ? '正在更新并自检...' : '立即执行今日全市场更新' }}
-        </button>
-      </article>
-
-      <article class="command-card">
-        <span class="command-kicker">自动化</span>
-        <h3>{{ coreMaintenance.enabled ? '自动维护已接管' : '自动维护已暂停' }}</h3>
-        <p>常规同步建议交给调度器。只有排障时才暂停或重启自动维护。</p>
-        <button class="btn secondary" @click="toggleCoreMaintenance">
-          {{ coreMaintenance.enabled ? '暂停自动维护' : '启动自动维护' }}
-        </button>
-      </article>
-
-      <article class="command-card">
-        <span class="command-kicker">排障</span>
-        <h3>历史分钟K线修复</h3>
-        <p>用于回补最近30个交易日股票/指数分钟K线，耗时较长，不作为日常主入口。</p>
-        <button
-          class="btn danger soft"
-          :disabled="runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running"
-          @click="triggerMarketMinuteHistoryRepairNow"
-        >
-          {{ runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running ? '修复中...' : '执行历史分钟修复' }}
-        </button>
-      </article>
-    </section>
-
-    <section class="section-card gateway-section">
-      <div class="section-title-row">
-        <div>
-          <span class="eyebrow">TDX Gateway</span>
-          <h2>TDX Gateway 排障入口</h2>
-        </div>
-        <span class="status-pill" :class="tdxGatewayStatusClass">
-          {{ tdxGatewayStatusText }}
-        </span>
-      </div>
-      <div class="maintenance-actions">
-        <button class="btn" :disabled="tdxGatewayLoading" @click="refreshTdxGatewayDiagnostics">
-          {{ tdxGatewayLoading ? '诊断中...' : '刷新诊断' }}
-        </button>
-        <button class="btn secondary" :disabled="tdxGatewayProbing || tdxGatewayLoading" @click="probeTdxGateway">
-          {{ tdxGatewayProbing ? '探针中...' : '真实取数探针' }}
-        </button>
-        <button class="btn primary" :disabled="tdxGatewayInitializing || tdxGatewayRestarting" @click="initializeTdxGateway">
-          {{ tdxGatewayInitializing ? '初始化中...' : '重新初始化' }}
-        </button>
-        <button class="btn primary" :disabled="tdxGatewayRecovering || tdxGatewayRestarting || tdxGatewayInitializing" @click="recoverTdxGateway">
-          {{ tdxGatewayRecovering ? '恢复中...' : '一键恢复' }}
-        </button>
-        <button class="btn danger soft" :disabled="tdxGatewayRestarting" @click="restartTdxGateway">
-          {{ tdxGatewayRestarting ? '重启请求已发送...' : '重启 Gateway' }}
-        </button>
-      </div>
-      <div class="gateway-verdict" :class="`level-${tdxGatewayVerdict.level || 'unknown'}`">
-        <strong>{{ tdxGatewayVerdict.summary || '等待诊断结果' }}</strong>
-        <span>排障顺序：{{ tdxGatewayRecoveryOrderText }}</span>
-      </div>
-      <div class="gateway-grid">
-        <article class="gateway-card">
-          <span>后端访问地址</span>
-          <strong>{{ tdxGatewayDiagnostics.gateway_url || '-' }}</strong>
-          <small>Docker 后端通过这个地址访问宿主机 Gateway</small>
-        </article>
-        <article class="gateway-card">
-          <span>健康检查</span>
-          <strong>{{ tdxGatewayHealthText }}</strong>
-          <small>{{ tdxGatewayHealthDetail }}</small>
-        </article>
-        <article class="gateway-card">
-          <span>真实取数探针</span>
-          <strong>{{ tdxGatewayProbeText }}</strong>
-          <small>{{ tdxGatewayProbeDetail }}</small>
-        </article>
-        <article class="gateway-card">
-          <span>宿主机进程</span>
-          <strong>{{ tdxGatewayProcessText }}</strong>
-          <small>{{ tdxGatewayTaskText }}</small>
-        </article>
-      </div>
-      <div class="gateway-diagnostics">
-        <div class="diagnostic-line">
-          <span>最近检查</span>
-          <strong>{{ formatDateTime(tdxGatewayDiagnostics.checked_at) }}</strong>
-        </div>
-        <div class="diagnostic-line">
-          <span>后端配置</span>
-          <strong>strict={{ tdxGatewayDiagnostics.backend?.strict_startup || '0' }}</strong>
-        </div>
-        <div v-if="tdxGatewayDiagnostics.health?.error" class="diagnostic-line danger-line">
-          <span>健康错误</span>
-          <strong>{{ tdxGatewayDiagnostics.health.error }}</strong>
-        </div>
-        <div v-if="tdxGatewayDiagnostics.market_data_probe?.error" class="diagnostic-line danger-line">
-          <span>取数错误</span>
-          <strong>{{ tdxGatewayDiagnostics.market_data_probe.error }}</strong>
-        </div>
-      </div>
-      <div class="gateway-check-grid">
-        <div
-          v-for="check in tdxGatewayChecks"
-          :key="check.key"
-          class="gateway-check"
-          :class="check.ok ? 'ok' : 'blocked'"
-        >
-          <span>{{ check.label }}</span>
-          <strong>{{ check.status || '-' }}</strong>
-        </div>
-      </div>
-      <div v-if="tdxGatewayBlockers.length" class="gateway-blockers">
-        <strong>当前阻塞</strong>
-        <span v-for="item in tdxGatewayBlockers" :key="item.key">{{ item.message }}</span>
-      </div>
-      <div v-if="tdxGatewayManualCommands.length" class="gateway-manual">
-        <strong>Gateway 完全不可达时的宿主机兜底</strong>
-        <div v-for="item in tdxGatewayManualCommands" :key="item.command" class="gateway-command">
-          <span>{{ item.label }}</span>
-          <code>{{ item.command }}</code>
         </div>
       </div>
     </section>
@@ -230,6 +114,7 @@
                   <small v-if="row.missing_rows || row.extra_rows">
                     缺 {{ formatInteger(row.missing_rows) }} / 多 {{ formatInteger(row.extra_rows) }}
                   </small>
+                  <small v-if="row.extended_rows">延长时段 +{{ formatInteger(row.extended_rows) }}</small>
                 </td>
                 <td>{{ row.latest_date || '-' }}</td>
                 <td>
@@ -246,6 +131,7 @@
                       <small v-if="period.missing_rows || period.extra_rows">
                         缺{{ formatInteger(period.missing_rows) }} 多{{ formatInteger(period.extra_rows) }}
                       </small>
+                      <small v-if="period.extended_rows">延长时段 +{{ formatInteger(period.extended_rows) }}</small>
                     </span>
                   </div>
                   <span v-else>-</span>
@@ -257,6 +143,70 @@
       </div>
 
       <div class="pipeline-grid">
+        <article v-if="qmtAfterClose.available" class="pipeline-card accent-amber qmt-execution-card">
+          <div class="pipeline-head">
+            <div>
+              <span class="command-kicker">QMT Execution</span>
+              <h3>QMT盘后执行结果</h3>
+              <p>仅展示 Windows 主机 QMT/xtquant 实际产物，不再使用旧调度器的推测状态。</p>
+            </div>
+            <span class="status-pill" :class="qmtAfterClose.closed ? 'enabled' : 'paused'">
+              {{ qmtAfterClose.closed ? '已闭环' : '未闭环' }}
+            </span>
+          </div>
+          <div class="qmt-task-grid">
+            <div class="task-chip qmt-summary-chip">
+              <div class="task-chip-main"><strong>执行窗口</strong><span class="state-success">{{ qmtAfterClose.schedule?.start }} 起，每 {{ qmtAfterClose.schedule?.retry_minutes }} 分钟重试</span></div>
+              <p>窗口截止 {{ qmtAfterClose.schedule?.active_end }}；闭环后自动跳过后续触发。</p>
+            </div>
+            <div class="task-chip qmt-summary-chip">
+              <div class="task-chip-main"><strong>盘后最终校验</strong><span :class="qmtAfterClose.closed ? 'state-success' : 'state-failed'">{{ qmtAfterClose.remaining_period_code_records || 0 }} 条周期-代码缺口记录</span></div>
+              <p>交易日：{{ qmtAfterClose.trade_date || '-' }}；初始：{{ qmtAfterClose.initial_period_code_records ?? '-' }} 条记录 / {{ qmtAfterClose.initial_unique_codes ?? '-' }} 只唯一码。</p>
+            </div>
+            <div v-for="period in qmtAfterClose.periods" :key="period.period" class="task-chip qmt-period-chip">
+              <div class="task-chip-main"><strong>{{ period.period }}</strong><span :class="period.issue_codes ? 'state-failed' : 'state-success'">{{ period.complete_codes }}/{{ period.expected_codes }}</span></div>
+              <p>缺口代码：{{ period.issue_codes }}；{{ period.reason_counts?.incomplete ? `不完整 ${period.reason_counts.incomplete}` : '完整' }}</p>
+            </div>
+          </div>
+        </article>
+        <article v-else class="pipeline-card accent-amber qmt-execution-card">
+          <div class="pipeline-head">
+            <div>
+              <span class="command-kicker">QMT Execution</span>
+              <h3>QMT盘后执行结果</h3>
+              <p>正在读取 Windows 主机 QMT/xtquant 的实际执行产物。</p>
+            </div>
+            <span class="status-pill paused">加载中</span>
+          </div>
+        </article>
+        <article v-if="qmtAfterClose.overnight_repair?.available" class="pipeline-card accent-green qmt-execution-card qmt-overnight-card">
+          <div class="pipeline-head">
+            <div>
+              <span class="command-kicker">QMT Overnight Repair</span>
+              <h3>午夜滚动修复结果</h3>
+              <p>展示最近一次历史分钟K线修复的真实执行状态，并与最终数据闭环状态分开呈现。</p>
+            </div>
+            <span class="status-pill" :class="qmtAfterClose.overnight_repair.execution_ok ? 'enabled' : (qmtAfterClose.overnight_repair.validation_closed ? 'paused' : 'failed')">
+              {{ qmtAfterClose.overnight_repair.execution_ok ? '执行完成' : (qmtAfterClose.overnight_repair.validation_closed ? '校验闭环 / 执行异常' : '未闭环') }}
+            </span>
+          </div>
+          <div class="qmt-overnight-grid">
+            <div class="task-chip">
+              <div class="task-chip-main"><strong>执行窗口</strong><span class="state-success">{{ qmtAfterClose.overnight_repair.schedule?.start }} - {{ qmtAfterClose.overnight_repair.schedule?.active_end }}</span></div>
+              <p>每日午夜滚动复核前一周的 5m/15m/30m/60m 数据。</p>
+            </div>
+            <div class="task-chip">
+              <div class="task-chip-main"><strong>最近修复范围</strong><span>{{ qmtAfterClose.overnight_repair.trade_dates?.join(' ~ ') || '-' }}</span></div>
+              <p>产物时间：{{ formatDateTime(qmtAfterClose.overnight_repair.updated_at) }}</p>
+            </div>
+            <div class="task-chip">
+              <div class="task-chip-main"><strong>最终校验</strong><span :class="qmtAfterClose.overnight_repair.validation_closed ? 'state-success' : 'state-failed'">{{ qmtAfterClose.overnight_repair.remaining_issue_count || 0 }} 条剩余缺口</span></div>
+              <p>{{ qmtAfterClose.overnight_repair.execution_message }}</p>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div v-if="false" class="pipeline-grid">
         <article v-for="group in coreTaskGroups" :key="group.key" class="pipeline-card" :class="`accent-${group.accent}`">
           <div class="pipeline-head">
             <div>
@@ -303,6 +253,43 @@
           <span class="timeline-time">{{ formatDateTime(item.created_at) }}</span>
         </div>
       </div>
+    </section>
+
+    <section class="command-grid deferred-command-grid">
+      <article class="command-card primary-command">
+        <span class="command-kicker">推荐操作</span>
+        <h2>一键修复今日市场数据</h2>
+        <p>覆盖交易日历、股票/指数/板块基础数据、当天日线、分钟快照、15/30m分钟K线、板块统计和盘后自检。</p>
+        <button
+          class="btn hero-btn"
+          :disabled="runningTodayFullMarketRefreshNow || isTaskRunning('today_full_market_refresh')"
+          @click="refreshTodayFullMarketNow"
+        >
+          {{ runningTodayFullMarketRefreshNow || isTaskRunning('today_full_market_refresh') ? '正在更新并自检...' : '立即执行今日全市场更新' }}
+        </button>
+      </article>
+
+      <article class="command-card">
+        <span class="command-kicker">自动化</span>
+        <h3>{{ coreMaintenance.enabled ? '自动维护已接管' : '自动维护已暂停' }}</h3>
+        <p>常规同步建议交给调度器。只有排障时才暂停或重启自动维护。</p>
+        <button class="btn secondary" @click="toggleCoreMaintenance">
+          {{ coreMaintenance.enabled ? '暂停自动维护' : '启动自动维护' }}
+        </button>
+      </article>
+
+      <article class="command-card">
+        <span class="command-kicker">排障</span>
+        <h3>历史分钟K线修复</h3>
+        <p>用于回补最近30个交易日股票/指数分钟K线，耗时较长，不作为日常主入口。</p>
+        <button
+          class="btn danger soft"
+          :disabled="runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running"
+          @click="triggerMarketMinuteHistoryRepairNow"
+        >
+          {{ runningMarketMinuteHistoryRepairNow || getTaskRaw('market_minute_history_repair')?.is_running ? '修复中...' : '执行历史分钟修复' }}
+        </button>
+      </article>
     </section>
 
     <section class="section-card data-source-section">
@@ -371,6 +358,7 @@
                 <small v-if="row.missing_rows || row.extra_rows">
                   缺 {{ formatInteger(row.missing_rows) }} / 多 {{ formatInteger(row.extra_rows) }}
                 </small>
+                <small v-if="row.extended_rows">延长时段 +{{ formatInteger(row.extended_rows) }}</small>
               </td>
               <td>{{ row.latest_date || '-' }}</td>
               <td>
@@ -387,6 +375,7 @@
                     <small v-if="period.missing_rows || period.extra_rows">
                       缺 {{ formatInteger(period.missing_rows) }} 多 {{ formatInteger(period.extra_rows) }}
                     </small>
+                    <small v-if="period.extended_rows">延长时段 +{{ formatInteger(period.extended_rows) }}</small>
                   </span>
                 </div>
                 <span v-else>-</span>
@@ -708,6 +697,7 @@ const strategyTaskSyncing = ref({})
 const strategyTaskPollTimers = ref({})
 const runningAllStrategyMaintenanceNow = ref(false)
 const STRATEGY_SUCCESS_STORAGE_KEY = 'aistock.strategyMaintenance.lastSuccess.v1'
+const runtimeHealth = ref({ status: 'loading', strategy_actionable: false, components: [] })
 
 const advancedOpen = ref(false)
 const showTimelinePanel = ref(false)
@@ -726,12 +716,6 @@ const dataSourceCounts = ref({
 const startupReferenceSyncEnabled = ref(false)
 const startupReferenceSyncDefaultEnabled = ref(false)
 const startupReferenceSyncSaving = ref(false)
-const tdxGatewayLoading = ref(false)
-const tdxGatewayInitializing = ref(false)
-const tdxGatewayRestarting = ref(false)
-const tdxGatewayProbing = ref(false)
-const tdxGatewayRecovering = ref(false)
-const tdxGatewayDiagnostics = ref({})
 const maintenanceTaskSyncing = ref({})
 const syncHistoryDays = ref(30)
 const klinePeriods = ref([
@@ -904,6 +888,7 @@ const coreMaintenance = ref({
   task_status_normalized: {},
   timeline: []
 })
+const qmtAfterClose = ref({ available: false, schedule: {} })
 
 const dataSourceCountRows = computed(() => dataSourceCounts.value?.rows || [])
 
@@ -995,79 +980,6 @@ const formatDuration = (valueSec) => {
   const remain = sec - min * 60
   return `${min}m ${remain.toFixed(1)}s`
 }
-
-const unwrapGatewayBody = (section) => {
-  const body = section?.body
-  return body?.data || body || {}
-}
-
-const tdxGatewayHealthPayload = computed(() => unwrapGatewayBody(tdxGatewayDiagnostics.value.health))
-const tdxGatewayHostPayload = computed(() => unwrapGatewayBody(tdxGatewayDiagnostics.value.host_diagnostics))
-const tdxGatewayProcessPayload = computed(() => tdxGatewayHostPayload.value?.process?.data || tdxGatewayHostPayload.value?.process || {})
-const tdxGatewayProbePayload = computed(() => tdxGatewayDiagnostics.value.market_data_probe || tdxGatewayHostPayload.value?.market_data_probe || {})
-const tdxGatewayVerdict = computed(() => tdxGatewayDiagnostics.value?.verdict || {})
-const tdxGatewayChecks = computed(() => tdxGatewayVerdict.value?.checks || [])
-const tdxGatewayBlockers = computed(() => tdxGatewayVerdict.value?.blockers || [])
-const tdxGatewayManualCommands = computed(() => tdxGatewayVerdict.value?.manual_commands || [])
-const tdxGatewayRecoveryOrderText = computed(() => {
-  const order = tdxGatewayVerdict.value?.recovery_order || []
-  return order.length ? order.join(' / ') : '刷新诊断 / 真实取数探针 / 重新初始化 / 必要时重启 Gateway'
-})
-
-const tdxGatewayStatusClass = computed(() => {
-  if (tdxGatewayLoading.value || tdxGatewayInitializing.value || tdxGatewayRestarting.value || tdxGatewayProbing.value || tdxGatewayRecovering.value) return 'running'
-  if (tdxGatewayVerdict.value?.ready) return 'enabled'
-  if (tdxGatewayVerdict.value?.level === 'error') return 'failed'
-  if (tdxGatewayProbePayload.value?.probe_ok || tdxGatewayProbePayload.value?.ok) return 'enabled'
-  return 'paused'
-})
-
-const tdxGatewayStatusText = computed(() => {
-  if (tdxGatewayRecovering.value) return '恢复中'
-  if (tdxGatewayProbing.value) return '探针中'
-  if (tdxGatewayRestarting.value) return '重启中'
-  if (tdxGatewayInitializing.value) return '初始化中'
-  if (tdxGatewayLoading.value) return '诊断中'
-  if (tdxGatewayStatusClass.value === 'enabled') return '可用'
-  if (tdxGatewayStatusClass.value === 'failed') return '不可达'
-  return '待排查'
-})
-
-const tdxGatewayHealthText = computed(() => {
-  const health = tdxGatewayHealthPayload.value
-  if (health.ready || health.status === 'available') return 'available'
-  return health.status || 'unknown'
-})
-
-const tdxGatewayHealthDetail = computed(() => {
-  const health = tdxGatewayHealthPayload.value
-  return health.last_error || `last=${formatDateTime(health.last_activity)}`
-})
-
-const tdxGatewayProbeText = computed(() => {
-  const probe = tdxGatewayProbePayload.value
-  if (probe.probe_ok || probe.ok) return '取数通过'
-  return '未通过'
-})
-
-const tdxGatewayProbeDetail = computed(() => {
-  const probe = tdxGatewayProbePayload.value
-  const fields = probe.fields || []
-  if (fields.length) return fields.join(', ')
-  return probe.error || probe.body?.detail || '-'
-})
-
-const tdxGatewayProcessText = computed(() => {
-  const proc = tdxGatewayProcessPayload.value || {}
-  const pid = proc.pid || proc.data?.pid
-  const memory = proc.privateMemoryMb || proc.data?.privateMemoryMb
-  return pid ? `PID ${pid}${memory ? ` / ${memory}MB` : ''}` : '-'
-})
-
-const tdxGatewayTaskText = computed(() => {
-  const proc = tdxGatewayProcessPayload.value || {}
-  return `task=${proc.taskState || '-'} result=${proc.lastTaskResult ?? '-'}`
-})
 
 const getTaskState = (taskKey) => {
   return coreMaintenance.value.task_status_normalized?.[taskKey] || {}
@@ -1372,6 +1284,48 @@ const refreshCoreMaintenanceStatus = async () => {
   }
 }
 
+const runtimeHealthStatusText = computed(() => ({
+  healthy: '健康',
+  deferred: '休市待刷新',
+  degraded: '降级',
+  blocked: '阻断',
+  loading: '加载中'
+}[runtimeHealth.value.status] || '未知'))
+
+const runtimeComponentLabel = (name) => ({
+  qmt_after_close_validation: 'QMT分钟数据闭环',
+  g3_strategy_summary: 'G3策略摘要',
+  broker_snapshot: '账户快照'
+}[name] || name || '未命名组件')
+
+const runtimeComponentStatusText = (item) => {
+  const status = { healthy: '正常', deferred: '休市待刷新', stale: '已过期', blocked: '已阻断' }[item?.status] || '未知'
+  return item?.age_seconds == null ? status : `${status}，${Math.round(item.age_seconds / 60)}分钟前更新`
+}
+
+const refreshRuntimeHealth = async () => {
+  try {
+    const response = await axios.get(`${API_BASE}/health/runtime`)
+    const payload = response.data || {}
+    runtimeHealth.value = {
+      status: payload.status || 'blocked',
+      strategy_actionable: !!payload.strategy_actionable,
+      components: Array.isArray(payload.components) ? payload.components : []
+    }
+  } catch (error) {
+    runtimeHealth.value = { status: 'blocked', strategy_actionable: false, components: [] }
+  }
+}
+
+const refreshQmtAfterCloseExecution = async () => {
+  try {
+    const response = await axios.get(`${API_BASE}/system/qmt-after-close-execution`)
+    qmtAfterClose.value = response.data?.data || { available: false, schedule: {} }
+  } catch (error) {
+    qmtAfterClose.value = { available: false, schedule: {} }
+  }
+}
+
 const refreshDataSourceCounts = async () => {
   dataSourceCountsLoading.value = true
   try {
@@ -1429,133 +1383,6 @@ const loadStartupReferenceSyncSetting = async () => {
     startupReferenceSyncDefaultEnabled.value = !!data.default_enabled
   } catch (error) {
     ElMessage.error('获取启动初始化配置失败')
-  }
-}
-
-const refreshTdxGatewayDiagnostics = async () => {
-  tdxGatewayLoading.value = true
-  try {
-    const response = await axios.get(`${API_BASE}/system/tdx-gateway/diagnostics?run_probe=true`)
-    const data = response.data?.data || {}
-    tdxGatewayDiagnostics.value = data.diagnostics || data || {}
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway诊断失败')
-  } finally {
-    tdxGatewayLoading.value = false
-  }
-}
-
-const probeTdxGateway = async () => {
-  tdxGatewayProbing.value = true
-  try {
-    const response = await axios.post(`${API_BASE}/system/tdx-gateway/probe`)
-    const data = response.data?.data || {}
-    tdxGatewayDiagnostics.value = data.diagnostics || tdxGatewayDiagnostics.value
-    if (response.data?.success) {
-      ElMessage.success('TDX Gateway真实取数探针通过')
-    } else {
-      ElMessage.warning('TDX Gateway真实取数探针未通过，请查看当前阻塞')
-    }
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway真实取数探针失败')
-  } finally {
-    tdxGatewayProbing.value = false
-  }
-}
-
-const waitForTdxGatewayReady = async (timeoutMs = 45000) => {
-  const started = Date.now()
-  let lastPayload = null
-  while (Date.now() - started < timeoutMs) {
-    await sleep(3000)
-    try {
-      const response = await axios.get(`${API_BASE}/system/tdx-gateway/diagnostics?run_probe=true`)
-      const data = response.data?.data || {}
-      lastPayload = data.diagnostics || data || {}
-      tdxGatewayDiagnostics.value = lastPayload
-      const probe = lastPayload.market_data_probe || {}
-      if (probe.probe_ok || lastPayload.verdict?.ready) {
-        return { ok: true, payload: lastPayload }
-      }
-    } catch (error) {
-      lastPayload = {
-        ...(lastPayload || {}),
-        health: { error: error.response?.data?.detail || error.message || 'TDX Gateway刷新失败' }
-      }
-      tdxGatewayDiagnostics.value = lastPayload
-    }
-  }
-  return { ok: false, payload: lastPayload }
-}
-
-const recoverTdxGateway = async () => {
-  tdxGatewayRecovering.value = true
-  try {
-    const response = await axios.post(`${API_BASE}/system/tdx-gateway/recover?allow_restart=true`)
-    const data = response.data?.data || {}
-    tdxGatewayDiagnostics.value = data.diagnostics || tdxGatewayDiagnostics.value
-    if (data.recovered || data.diagnostics?.verdict?.ready) {
-      ElMessage.success('TDX Gateway已恢复并通过真实取数')
-    } else if (data.restart_requested) {
-      ElMessage.success('已请求重启Gateway，正在等待真实取数恢复')
-      const ready = await waitForTdxGatewayReady()
-      if (ready.ok) {
-        ElMessage.success('TDX Gateway已恢复')
-      } else {
-        ElMessage.warning('Gateway重启后仍未通过真实取数，请查看阻塞清单')
-      }
-    } else {
-      ElMessage.warning(response.data?.message || '一键恢复结束，请查看诊断结果')
-    }
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway一键恢复失败')
-  } finally {
-    tdxGatewayRecovering.value = false
-  }
-}
-
-const initializeTdxGateway = async () => {
-  tdxGatewayInitializing.value = true
-  try {
-    const response = await axios.post(`${API_BASE}/system/tdx-gateway/initialize`)
-    tdxGatewayDiagnostics.value = response.data?.data?.diagnostics || {}
-    if (tdxGatewayDiagnostics.value?.verdict?.ready) {
-      ElMessage.success('TDX Gateway重新初始化完成并通过真实取数')
-    } else {
-      const ready = await waitForTdxGatewayReady(18000)
-      if (ready.ok) {
-        ElMessage.success('TDX Gateway已恢复并通过真实取数')
-      } else {
-        ElMessage.warning('TDX Gateway初始化后仍未通过真实取数，请查看阻塞清单')
-      }
-    }
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway初始化失败')
-  } finally {
-    tdxGatewayInitializing.value = false
-  }
-}
-
-const restartTdxGateway = async () => {
-  tdxGatewayRestarting.value = true
-  try {
-    const response = await axios.post(`${API_BASE}/system/tdx-gateway/restart`)
-    tdxGatewayDiagnostics.value = response.data?.data?.diagnostics || tdxGatewayDiagnostics.value
-    if (response.data?.success) {
-      ElMessage.success('TDX Gateway重启请求已发送，正在等待恢复')
-      const ready = await waitForTdxGatewayReady()
-      if (ready.ok) {
-        ElMessage.success('TDX Gateway已恢复并通过真实取数')
-      } else {
-        ElMessage.warning('TDX Gateway重启后仍未通过真实取数，请查看阻塞清单')
-      }
-    } else {
-      ElMessage.warning(response.data?.message || '重启请求未成功，请查看诊断')
-    }
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || 'TDX Gateway重启请求失败')
-  } finally {
-    tdxGatewayRestarting.value = false
   }
 }
 
@@ -2490,12 +2317,14 @@ const toggleEmotionAuto5m = async () => {
 onMounted(() => {
   loadStrategySuccessMemory()
   refreshCoreMaintenanceStatus()
+  refreshRuntimeHealth()
+  refreshQmtAfterCloseExecution()
   refreshDataSourceCounts()
   refreshStrategyMaintenanceStatus()
   loadStartupReferenceSyncSetting()
-  refreshTdxGatewayDiagnostics()
   coreMaintenanceRefreshTimer.value = setInterval(async () => {
     await refreshCoreMaintenanceStatus()
+    await refreshRuntimeHealth()
     await refreshStrategyMaintenanceStatus()
     if (showTimelinePanel.value) await refreshTimeline()
   }, 10000)
@@ -2616,6 +2445,42 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
+.runtime-health-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(90, 119, 164, 0.2);
+  border-radius: 14px;
+  background: rgba(246, 250, 255, 0.8);
+}
+
+.runtime-health-head,
+.runtime-health-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runtime-health-head span { font-size: 12px; color: var(--muted); }
+.runtime-health-head strong { font-size: 14px; }
+.runtime-healthy { color: var(--green); }
+.runtime-degraded { color: var(--amber); }
+.runtime-deferred { color: var(--muted); }
+.runtime-blocked { color: var(--red); }
+.runtime-loading { color: var(--muted); }
+.runtime-health-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.runtime-health-items { display: grid; gap: 6px; }
+.runtime-health-item { justify-content: flex-start; align-items: flex-start; }
+.runtime-health-item strong, .runtime-health-item small { display: block; }
+.runtime-health-item strong { font-size: 12px; }
+.runtime-health-item small { margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.runtime-dot { width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #9aa8bc; flex: 0 0 auto; }
+.runtime-dot.healthy { background: var(--green); }
+.runtime-dot.stale { background: var(--amber); }
+.runtime-dot.deferred { background: var(--muted); }
+.runtime-dot.blocked { background: var(--red); }
+
 .command-grid {
   display: grid;
   grid-template-columns: 1.5fr 0.9fr 0.9fr;
@@ -2691,81 +2556,9 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-.gateway-section {
-  border-color: rgba(197, 107, 8, 0.24);
-}
-
-.gateway-verdict {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid var(--line);
-  background: #f7f9fc;
-}
-
-.gateway-verdict strong {
-  color: #172746;
-  font-size: 15px;
-}
-
-.gateway-verdict span {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.gateway-verdict.level-ok {
-  border-color: rgba(11, 143, 99, 0.24);
-  background: #f3fbf7;
-}
-
-.gateway-verdict.level-warning {
-  border-color: rgba(197, 107, 8, 0.28);
-  background: #fff9ed;
-}
-
-.gateway-verdict.level-error {
-  border-color: rgba(196, 61, 50, 0.28);
-  background: #fff5f3;
-}
-
-.gateway-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.gateway-card {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: linear-gradient(180deg, #fff, #fbfcff);
-}
-
-.gateway-card span,
-.gateway-card small,
 .diagnostic-line span {
   color: var(--muted);
   font-size: 12px;
-}
-
-.gateway-card strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: #203153;
-  font-size: 16px;
-}
-
-.gateway-diagnostics {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
 }
 
 .diagnostic-line {
@@ -2792,96 +2585,6 @@ onUnmounted(() => {
   color: var(--red);
 }
 
-.gateway-check-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.gateway-check {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.gateway-check span,
-.gateway-blockers span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.gateway-check strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: #26395f;
-  font-size: 13px;
-}
-
-.gateway-check.ok {
-  border-color: rgba(11, 143, 99, 0.18);
-}
-
-.gateway-check.blocked {
-  border-color: rgba(196, 61, 50, 0.22);
-  background: #fffafa;
-}
-
-.gateway-blockers {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(196, 61, 50, 0.22);
-  background: #fff5f3;
-}
-
-.gateway-blockers strong {
-  color: var(--red);
-  font-size: 14px;
-}
-
-.gateway-manual {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(49, 95, 189, 0.18);
-  background: #f7faff;
-}
-
-.gateway-manual > strong {
-  color: #203153;
-  font-size: 14px;
-}
-
-.gateway-command {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-}
-
-.gateway-command span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.gateway-command code {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  padding: 6px 8px;
-  border-radius: 8px;
-  color: #172746;
-  background: rgba(49, 95, 189, 0.08);
-  font-size: 12px;
-}
 
 .data-source-panel {
   margin-top: 16px;
@@ -3067,6 +2770,68 @@ onUnmounted(() => {
 
 .pipeline-card.accent-amber .pipeline-head {
   background: linear-gradient(135deg, rgba(197, 107, 8, 0.1), transparent);
+}
+
+.qmt-execution-card {
+  grid-column: 1 / -1;
+}
+
+.qmt-task-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  background: #fbfcff;
+}
+
+.qmt-execution-card .task-chip {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e4eaf4;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.qmt-summary-chip {
+  grid-column: span 4;
+}
+
+.qmt-period-chip {
+  grid-column: span 2;
+}
+
+.qmt-period-chip .task-chip-main {
+  align-items: baseline;
+}
+
+.qmt-period-chip .task-chip-main strong {
+  font-size: 16px;
+}
+
+.qmt-overnight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  background: #fbfcff;
+}
+
+.qmt-overnight-card .task-chip {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e4eaf4;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.qmt-overnight-card .task-chip-main span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.deferred-command-grid {
+  margin-top: 18px;
 }
 
 .pipeline-head {
@@ -3579,7 +3344,6 @@ onUnmounted(() => {
 @media (max-width: 980px) {
   .ops-hero,
   .command-grid,
-  .gateway-grid,
   .pipeline-grid,
   .strategy-grid {
     grid-template-columns: 1fr;
@@ -3605,6 +3369,23 @@ onUnmounted(() => {
   }
 
   .timeline-item {
+    grid-template-columns: 1fr;
+  }
+
+  .qmt-task-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .qmt-summary-chip,
+  .qmt-period-chip {
+    grid-column: span 1;
+  }
+
+  .qmt-summary-chip {
+    grid-column: 1 / -1;
+  }
+
+  .qmt-overnight-grid {
     grid-template-columns: 1fr;
   }
 }

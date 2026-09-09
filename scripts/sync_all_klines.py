@@ -15,7 +15,7 @@ import math
 import threading
 from contextlib import nullcontext
 
-# 濞ｈ濮炴い鍦窗閺嶅湱娲拌ぐ鏇炲煂 Python 閹兼粎鍌ㄧ捄顖氱窞
+# Ensure local project modules are importable when this script runs directly.
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -23,6 +23,12 @@ if project_root not in sys.path:
 from data_fetcher.manager import DataSourceManager
 from utils.config import ConfigManager
 from utils.logger import get_logger
+from utils.kline_units import (
+    QMT_DAILY_SOURCE_NAMES,
+    normalize_akshare_daily_units,
+    normalize_qmt_daily_units,
+    normalize_tushare_daily_units,
+)
 from utils.database import db
 from utils.market_warehouse import clickhouse_available, clickhouse_table_exists, clickhouse_query_df
 
@@ -60,7 +66,7 @@ class KlineSyncer:
         self._security_type_cache: Dict[str, str] = {}
         self._canonical_code_cache: Dict[str, str] = {}
         
-        # 閺€顖涘瘮閻ㄥ嫬鎳嗛張鐔峰灙鐞涱煉绱欐担璺ㄦ暏缂佺喍绔撮惃鍕闂傛潙宕熸担宥嗙垼閸戝棴绱氶妴?        # 閺嶅洤鍣弽鐓庣础閿?m, 5m, 15m, 30m, 60m, 1d, 1w, 1mon, 1q, 1y
+        # Use one canonical display-name mapping for all supported periods.
         from utils.period_constants import PERIOD_DISPLAY_NAMES
         self.periods = PERIOD_DISPLAY_NAMES
         
@@ -182,7 +188,8 @@ class KlineSyncer:
                 end_date=end_date.replace("-", ""),
                 adjust="qfq",
             )
-            return self._normalize_external_daily_frame(df)
+            normalized = self._normalize_external_daily_frame(df)
+            return normalize_akshare_daily_units(normalized) if normalized is not None else None
         except Exception as e:
             logger.warning(f"external akshare daily fetch failed for {code}: {e}")
             return None
@@ -200,7 +207,8 @@ class KlineSyncer:
             )
             if df is None or df.empty:
                 return None
-            return self._normalize_external_daily_frame(df)
+            normalized = self._normalize_external_daily_frame(df)
+            return normalize_tushare_daily_units(normalized) if normalized is not None else None
         except Exception as e:
             logger.warning(f"external tushare daily fetch failed for {code}: {e}")
             return None
@@ -320,7 +328,7 @@ class KlineSyncer:
 
         if not trade_date:
             fallback = (reference_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-            logger.warning(f"閺堣姘﹂弰鎾存）閸樺棜袙閺嬫劕鍩屽鍙夋暪閻╂ü姘﹂弰鎾存）閿涘奔濞囬悽銊ユ礀??閺冦儲婀?{fallback}")
+            logger.warning(f"No completed trade date found; falling back to {fallback}")
             return fallback
         return str(trade_date)
 
@@ -420,7 +428,7 @@ class KlineSyncer:
         target_stocks = stocks if stocks is not None else self._get_missing_stocks_for_trade_date(trade_date, sync_type)
 
         logger.info(
-            f"瀵偓婵鎱ㄦ径?trade_date={trade_date}, scope={sync_type or 'all'}, "
+            f"Daily coverage repair: trade_date={trade_date}, scope={sync_type or 'all'}, ",
             f"before={before['actual_count']}/{before['baseline_count']}, missing_targets={len(target_stocks)}"
         )
 
@@ -507,9 +515,9 @@ class KlineSyncer:
             }
 
         logger.warning(
-            f"?濞村鍩屽鍌氱埗韫?trade_date={target_trade_date}, "
+            f"Daily coverage check: trade_date={target_trade_date}, ",
             f"actual={before['actual_count']}, baseline={before['baseline_count']}, "
-            f"ratio={before['ratio']:.2%}, 寮€濮嬭嚜鍔ㄤ慨?.."
+            f"ratio={before['ratio']:.2%}, 弢始自动修?.."
         )
         return self.repair_trade_date(
             trade_date=target_trade_date,
@@ -541,11 +549,11 @@ class KlineSyncer:
                 }
                 for r in df.itertuples(index=False)
             ]
-            logger.info(f"閼惧嘲褰囬崚?{len(result)} 閸?stock/index 缁鐎风拠浣稿煖")
+            logger.info(f"Loaded {len(result)} enabled stock/index records")
             return result
             
         except Exception as e:
-            logger.error(f"閼惧嘲褰囬懖锛勩偍閸掓銆冩径杈Е: {e}")
+            logger.error(f"Failed to load stock/index universe: {e}")
             return []
     
     def get_all_stocks(self) -> List[dict]:
@@ -571,11 +579,11 @@ class KlineSyncer:
                 }
                 for r in df.itertuples(index=False)
             ]
-            logger.info(f"閼惧嘲褰囬崚?{len(result)} 閸?stock 缁鐎烽懖锛勩偍")
+            logger.info(f"Loaded {len(result)} enabled stock records")
             return result
             
         except Exception as e:
-            logger.error(f"閼惧嘲褰囬懖锛勩偍閸掓銆冩径杈Е: {e}")
+            logger.error(f"Failed to load stock universe: {e}")
             return []
     
     def get_all_indices(self) -> List[dict]:
@@ -866,7 +874,7 @@ class KlineSyncer:
                     return []
                 out = []
                 out.append(s)
-                # 闁灝鍘ら崥鎴濈俺?SDK 娴?鐟侀晲鍞惍渚婄礄 600000閿涘绱濇禒鍛躬缁炬洖鐡ч弮鎯八夐崗銊ユ倵缂傗偓閸??                # 600000 -> 600000.SH / 600000.SZ / 600000.BJ (鐏忎粙鍣虹憰鍡欐磰鐢绔堕崷鍝勬倵缂傗偓)
+                # Expand an unqualified six-digit code for SDK-compatible lookup.
                 if s.isdigit() and len(s) == 6:
                     for suf in ("SH", "SZ", "BJ"):
                         v = f"{s}.{suf}"
@@ -874,7 +882,7 @@ class KlineSyncer:
                             out.append(v)
                 return out
 
-            # 鑾峰?K 绾挎暟鎹紝瀵规暟鎹簮 code 鏍煎紡鍋氬?            last_err = None
+            last_err = None
             df = None
             source_used = self.preferred_source or "qmt_xtquant"
             for fetch_code in _candidate_codes(code):
@@ -918,6 +926,16 @@ class KlineSyncer:
                 if df is None or df.empty:
                     logger.warning(f"{code} {name} {period} data empty after anomaly filtering, skip insert")
                     return False
+
+            # QMT stock daily bars already use lots/yuan.  Index volume keeps
+            # the established shares-to-lots conversion.
+            if period == "1d" and source_used in QMT_DAILY_SOURCE_NAMES:
+                instrument_type = (
+                    "index"
+                    if str((stock or {}).get("type") or "").strip().lower() == "index"
+                    else "stock"
+                )
+                df = normalize_qmt_daily_units(df, instrument_type=instrument_type)
             
             # 娣囨繂鐡ㄩ崚鐗堟殶閹诡喖绨?
             serialize_minute_write = bool(self._is_index_stock(stock, code) and period in {'15m', '30m', '1h', '60m'})
@@ -950,12 +968,12 @@ class KlineSyncer:
             from utils.database import db
             from utils.market_warehouse import market_source
             
-            # 闁插秶鏁ら崗銊ョ湰閺佺増宓佹惔鎾圭箾閹恒儲鐫?
+            # Use the active database dialect to choose the write path.
             engine = db._engine
             dialect_name = str(getattr(getattr(engine, "dialect", None), "name", "") or "").lower()
             is_clickhouse = ("clickhouse" in dialect_name) or (str(market_source() or "").lower() == "clickhouse")
             
-            # 閺嶈宓侀崨銊︽埂绾喖鐣剧悰銊ユ倳
+            # Build a canonical storage code before writing K-line records.
             table_map = {
                 '1m': 'kline_minute_1',
                 '5m': 'kline_minute_5',
@@ -973,14 +991,14 @@ class KlineSyncer:
             table_name = table_map.get(period, 'kline_daily')
             # ClickHouse single-path mode: write directly to base table.
             
-            # 閺佺増宓侀崙鍡楊槵閿涘牏绮烘稉鈧?code 娑?stocks 鐞涖劋鑵戦惃鍕潐閼?code閿?            canonical_code = self._canonical_storage_code(code)
+            canonical_code = self._canonical_storage_code(code)
             df = df.copy()
             df['code'] = canonical_code
             df['created_at'] = datetime.now()
             
-            # 閺嶈宓佺悰銊ц閸ㄥ鈥樼€规艾鍨崥宥嗘Ё鐏忓嫬鎷伴弫鐗堝祦婢跺嫮鎮?
+            # Normalize the source code before locating existing records.
             if table_name.startswith('kline_minute'):
-                # 鍒嗛挓绾胯浣跨敤 datetime 瀛楁?
+                # 分钟线使用 datetime 字?
                 column_map = {
                     'date': 'datetime',
                     'open': 'open',
@@ -1012,12 +1030,12 @@ class KlineSyncer:
                 df = df.sort_values('trade_date')
                 
                 if len(df) > 1:
-                    # 濡傛灉鏈夊澶╂暟鎹紝浣跨敤diff鍜宻hift璁＄?
+                    # Use diff and shift for incremental daily-row repair.
                     df['change_amount'] = df['close'].diff()
                     df['change_pct'] = (df['change_amount'] / df['close'].shift(1)) * 100
                     df['amplitude'] = ((df['high'] - df['low']) / df['close'].shift(1)) * 100
                     
-                    # 绗60ぉ娌℃湁?澶╂暟鎹艰?
+                    # Stop when no recent daily rows are available.
                     df.loc[df.index[0], 'change_amount'] = 0
                     df.loc[df.index[0], 'change_pct'] = 0
                     df.loc[df.index[0], 'amplitude'] = 0
@@ -1059,7 +1077,7 @@ class KlineSyncer:
                             else:
                                 df['amplitude'] = 0
                         else:
-                            # 濞屸剝婀侀崜宥勭婢垛晝娈戦弫鐗堝祦閿涘瞼绀?
+                            # Keep only rows within the requested date range.
                             df['change_amount'] = 0
                             df['change_pct'] = 0
                             df['amplitude'] = 0
@@ -1110,7 +1128,7 @@ class KlineSyncer:
                 df = df[[col for col in columns if col in df.columns]]
                 
             elif table_name == 'kline_quarterly':
-                # 鐎涳絽瀹崇痪鑳€?鐟曚胶澹掑▓濠勬倞閿涘奔绮燿ate娑撳繐褰噛ear閸滃uarter
+                # Derive year and quarter fields from the K-line date.
                 df['year'] = pd.to_datetime(df['date']).dt.year
                 df['quarter'] = pd.to_datetime(df['date']).dt.quarter
                 
@@ -1129,7 +1147,7 @@ class KlineSyncer:
                 df = df[[col for col in columns if col in df.columns]]
                 
             elif table_name == 'kline_yearly':
-                # 楠炲鍤庣悰銊╂付鐟曚胶澹掑▓濠勬倞閿涘奔绮燿ate娑撳繐褰噛ear
+                # Derive the year field from the K-line date.
                 df['year'] = pd.to_datetime(df['date']).dt.year
                 
                 column_map = {
@@ -1146,7 +1164,7 @@ class KlineSyncer:
                 columns = ['code', 'year', 'open', 'high', 'low', 'close', 'volume', 'amount', 'created_at']
                 df = df[[col for col in columns if col in df.columns]]
             
-            # 閹靛綊鍣烘径鍕倞閺佺増宓侀敍灞藉櫤鐏忔垶鏆熼幑鐑樻惙娴ｆ粍顐奸弫?            # 缂佺喍绔村〒鍛閿涙艾鐨㈤棃鐐寸《閺?閺嶅洤鍣崠鏍电礉闁?NaN/inf 閸忋儱绨?
+            # Define per-table keys and discard invalid rows before persistence.
             key_fields_map = {
                 'kline_daily': ['trade_date'],
                 'kline_weekly': ['week_start_date'],
@@ -1171,7 +1189,7 @@ class KlineSyncer:
                 if dropped_rows > 0:
                     logger.warning(f"{code} {period} dropped invalid kline rows: {dropped_rows}")
             
-            # 鐎甸€涚艾閸掑棝鎸撶痪鎸庢殶閹诡噯绱濇０婵嗩樆绾喕绻歞atetime閸掓鐥呴張濉弌ne閸?            if table_name.startswith('kline_minute') and 'datetime' in df.columns:
+            if table_name.startswith('kline_minute') and 'datetime' in df.columns:
                 before_rows = len(df)
                 df = df.dropna(subset=['datetime'])
                 dropped_rows = before_rows - len(df)
@@ -1227,6 +1245,15 @@ class KlineSyncer:
                 dropped_rows = before_rows - len(df)
                 if dropped_rows > 0:
                     logger.warning(f"{code} {period} dropped invalid ClickHouse datetime rows: {dropped_rows}")
+
+            if table_name == 'kline_daily':
+                from utils.kline_store import filter_trading_day_rows
+
+                before_rows = len(df)
+                df = filter_trading_day_rows('1d', df)
+                if df.empty:
+                    logger.warning(f"{code} {period} blocked by trade_calendar guard: dropped={before_rows}")
+                    return 0
 
             def _sanitize_param_value(value):
                 if value is None:
@@ -1291,7 +1318,7 @@ class KlineSyncer:
             # Keep all writes on the active SQLAlchemy engine path.
 
             if not df.empty:
-                # 閹稿澹掑▎锛勬倞閿涘本鐦￠幍?0閺夆槄绱欓崙蹇撶毌閹电懓銇囩亸蹇庝簰闂勫秳缍嗛柨浣哄芳閿?                batch_size = 50
+                batch_size = 50
                 total_rows = len(df)
                 inserted_rows = 0
                 write_guard = nullcontext()
@@ -1331,7 +1358,7 @@ class KlineSyncer:
                                         :amplitude, :change_pct, :change_amount, :turnover_rate, :created_at)
                                 """
                             elif table_name == 'kline_weekly':
-                                # 鍛ㄧ?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟鏃ユ湡鑼冨洿
+                                # 周?- 先删除后插入᳡保数捜新且避免死?                                # 获取批业日期范围
                                 date_range = batch_df['week_start_date'].tolist()
                                 min_date = min(date_range)
                                 max_date = max(date_range)
@@ -1356,7 +1383,7 @@ class KlineSyncer:
                                 VALUES (:code, :week_start_date, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             elif table_name == 'kline_monthly':
-                                # 鏈堢?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟鏃ユ湡鑼冨洿
+                                # 月?- 先删除后插入᳡保数捜新且避免死?                                # 获取批业日期范围
                                 date_range = batch_df['month_start_date'].tolist()
                                 min_date = min(date_range)
                                 max_date = max(date_range)
@@ -1381,7 +1408,7 @@ class KlineSyncer:
                                 VALUES (:code, :month_start_date, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             elif table_name == 'kline_quarterly':
-                                # 瀛ｅ害绾胯?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                years = batch_df['year'].tolist()
+                                # 季度线?- 先删除后插入᳡保数捜新且避免死?                                years = batch_df['year'].tolist()
                                 quarters = batch_df['quarter'].tolist()
                                 min_year = min(years)
                                 max_year = max(years)
@@ -1402,7 +1429,7 @@ class KlineSyncer:
                                 VALUES (:code, :year, :quarter, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             elif table_name == 'kline_yearly':
-                                # 骞寸?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟骞翠唤鑼冨洿
+                                # 年?- 先删除后插入᳡保数捜新且避免死?                                # 获取批业年份范围
                                 years = batch_df['year'].tolist()
                                 min_year = min(years)
                                 max_year = max(years)
@@ -1420,7 +1447,7 @@ class KlineSyncer:
                                 VALUES (:code, :year, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             else:
-                                # 榛樻儏鍐?- 鍏堝垹闄ゅ悗鎻掑叆锛岢‘淇濇暟鎹滄柊涓旈伩鍏嶆閿?                                # 鑾峰彇鎵逛笟鏃ユ湡鑼冨洿
+                                # 默情?- 先删除后插入᳡保数捜新且避免死?                                # 获取批业日期范围
                                 date_range = batch_df['trade_date'].tolist()
                                 min_date = min(date_range)
                                 max_date = max(date_range)
@@ -1445,7 +1472,7 @@ class KlineSyncer:
                                 VALUES (:code, :trade_date, :open, :high, :low, :close, :volume, :amount, :created_at)
                                 """
                             
-                            # 鐢箓鍣哥拠鏇熸簚閸掑墎娈戦幍褰掑櫤閹绘帒鍙?
+                            # Retry transient database write failures.
                             max_retries = 3
                             retry_count = 0
                             success = False
@@ -1463,27 +1490,27 @@ class KlineSyncer:
                                 except Exception as e:
                                     retry_count += 1
                                     if retry_count >= max_retries:
-                                        logger.exception(f"閹靛綊鍣洪幓鎺戝弳閺佺増宓佹径杈Е {code} {period}閿涘苯鍑￠柌宥堢槸{max_retries}: {e}")
-                                        # 閸ョ偞绮存禍瀣
+                                        logger.exception(f"Batch write failed for {code} {period}; retry {max_retries}: {e}")
+                                        # Retry each record separately after a batch failure.
                                         conn.rollback()
-                                        # 灏濊瘯鍗曟潯鎻掑?
+                                        # 尝试单条插?
                                         for _, row in batch_df.iterrows():
                                             try:
                                                 conn.execute(text(insert_sql), _sanitize_record_for_sql(row.to_dict()))
                                                 conn.commit()
                                                 inserted_rows += 1
                                             except Exception as single_e:
-                                                logger.exception(f"閸楁洘娼幓鎺戝弳閺佺増宓佹径杈Е {code} {period}: {single_e}")
+                                                logger.exception(f"Single-record write failed for {code} {period}: {single_e}")
                                                 conn.rollback()
                                     else:
-                                        logger.warning(f"閹靛綊鍣洪幓鎺戝弳閺佺増宓佹径杈Е {code} {period}閿涘瞼顑?{retry_count} 濞嗭繝鍣哥拠? {e}")
+                                        logger.warning(f"Batch write failed for {code} {period}; retry {retry_count}: {e}")
                                         conn.rollback()
-                                        time.sleep(0.5 * retry_count)  # 閹稿洦鏆熼柅鈧柆鍖＄礉閸戝繐鐨柨浣稿暱缁?
+                                        time.sleep(0.5 * retry_count)  # incremental retry backoff
                 return inserted_rows
             return 0
                 
         except Exception as e:
-            logger.error(f"娣囨繂鐡↘缁炬寧鏆熼幑顔笺亼鐠?{code} {period}: {e}")
+            logger.error(f"Failed to persist K-line data for {code} {period}: {e}")
             raise
     
     def sync_all_klines(self, max_workers: int = 2, periods: Optional[List[str]] = None, type: Optional[str] = None):
@@ -1495,10 +1522,10 @@ class KlineSyncer:
         logger.info(f"Start K-line sync, type={type}")
         logger.info("=" * 80)
         
-        # 绾喖鐣剧憰浣告倱濮濄儳娈戦崨銊︽埂
+        # Synchronize all selected symbols for the requested periods.
         sync_periods = periods or list(self.periods.keys())
         
-        # 闁劒閲滈崨銊︽埂閸氬本顒?
+        # Initialize per-period result counters.
         for period in sync_periods:
             if period not in self.periods:
                 logger.warning(f"Unknown period {period}, skip")
@@ -1509,12 +1536,12 @@ class KlineSyncer:
             logger.info(f"Start period sync: {period_name} ({period})")
             logger.info(f"{'='*80}")
             
-            # 閺嶈宓侀崨銊︽埂閸滃瞼琚崹瀣偓澶嬪鐠囦礁鍩滈崚妤勩€?
+            # Select the configured source universe for the requested synchronization type.
             if period == '1m':
-                # 1閸掑棝鎸撻弫鐗堝祦閸欘亜鎮撳銉ㄥ殰闁鍋傞崪灞惧瘮娴犳捁鍋?
+                # Start stock synchronization and submit one task per symbol.
                 stocks = self.get_watchlist_and_holding_stocks()
             else:
-                # 閺嶈宓佺猾璇茬€烽柅澶嬪鐠囦礁鍩滈崚妤勩€?
+                # Select the complete eligible universe for the requested type.
                 if type == 'index':
                     stocks = self.get_all_indices()
                 elif type == 'stock':
@@ -1574,14 +1601,14 @@ class KlineSyncer:
                         period_failed += 1
                         self.stats['failed'] += 1
                     finally:
-                        # 閸掔娀娅巉uture闁插﹥鏂侀崘鍛摠
+                        # Release completed futures promptly to reduce memory pressure.
                         del future
                     
-                    # 濮ｅ繐顦╅悶?00閸欘亝澧﹂崡鎷岀箻鎼达箑鑻熷鍝勫煑閸ㄥ啫婧囬崶鐐存暪
+                    # Report progress and release memory after every 100 symbols.
                     if (period_success + period_failed) % 100 == 0:
-                        logger.info(f"杩涘? {period_success + period_failed}/{len(stocks)}, "
-                                  f"閹存劕濮? {period_success}, 婢惰精瑙? {period_failed}")
-                        # 寮哄埗鍨冨溇鍥炴?
+                        logger.info(f"Progress {period_success + period_failed}/{len(stocks)}, ",
+                                  f"succeeded {period_success}, failed {period_failed}")
+                        # Release completed futures before the next batch.
                         import gc
                         gc.collect()
             
@@ -1590,13 +1617,13 @@ class KlineSyncer:
             import gc
             gc.collect()
             
-            logger.info(f"{period_name} 閸氬本顒炵€瑰本鍨? 閹存劕濮?{period_success}, 婢惰精瑙?{period_failed}")
+            logger.info(f"{period_name} synchronization completed: succeeded {period_success}, failed {period_failed}")
 
             if period == '1d' and anchor_trade_date:
                 crossed_midnight = datetime.now().date() != job_anchor_datetime.date()
                 if crossed_midnight:
                     logger.warning(
-                        f"浠诲姟鎵ф湡闂磋法杩囧崍锛屼絾宸茬户缁斿畾鍩哄噯鏃?anchor_trade_date={anchor_trade_date}"
+                        f"任务执期间跨过午，但已继绔定基准?anchor_trade_date={anchor_trade_date}"
                     )
 
                 snapshot = self._get_trade_date_candidates(anchor_trade_date, type)
@@ -1619,7 +1646,7 @@ class KlineSyncer:
                             f"remaining={repair_result['remaining_count']}"
                         )
             
-            # 姣忎釜鍛ㄦ湡缁撴潫鍚庢殏鍋滀竴涓嬶紝閬垮厤璇锋眰杩囦簬棰戠箒
+            # 每个周期结束后暂停一下，避免请求过于频繁
             time.sleep(5)
         
         logger.info(f"\n{'='*80}")

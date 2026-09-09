@@ -7,8 +7,10 @@ REM ==================================
 set "ROOT_DIR=%~dp0"
 if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 set "FRONTEND_DIR=%ROOT_DIR%\frontend"
+set "LOG_DIR=%ROOT_DIR%\runtime\logs"
 set "BACKEND_PORT=8000"
 set "FRONTEND_PORT=3000"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>nul
 
 echo ================================
 echo AiStock-core Service Restart
@@ -31,13 +33,13 @@ if not exist "%FRONTEND_DIR%\node_modules" (
 )
 
 echo Starting backend service...
-start "AiStock-core Backend" cmd /k "cd /d %ROOT_DIR% && python -m uvicorn api.main:app --host 0.0.0.0 --port %BACKEND_PORT%"
+powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'python' -ArgumentList '-m','uvicorn','api.main:app','--host','0.0.0.0','--port','%BACKEND_PORT%' -WorkingDirectory '%ROOT_DIR%' -RedirectStandardOutput '%LOG_DIR%\backend-uvicorn.log' -RedirectStandardError '%LOG_DIR%\backend-uvicorn.err.log' -WindowStyle Hidden"
 
 echo Waiting for backend to start...
 timeout /t 3 /nobreak > nul
 
 echo Starting frontend service...
-start "AiStock-core Frontend" cmd /k "cd /d %FRONTEND_DIR% && npm run dev"
+powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','npm run dev -- --host 127.0.0.1 --port %FRONTEND_PORT%' -WorkingDirectory '%FRONTEND_DIR%' -RedirectStandardOutput '%LOG_DIR%\frontend-vite.log' -RedirectStandardError '%LOG_DIR%\frontend-vite.err.log' -WindowStyle Hidden"
 
 echo ================================
 echo Services started successfully

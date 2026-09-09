@@ -249,6 +249,13 @@ def _fetch_period(batch_codes: list[str], target_date: str, period: str, fill_da
 def _write_rows(table: str, rows: pd.DataFrame, target_date: str, dry_run: bool) -> int:
     if rows.empty:
         return 0
+    from utils.kline_store import filter_trading_day_rows
+
+    before_rows = len(rows)
+    rows = filter_trading_day_rows(table.replace("kline_minute_", "") + "m", rows)
+    if rows.empty:
+        log(f"{table} write blocked by trade_calendar guard: date={target_date}, dropped={before_rows}")
+        return 0
     client = clickhouse_client()
     codes = sorted({str(code) for code in rows["code"].dropna().tolist()})
     code_sql = ", ".join(_quote_sql(code) for code in codes)

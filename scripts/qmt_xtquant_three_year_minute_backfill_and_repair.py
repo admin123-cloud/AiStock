@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -21,12 +22,27 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from scripts.qmtmini_daily_backfill_validate import ch_client, quote_sql
+from utils.kline_store import filter_trading_day_tuples
 from utils.paths import report_path
 
 
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_PERIODS = "5m,15m,30m,60m"
 DEFAULT_MIN_5M_BARS = 48
+MINUTE_TABLES = {
+    "5m": "kline_minute_5",
+    "15m": "kline_minute_15",
+    "30m": "kline_minute_30",
+    "60m": "kline_minute_60",
+}
+
+
+def is_month_partitioned_minute_table(client, table: str) -> bool:
+    rows = client.query(
+        "SELECT partition_key FROM system.tables WHERE database = currentDatabase() AND name = %(table)s",
+        parameters={"table": table},
+    ).result_rows
+    return bool(rows and "toYYYYMM(datetime)" in str(rows[0][0] or ""))
 
 
 def log(message: str) -> None:
@@ -46,6 +62,31 @@ def years_before(day: date, years: int) -> date:
         return day.replace(year=day.year - years)
     except ValueError:
         return day.replace(year=day.year - years, day=28)
+
+
+def parse_periods(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def universe_filter_sql(code_expr: str, universe: str) -> str:
+    kinds = {part.strip().lower() for part in universe.split(",") if part.strip()}
+    if not kinds or "all" in kinds:
+        return "1"
+    parts: list[str] = []
+    if "stock" in kinds:
+        parts.append(
+            f"(match({code_expr}, '^(000|001|002|003|300|301)[0-9]{{3}}\\\\.SZ$') "
+            f"OR match({code_expr}, '^(600|601|603|605|688)[0-9]{{3}}\\\\.SH$') "
+            f"OR match({code_expr}, '^[0-9]{{6}}\\\\.BJ$'))"
+        )
+    if "index" in kinds:
+        parts.append(f"match({code_expr}, '^(000|399)[0-9]{{3}}\\\\.(SH|SZ)$')")
+    if "etf" in kinds:
+        parts.append(f"match({code_expr}, '^(159|510|511|512|513|515|516|517|518|588)[0-9]{{3}}\\\\.(SH|SZ)$')")
+    if "other" in kinds:
+        known = universe_filter_sql(code_expr, "stock,index,etf")
+        parts.append(f"NOT ({known})")
+    return " OR ".join(parts) if parts else "1"
 
 
 def chunked(items: list[str], size: int) -> Iterable[list[str]]:
@@ -98,25 +139,44 @@ def resolve_default_end_date(client) -> str:
     return today
 
 
-def expected_codes_for_date(client, trade_date: str) -> list[str]:
+def expected_codes_for_date(client, trade_date: str, universe: str = "stock,index") -> list[str]:
+    code_filter = universe_filter_sql("code", universe)
     rows = client.query(
         f"""
         SELECT DISTINCT code
         FROM kline_daily
         WHERE trade_date = toDate({quote_sql(trade_date)})
+          AND ({code_filter})
         ORDER BY code
         """
     ).result_rows
     return [str(row[0]) for row in rows if row and row[0]]
 
 
-def issue_codes_for_date(client, trade_date: str, min_bars: int) -> dict[str, Any]:
+def issue_codes_for_date(
+    client,
+    trade_date: str,
+    min_bars: int,
+    include_orphan_incomplete: bool = False,
+    universe: str = "stock,index",
+) -> dict[str, Any]:
+    expected_filter = universe_filter_sql("code", universe)
+    orphan_predicate = (
+        f"""
+            a.bars < {int(min_bars)}
+            OR toString(a.min_dt) < concat({quote_sql(trade_date)}, ' 09:00:00')
+            OR toString(a.max_dt) < concat({quote_sql(trade_date)}, ' 15:00:00')
+        """
+        if include_orphan_incomplete
+        else f"toString(a.min_dt) < concat({quote_sql(trade_date)}, ' 09:00:00')"
+    )
     rows = client.query(
         f"""
         WITH expected AS (
             SELECT DISTINCT code
             FROM kline_daily
             WHERE trade_date = toDate({quote_sql(trade_date)})
+              AND ({expected_filter})
         ),
         actual AS (
             SELECT
@@ -143,7 +203,22 @@ def issue_codes_for_date(client, trade_date: str, min_bars: int) -> dict[str, An
         FROM expected e
         LEFT JOIN actual a ON e.code = a.code
         WHERE reason != 'ok'
-        ORDER BY e.code
+        UNION ALL
+        SELECT
+            a.code,
+            a.bars,
+            toString(a.min_dt) AS min_dt,
+            toString(a.max_dt) AS max_dt,
+            multiIf(
+                a.bars < {int(min_bars)}, 'orphan_incomplete',
+                toString(a.min_dt) < concat({quote_sql(trade_date)}, ' 09:00:00'), 'orphan_bad_early_time',
+                toString(a.max_dt) < concat({quote_sql(trade_date)}, ' 15:00:00'), 'orphan_incomplete_tail',
+                'orphan_unexpected'
+            ) AS reason
+        FROM actual a
+        WHERE a.code NOT IN (SELECT code FROM expected)
+          AND ({orphan_predicate})
+        ORDER BY code
         """
     ).result_rows
     issues = [
@@ -160,6 +235,124 @@ def issue_codes_for_date(client, trade_date: str, min_bars: int) -> dict[str, An
             for reason in sorted({item["reason"] for item in issues})
         },
     }
+
+
+def cleanup_orphan_bad_early_for_date(client, args: argparse.Namespace, trade_date: str, issue_info: dict[str, Any]) -> list[str]:
+    if not args.cleanup_orphan_bad_early or args.dry_run:
+        return []
+    codes = [
+        item["code"]
+        for item in issue_info.get("issues", [])
+        if item.get("reason") == "orphan_bad_early_time" and item.get("code")
+    ]
+    if not codes:
+        return []
+    code_sql = ",".join(quote_sql(code) for code in sorted(set(codes)))
+    for period in parse_periods(args.periods):
+        table = MINUTE_TABLES.get(period)
+        if not table:
+            continue
+        if not is_month_partitioned_minute_table(client, table):
+            log(f"skip destructive orphan cleanup for unpartitioned {table}")
+            continue
+        client.command(
+            f"""
+            ALTER TABLE {table}
+            DELETE WHERE code IN ({code_sql})
+              AND toDate(datetime) = toDate({quote_sql(trade_date)})
+            SETTINGS mutations_sync = 1
+            """
+        )
+    cleaned = sorted(set(codes))
+    log(f"cleanup orphan_bad_early date={trade_date} codes={len(cleaned)}")
+    return cleaned
+
+
+def stable_minute_id(period: str, code: str, dt: datetime) -> int:
+    key = f"{period}|{code}|{dt:%Y-%m-%d %H:%M:%S}".encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big", signed=False)
+
+
+def as_datetime(value: Any) -> datetime:
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime()
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
+
+
+def shift_complete_bad_early_5m_for_date(client, args: argparse.Namespace, trade_date: str, issue_info: dict[str, Any]) -> list[str]:
+    if not args.shift_complete_bad_early_5m or args.dry_run:
+        return []
+    codes = [
+        item["code"]
+        for item in issue_info.get("issues", [])
+        if item.get("reason") == "bad_early_time" and int(item.get("bars") or 0) >= int(args.min_5m_bars)
+    ]
+    if not codes:
+        return []
+    if not is_month_partitioned_minute_table(client, "kline_minute_5"):
+        log("skip destructive bad-early cleanup for unpartitioned kline_minute_5")
+        return []
+    code_sql = ",".join(quote_sql(code) for code in sorted(set(codes)))
+    df = client.query_df(
+        f"""
+        SELECT code, datetime, open, high, low, close, volume, amount, created_at
+        FROM kline_minute_5
+        WHERE code IN ({code_sql})
+          AND toDate(datetime) = toDate({quote_sql(trade_date)})
+          AND datetime < toDateTime(concat({quote_sql(trade_date)}, ' 09:00:00'))
+        ORDER BY code, datetime
+        """
+    )
+    if df.empty:
+        return []
+    rows = []
+    shifted_codes: set[str] = set()
+    for row in df.itertuples(index=False):
+        code = str(row.code)
+        new_dt = as_datetime(row.datetime) + timedelta(hours=8)
+        created_at = as_datetime(row.created_at) if row.created_at is not None else datetime.now(BUSINESS_TZ).replace(tzinfo=None)
+        rows.append(
+            [
+                code,
+                new_dt,
+                row.open,
+                row.high,
+                row.low,
+                row.close,
+                row.volume,
+                row.amount,
+                created_at,
+                stable_minute_id("5m", code, new_dt),
+            ]
+        )
+        shifted_codes.add(code)
+    rows = filter_trading_day_tuples(
+        "5m",
+        [tuple(row) for row in rows],
+        ["code", "datetime", "open", "high", "low", "close", "volume", "amount", "created_at", "id"],
+    )
+    if not rows:
+        log(f"shift bad_early_5m blocked by trade_calendar guard date={trade_date}")
+        return []
+    client.insert(
+        "kline_minute_5",
+        rows,
+        column_names=["code", "datetime", "open", "high", "low", "close", "volume", "amount", "created_at", "id"],
+    )
+    client.command(
+        f"""
+        ALTER TABLE kline_minute_5
+        DELETE WHERE code IN ({code_sql})
+          AND toDate(datetime) = toDate({quote_sql(trade_date)})
+          AND datetime < toDateTime(concat({quote_sql(trade_date)}, ' 09:00:00'))
+        SETTINGS mutations_sync = 1
+        """
+    )
+    shifted = sorted(shifted_codes)
+    log(f"shift bad_early_5m date={trade_date} codes={len(shifted)} rows={len(rows)}")
+    return shifted
 
 
 def build_minute_cmd(
@@ -211,21 +404,29 @@ def run_cmd(cmd: list[str], timeout_sec: int, dry_run: bool) -> dict[str, Any]:
     started = time.perf_counter()
     if dry_run:
         return {"ok": True, "dry_run": True, "elapsed_sec": 0.0, "cmd": cmd}
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=str(REPO_ROOT),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout_sec,
     )
+    timed_out = False
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, text=True)
+        stdout, stderr = proc.communicate(timeout=10)
     return {
-        "ok": proc.returncode == 0,
+        "ok": proc.returncode == 0 and not timed_out,
         "returncode": proc.returncode,
+        "timed_out": timed_out,
         "elapsed_sec": round(time.perf_counter() - started, 3),
-        "stdout_tail": (proc.stdout or "")[-6000:],
-        "stderr_tail": (proc.stderr or "")[-6000:],
+        "stdout_tail": (stdout or "")[-6000:],
+        "stderr_tail": (stderr or "")[-6000:],
         "cmd": cmd,
     }
 
@@ -259,10 +460,11 @@ def run_backfill_for_date(
     progress_file: Path,
     done_keys: set[str],
 ) -> dict[str, Any]:
-    issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars)
-    codes = issue_info["codes"]
+    issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe)
+    backfill_reasons = {"missing", "incomplete", "incomplete_tail"}
+    codes = [item["code"] for item in issue_info["issues"] if item["reason"] in backfill_reasons]
     if not codes:
-        return {"date": trade_date, "ok": True, "skipped": "already_complete", "issues_before": issue_info}
+        return {"date": trade_date, "ok": True, "skipped": "no_backfill_issues", "issues_before": issue_info}
     chunks = list(chunked(codes, args.code_chunk_size))
     failures: list[dict[str, Any]] = []
     applied = 0
@@ -295,7 +497,7 @@ def run_backfill_for_date(
             failures.append(event)
             if args.stop_on_error:
                 break
-    after = issue_codes_for_date(client, trade_date, args.min_5m_bars) if not args.dry_run else {}
+    after = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe) if not args.dry_run else {}
     return {
         "date": trade_date,
         "ok": not failures,
@@ -316,10 +518,45 @@ def run_repair_for_date(
     progress_file: Path,
     done_keys: set[str],
 ) -> dict[str, Any]:
-    issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars)
+    issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe)
+    shifted_bad_early = shift_complete_bad_early_5m_for_date(client, args, trade_date, issue_info)
+    if shifted_bad_early:
+        append_jsonl(
+            progress_file,
+            {
+                "ts": datetime.now(BUSINESS_TZ).isoformat(),
+                "key": f"shift_bad_early_5m|{trade_date}",
+                "stage": "shift_bad_early_5m",
+                "date": trade_date,
+                "codes": shifted_bad_early,
+                "ok": True,
+            },
+        )
+        issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe)
+    cleaned_orphans = cleanup_orphan_bad_early_for_date(client, args, trade_date, issue_info)
+    if cleaned_orphans:
+        append_jsonl(
+            progress_file,
+            {
+                "ts": datetime.now(BUSINESS_TZ).isoformat(),
+                "key": f"cleanup_orphan_bad_early|{trade_date}",
+                "stage": "cleanup_orphan_bad_early",
+                "date": trade_date,
+                "codes": cleaned_orphans,
+                "ok": True,
+            },
+        )
+        issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe)
     codes = issue_info["codes"]
     if not codes:
-        return {"date": trade_date, "ok": True, "skipped": "no_issues", "issues_before": issue_info}
+        return {
+            "date": trade_date,
+            "ok": True,
+            "skipped": "no_issues",
+            "issues_before": issue_info,
+            "shifted_bad_early_5m": shifted_bad_early,
+            "cleaned_orphan_bad_early": cleaned_orphans,
+        }
     chunks = list(chunked(codes, args.repair_code_chunk_size))
     failures: list[dict[str, Any]] = []
     applied = 0
@@ -352,13 +589,15 @@ def run_repair_for_date(
             failures.append(event)
             if args.stop_on_error:
                 break
-    after = issue_codes_for_date(client, trade_date, args.min_5m_bars) if not args.dry_run else {}
+    after = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe) if not args.dry_run else {}
     return {
         "date": trade_date,
         "ok": not failures,
         "stage": "repair",
         "issues_before": issue_info,
         "issues_after": after,
+        "shifted_bad_early_5m": shifted_bad_early,
+        "cleaned_orphan_bad_early": cleaned_orphans,
         "chunks": len(chunks),
         "codes_attempted": applied,
         "failures": failures[:5],
@@ -415,7 +654,7 @@ def run_workflow(args: argparse.Namespace) -> dict[str, Any]:
             if args.stop_on_error and not result.get("ok"):
                 break
         if args.mode == "verify":
-            issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars)
+            issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe)
             result = {"date": trade_date, "ok": issue_info["issue_count"] == 0, "stage": "verify", "issues": issue_info}
             date_results.append(result)
             append_jsonl(progress_file, {"ts": datetime.now(BUSINESS_TZ).isoformat(), "stage": "date_verify_summary", **result})
@@ -424,7 +663,7 @@ def run_workflow(args: argparse.Namespace) -> dict[str, Any]:
     final_verification = "skipped_dry_run" if args.dry_run else "completed"
     if not args.dry_run:
         for trade_date in trading_dates:
-            issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars)
+            issue_info = issue_codes_for_date(client, trade_date, args.min_5m_bars, args.include_orphan_incomplete, args.universe)
             if issue_info["issue_count"]:
                 final_issues.append(
                     {
@@ -469,6 +708,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--order", choices=["asc", "desc"], default="asc")
     parser.add_argument("--periods", default=DEFAULT_PERIODS)
     parser.add_argument("--min-5m-bars", type=int, default=DEFAULT_MIN_5M_BARS)
+    parser.add_argument("--universe", default="stock,index", help="Comma-separated: stock,index,etf,other,all")
+    parser.add_argument("--include-orphan-incomplete", action="store_true")
+    parser.add_argument("--cleanup-orphan-bad-early", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shift-complete-bad-early-5m", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--code-chunk-size", type=int, default=80)
     parser.add_argument("--repair-code-chunk-size", type=int, default=40)
     parser.add_argument("--qmt-batch-size", type=int, default=30)
@@ -481,14 +724,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--progress-file", default="")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--stop-on-error", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--print-full-summary", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
+
+
+def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    failures = summary.get("failures") or []
+    failures_count = failures if isinstance(failures, int) else len(failures)
+    issue_sample = [
+        {
+            "date": item.get("date"),
+            "issue_count": item.get("issue_count"),
+            "reason_counts": item.get("reason_counts"),
+        }
+        for item in summary.get("final_issue_sample", [])[:10]
+    ]
+    return {
+        "ok": summary.get("ok"),
+        "validation_status": summary.get("validation_status"),
+        "mode": summary.get("mode"),
+        "start_date": summary.get("start_date"),
+        "end_date": summary.get("end_date"),
+        "trading_dates": summary.get("trading_dates"),
+        "failures_count": failures_count,
+        "final_issue_dates": summary.get("final_issue_dates"),
+        "final_issue_sample": issue_sample,
+        "progress_file": summary.get("progress_file"),
+        "summary_file": summary.get("summary_file"),
+    }
 
 
 def main() -> int:
     args = parse_args()
     summary = run_workflow(args)
-    print(json.dumps(summary, ensure_ascii=False, indent=2, default=json_default))
+    payload = summary if args.print_full_summary else compact_summary(summary)
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=json_default))
     return 0 if summary.get("ok") else 1
 
 

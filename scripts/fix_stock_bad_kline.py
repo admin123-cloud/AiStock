@@ -10,6 +10,8 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from utils.market_warehouse import clickhouse_client, clickhouse_query_df
+from utils.kline_store import filter_trading_day_tuples
+from utils.kline_units import normalize_tdxquant_daily_units
 from data_fetcher.sources.tdxquant import TdxQuantDataSource
 from utils.logger import get_logger
 
@@ -71,6 +73,7 @@ def fix_stock(tdx, client, stock, extra_days=5):
         df["code"] = code
         df.rename(columns={"date": "trade_date"}, inplace=True)
         df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+        df = normalize_tdxquant_daily_units(df, instrument_type="stock")
 
         # 从数据库中获取这个时间段内的异常日期
         bad_sql = f"""
@@ -110,12 +113,15 @@ def fix_stock(tdx, client, stock, extra_days=5):
                 float(r.get("low", 0)),
                 float(r.get("close", 0)),
                 float(r.get("volume", 0)),
-                float(r.get("amount", 0)) * 10000,  # TDX amount 为万元，转为元
+                float(r.get("amount", 0)),
             ])
 
         if rows:
+            column_names = ["code", "trade_date", "open", "high", "low", "close", "volume", "amount"]
+            rows = filter_trading_day_tuples("1d", [tuple(row) for row in rows], column_names)
+        if rows:
             client.insert("stock.kline_daily", rows,
-                          column_names=["code", "trade_date", "open", "high", "low", "close", "volume", "amount"])
+                          column_names=column_names)
             logger.info(f"  ✓ {code}: 修复 {len(rows)} 条")
 
         return True

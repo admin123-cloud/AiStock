@@ -5,6 +5,7 @@ set "ROOT_DIR=%~dp0.."
 for %%I in ("%ROOT_DIR%") do set "ROOT_DIR=%%~fI"
 
 set "PORT=8765"
+set "AISTOCK_ALLOW_LEGACY_TDX=1"
 set "AISTOCK_TDXQ_EAGER_INIT=0"
 set "AISTOCK_STRICT_TDXQ_STARTUP=0"
 set "AISTOCK_TDXQ_INIT_PATH=D:\TDX\PYPlugins\user\aistock_gateway.py"
@@ -14,7 +15,7 @@ set "LOG_DIR=%ROOT_DIR%\runtime\logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>nul
 set "LOG_FILE=%LOG_DIR%\tdx_gateway.log"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-RestMethod -TimeoutSec 3 -Uri 'http://127.0.0.1:%PORT%/health'; if ($r.ready -eq $true -or $r.status -eq 'available') { exit 0 } } catch { exit 1 }; exit 1"
+powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "try { $r = Invoke-RestMethod -TimeoutSec 3 -Uri 'http://127.0.0.1:%PORT%/health'; if ($r.ready -eq $true -or $r.status -eq 'available') { exit 0 } } catch { exit 1 }; exit 1"
 if "%ERRORLEVEL%"=="0" (
   echo Existing AiStock TDX Gateway is healthy on port %PORT%.
   exit /b 0

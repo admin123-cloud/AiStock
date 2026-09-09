@@ -243,6 +243,32 @@ const routes = [
     }
   },
   {
+    path: '/gen3/state-alpha/holding-ticks',
+    name: 'Gen3StateAlphaHoldingTicks',
+    component: () => import('@/views/pages/Gen3StateAlphaHoldingTicks.vue'),
+    meta: {
+      title: '做T交易',
+      group: 'gen3',
+      groupLabel: 'G3第三代策略',
+      groupOrder: 2.7,
+      navOrder: 1.03,
+      navLabel: '做T交易'
+    }
+  },
+  {
+    path: '/gen3/state-alpha/holding-t-review',
+    name: 'Gen3HoldingTReview',
+    component: () => import('@/views/pages/Gen3HoldingTReview.vue'),
+    meta: {
+      title: '做T复盘',
+      group: 'gen3',
+      groupLabel: 'G3第三代策略',
+      groupOrder: 2.7,
+      navOrder: 1.04,
+      navLabel: '做T复盘'
+    }
+  },
+  {
     path: '/gen3/state-alpha/mainwave',
     name: 'Gen3StateAlphaMainwave',
     component: () => import('@/views/pages/Gen3StateAlphaMainwave.vue'),

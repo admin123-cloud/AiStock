@@ -16,6 +16,7 @@
 
 import sys
 import os
+from types import SimpleNamespace
 
 # 添加项目根目录到Python模块搜索路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,11 +24,58 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 
+import pandas as pd
+
 from utils.database import db
 from utils.logger import get_logger
+from utils.market_warehouse import (
+    clickhouse_available,
+    clickhouse_client,
+    clickhouse_query_df,
+    clickhouse_scalar,
+    clickhouse_table_exists,
+)
 from models.stock_models import Stock, KlineDaily, EmotionCycle
 
 logger = get_logger("GenerateEmotionCycle")
+
+
+def publish_emotion_cycle_to_clickhouse(emotion_cycle: EmotionCycle) -> None:
+    """Publish the confirmed SQL record to the home-page ClickHouse source."""
+    if not clickhouse_available() or not clickhouse_table_exists("emotion_cycle"):
+        return
+
+    now = datetime.now()
+    row = (
+        int(emotion_cycle.id),
+        emotion_cycle.date,
+        float(emotion_cycle.close_up_rate or 0),
+        float(emotion_cycle.intraday_up_rate or 0),
+        float(emotion_cycle.sh_up_rate or 0),
+        float(emotion_cycle.sz_up_rate or 0),
+        float(getattr(emotion_cycle, "gem_up_rate", 0) or 0),
+        float(emotion_cycle.cyb_up_rate or 0),
+        float(emotion_cycle.strong_up_rate or 0),
+        float(emotion_cycle.limit_up_follow_rate or 0),
+        float(emotion_cycle.weak_up_rate or 0),
+        float(emotion_cycle.yesterday_monster_up_rate or 0),
+        float(emotion_cycle.yesterday_strong_up_rate or 0),
+        float(emotion_cycle.yesterday_weak_up_rate or 0),
+        int(emotion_cycle.total_stocks or 0),
+        int(emotion_cycle.is_confirmed or 0),
+        emotion_cycle.created_at or now,
+        now,
+    )
+    clickhouse_client().insert(
+        "emotion_cycle",
+        [row],
+        column_names=[
+            "id", "date", "close_up_rate", "intraday_up_rate", "sh_up_rate", "sz_up_rate",
+            "gem_up_rate", "cyb_up_rate", "strong_up_rate", "limit_up_follow_rate", "weak_up_rate",
+            "yesterday_monster_up_rate", "yesterday_strong_up_rate", "yesterday_weak_up_rate",
+            "total_stocks", "is_confirmed", "created_at", "updated_at",
+        ],
+    )
 
 
 class EmotionCycleGenerator:
@@ -35,6 +83,41 @@ class EmotionCycleGenerator:
 
     def __init__(self):
         self.session = None
+
+    def _stock_kline_rows(
+        self,
+        trade_date: date,
+        *,
+        market: str | None = None,
+        codes: list[str] | None = None,
+    ) -> list:
+        """Read one canonical daily row per listed stock from ClickHouse FINAL."""
+        conditions = ["kline_daily.trade_date = ?", "s.type = 'stock'"]
+        params: list = [trade_date]
+        if market == "SH":
+            conditions.append("kline_daily.code LIKE '6%%'")
+        elif market == "SZ":
+            conditions.append("(kline_daily.code LIKE '0%%' OR kline_daily.code LIKE '3%%')")
+        elif market == "CYB":
+            conditions.append("kline_daily.code LIKE '3%%'")
+        if codes is not None:
+            if not codes:
+                return []
+            conditions.append("kline_daily.code IN ({})".format(",".join("?" for _ in codes)))
+            params.extend(codes)
+        df = clickhouse_query_df(
+            """
+            SELECT kline_daily.code, kline_daily.change_pct
+            FROM kline_daily FINAL
+            INNER JOIN stocks AS s ON s.code = kline_daily.code
+            WHERE {where}
+            """.format(where=" AND ".join(conditions)),
+            params,
+        )
+        return [
+            SimpleNamespace(code=str(row.code), change_pct=row.change_pct)
+            for row in df.itertuples(index=False)
+        ]
 
     def calculate_up_rate(self, stocks: list) -> float:
         """
@@ -60,6 +143,49 @@ class EmotionCycleGenerator:
         count = sum(1 for s in stocks if predicate(s))
         return round((count / len(stocks)) * 100, 2)
 
+    def is_trading_day(self, trade_date: date) -> bool:
+        if not clickhouse_table_exists("trade_calendar"):
+            logger.error("trade_calendar 缺失，拒绝生成情绪周期")
+            return False
+        value = clickhouse_scalar(
+            """
+            SELECT count()
+            FROM trade_calendar
+            WHERE market = 'SH'
+              AND is_trading = 1
+              AND trade_date = ?
+            """,
+            [trade_date],
+        )
+        return int(value or 0) > 0
+
+    def filter_trading_dates(self, trade_dates: list[date]) -> list[date]:
+        if not trade_dates:
+            return []
+        if not clickhouse_table_exists("trade_calendar"):
+            logger.error("trade_calendar 缺失，拒绝批量生成情绪周期")
+            return []
+        start_date = min(trade_dates)
+        end_date = max(trade_dates)
+        calendar = clickhouse_query_df(
+            """
+            SELECT trade_date
+            FROM trade_calendar
+            WHERE market = 'SH'
+              AND is_trading = 1
+              AND trade_date >= ?
+              AND trade_date <= ?
+            """,
+            [start_date, end_date],
+        )
+        allowed = {pd.to_datetime(value).date() for value in calendar.get("trade_date", [])}
+        filtered = [trade_day for trade_day in trade_dates if trade_day in allowed]
+        dropped = len(trade_dates) - len(filtered)
+        if dropped > 0:
+            blocked = sorted(str(trade_day) for trade_day in trade_dates if trade_day not in allowed)
+            logger.warning(f"情绪周期跳过非交易日: dropped={dropped}, dates={blocked[:10]}")
+        return filtered
+
     def calculate_market_up_rate(self, market: str, trade_date: date) -> float:
         """
         计算指定市场的上涨率
@@ -73,16 +199,10 @@ class EmotionCycleGenerator:
         """
         if market == 'SH':
             # 上证：6开头的股票
-            stocks = self.session.query(KlineDaily.code, KlineDaily.change_pct).filter(
-                KlineDaily.trade_date == trade_date,
-                KlineDaily.code.like('6%')
-            ).all()
+            stocks = self._stock_kline_rows(trade_date, market="SH")
         elif market == 'SZ':
             # 深证：0或3开头的股票
-            stocks = self.session.query(KlineDaily.code, KlineDaily.change_pct).filter(
-                KlineDaily.trade_date == trade_date,
-                (KlineDaily.code.like('0%') | KlineDaily.code.like('3%'))
-            ).all()
+            stocks = self._stock_kline_rows(trade_date, market="SZ")
         else:
             stocks = []
 
@@ -100,9 +220,7 @@ class EmotionCycleGenerator:
             股票代码列表
         """
         # 获取前一交易日的所有股票K线数据
-        prev_klines = self.session.query(KlineDaily.code, KlineDaily.change_pct).filter(
-            KlineDaily.trade_date == prev_date
-        ).all()
+        prev_klines = self._stock_kline_rows(prev_date)
 
         if category == 'monster':
             # 妖股：涨幅 > 9.5%
@@ -137,10 +255,7 @@ class EmotionCycleGenerator:
             return 0.0
 
         # 查询这些股票在当日的表现
-        today_klines = self.session.query(KlineDaily.code, KlineDaily.change_pct).filter(
-            KlineDaily.trade_date == trade_date,
-            KlineDaily.code.in_(prev_codes)
-        ).all()
+        today_klines = self._stock_kline_rows(trade_date, codes=prev_codes)
 
         return self.calculate_up_rate(today_klines)
 
@@ -155,21 +270,31 @@ class EmotionCycleGenerator:
             EmotionCycle对象
         """
         # 获取前一交易日
-        prev_kline = self.session.query(KlineDaily.trade_date).filter(
-            KlineDaily.trade_date < trade_date
-        ).order_by(KlineDaily.trade_date.desc()).first()
+        prev_date_value = clickhouse_scalar(
+            """
+            SELECT max(kline_daily.trade_date)
+            FROM kline_daily FINAL
+            INNER JOIN stocks AS s ON s.code = kline_daily.code
+            WHERE kline_daily.trade_date < ?
+              AND s.type = 'stock'
+            """,
+            [trade_date],
+        )
+        prev_kline = (prev_date_value,) if prev_date_value else None
 
         if not prev_kline:
             logger.warning(f"未找到 {trade_date} 的前一交易日数据")
+            return None
+
+        if not self.is_trading_day(trade_date):
+            logger.warning(f"{trade_date}: 非交易日，拒绝生成情绪周期")
             return None
 
         prev_date = prev_kline[0]
 
         # 计算各种上涨率
         # 1. 收盘上涨率：所有股票收盘价相对于前收盘的上涨比例
-        all_stocks = self.session.query(KlineDaily.code, KlineDaily.change_pct).filter(
-            KlineDaily.trade_date == trade_date
-        ).all()
+        all_stocks = self._stock_kline_rows(trade_date)
 
         close_up_rate = self.calculate_up_rate(all_stocks)
 
@@ -183,10 +308,7 @@ class EmotionCycleGenerator:
         sz_up_rate = self.calculate_market_up_rate('SZ', trade_date)
 
         # 5. 创业板上涨率（3开头的股票）
-        cyb_stocks = self.session.query(KlineDaily.code, KlineDaily.change_pct).filter(
-            KlineDaily.trade_date == trade_date,
-            KlineDaily.code.like('3%')
-        ).all()
+        cyb_stocks = self._stock_kline_rows(trade_date, market="CYB")
         cyb_up_rate = self.calculate_up_rate(cyb_stocks)
 
         # 6. 昨日妖股上涨率
@@ -272,7 +394,7 @@ class EmotionCycleGenerator:
                 KlineDaily.trade_date <= end_date
             ).distinct().order_by(KlineDaily.trade_date.desc()).all()
 
-            trade_dates = [d[0] for d in trade_dates]
+            trade_dates = self.filter_trading_dates([d[0] for d in trade_dates])
 
             logger.info(f"共找到 {len(trade_dates)} 个交易日")
 

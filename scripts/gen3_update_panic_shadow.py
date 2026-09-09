@@ -30,6 +30,7 @@ from utils.market_warehouse import clickhouse_query_df
 DEFAULT_OUTPUT_DIR = ROOT / "reports" / "gen3_panic_shadow"
 DEFAULT_STATE_DIR = ROOT / "data" / "runtime" / "gen3_panic_shadow"
 INDEX_CODE = "999999.SH"
+CURRENT_INDEX_CODE_FALLBACK = "000001.SH"
 
 
 def _sql_literal(value: str) -> str:
@@ -48,46 +49,81 @@ def _pct(value: Any) -> str:
 
 
 def _latest_index_trade_date() -> str:
-    d = clickhouse_query_df(
-        """
-        SELECT max(trade_date) AS trade_date
-        FROM kline_daily
-        WHERE code = %(index_code)s
-        """,
-        {"index_code": INDEX_CODE},
-    )
-    if d.empty or pd.isna(d.iloc[0]["trade_date"]):
-        return ""
-    return pd.Timestamp(d.iloc[0]["trade_date"]).strftime("%Y-%m-%d")
+    dates: list[pd.Timestamp] = []
+    for index_code in [INDEX_CODE, CURRENT_INDEX_CODE_FALLBACK]:
+        d = clickhouse_query_df(
+            """
+            SELECT max(trade_date) AS trade_date
+            FROM kline_daily
+            WHERE code = %(index_code)s
+            """,
+            {"index_code": index_code},
+        )
+        if not d.empty and not pd.isna(d.iloc[0]["trade_date"]):
+            dates.append(pd.Timestamp(d.iloc[0]["trade_date"]))
+    return max(dates).strftime("%Y-%m-%d") if dates else ""
 
 
 def _prev_index_trade_date(entry_date: str) -> str:
-    d = clickhouse_query_df(
-        """
-        SELECT max(trade_date) AS prev_trade_date
-        FROM kline_daily
-        WHERE code = %(index_code)s
-          AND trade_date < toDate(%(entry_date)s)
-        """,
-        {"index_code": INDEX_CODE, "entry_date": entry_date},
-    )
-    if d.empty or pd.isna(d.iloc[0]["prev_trade_date"]):
-        return ""
-    return pd.Timestamp(d.iloc[0]["prev_trade_date"]).strftime("%Y-%m-%d")
+    dates: list[pd.Timestamp] = []
+    for index_code in [INDEX_CODE, CURRENT_INDEX_CODE_FALLBACK]:
+        d = clickhouse_query_df(
+            """
+            SELECT max(trade_date) AS prev_trade_date
+            FROM kline_daily
+            WHERE code = %(index_code)s
+              AND trade_date < toDate(%(entry_date)s)
+            """,
+            {"index_code": index_code, "entry_date": entry_date},
+        )
+        if not d.empty and not pd.isna(d.iloc[0]["prev_trade_date"]):
+            dates.append(pd.Timestamp(d.iloc[0]["prev_trade_date"]))
+    return max(dates).strftime("%Y-%m-%d") if dates else ""
 
 
 def _next_index_trade_date(trade_date: str) -> str:
-    d = clickhouse_query_df(
-        f"""
-        SELECT min(trade_date) AS next_trade_date
-        FROM kline_daily
-        WHERE code = {_sql_literal(INDEX_CODE)}
-          AND trade_date > toDate({_sql_literal(trade_date)})
-        """,
-    )
-    if d.empty or pd.isna(d.iloc[0]["next_trade_date"]):
-        return ""
-    return pd.Timestamp(d.iloc[0]["next_trade_date"]).strftime("%Y-%m-%d")
+    dates: list[pd.Timestamp] = []
+    for index_code in [INDEX_CODE, CURRENT_INDEX_CODE_FALLBACK]:
+        d = clickhouse_query_df(
+            f"""
+            SELECT min(trade_date) AS next_trade_date
+            FROM kline_daily
+            WHERE code = {_sql_literal(index_code)}
+              AND trade_date > toDate({_sql_literal(trade_date)})
+            """,
+        )
+        if not d.empty and not pd.isna(d.iloc[0]["next_trade_date"]):
+            dates.append(pd.Timestamp(d.iloc[0]["next_trade_date"]))
+    return min(dates).strftime("%Y-%m-%d") if dates else ""
+
+
+def _load_index_daily_current_context(start_date: str, end_date: str) -> pd.DataFrame:
+    last_error = ""
+    for index_code in [INDEX_CODE, CURRENT_INDEX_CODE_FALLBACK]:
+        try:
+            df = clickhouse_query_df(
+                """
+                SELECT trade_date, open, high, low, close, volume, amount, turnover_rate
+                FROM kline_daily
+                WHERE code = %(index_code)s
+                  AND trade_date BETWEEN subtractDays(toDate(%(start_date)s), 260) AND toDate(%(end_date)s)
+                ORDER BY trade_date
+                """,
+                {"index_code": index_code, "start_date": start_date, "end_date": end_date},
+            )
+            if df.empty:
+                last_error = f"No index daily data loaded for {index_code}"
+                continue
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            for col in ["open", "high", "low", "close", "volume", "amount", "turnover_rate"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            out = df.dropna(subset=["trade_date", "close"]).sort_values("trade_date").reset_index(drop=True)
+            if not out.empty:
+                return out
+            last_error = f"No valid index daily rows for {index_code}"
+        except Exception as exc:
+            last_error = str(exc)
+    raise RuntimeError(last_error or "No index daily data loaded")
 
 
 def _load_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -107,7 +143,7 @@ def _build_daily_candidates(entry_date: str, top_n: int, min_amount20: float, ma
 
     stocks = _load_stock_daily(trade_date, trade_date, max_codes=max_codes)
     features = _add_stock_features(stocks)
-    index = _load_index_daily(trade_date, trade_date)
+    index = _load_index_daily_current_context(trade_date, trade_date)
     market_context = _build_market_context(features, _add_index_features(index), min_amount20=min_amount20)
     candidates = _select_variants(features, market_context, top_n=top_n, min_amount20=min_amount20)
     if candidates.empty:

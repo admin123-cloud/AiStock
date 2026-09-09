@@ -4,7 +4,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: aistock-clickhouse
-    restart: "no"
+    restart: unless-stopped
     cpus: "1.5"
     mem_limit: 4g
     memswap_limit: 4g
@@ -28,7 +28,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: aistock-backend-dev
-    restart: "no"
+    restart: unless-stopped
     cpus: "2.0"
     mem_limit: 3g
     memswap_limit: 3g
@@ -75,7 +75,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     container_name: aistock-frontend-dev
-    restart: "no"
+    restart: unless-stopped
     cpus: "1.5"
     mem_limit: 1g
     memswap_limit: 1g

@@ -3,13 +3,23 @@
 """
 
 from collections import defaultdict
+from datetime import datetime, timezone
+import json
+import os
+import time
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
+from urllib.request import urlopen
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
 from sqlalchemy import and_, case, desc, func, or_, text
 
 from models.stock_models import EmotionCycle, KlineDaily, Stock
+from services.market_turnover_forecast import get_intraday_turnover_forecast
+from services.market_sentiment_cache import load_homepage_sentiment
+from services.margin_sentiment import load_margin_sentiment
 from utils.database import db
 from utils.logger import get_logger
 from utils.market_warehouse import (
@@ -22,10 +32,128 @@ from utils.market_warehouse import (
 
 router = APIRouter(prefix="/market", tags=["大盘概览"])
 logger = get_logger("market_overview")
-CORE_INDEX_CODES = {"999999.SH", "399001.SZ"}
+CORE_INDEX_CODES = {"000001.SH", "399001.SZ"}
 DEFAULT_INDEX_JUMP_THRESHOLD = 20.0
 CORE_INDEX_JUMP_THRESHOLD = 15.0
 MIN_EMOTION_CYCLE_STOCKS = 1000
+MIN_QMT_INTRADAY_COVERAGE_RATIO = 0.90
+_QMT_INTRADAY_SENTIMENT_CACHE: Dict[str, Any] = {"expires_at": 0.0, "trade_date": "", "payload": None}
+# The home page must never silently switch to public AkShare/Sina quotes.  The
+# host bridge is a read-only proxy for the same QMT quote service used by the
+# intraday collector.  Keep the alias while the stock master still contains
+# the legacy Shanghai composite code.
+HOME_LIVE_INDEX_CODES = {"999999.SH", "000001.SH", "000680.SH", "399001.SZ", "399006.SZ"}
+QMT_INDEX_CODE_ALIASES = {"999999.SH": "000001.SH"}
+
+
+def _intraday_emotion_snapshot() -> Optional[Dict[str, Any]]:
+    """Build a provisional, same-day breadth snapshot from QMT facts.
+
+    This intentionally stays out of ``emotion_cycle``: that table is the
+    after-close, confirmed daily series.  The snapshot is only appended to the
+    API response while the current trade day has sufficiently broad 5-minute
+    coverage, so the home page can show the live state without treating it as a
+    confirmed close.
+    """
+    if not clickhouse_available() or not _has_clickhouse_table("kline_daily_intraday"):
+        return None
+
+    trade_date = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    try:
+        snapshot_df = clickhouse_query_df(
+            """
+            WITH intraday_latest AS (
+                SELECT
+                    code,
+                    argMax(close, snapshot_at) AS last_close,
+                    argMax(previous_close, snapshot_at) AS previous_close,
+                    max(snapshot_at) AS as_of
+                FROM kline_daily_intraday FINAL
+                WHERE trade_date = ?
+                GROUP BY code
+            )
+            SELECT
+                count() AS total_stocks,
+                max(i.as_of) AS as_of,
+                avg(i.last_close > i.previous_close) * 100 AS close_up_rate,
+                avgIf(i.last_close > i.previous_close, s.market = 'SH') * 100 AS sh_up_rate,
+                avgIf(i.last_close > i.previous_close, s.market = 'SZ') * 100 AS sz_up_rate,
+                avgIf(i.last_close > i.previous_close, i.code LIKE '300%%.SZ' OR i.code LIKE '301%%.SZ') * 100 AS cyb_up_rate,
+                avg((i.last_close - i.previous_close) / i.previous_close * 100 > 3) * 100 AS strong_up_rate,
+                avg((i.last_close - i.previous_close) / i.previous_close * 100 < -3) * 100 AS weak_up_rate
+            FROM intraday_latest AS i
+            INNER JOIN stocks AS s FINAL ON s.code = i.code
+            WHERE s.type = 'stock' AND i.last_close > 0 AND i.previous_close > 0
+            """,
+            [trade_date],
+        )
+    except Exception as exc:
+        logger.warning(f"intraday emotion snapshot query failed: {exc}")
+        return None
+
+    if snapshot_df is None or snapshot_df.empty:
+        return None
+    row = snapshot_df.iloc[0]
+    total_stocks = int(row.get("total_stocks") or 0)
+    as_of = row.get("as_of")
+    if total_stocks < MIN_EMOTION_CYCLE_STOCKS or as_of is None:
+        return None
+
+    def metric(name: str) -> float:
+        return round(float(row.get(name) or 0.0), 2)
+
+    return {
+        "date": trade_date.isoformat(),
+        "as_of": _datetime_text(as_of),
+        "total_stocks": total_stocks,
+        "close_up_rate": metric("close_up_rate"),
+        "intraday_up_rate": metric("close_up_rate"),
+        "sh_up_rate": metric("sh_up_rate"),
+        "sz_up_rate": metric("sz_up_rate"),
+        "cyb_up_rate": metric("cyb_up_rate"),
+        "strong_up_rate": metric("strong_up_rate"),
+        "weak_up_rate": metric("weak_up_rate"),
+        "is_temporary": True,
+        "source": "clickhouse:kline_daily_intraday",
+    }
+
+
+def _append_intraday_emotion_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Append today's provisional point to a confirmed daily trend payload."""
+    snapshot = _intraday_emotion_snapshot()
+    if not snapshot or snapshot["date"] in payload.get("dates", []):
+        return payload
+
+    payload["dates"].append(snapshot["date"])
+    live_fields = {
+        "close_up_rate",
+        "intraday_up_rate",
+        "sh_up_rate",
+        "sz_up_rate",
+        "cyb_up_rate",
+        "strong_up_rate",
+        "weak_up_rate",
+    }
+    for field in (
+        "close_up_rate",
+        "intraday_up_rate",
+        "sh_up_rate",
+        "sz_up_rate",
+        "cyb_up_rate",
+        "yesterday_monster_up_rate",
+        "yesterday_strong_up_rate",
+        "yesterday_weak_up_rate",
+        "strong_up_rate",
+        "weak_up_rate",
+        "limit_up_follow_rate",
+    ):
+        series = payload.setdefault(field, [])
+        value = snapshot[field] if field in live_fields else (series[-1] if series else 0.0)
+        series.append(float(value))
+
+    payload["total"] = len(payload["dates"])
+    payload["intraday_snapshot"] = snapshot
+    return payload
 
 
 def _resolve_table_name(base: str, candidates: Optional[List[str]] = None) -> str:
@@ -142,6 +270,288 @@ def _datetime_text(value: Any) -> str:
         return value.strftime("%Y-%m-%d %H:%M")
     text = str(value).replace("T", " ")
     return text[:16]
+
+
+def _latest_qmt_home_index_quotes(codes: List[str]) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    """Read the home-page indices from the read-only QMT host bridge.
+
+    The old implementation read ``intraday_quote_snapshot``, whose writer is
+    AkShare/Sina.  Do not fall back to that table: a missing QMT quote must be
+    visible as unavailable rather than presented as a real-time quote.
+    """
+    requested = [str(code).upper() for code in codes if str(code).upper() in HOME_LIVE_INDEX_CODES]
+    if not requested:
+        return {}, {"provider": "qmt_xtdata", "status": "not_requested"}
+
+    qmt_codes = [QMT_INDEX_CODE_ALIASES.get(code, code) for code in requested]
+    bridge_url = str(
+        os.getenv("AISTOCK_QMT_TICK_BRIDGE_URL", "http://host.docker.internal:8766/full-tick")
+    ).strip()
+    if not bridge_url:
+        return {}, {"provider": "qmt_xtdata", "status": "unavailable", "reason": "bridge_url_missing"}
+
+    try:
+        separator = "&" if "?" in bridge_url else "?"
+        with urlopen(f"{bridge_url}{separator}{urlencode({'codes': ','.join(qmt_codes)})}", timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        raw_ticks = body.get("ticks") if isinstance(body, dict) and body.get("ok") else None
+        if not isinstance(raw_ticks, dict):
+            raise RuntimeError(str((body or {}).get("message") or "invalid_qmt_bridge_response"))
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        logger.warning(f"QMT home index quote unavailable: {reason}")
+        return {}, {"provider": "qmt_xtdata", "status": "unavailable", "reason": reason}
+
+    quotes: Dict[str, Dict[str, Any]] = {}
+    for requested_code, qmt_code in zip(requested, qmt_codes):
+        tick = raw_ticks.get(qmt_code) or raw_ticks.get(requested_code)
+        if not isinstance(tick, dict):
+            continue
+        price = _to_float(tick.get("lastPrice") or tick.get("last") or tick.get("price"))
+        if price <= 0:
+            continue
+        try:
+            tick_time = datetime.fromtimestamp(float(tick.get("time")) / 1000, tz=timezone.utc).astimezone(ZoneInfo("Asia/Shanghai"))
+        except Exception:
+            tick_time = datetime.now(ZoneInfo("Asia/Shanghai"))
+        quotes[requested_code] = {
+            "snapshot_date": tick_time.date(),
+            "snapshot_time": tick_time,
+            "price": price,
+            "pre_close": _to_float(tick.get("lastClose") or tick.get("preClose")),
+            "volume": _to_float(tick.get("pvolume") or tick.get("volume")),
+            "amount": _to_float(tick.get("amount")),
+            "source": "qmt_xtdata_host_bridge",
+        }
+
+    status = "live" if quotes else "unavailable"
+    return quotes, {
+        "provider": "qmt_xtdata",
+        "status": status,
+        "quote_count": len(quotes),
+        "requested_count": len(requested),
+        "as_of": max((_datetime_text(item["snapshot_time"]) for item in quotes.values()), default=None),
+    }
+
+
+def _latest_qmt_intraday_index_quotes(codes: List[str]) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    """Read today's QMT index facts when the host quote bridge is unavailable."""
+    requested = [str(code).upper() for code in codes if str(code).upper() in HOME_LIVE_INDEX_CODES]
+    if not requested or not clickhouse_available() or not _has_clickhouse_table("kline_daily_intraday"):
+        return {}, {"provider": "qmt_clickhouse", "status": "unavailable"}
+
+    trade_date = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    source_codes = [QMT_INDEX_CODE_ALIASES.get(code, code) for code in requested]
+    placeholders = ",".join(["?"] * len(source_codes))
+    try:
+        snapshot_df = clickhouse_query_df(
+            f"""
+            SELECT
+                code,
+                argMax(close, snapshot_at) AS price,
+                argMax(previous_close, snapshot_at) AS pre_close,
+                argMax(volume, snapshot_at) AS volume,
+                argMax(amount, snapshot_at) AS amount,
+                max(snapshot_at) AS snapshot_time
+            FROM kline_daily_intraday FINAL
+            WHERE trade_date = ? AND code IN ({placeholders})
+            GROUP BY code
+            """,
+            [trade_date] + source_codes,
+        )
+    except Exception as exc:
+        logger.warning(f"QMT intraday index fact query failed: {exc}")
+        return {}, {
+            "provider": "qmt_clickhouse",
+            "status": "unavailable",
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+
+    quotes: Dict[str, Dict[str, Any]] = {}
+    if snapshot_df is not None and not snapshot_df.empty:
+        source_to_requested = {source: requested[index] for index, source in enumerate(source_codes)}
+        for row in snapshot_df.itertuples(index=False):
+            requested_code = source_to_requested.get(str(row.code).upper())
+            price = _to_float(row.price)
+            pre_close = _to_float(row.pre_close)
+            if not requested_code or price <= 0 or pre_close <= 0:
+                continue
+            quotes[requested_code] = {
+                "snapshot_date": trade_date,
+                "snapshot_time": row.snapshot_time,
+                "price": price,
+                "pre_close": pre_close,
+                "volume": _to_float(row.volume),
+                "amount": _to_float(row.amount),
+                "source": "qmt_clickhouse_intraday",
+            }
+
+    return quotes, {
+        "provider": "qmt_clickhouse",
+        "status": "live" if quotes else "unavailable",
+        "quote_count": len(quotes),
+        "requested_count": len(requested),
+        "as_of": max((_datetime_text(item["snapshot_time"]) for item in quotes.values()), default=None),
+    }
+
+
+def _load_qmt_intraday_market_sentiment() -> Optional[Dict[str, Any]]:
+    """Aggregate the latest completed QMT five-minute bars for the home page.
+
+    This is intentionally a read from ``kline_minute_5`` rather than from the
+    legacy AkShare/Sina snapshot table.  The cache is shorter than the source
+    cadence and prevents several simultaneous homepage requests from repeating
+    the full-market aggregation.
+    """
+    trade_date = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    cached = _QMT_INTRADAY_SENTIMENT_CACHE.get("payload")
+    if (
+        cached is not None
+        and _QMT_INTRADAY_SENTIMENT_CACHE.get("trade_date") == trade_date.isoformat()
+        and time.monotonic() < float(_QMT_INTRADAY_SENTIMENT_CACHE.get("expires_at") or 0)
+    ):
+        return cached
+
+    def finish(payload: Optional[Dict[str, Any]], cache_seconds: int = 75) -> Optional[Dict[str, Any]]:
+        _QMT_INTRADAY_SENTIMENT_CACHE.update(
+            {
+                "trade_date": trade_date.isoformat(),
+                "payload": payload,
+                "expires_at": time.monotonic() + cache_seconds,
+            }
+        )
+        return payload
+
+    if not clickhouse_available() or not _has_clickhouse_table("kline_minute_5"):
+        return finish(None, 60)
+
+    try:
+        expected_count = int(
+            clickhouse_scalar("SELECT count() FROM stocks WHERE type = 'stock'") or 0
+        )
+        previous_date = clickhouse_scalar(
+            "SELECT max(trade_date) FROM kline_daily WHERE trade_date < ?",
+            [trade_date],
+        )
+        if expected_count <= 0 or not previous_date:
+            return finish(None, 60)
+        summary_df = clickhouse_query_df(
+            """
+            WITH minute_latest AS (
+                SELECT code, argMax(close, datetime) AS close, max(datetime) AS as_of
+                FROM kline_minute_5
+                WHERE toDate(datetime) = ?
+                GROUP BY code
+            ),
+            minute_turnover AS (
+                SELECT code, sum(amount) AS amount
+                FROM kline_minute_5
+                WHERE toDate(datetime) = ?
+                GROUP BY code
+            ),
+            previous_close AS (
+                SELECT code, argMax(close, trade_date) AS close
+                FROM kline_daily
+                WHERE trade_date = ?
+                GROUP BY code
+            ),
+            base AS (
+                SELECT
+                    s.code AS code,
+                    s.market AS market,
+                    m.close AS close,
+                    p.close AS previous_close,
+                    m.as_of AS as_of,
+                    t.amount AS amount,
+                    (m.close - p.close) / nullIf(p.close, 0) * 100 AS pct
+                FROM stocks AS s
+                INNER JOIN minute_latest AS m ON m.code = s.code
+                INNER JOIN previous_close AS p ON p.code = s.code
+                LEFT JOIN minute_turnover AS t ON t.code = s.code
+                WHERE s.type = 'stock' AND m.close > 0 AND p.close > 0
+            )
+            SELECT
+                count() AS covered_count,
+                max(as_of) AS as_of,
+                sum(pct > 0) AS up_count,
+                sum(pct < 0) AS down_count,
+                sum(pct = 0) AS unchanged_count,
+                sum(pct >= 5) AS up_5_count,
+                sum(pct <= -5) AS down_5_count,
+                sum(pct >= 9.9) AS limit_up_count,
+                sum(pct <= -9.9) AS limit_down_count,
+                avg(pct) AS avg_change_percent,
+                sum(amount) AS total_amount,
+                sumIf(amount, market = 'SH') AS sh_amount,
+                sumIf(amount, market = 'SZ') AS sz_amount,
+                sumIf(amount, market = 'BJ') AS bj_amount,
+                sum(pct >= 7) AS bucket_up_7,
+                sum(pct >= 5 AND pct < 7) AS bucket_up_5_7,
+                sum(pct >= 3 AND pct < 5) AS bucket_up_3_5,
+                sum(pct > 0 AND pct < 3) AS bucket_up_0_3,
+                sum(pct = 0) AS bucket_zero,
+                sum(pct < 0 AND pct > -3) AS bucket_down_0_3,
+                sum(pct <= -3 AND pct > -5) AS bucket_down_3_5,
+                sum(pct <= -5 AND pct > -7) AS bucket_down_5_7,
+                sum(pct <= -7) AS bucket_down_7
+            FROM base
+            """,
+            [trade_date, trade_date, previous_date],
+        )
+    except Exception as exc:
+        logger.warning(f"QMT intraday market sentiment query failed: {exc}")
+        return finish(None, 60)
+
+    if summary_df is None or summary_df.empty:
+        return finish(None, 60)
+    row = summary_df.iloc[0]
+    covered_count = int(row.get("covered_count") or 0)
+    as_of = row.get("as_of")
+    coverage_ratio = covered_count / expected_count if expected_count else 0.0
+    if as_of is None or covered_count <= 0 or coverage_ratio < MIN_QMT_INTRADAY_COVERAGE_RATIO:
+        logger.warning(
+            "QMT intraday market sentiment coverage insufficient: "
+            f"covered={covered_count}, expected={expected_count}, ratio={coverage_ratio:.3f}"
+        )
+        return finish(None, 60)
+
+    def count(name: str) -> int:
+        return int(row.get(name) or 0)
+
+    distribution = [
+        {"label": ">=7", "count": count("bucket_up_7"), "side": "up"},
+        {"label": "5~7", "count": count("bucket_up_5_7"), "side": "up"},
+        {"label": "3~5", "count": count("bucket_up_3_5"), "side": "up"},
+        {"label": "0~3", "count": count("bucket_up_0_3"), "side": "up"},
+        {"label": "0", "count": count("bucket_zero"), "side": "flat"},
+        {"label": "-3~0", "count": count("bucket_down_0_3"), "side": "down"},
+        {"label": "-5~-3", "count": count("bucket_down_3_5"), "side": "down"},
+        {"label": "-7~-5", "count": count("bucket_down_5_7"), "side": "down"},
+        {"label": "<=-7", "count": count("bucket_down_7"), "side": "down"},
+    ]
+    return finish(
+        {
+            "date": trade_date.isoformat(),
+            "as_of": _datetime_text(as_of),
+            "covered_count": covered_count,
+            "expected_count": expected_count,
+            "coverage_ratio": round(coverage_ratio, 4),
+            "up_count": count("up_count"),
+            "down_count": count("down_count"),
+            "unchanged_count": count("unchanged_count"),
+            "up_5_percent_count": count("up_5_count"),
+            "down_5_percent_count": count("down_5_count"),
+            "limit_up_count": count("limit_up_count"),
+            "limit_down_count": count("limit_down_count"),
+            "avg_change_percent": round(float(row.get("avg_change_percent") or 0.0), 3),
+            "total_turnover": float(row.get("total_amount") or 0.0),
+            "sh_amount": float(row.get("sh_amount") or 0.0),
+            "sz_amount": float(row.get("sz_amount") or 0.0),
+            "bj_amount": float(row.get("bj_amount") or 0.0),
+            "change_distribution": distribution,
+            "source": "qmt:kline_minute_5",
+        }
+    )
 
 
 def _empty_emotion_trend(message: str = "") -> Dict[str, Any]:
@@ -526,6 +936,39 @@ def get_market_indices(code: Optional[str] = None):
                         indices: List[Dict[str, Any]] = []
                         blocked_codes: List[Dict[str, Any]] = []
                         present_core_codes = set()
+                        intraday_snapshots, fact_snapshot_status = _latest_qmt_intraday_index_quotes(codes)
+                        bridge_snapshots, bridge_status = _latest_qmt_home_index_quotes(codes)
+                        # Prefer the host bridge when it is available, while retaining
+                        # today's ClickHouse fact snapshot as the durable fallback.
+                        intraday_snapshots.update(bridge_snapshots)
+                        intraday_quote_status = {
+                            "provider": "qmt_xtdata+qmt_clickhouse",
+                            "status": "live" if intraday_snapshots else "unavailable",
+                            "quote_count": len(intraday_snapshots),
+                            "requested_count": len(codes),
+                            "as_of": max(
+                                (
+                                    _datetime_text(item["snapshot_time"])
+                                    for item in intraday_snapshots.values()
+                                    if item.get("snapshot_time")
+                                ),
+                                default=None,
+                            ),
+                            "bridge_status": bridge_status,
+                            "fact_snapshot_status": {
+                                "status": "live" if any(
+                                    item.get("source") == "qmt_clickhouse_intraday"
+                                    for item in intraday_snapshots.values()
+                                ) else "unavailable",
+                                "as_of": fact_snapshot_status.get("as_of"),
+                            },
+                        }
+                        intraday_dates = [
+                            _date_text(item.get("snapshot_date"))
+                            for item in intraday_snapshots.values()
+                            if item.get("snapshot_date")
+                        ]
+                        intraday_trading_date = max(intraday_dates) if intraday_dates else None
 
                         for stock in stocks:
                             latest_kline = kline_map.get((stock.code, latest_key))
@@ -535,21 +978,30 @@ def get_market_indices(code: Optional[str] = None):
                                 continue
 
                             previous_kline = kline_map.get((stock.code, previous_key))
+                            intraday_snapshot = intraday_snapshots.get(stock.code)
                             change = 0.0
                             change_pct = 0.0
-                            latest_close = float(latest_kline.get("close") or 0)
-                            if previous_kline and previous_kline.get("close"):
+                            latest_close = float(
+                                (intraday_snapshot or {}).get("price")
+                                if intraday_snapshot
+                                else latest_kline.get("close")
+                                or 0
+                            )
+                            prev_close = 0.0
+                            if intraday_snapshot and intraday_snapshot.get("pre_close"):
+                                prev_close = float(intraday_snapshot.get("pre_close") or 0)
+                            elif previous_kline and previous_kline.get("close"):
                                 prev_close = float(previous_kline.get("close") or 0)
-                                if prev_close > 0:
-                                    change = latest_close - prev_close
-                                    change_pct = (change / prev_close) * 100
+                            if prev_close > 0:
+                                change = latest_close - prev_close
+                                change_pct = (change / prev_close) * 100
 
                             threshold = CORE_INDEX_JUMP_THRESHOLD if stock.code in CORE_INDEX_CODES else DEFAULT_INDEX_JUMP_THRESHOLD
-                            is_abnormal = latest_close <= 0 or (previous_kline is not None and abs(change_pct) > threshold)
+                            is_abnormal = latest_close <= 0 or (prev_close > 0 and abs(change_pct) > threshold)
                             validation_reason = "ok"
                             if latest_close <= 0:
                                 validation_reason = "invalid_close"
-                            elif previous_kline is not None and abs(change_pct) > threshold:
+                            elif prev_close > 0 and abs(change_pct) > threshold:
                                 validation_reason = f"change_pct_exceeds_{threshold}%"
 
                             if stock.code in CORE_INDEX_CODES:
@@ -564,16 +1016,22 @@ def get_market_indices(code: Optional[str] = None):
                                     )
 
                             date_value = latest_kline.get("trade_date")
+                            snapshot_date = (intraday_snapshot or {}).get("snapshot_date")
+                            snapshot_time = (intraday_snapshot or {}).get("snapshot_time")
+                            row_date = snapshot_date or date_value
+                            data_source = (intraday_snapshot or {}).get("source", "kline_daily") if intraday_snapshot else "kline_daily"
                             indices.append(
                                 {
                                     "code": stock.code,
                                     "name": stock.name,
-                                    "price": latest_kline.get("close"),
+                                    "price": latest_close,
                                     "change": change,
                                     "change_pct": change_pct,
-                                    "volume": latest_kline.get("volume"),
-                                    "amount": latest_kline.get("amount"),
-                                    "date": date_value.strftime("%Y-%m-%d") if hasattr(date_value, "strftime") else str(date_value),
+                                    "volume": (intraday_snapshot or {}).get("volume", latest_kline.get("volume")),
+                                    "amount": (intraday_snapshot or {}).get("amount", latest_kline.get("amount")),
+                                    "date": row_date.strftime("%Y-%m-%d") if hasattr(row_date, "strftime") else str(row_date),
+                                    "snapshot_time": _datetime_text(snapshot_time) if snapshot_time else None,
+                                    "data_source": data_source,
                                     "is_abnormal": is_abnormal,
                                     "validation_reason": validation_reason,
                                 }
@@ -585,7 +1043,7 @@ def get_market_indices(code: Optional[str] = None):
 
                         validation_status = "passed" if not blocked_codes else "failed"
                         validation_reason = "ok" if not blocked_codes else "core_index_validation_failed"
-                        latest_date_text = _date_text(latest_date)
+                        latest_date_text = intraday_trading_date or _date_text(latest_date)
 
                         return {
                             "indices": indices,
@@ -593,7 +1051,9 @@ def get_market_indices(code: Optional[str] = None):
                             "validation_status": validation_status,
                             "validation_reason": validation_reason,
                             "blocked_codes": blocked_codes,
-                            "source": "clickhouse",
+                            "source": "clickhouse+qmt_intraday_quote" if intraday_trading_date else "clickhouse",
+                            "intraday_snapshot_time": intraday_quote_status.get("as_of"),
+                            "intraday_quote_status": intraday_quote_status,
                         }
                 except Exception as exc:
                     logger.warning(f"ClickHouse market indices fallback to SQLAlchemy engine: {exc}")
@@ -846,6 +1306,39 @@ def _legacy_get_market_sentiment():
 
 
 def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
+    cached_payload = load_homepage_sentiment()
+    if cached_payload:
+        latest_date = cached_payload["date"]
+        latest_date_value = datetime.fromisoformat(latest_date).date()
+        latest_cycle = (
+            session.query(EmotionCycle)
+            .filter(EmotionCycle.date == latest_date)
+            .order_by(desc(EmotionCycle.date))
+            .first()
+        )
+        previous_cycle = (
+            session.query(EmotionCycle)
+            .filter(EmotionCycle.date < latest_cycle.date)
+            .order_by(desc(EmotionCycle.date))
+            .first()
+            if latest_cycle
+            else None
+        )
+        cached_payload["sentiment_level"] = _sentiment_level(cached_payload["sentiment_score"])
+        cached_payload["emotion_phase"] = _build_emotion_phase(
+            trade_date=latest_date_value,
+            sentiment_score=cached_payload["sentiment_score"],
+            up_count=cached_payload["up_count"],
+            down_count=cached_payload["down_count"],
+            unchanged_count=cached_payload["unchanged_count"],
+            up_5_count=cached_payload["up_5_percent_count"],
+            down_5_count=cached_payload["down_5_percent_count"],
+            limit_up_count=cached_payload["limit_up_count"],
+            limit_down_count=cached_payload["limit_down_count"],
+            latest_cycle=latest_cycle,
+            previous_cycle=previous_cycle,
+        )
+        return cached_payload
     if not clickhouse_available():
         return None
     stocks_table = _resolve_table_name("stocks")
@@ -889,6 +1382,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             SUM(CASE WHEN pct <= -5 THEN 1 ELSE 0 END) AS down_5_count,
             SUM(CASE WHEN pct >= 9.9 THEN 1 ELSE 0 END) AS limit_up_count,
             SUM(CASE WHEN pct <= -9.9 THEN 1 ELSE 0 END) AS limit_down_count,
+            AVG(pct) AS avg_change_percent,
             SUM(amount) AS total_amount,
             SUM(CASE WHEN pct >= 7 THEN 1 ELSE 0 END) AS bucket_up_7,
             SUM(CASE WHEN pct >= 5 AND pct < 7 THEN 1 ELSE 0 END) AS bucket_up_5_7,
@@ -917,6 +1411,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
     down_5_count = _int_col("down_5_count")
     limit_up_count = _int_col("limit_up_count")
     limit_down_count = _int_col("limit_down_count")
+    avg_change_percent = float(row.get("avg_change_percent") or 0)
     total_amount = float(row.get("total_amount") or 0)
     total = up_count + down_count + unchanged_count
     sentiment_score = 50 + (up_count - down_count) / total * 50 if total > 0 else 50
@@ -964,8 +1459,10 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             WITH base AS (
                 SELECT
                     k.trade_date,
+                    k.amount AS amount,
+                    s.market AS market,
                     COALESCE(k.change_pct, (k.close - k.open) / NULLIF(k.open, 0) * 100) AS pct
-                FROM {kline_table} k
+                FROM {kline_table} AS k FINAL
                 JOIN {stocks_table} s ON s.code = k.code
                 WHERE s.type = 'stock'
                   AND k.open > 0
@@ -973,6 +1470,10 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             )
             SELECT
                 trade_date,
+                SUM(amount) AS total_amount,
+                SUM(CASE WHEN market = 'SH' THEN amount ELSE 0 END) AS sh_amount,
+                SUM(CASE WHEN market = 'SZ' THEN amount ELSE 0 END) AS sz_amount,
+                SUM(CASE WHEN market = 'BJ' THEN amount ELSE 0 END) AS bj_amount,
                 SUM(CASE WHEN pct > 0 THEN 1 ELSE 0 END) AS up_count,
                 SUM(CASE WHEN pct < 0 THEN 1 ELSE 0 END) AS down_count,
                 SUM(CASE WHEN pct >= 9.9 THEN 1 ELSE 0 END) AS limit_up_count,
@@ -988,6 +1489,10 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             for item in curve_df.itertuples(index=False):
                 key = _date_text(item.trade_date)
                 curve_map[key] = {
+                    "total_amount": float(item.total_amount or 0),
+                    "sh_amount": float(item.sh_amount or 0),
+                    "sz_amount": float(item.sz_amount or 0),
+                    "bj_amount": float(item.bj_amount or 0),
                     "up_count": int(item.up_count or 0),
                     "down_count": int(item.down_count or 0),
                     "limit_up_count": int(item.limit_up_count or 0),
@@ -1049,8 +1554,10 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
         "up_5_count": up_5_count,
         "down_5_count": down_5_count,
     }
+    intraday = _load_qmt_intraday_market_sentiment()
+    turnover_forecast = get_intraday_turnover_forecast(current_snapshot=intraday) if intraday else get_intraday_turnover_forecast()
 
-    return {
+    payload = {
         "date": latest_date_text,
         "up_count": up_count,
         "down_count": down_count,
@@ -1059,7 +1566,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
         "down_5_percent_count": down_5_count,
         "limit_up_count": limit_up_count,
         "limit_down_count": limit_down_count,
-        "avg_change_percent": 0,
+        "avg_change_percent": round(avg_change_percent, 3),
         "total_turnover": total_amount,
         "sh_amount": float(turnover_by_market.get("SH") or 0),
         "sz_amount": float(turnover_by_market.get("SZ") or 0),
@@ -1078,6 +1585,17 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             "latest_snapshot": latest_snapshot,
             "latest_date": latest_date_text,
         },
+        "turnover_trend_30d": {
+            "trade_dates": curve_dates,
+            "amounts": [float(curve_map.get(d, {}).get("total_amount", 0)) for d in curve_dates],
+            "sh_amounts": [float(curve_map.get(d, {}).get("sh_amount", 0)) for d in curve_dates],
+            "sz_amounts": [float(curve_map.get(d, {}).get("sz_amount", 0)) for d in curve_dates],
+            "bj_amounts": [float(curve_map.get(d, {}).get("bj_amount", 0)) for d in curve_dates],
+            "threshold_amount": 2_000_000_000_000,
+            "unit": "CNY",
+            "latest_date": latest_date_text,
+        },
+        "turnover_forecast_intraday": turnover_forecast,
         "sentiment_score": sentiment_score,
         "sentiment_level": _sentiment_level(sentiment_score),
         "emotion_phase": _build_emotion_phase(
@@ -1095,6 +1613,78 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
         ),
         "source": "clickhouse",
     }
+    if not intraday:
+        return payload
+
+    turnover_trend = payload["turnover_trend_30d"]
+    intraday_date = str(intraday["date"])
+    trend_dates = list(turnover_trend["trade_dates"])
+    trend_values = {
+        "amounts": float(intraday["total_turnover"]),
+        "sh_amounts": float(intraday["sh_amount"]),
+        "sz_amounts": float(intraday["sz_amount"]),
+        "bj_amounts": float(intraday.get("bj_amount") or 0),
+    }
+    if trend_dates and trend_dates[-1] == intraday_date:
+        for key, value in trend_values.items():
+            turnover_trend[key][-1] = value
+    else:
+        turnover_trend["trade_dates"] = (trend_dates + [intraday_date])[-30:]
+        for key, value in trend_values.items():
+            turnover_trend[key] = (list(turnover_trend[key]) + [value])[-30:]
+    turnover_trend.update(
+        {
+            "latest_date": intraday_date,
+            "latest_is_provisional": True,
+            "latest_as_of": intraday["as_of"],
+        }
+    )
+
+    total = int(intraday["up_count"]) + int(intraday["down_count"]) + int(intraday["unchanged_count"])
+    sentiment_score = (
+        50 + (int(intraday["up_count"]) - int(intraday["down_count"])) / total * 50
+        if total > 0
+        else 50
+    )
+    payload.update(
+        {
+            "date": intraday["date"],
+            "up_count": intraday["up_count"],
+            "down_count": intraday["down_count"],
+            "unchanged_count": intraday["unchanged_count"],
+            "up_5_percent_count": intraday["up_5_percent_count"],
+            "down_5_percent_count": intraday["down_5_percent_count"],
+            "limit_up_count": intraday["limit_up_count"],
+            "limit_down_count": intraday["limit_down_count"],
+            "avg_change_percent": intraday["avg_change_percent"],
+            "total_turnover": intraday["total_turnover"],
+            "sh_amount": intraday["sh_amount"],
+            "sz_amount": intraday["sz_amount"],
+            "turnover_source": "qmt_5m_stock_aggregate",
+            "change_distribution": intraday["change_distribution"],
+            "sentiment_score": round(sentiment_score, 2),
+            "sentiment_level": _sentiment_level(sentiment_score),
+            "source": "qmt_5m_intraday+clickhouse_daily_history",
+            "intraday_status": {
+                "mode": "provisional_5m",
+                "as_of": intraday["as_of"],
+                "covered_count": intraday["covered_count"],
+                "expected_count": intraday["expected_count"],
+                "coverage_ratio": intraday["coverage_ratio"],
+                "source": intraday["source"],
+            },
+            # Curves and the emotion phase remain confirmed daily values.  They
+            # are deliberately not mutated with an incomplete trading session.
+            "daily_close_date": latest_date_text,
+        }
+    )
+    return payload
+
+
+@router.get("/margin-sentiment")
+def get_margin_sentiment(days: int = 30):
+    """Return confirmed exchange-published daily margin-financing sentiment."""
+    return load_margin_sentiment(days=days)
 
 
 @router.get("/sentiment")
@@ -1766,7 +2356,7 @@ def get_emotion_trend(days: int = 30, granularity: str = "daily"):
                         date, close_up_rate, intraday_up_rate, sh_up_rate, sz_up_rate, cyb_up_rate,
                         yesterday_monster_up_rate, yesterday_strong_up_rate, yesterday_weak_up_rate,
                         strong_up_rate, weak_up_rate, limit_up_follow_rate
-                    FROM {emotion_table}
+                    FROM {emotion_table} FINAL
                     WHERE total_stocks >= {MIN_EMOTION_CYCLE_STOCKS}
                     ORDER BY date DESC
                     LIMIT ?
@@ -1775,7 +2365,7 @@ def get_emotion_trend(days: int = 30, granularity: str = "daily"):
                 )
                 if trend_df is not None and not trend_df.empty:
                     trend_df = trend_df.iloc[::-1]
-                    return {
+                    return _append_intraday_emotion_snapshot({
                         "dates": [_date_text(v) for v in trend_df["date"].tolist()],
                         "close_up_rate": [float(v) for v in trend_df["close_up_rate"].fillna(0).tolist()],
                         "intraday_up_rate": [float(v) for v in trend_df["intraday_up_rate"].fillna(0).tolist()],
@@ -1790,7 +2380,7 @@ def get_emotion_trend(days: int = 30, granularity: str = "daily"):
                         "limit_up_follow_rate": [float(v) for v in trend_df["limit_up_follow_rate"].fillna(0).tolist()],
                         "total": int(len(trend_df)),
                         "source": "clickhouse",
-                    }
+                    })
         emotion_cycles = (
             session.query(EmotionCycle)
             .filter(EmotionCycle.total_stocks >= MIN_EMOTION_CYCLE_STOCKS)
@@ -1869,7 +2459,7 @@ def calculate_emotion_cycle():
             session.delete(existing)
             session.commit()
 
-        from scripts.generate_emotion_cycle import EmotionCycleGenerator
+        from scripts.generate_emotion_cycle import EmotionCycleGenerator, publish_emotion_cycle_to_clickhouse
 
         generator = EmotionCycleGenerator()
         generator.session = session
@@ -1880,6 +2470,7 @@ def calculate_emotion_cycle():
 
         session.add(emotion_cycle)
         session.commit()
+        publish_emotion_cycle_to_clickhouse(emotion_cycle)
 
         return {
             "success": True,

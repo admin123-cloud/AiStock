@@ -18,6 +18,32 @@
       :title="fusionText"
     />
 
+    <section class="panel score88-replay-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Score88 独立历史复现</h2>
+          <p>{{ score88Replay.message || '尚未加载 Score88 复现工件。' }}</p>
+        </div>
+        <el-tag :type="score88Replay.available ? 'info' : 'warning'" effect="plain">
+          {{ score88Replay.available ? '研究级 OHLC 代理' : '工件不可用' }}
+        </el-tag>
+      </div>
+      <div v-if="score88Replay.available" class="natural-summary-grid">
+        <div><span>复现交易</span><strong>{{ fmt(score88Replay.metrics?.trade_count, 0) }}</strong><small>两槽成交</small></div>
+        <div><span>胜率</span><strong>{{ pct(score88Replay.metrics?.win_rate) }}</strong><small>非实盘胜率</small></div>
+        <div><span>平均收益</span><strong>{{ pct(score88Replay.metrics?.avg_trade_return) }}</strong><small>OHLC 代理</small></div>
+        <div><span>盈亏比</span><strong>{{ fmt(score88Replay.metrics?.payoff_ratio, 2) }}</strong><small>研究口径</small></div>
+      </div>
+      <el-alert
+        v-if="score88Replay.audit?.windows?.blind_2026ytd"
+        class="score88-audit-alert"
+        :closable="false"
+        type="warning"
+        show-icon
+        :title="`2026 盲测：${fmt(score88Replay.audit.windows.blind_2026ytd.trade_count, 0)} 笔，胜率 ${pct(score88Replay.audit.windows.blind_2026ytd.win_rate)}，平均收益 ${pct(score88Replay.audit.windows.blind_2026ytd.avg_trade_return)}，盈亏比 ${fmt(score88Replay.audit.windows.blind_2026ytd.payoff_ratio, 2)}；该窗口未达到推广证据标准。`"
+      />
+    </section>
+
     <section class="panel current-shadow-panel">
       <div class="panel-head">
         <div>
@@ -54,6 +80,12 @@
 
     <section class="filters panel">
       <el-form :inline="true" label-position="top">
+        <el-form-item label="数据集">
+          <el-select v-model="query.dataset" class="filter-control" @change="load">
+            <el-option label="旧历史参考" value="reference" />
+            <el-option label="Score88 全历史复现（研究）" value="score88_replay" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="路由">
           <el-select v-model="query.route" class="filter-control" @change="load">
             <el-option label="全部路由" value="all" />
@@ -600,6 +632,7 @@ const replayDate = ref('')
 const curveEl = ref(null)
 let curveChart = null
 const query = reactive({
+  dataset: 'reference',
   route: 'all',
   window: 'all',
   sort_by: 'entry_date',
@@ -618,6 +651,8 @@ const routeMetrics = computed(() => Array.isArray(payload.value.route_metrics) ?
 const windowMetrics = computed(() => Array.isArray(payload.value.window_metrics) ? payload.value.window_metrics : [])
 const marketStyleMetrics = computed(() => Array.isArray(payload.value.market_style_metrics) ? payload.value.market_style_metrics : [])
 const assessment = computed(() => payload.value.replacement_assessment || {})
+const score88Replay = computed(() => payload.value.score88_replay || {})
+const historicalReference = computed(() => payload.value.historical_reference || {})
 const replacementGates = computed(() => Array.isArray(assessment.value.gates) ? assessment.value.gates : [])
 const equityCurve = computed(() => Array.isArray(payload.value.equity_curve) ? payload.value.equity_curve : [])
 const exposure = computed(() => payload.value.exposure_metrics || {})
@@ -663,7 +698,11 @@ const currentAllCandidates = computed(() => (
 const historicalReplayCandidates = computed(() => (
   Array.isArray(payload.value.historical_replay_candidates) ? payload.value.historical_replay_candidates : []
 ))
-const fusionText = computed(() => assessment.value.verdict || 'G3 正在按最终版合同融合 G2 补位能力；观察期内保留深链验收，不再作为独立主策略展示。')
+const fusionText = computed(() => (
+  historicalReference.value.message
+  || assessment.value.verdict
+  || 'G3 正在按最终版合同融合 G2 补位能力；观察期内保留深链验收，不再作为独立主策略展示。'
+))
 const replayDateOptions = computed(() => {
   const dates = new Set()
   trades.value.forEach((row) => {
@@ -848,7 +887,8 @@ function routeStrategyName(row) {
   const names = {
     range_weak_repair: '震荡弱势修复',
     panic_capitulation_repair: '恐慌出清修复',
-    institutional_score120_mainwave: '机构主升Score120',
+    institutional_mainwave_score88: '机构主升Score88',
+    institutional_score120_mainwave: '机构主升Score120（历史）',
     old_g3_strong_breakout: '强势突破',
     mainwave_breakout_offense: '主升/突破进攻',
     volume_runup_supplement: '量能续强补位',

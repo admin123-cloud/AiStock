@@ -13,7 +13,6 @@
     </header>
 
     <el-alert :type="alertType" :closable="false" show-icon :title="statusText" />
-
     <section class="panel management-panel">
       <div class="panel-head">
         <div>
@@ -25,7 +24,7 @@
             真实持仓 {{ realHoldingRows.length }} / 仓位 {{ pct(realAccountPositionPct) }}
           </el-tag>
           <el-button size="small" :loading="brokerLoading" @click="loadBrokerState">刷新真实账户</el-button>
-          <el-button size="small" type="primary" plain :loading="brokerHoldingSyncLoading" @click="syncBrokerHoldingsFromThs">同步同花顺持仓</el-button>
+          <el-button size="small" type="primary" plain :loading="brokerHoldingSyncLoading" @click="syncBrokerHoldingsFromThs">同步QMT真实持仓</el-button>
         </div>
       </div>
       <div class="summary-list broker-summary">
@@ -393,9 +392,9 @@
       </div>
       <div class="ops-grid">
         <div class="ops-card" :class="acceptedObservationDays >= 30 ? 'ok' : 'blocked'">
-          <span>验收观察日</span>
+          <span>Score88 独立验证日</span>
           <strong>{{ acceptedObservationDays }}/30</strong>
-          <small>按当前 2槽/50% 合同重新累计</small>
+          <small>从冻结合同后重新累计，不是最近30日交易数；旧合同快照 {{ legacyObservationCount }} 条不计入</small>
         </div>
         <div class="ops-card" :class="latestObservation?.accepted ? 'ok' : 'blocked'">
           <span>最近快照</span>
@@ -710,6 +709,7 @@ const realAccountBuyCapacityType = computed(() => (
   selectedTicketExecutablePositionPct.value > 0.001 ? 'warning' : 'info'
 ))
 const acceptedObservationDays = computed(() => Number(observationPayload.value?.accepted_observation_days || 0))
+const legacyObservationCount = computed(() => Number(observationPayload.value?.legacy_snapshot_count || 0))
 const latestObservation = computed(() => observationSnapshots.value[0] || null)
 const observationScheduler = computed(() => observationPayload.value?.scheduler || workflowPayload.value?.observation_scheduler || {})
 const parityCount = computed(() => {
@@ -1019,7 +1019,8 @@ function signedPct(value) {
 function pnlTagType(value) {
   const n = Number(value)
   if (!Number.isFinite(n) || Math.abs(n) < 0.0001) return 'info'
-  return n > 0 ? 'success' : 'danger'
+  // A 股行情惯例：上涨显示红色， 下跌显示绿色。
+  return n > 0 ? 'danger' : 'success'
 }
 
 function managementAction(row, paper) {
@@ -1062,7 +1063,8 @@ function exitReasonText(row) {
 function routeLabel(route) {
   const labels = {
     institutional_mainwave: '机构主升浪',
-    institutional_score120_mainwave: '机构主升Score120',
+    institutional_mainwave_score88: '机构主升Score88',
+    institutional_score120_mainwave: '机构主升Score120（历史）',
     panic_repair: '恐慌修复',
     panic_capitulation_repair: '恐慌出清修复',
     range_weak_repair: '震荡弱势修复',
@@ -1154,7 +1156,7 @@ function opportunityText(row) {
   const label = row.sector_diffusion_label || (Number.isFinite(diffusion)
     ? (diffusion >= 80 ? '强扩散' : diffusion >= 65 ? '有效扩散' : diffusion >= 50 ? '观察扩散' : '扩散不足')
     : '扩散未知')
-  if (route === 'institutional_mainwave' || route === 'institutional_score120_mainwave') {
+  if (route === 'institutional_mainwave' || route === 'institutional_mainwave_score88' || route === 'institutional_score120_mainwave') {
     const details = [`机构主升机会落在${sector}`, label]
     if (Number.isFinite(diffusion)) details.push(`扩散分${diffusion.toFixed(1)}`)
     if (row.sector_candidate_count !== undefined && row.sector_candidate_count !== null) details.push(`同板块候选${Number(row.sector_candidate_count).toFixed(0)}只`)
@@ -1248,10 +1250,10 @@ async function syncBrokerHoldingsFromThs() {
   try {
     const result = await syncGen3StateAlphaBrokerHoldingsFromThs({})
     brokerPayload.value = result || {}
-    if (result?.ok) ElMessage.success(`已同步同花顺真实持仓：${brokerHoldings.value.length} 只`)
-    else ElMessage.warning(result?.message || '同步同花顺真实持仓失败')
+    if (result?.ok) ElMessage.success(`已同步QMT真实持仓：${brokerHoldings.value.length} 只`)
+    else ElMessage.warning(result?.message || '同步QMT真实持仓失败')
   } catch (error) {
-    ElMessage.warning(error?.message || '同步同花顺真实持仓失败')
+    ElMessage.warning(error?.message || '同步QMT真实持仓失败')
   } finally {
     brokerHoldingSyncLoading.value = false
   }

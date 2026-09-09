@@ -260,9 +260,18 @@ def enrich_exits(signals: pd.DataFrame) -> pd.DataFrame:
 
 def select_variants(signals: pd.DataFrame) -> dict[str, pd.DataFrame]:
     d = signals.copy()
-    l3 = pd.to_numeric(d.get("l3_rt_strong3_ratio", d.get("l3_s3")), errors="coerce")
-    rt = pd.to_numeric(d.get("rt_return_from_d1_close"), errors="coerce")
-    box = pd.to_numeric(d.get("rt_breakout_vs_box_top"), errors="coerce")
+    def numeric_column(name: str, fallback: str | None = None) -> pd.Series:
+        """Return an index-aligned numeric column when an older source lacks a field."""
+        value = d.get(name)
+        if value is None and fallback:
+            value = d.get(fallback)
+        if not isinstance(value, pd.Series):
+            value = pd.Series(float("nan"), index=d.index, dtype=float)
+        return pd.to_numeric(value, errors="coerce")
+
+    l3 = numeric_column("l3_rt_strong3_ratio", "l3_s3")
+    rt = numeric_column("rt_return_from_d1_close")
+    box = numeric_column("rt_breakout_vs_box_top")
     index_raw = d.get("index_close_ge_ma20")
     if isinstance(index_raw, pd.Series) and index_raw.notna().any():
         index_num = pd.to_numeric(index_raw, errors="coerce")
@@ -273,9 +282,9 @@ def select_variants(signals: pd.DataFrame) -> dict[str, pd.DataFrame]:
     else:
         skeleton = d.get("ma_skeleton_d1", pd.Series("", index=d.index)).astype(str)
         index_ok = skeleton.isin(["bull_stack", "weak_repair"])
-    breadth = pd.to_numeric(d.get("breadth_ma20"), errors="coerce")
+    breadth = numeric_column("breadth_ma20")
     if breadth.isna().all():
-        breadth = pd.to_numeric(d.get("up_rate"), errors="coerce")
+        breadth = numeric_column("up_rate")
     style = d.get("market_style_d1", pd.Series("", index=d.index)).astype(str)
     struct_gate = (
         index_ok

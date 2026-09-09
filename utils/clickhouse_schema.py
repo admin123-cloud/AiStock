@@ -18,6 +18,7 @@ MARKET_TABLE_DDL = [
         industry Nullable(String),
         region Nullable(String),
         list_date Nullable(Date),
+        delist_date Nullable(Date),
         quit UInt8 DEFAULT 0,
         st UInt8 DEFAULT 0,
         industry_code Nullable(String),
@@ -53,6 +54,30 @@ MARKET_TABLE_DDL = [
     ORDER BY (code, trade_date)
     """,
     """
+    CREATE TABLE IF NOT EXISTS kline_daily_intraday
+    (
+        code String,
+        trade_date Date,
+        open Float64,
+        high Float64,
+        low Float64,
+        close Float64,
+        volume Float64 DEFAULT 0,
+        amount Float64 DEFAULT 0,
+        previous_close Nullable(Float64),
+        amplitude Nullable(Float64),
+        change_pct Nullable(Float64),
+        change_amount Nullable(Float64),
+        turnover_rate Nullable(Float64),
+        snapshot_at DateTime('Asia/Shanghai'),
+        source String DEFAULT 'qmt_intraday',
+        is_provisional UInt8 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(snapshot_at)
+    PARTITION BY toYYYYMM(trade_date)
+    ORDER BY (code, trade_date)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS emotion_cycle
     (
         id Int64,
@@ -76,6 +101,95 @@ MARKET_TABLE_DDL = [
     )
     ENGINE = ReplacingMergeTree(updated_at)
     ORDER BY date
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS market_sentiment_snapshot
+    (
+        trade_date Date,
+        snapshot_at DateTime('Asia/Shanghai'),
+        is_provisional UInt8,
+        covered_count UInt32,
+        expected_count UInt32,
+        up_count UInt32,
+        down_count UInt32,
+        unchanged_count UInt32,
+        up_5_count UInt32,
+        down_5_count UInt32,
+        limit_up_count UInt32,
+        limit_down_count UInt32,
+        avg_change_percent Float64,
+        total_amount Float64,
+        sh_amount Float64,
+        sz_amount Float64,
+        bj_amount Float64,
+        bucket_up_7 UInt32,
+        bucket_up_5_7 UInt32,
+        bucket_up_3_5 UInt32,
+        bucket_up_0_3 UInt32,
+        bucket_zero UInt32,
+        bucket_down_0_3 UInt32,
+        bucket_down_3_5 UInt32,
+        bucket_down_5_7 UInt32,
+        bucket_down_7 UInt32,
+        source String
+    )
+    ENGINE = ReplacingMergeTree(snapshot_at)
+    PARTITION BY toYYYYMM(trade_date)
+    ORDER BY (trade_date, is_provisional)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS market_margin_sentiment
+    (
+        trade_date Date,
+        financing_balance Float64,
+        securities_lending_balance Float64,
+        margin_balance Float64,
+        financing_buy Float64,
+        financing_net_buy Float64,
+        source String,
+        updated_at DateTime('Asia/Shanghai')
+    )
+    ENGINE = ReplacingMergeTree(updated_at)
+    ORDER BY trade_date
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS source_sectors
+    (
+        source String,
+        sector_code String,
+        sector_name String,
+        sector_type String,
+        level Int32 DEFAULT 0,
+        canonical_sector_code String DEFAULT '',
+        canonical_sector_name String DEFAULT '',
+        match_method String DEFAULT '',
+        confidence Float64 DEFAULT 0,
+        alias_status String DEFAULT '',
+        snapshot_date Date,
+        snapshot_at DateTime,
+        id String
+    )
+    ENGINE = ReplacingMergeTree(snapshot_at)
+    ORDER BY (source, snapshot_date, sector_code, canonical_sector_code)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS source_sector_stocks
+    (
+        source String,
+        sector_code String,
+        sector_name String,
+        sector_type String,
+        source_stock_code String,
+        canonical_code String,
+        alias_status String DEFAULT '',
+        match_method String DEFAULT '',
+        confidence Float64 DEFAULT 0,
+        snapshot_date Date,
+        snapshot_at DateTime,
+        id String
+    )
+    ENGINE = ReplacingMergeTree(snapshot_at)
+    ORDER BY (source, snapshot_date, sector_code, canonical_code, source_stock_code)
     """,
 ]
 
@@ -245,3 +359,6 @@ def ensure_clickhouse_tables(engine: Engine) -> None:
     with engine.begin() as connection:
         for ddl in [*MARKET_TABLE_DDL, *STRATEGY_TABLE_DDL]:
             connection.execute(text(ddl))
+        # The table predates this field on deployed hosts.  Keep the migration
+        # idempotent so existing historical metadata remains usable.
+        connection.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS delist_date Nullable(Date) AFTER list_date"))

@@ -169,6 +169,8 @@ _v4_monitor_job_id = "v4_manual_holdings_monitor"
 _gen2_shadow_monitor_job_id = "gen2_shadow_buy_monitor"
 _gen2_strategy_refresh_job_id = "gen2_strategy_refresh_30m"
 _gen2_strategy_refresh_lock = threading.Lock()
+GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3 = True
+GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY = "g3_final_with_g2_gap_supplement"
 GEN2_30M_BAR_CLOSE_TIMES = (
     time(10, 0),
     time(10, 30),
@@ -333,8 +335,8 @@ def _read_ths_current_table_text() -> Dict[str, Any]:
     view_desc = {
         "recent_trades": "历史成交",
         "holdings": "持仓",
-        "unknown": "鏈煡琛ㄦ牸",
-    }.get(view_type, "鏈煡琛ㄦ牸")
+        "unknown": "Unknown table",
+    }.get(view_type, "Unknown table")
     return {
         "ok": True,
         "raw_text": raw_text,
@@ -938,13 +940,15 @@ def _save_v4_monitor_state(state: Dict[str, Any]) -> None:
 def _default_gen2_shadow_monitor_state() -> Dict[str, Any]:
     recipient_email = _default_monitor_recipient_email()
     return {
-        "enabled": True,
+        "enabled": False,
+        "integrated_into_g3_final": True,
+        "integration_strategy": GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY,
         "interval_seconds": 120,
         "pool_rank": 200,
         "alpha191_gate": "g2_v2_complete",
         "recipient_email": recipient_email,
         "trading_hours_only": True,
-        "heartbeat_enabled": True,
+        "heartbeat_enabled": False,
         "heartbeat_email_minutes": 30,
         "official_rebuild_enabled": True,
         "official_rebuild_include_breakout": True,
@@ -974,14 +978,20 @@ def _load_gen2_shadow_monitor_state() -> Dict[str, Any]:
         state = _default_gen2_shadow_monitor_state()
     base = _default_gen2_shadow_monitor_state()
     base.update(state)
-    base["enabled"] = bool(base.get("enabled"))
+    if GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3:
+        base["enabled"] = False
+        base["heartbeat_enabled"] = False
+        base["integrated_into_g3_final"] = True
+        base["integration_strategy"] = GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY
+    else:
+        base["enabled"] = bool(base.get("enabled"))
     base["interval_seconds"] = max(120, _to_int(base.get("interval_seconds"), 120))
     base["pool_rank"] = min(500, max(50, _to_int(base.get("pool_rank"), 200)))
     alpha191_gate = str(base.get("alpha191_gate") or "off").strip().lower()
     base["alpha191_gate"] = alpha191_gate if alpha191_gate in GEN2_ALPHA191_ACTIVE_GATES else "off"
     base["recipient_email"] = str(base.get("recipient_email") or "").strip()
     base["trading_hours_only"] = bool(base.get("trading_hours_only"))
-    base["heartbeat_enabled"] = bool(base.get("heartbeat_enabled", True))
+    base["heartbeat_enabled"] = False if GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3 else bool(base.get("heartbeat_enabled", True))
     base["heartbeat_email_minutes"] = max(30, _to_int(base.get("heartbeat_email_minutes"), 30))
     base["official_rebuild_enabled"] = bool(base.get("official_rebuild_enabled", True))
     base["official_rebuild_legacy_330"] = bool(base.get("official_rebuild_legacy_330", True))
@@ -1002,7 +1012,7 @@ def _default_gen2_strategy_refresh_state() -> Dict[str, Any]:
         "enabled": True,
         "trading_hours_only": True,
         "data_delay_minutes": 2,
-        "run_shadow_monitor": True,
+        "run_shadow_monitor": False,
         "run_mainline_hotspots": True,
         "mainline_mode": "sector",
         "mainline_limit": 30,
@@ -1026,7 +1036,7 @@ def _load_gen2_strategy_refresh_state() -> Dict[str, Any]:
     base["enabled"] = bool(base.get("enabled"))
     base["trading_hours_only"] = bool(base.get("trading_hours_only"))
     base["data_delay_minutes"] = min(20, max(0, _to_int(base.get("data_delay_minutes"), 2)))
-    base["run_shadow_monitor"] = bool(base.get("run_shadow_monitor", True))
+    base["run_shadow_monitor"] = False if GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3 else bool(base.get("run_shadow_monitor", False))
     base["run_mainline_hotspots"] = bool(base.get("run_mainline_hotspots", True))
     mode = str(base.get("mainline_mode") or "sector").strip().lower()
     base["mainline_mode"] = mode if mode in {"all", "sector", "theme"} else "sector"
@@ -1986,7 +1996,7 @@ def _run_v4_manual_holdings_monitor(force_send: bool = False, recipient_override
         status_key = _monitor_state_for_row(row)
         next_states[code] = status_key
         before = str(prev_states.get(code) or "")
-        has_alert = ("|1|" in status_key) or status_key.startswith("绂佸姞浠搢") or status_key.startswith("搴斿鐞唡")
+        has_alert = ("|1|" in status_key) or status_key.startswith("No add") or status_key.startswith("Action required")
         if has_alert:
             alert_rows.append(
                 {
@@ -3907,6 +3917,9 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
     state = _load_gen2_shadow_monitor_state()
     now = datetime.now()
     now_text = now.strftime("%Y-%m-%d %H:%M:%S")
+    independent_email_enabled = not GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3
+    state["integrated_into_g3_final"] = bool(GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3)
+    state["integration_strategy"] = GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY
     state["last_error"] = None
     if state.get("trading_hours_only") and not force_send and not _is_trading_session_now(now):
         pending_alerts = _load_gen2_pending_shadow_alerts_for_latest_trade_date(state)
@@ -3922,13 +3935,16 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
                     "filtered_signals": len(rows),
                     "shadow_rows_for_date": len(rows),
                 }
-            _send_gen2_shadow_buy_email(
-                now_text,
-                pending_signal_date,
-                update_result,
-                new_rows,
-                recipient_override=recipient_override or state.get("recipient_email"),
-            )
+            email_sent = False
+            if independent_email_enabled:
+                _send_gen2_shadow_buy_email(
+                    now_text,
+                    pending_signal_date,
+                    update_result,
+                    new_rows,
+                    recipient_override=recipient_override or state.get("recipient_email"),
+                )
+                email_sent = True
             for row in new_rows:
                 key = str(row.get("alert_key") or "")
                 if key:
@@ -3937,7 +3953,8 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
                 last_alert_keys = dict(list(last_alert_keys.items())[-1000:])
             state["last_alert_keys"] = last_alert_keys
             state["last_run_at"] = now_text
-            state["last_email_sent_at"] = now_text
+            if email_sent:
+                state["last_email_sent_at"] = now_text
             state["last_error"] = None
             state["last_result"] = {
                 "skipped": False,
@@ -3946,13 +3963,17 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
                 "signal_date": pending_signal_date,
                 "candidate_count": len(rows),
                 "new_count": len(new_rows),
-                "email_sent": True,
+                "email_sent": email_sent,
+                "integrated_into_g3_final": bool(GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3),
+                "integration_strategy": GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY,
             }
             _save_gen2_shadow_monitor_state(state)
             return {
                 "ok": True,
                 "message": "非交易时段，已发送影子候选补报",
-                "email_sent": True,
+                "email_sent": email_sent,
+                "integrated_into_g3_final": bool(GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3),
+                "integration_strategy": GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY,
                 "new_rows": new_rows,
                 "candidate_count": len(rows),
                 "signal_date": pending_signal_date,
@@ -4048,7 +4069,7 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
         if blocker_result is not None:
             blocker_email_sent = False
             heartbeat_email_sent = False
-            if _is_gen2_official_rebuild_wait_only(blocker_result):
+            if independent_email_enabled and _is_gen2_official_rebuild_wait_only(blocker_result):
                 if _should_send_gen2_heartbeat(state, now, force_send=force_send):
                     _send_gen2_shadow_heartbeat_email(
                         now_text,
@@ -4133,12 +4154,16 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
         blocker_email_sent = False
         last_blocker_at = str(state.get("last_blocker_alert_at") or "").strip()
         send_blocker = bool(force_send)
+        if not independent_email_enabled:
+            send_blocker = False
         if not send_blocker:
             try:
                 last_dt = datetime.strptime(last_blocker_at, "%Y-%m-%d %H:%M:%S") if last_blocker_at else None
                 send_blocker = last_dt is None or (now - last_dt).total_seconds() >= 15 * 60
             except Exception:
                 send_blocker = True
+        if not independent_email_enabled:
+            send_blocker = False
         if send_blocker:
             _send_gen2_blocker_email(
                 now_text,
@@ -4196,12 +4221,16 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
     if blocker_result.get("blockers"):
         last_blocker_at = str(state.get("last_blocker_alert_at") or "").strip()
         send_blocker = bool(force_send)
+        if not independent_email_enabled:
+            send_blocker = False
         if not send_blocker:
             try:
                 last_dt = datetime.strptime(last_blocker_at, "%Y-%m-%d %H:%M:%S") if last_blocker_at else None
                 send_blocker = last_dt is None or (now - last_dt).total_seconds() >= 15 * 60
             except Exception:
                 send_blocker = True
+        if not independent_email_enabled:
+            send_blocker = False
         if send_blocker:
             _send_gen2_blocker_email(
                 now_text,
@@ -4251,7 +4280,7 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
     new_rows = [row for row in rows if force_send or row.get("alert_key") not in last_alert_keys]
     email_sent = False
     heartbeat_email_sent = False
-    if new_rows:
+    if new_rows and independent_email_enabled:
         _send_gen2_shadow_buy_email(
             now_text,
             pipeline_signal_date,
@@ -4264,7 +4293,7 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
             key = str(row.get("alert_key") or "")
             if key:
                 last_alert_keys[key] = now_text
-    elif _should_send_gen2_heartbeat(state, now, force_send=force_send):
+    elif independent_email_enabled and _should_send_gen2_heartbeat(state, now, force_send=force_send):
         _send_gen2_shadow_heartbeat_email(
             now_text,
             pipeline_signal_date,
@@ -4296,6 +4325,8 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
         "new_count": len(new_rows),
         "email_sent": email_sent,
         "heartbeat_email_sent": heartbeat_email_sent,
+        "integrated_into_g3_final": bool(GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3),
+        "integration_strategy": GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY,
         "promotion_snapshot": promotion_snapshot_result,
         "official_rebuild": official_rebuild_result,
         "blocker_check": blocker_result,
@@ -4307,6 +4338,8 @@ def _run_gen2_shadow_buy_monitor(force_send: bool = False, recipient_override: O
         "email_sent": email_sent,
         "heartbeat_email_sent": heartbeat_email_sent,
         "blocker_email_sent": blocker_email_sent,
+        "integrated_into_g3_final": bool(GEN2_SHADOW_MONITOR_INTEGRATED_INTO_G3),
+        "integration_strategy": GEN2_SHADOW_MONITOR_INTEGRATION_STRATEGY,
         "blocker_check": blocker_result,
         "promotion_snapshot": promotion_snapshot_result,
         "official_rebuild": official_rebuild_result,

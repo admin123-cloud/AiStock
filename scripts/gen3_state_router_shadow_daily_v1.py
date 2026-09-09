@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -26,6 +27,7 @@ from scripts.gen3_build_four_path_candidates import (  # noqa: E402
     _with_entry_date,
 )
 from scripts.gen3_institutional_mainwave_current_v1 import build_current_candidates as _institutional_current_candidates  # noqa: E402
+from scripts.gen3_mainwave_breakout_current_v1 import build_current_breakout_candidates as _breakout_current_candidates  # noqa: E402
 from scripts.gen3_update_panic_shadow import (  # noqa: E402
     _attach_intraday_confirmation as _panic_intraday_confirmation,
     _build_daily_candidates as _panic_daily_candidates,
@@ -34,7 +36,14 @@ from scripts.gen3_update_panic_shadow import (  # noqa: E402
     _prev_index_trade_date,
 )
 from scheduler.trading_calendar import TradingCalendar  # noqa: E402
+from utils.g3_mainwave_confirmation import (  # noqa: E402
+    FORMAL_CONFIRMATION_NAME,
+    confirmation_contract_metadata,
+    is_confirmation_data_wall,
+)
+from utils.market_warehouse import clickhouse_query_df  # noqa: E402
 from utils.paths import report_path, runtime_path  # noqa: E402
+from utils.strategy_contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata  # noqa: E402
 
 
 OUT_DIR = report_path("gen3_state_router_shadow_daily_v1")
@@ -42,31 +51,38 @@ RUNTIME_DIR = runtime_path("gen3_state_router_shadow")
 STATE_ALPHA_RUNTIME_DIR = runtime_path("gen3_state_alpha")
 DAILY_ARCHIVE_DIR = OUT_DIR / "daily_archive"
 MARKET_CONTEXT_ARCHIVE = report_path("gen3_four_path_independent_candidates", "market_context.csv")
-INSTITUTIONAL_REPLAY = report_path("gen3_score120_core_strategy_v1", "g3_route_execution_mandate_candidate_closed_trades.csv")
+INSTITUTIONAL_REPLAY = report_path("gen3_score120_formal_institutional_source_v1", "closed_trades.csv")
 CURRENT_WAVE_SCAN_SUMMARY = report_path("current_wave_style_candidate_scan_v1", "summary.json")
+INSTITUTIONAL_CURRENT_SUMMARY = runtime_path("gen3_institutional_mainwave_current", "latest_summary.json")
 MODE_TRADE_LIBRARY = report_path("gen3_market_mode_router_v1", "mode_trade_library.csv")
 G2_GAP_SUPPLEMENT_LIVE_DIR = report_path("gen2_risk_cool_shadow_ledger", "live_updates")
 G2_GAP_SUPPLEMENT_LEDGER = report_path("gen2_risk_cool_shadow_ledger", "shadow_ledger.csv")
 G2_V2_COMPLETE_SOURCE = report_path("gen2_v2_complete_strategy", "sources", "g2_v2_complete.parquet")
 G2_VOLUME5_ALPHA191_SOURCE = report_path("gen2_alpha191_light_constraint_matrix", "sources", "volume5_keep80_runup_le100.parquet")
-FINAL_G3_STRATEGY_ID = "g3_final_with_g2_gap_supplement"
-FINAL_G3_STRATEGY_NAME = "G3 Full Formal Policy"
-FINAL_G3_STRATEGY_NAME_CN = "G3最终版"
+CURRENT_INDEX_CODE_FALLBACK = "000001.SH"
+FORMAL_G3_CONTRACT = formal_g3_score88_contract()
+FINAL_G3_STRATEGY_ID = FORMAL_G3_CONTRACT["strategy_id"]
+FINAL_G3_STRATEGY_NAME = "G3 Institutional Mainwave Score88 30m Volume Breakout and Cash"
+FINAL_G3_STRATEGY_NAME_CN = "G3机构主升 Score88"
 FINAL_G3_LEGACY_BASE_PROFILE = "g3_final_top2_mainwave_sector_exempt_v1"
-FINAL_G3_PROFILE = "g3_final_with_g2_gap_supplement"
+FINAL_G3_PROFILE = FINAL_G3_STRATEGY_ID
 FINAL_G3_FORMAL_POLICY = "mainwave_hard_le_5_50"
-FULL_G3_ONLY_MODE = True
+FULL_G3_ONLY_MODE = False
 FULL_G3_DISABLED_SOURCE_NAMES = [
     "panic_current_builder",
     "old_g3_current_builder_v1",
     "g2_gap_supplement_current_builder_v1",
 ]
 FINAL_G3_PROFILE_NAME = "G3最终版：二槽主升 + G2空档补位"
-FINAL_G3_PROFILE_NAME = "G3 Full Formal Policy: mainwave_hard_le_5_50"
+FINAL_G3_PROFILE_NAME = "G3 Institutional Mainwave + Cash"
 G2_GAP_SUPPLEMENT_LIVE_ENABLED = False
 G2_GAP_SUPPLEMENT_RETIRE_REASON = "historical_replay_negative_and_no_portfolio_improvement_retired_from_live_trading_2026_06_21"
+G2_GAP_SUPPLEMENT_REENABLE_REASON = ""
+BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
+FIRST_COMPLETED_30M_TIME = dt_time(10, 0)
 
 TRADE_STRATEGY_LABELS = {
+    "institutional_mainwave_score88": "机构主升Score88",
     "institutional_score120_mainwave": "机构主升Score120",
     "old_g3_strong_breakout": "强势突破",
     "volume_runup_supplement": "量能续强补位",
@@ -200,21 +216,90 @@ def _calendar_entry_date(value: str) -> str:
         return base
 
 
-def _resolve_entry_date(value: str) -> tuple[str, str]:
-    if value:
-        entry_date = _calendar_entry_date(value)
-        return entry_date, _calendar_prev_trade_date(entry_date)
+def _entry_date_from_current_calendar() -> tuple[str, str, str]:
+    now = datetime.now(BUSINESS_TZ)
+    try:
+        if TradingCalendar.is_trading_day(now) and now.time() >= FIRST_COMPLETED_30M_TIME:
+            current_day = now.strftime("%Y-%m-%d")
+            return current_day, _calendar_prev_trade_date(current_day), "current_trade_day_first_completed_30m"
+        entry_dt = now if TradingCalendar.is_trading_day(now) else TradingCalendar.get_next_trading_day(now)
+        entry_date = entry_dt.strftime("%Y-%m-%d")
+        decision_date = _calendar_prev_trade_date(entry_date)
+        return entry_date, decision_date, "trading_calendar_current_day"
+    except Exception:
+        return "", "", "trading_calendar_current_day_failed"
+
+
+def _is_recent_date(value: str, max_calendar_days: int = 14) -> bool:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return False
+    today = pd.Timestamp(datetime.now()).normalize()
+    return abs((today - ts.normalize()).days) <= int(max_calendar_days)
+
+
+def _entry_date_from_institutional_current_summary() -> tuple[str, str, str]:
+    if not INSTITUTIONAL_CURRENT_SUMMARY.exists():
+        return "", "", "missing_institutional_current_summary"
+    try:
+        summary = json.loads(INSTITUTIONAL_CURRENT_SUMMARY.read_text(encoding="utf-8"))
+    except Exception:
+        return "", "", "invalid_institutional_current_summary"
+    entry_date = _date_text(summary.get("entry_date"))
+    decision_date = _date_text(summary.get("decision_date"))
+    if not entry_date or not decision_date:
+        return "", "", "institutional_current_summary_missing_dates"
+    if not _is_recent_date(entry_date):
+        return "", "", "institutional_current_summary_stale"
+    return entry_date, decision_date, "institutional_current_summary"
+
+
+def _entry_date_from_latest_index_trade_date() -> tuple[str, str, str]:
     try:
         latest = _latest_index_trade_date()
-        if not latest:
-            return "", ""
-        next_date = _calendar_next_trade_date(latest)
-        if next_date and next_date <= latest:
-            next_date = ""
-        entry_date = next_date or latest
-        decision_date = _calendar_prev_trade_date(entry_date)
-        return entry_date, decision_date
+        if latest and _is_recent_date(latest):
+            next_date = _calendar_next_trade_date(latest)
+            if next_date and next_date <= latest:
+                next_date = ""
+            entry_date = next_date or latest
+            decision_date = _calendar_prev_trade_date(entry_date)
+            if entry_date and decision_date:
+                return entry_date, decision_date, "latest_index_trade_date"
     except Exception:
+        pass
+    return "", "", "latest_index_trade_date_unavailable"
+
+
+def _resolve_entry_date(value: str) -> tuple[str, str]:
+    entry_date, decision_date, _ = _resolve_entry_date_with_source(value)
+    return entry_date, decision_date
+
+
+def _resolve_entry_date_with_source(value: str) -> tuple[str, str, str]:
+    if value:
+        entry_date = _calendar_entry_date(value)
+        return entry_date, _calendar_prev_trade_date(entry_date), "explicit_entry_date"
+
+    calendar_entry_date, calendar_decision_date, calendar_source = _entry_date_from_current_calendar()
+    if (
+        calendar_entry_date
+        and calendar_decision_date
+        and calendar_source == "current_trade_day_first_completed_30m"
+    ):
+        return calendar_entry_date, calendar_decision_date, calendar_source
+
+    entry_date, decision_date, source = _entry_date_from_latest_index_trade_date()
+    if entry_date and decision_date:
+        return entry_date, decision_date, source
+
+    entry_date, decision_date, source = _entry_date_from_institutional_current_summary()
+    if entry_date and decision_date:
+        return entry_date, decision_date, source
+
+    if calendar_entry_date and calendar_decision_date:
+        return calendar_entry_date, calendar_decision_date, calendar_source
+
+    try:
         if CURRENT_WAVE_SCAN_SUMMARY.exists():
             summary = json.loads(CURRENT_WAVE_SCAN_SUMMARY.read_text(encoding="utf-8"))
             decision_date = _date_text(summary.get("target_date", ""))
@@ -223,8 +308,66 @@ def _resolve_entry_date(value: str) -> tuple[str, str]:
             entry_date = _calendar_entry_date(raw_entry_date)
             decision_date = _calendar_prev_trade_date(entry_date)
             if entry_date and decision_date:
-                return entry_date, decision_date
-        return "", ""
+                return entry_date, decision_date, "current_wave_scan_summary"
+    except Exception:
+        pass
+    return "", "", "unresolved"
+
+
+def _load_index_daily_for_current_context(start_date: str, end_date: str) -> tuple[pd.DataFrame, str]:
+    last_error = ""
+    for index_code in [INDEX_CODE, CURRENT_INDEX_CODE_FALLBACK]:
+        try:
+            df = clickhouse_query_df(
+                """
+                SELECT trade_date, open, high, low, close, volume, amount, turnover_rate
+                FROM kline_daily
+                WHERE code = %(index_code)s
+                  AND trade_date BETWEEN subtractDays(toDate(%(start_date)s), 260) AND toDate(%(end_date)s)
+                ORDER BY trade_date
+                """,
+                {"index_code": index_code, "start_date": start_date, "end_date": end_date},
+            )
+            if df.empty:
+                last_error = f"No index daily data loaded for {index_code}"
+                continue
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            for col in ["open", "high", "low", "close", "volume", "amount", "turnover_rate"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            out = df.dropna(subset=["trade_date", "close"]).sort_values("trade_date").reset_index(drop=True)
+            if out.empty:
+                last_error = f"No valid index daily rows for {index_code}"
+                continue
+            return out, index_code
+        except Exception as exc:
+            last_error = str(exc)
+    raise RuntimeError(last_error or "No index daily data loaded")
+
+
+def _load_trade_dates_for_current_context(start_date: str, end_date: str) -> tuple[list[str], str]:
+    last_error = ""
+    for index_code in [INDEX_CODE, CURRENT_INDEX_CODE_FALLBACK]:
+        try:
+            d = clickhouse_query_df(
+                """
+                SELECT DISTINCT trade_date
+                FROM kline_daily
+                WHERE code = %(index_code)s
+                  AND trade_date BETWEEN subtractDays(toDate(%(start_date)s), 260) AND toDate(%(end_date)s)
+                ORDER BY trade_date
+                """,
+                {"index_code": index_code, "start_date": start_date, "end_date": end_date},
+            )
+            if d.empty:
+                last_error = f"No trade dates found for {index_code}"
+                continue
+            dates = pd.to_datetime(d["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d").dropna().tolist()
+            if dates:
+                return dates, index_code
+            last_error = f"No valid trade dates found for {index_code}"
+        except Exception as exc:
+            last_error = str(exc)
+    raise RuntimeError(last_error or "No trade dates found")
 
 
 def _current_market_context(decision_date: str, min_amount20: float, max_codes: int) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -233,11 +376,11 @@ def _current_market_context(decision_date: str, min_amount20: float, max_codes: 
     try:
         stocks = _load_stock_daily(decision_date, decision_date, max_codes=max_codes)
         features = _add_stock_features(stocks)
-        index = _load_index_daily(decision_date, decision_date)
+        index, index_code = _load_index_daily_for_current_context(decision_date, decision_date)
         context = _build_market_context(features, _add_index_features(index), min_amount20=min_amount20)
         context = context[pd.to_datetime(context["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d").eq(decision_date)].copy()
         context = context.drop_duplicates(subset=["trade_date"], keep="last")
-        return context, {"ok": True, "source": "clickhouse_rebuilt", "rows": int(len(context))}
+        return context, {"ok": True, "source": "clickhouse_rebuilt", "index_code": index_code, "rows": int(len(context))}
     except Exception as exc:
         archived = _read_csv(MARKET_CONTEXT_ARCHIVE)
         if not archived.empty and "trade_date" in archived.columns:
@@ -406,8 +549,10 @@ def _infer_trade_strategy(item: dict[str, Any]) -> tuple[str, str, str]:
     g3_chain = str(item.get("g3_chain") or item.get("route_source") or "")
 
     if route == "institutional_mainwave":
-        key = "institutional_score120_mainwave"
-        return key, TRADE_STRATEGY_LABELS[key], "机构主升浪Score120核心"
+        if str(item.get("entry_mode") or "") == "breakout_initiation":
+            return "mainwave_breakout_initiation", "前高突破启动", "前高突破+30m承接"
+        key = "institutional_mainwave_score88"
+        return key, TRADE_STRATEGY_LABELS[key], "机构主升Score88核心"
     if route == "g2_gap_supplement":
         key = "volume_runup_supplement"
         source = "G2量能续强+板块加分" if bool(item.get("sector_bonus", False)) else "G2量能续强"
@@ -464,15 +609,21 @@ def _build_shadow_tickets(selected: pd.DataFrame, summary: dict[str, Any]) -> pd
         m30_above_ma20 = _safe_num(item.get("m30_close_above_ma20"))
         m30_ma20_proxy = round(reference_close / (1.0 + m30_above_ma20), 4) if reference_close and m30_above_ma20 is not None and (1.0 + m30_above_ma20) > 0 else None
 
-        if route == "institutional_mainwave":
+        if route == "institutional_mainwave" and str(item.get("entry_mode") or "") == "breakout_initiation":
+            position_pct = 0.50; max_position_pct = 0.50
+            structure_stop = _pct_price(reference_close, -0.04)
+            hard_stop = _pct_price(reference_close, -0.04)
+            take_profit_1 = _pct_price(reference_close, 0.10); take_profit_1_ratio = 0.5
+            exit_contract = "breakout initiation: entry after the first completed entry-day 30m bar confirms MA20 acceptance; -4% hard stop; +10% sell half; remaining exits on previous-day low break confirmed by 30m."
+        elif route == "institutional_mainwave":
             position_pct = 0.50
             max_position_pct = 0.50
-            stop_candidates = [x for x in [decision_low, m30_ma20_proxy, _pct_price(reference_close, -0.12)] if x is not None and x > 0]
-            structure_stop = round(max(stop_candidates), 4) if stop_candidates else _pct_price(reference_close, -0.12)
-            hard_stop = _pct_price(reference_close, -0.12)
-            take_profit_1 = _pct_price(reference_close, 0.12)
+            stop_candidates = [x for x in [decision_low, m30_ma20_proxy, _pct_price(reference_close, -0.10)] if x is not None and x > 0]
+            structure_stop = round(max(stop_candidates), 4) if stop_candidates else _pct_price(reference_close, -0.10)
+            hard_stop = _pct_price(reference_close, -0.10)
+            take_profit_1 = _pct_price(reference_close, 0.10)
             take_profit_1_ratio = 0.5
-            exit_contract = "institutional mainwave dynamic contract: 2 slots, 50% slot; index_mom60<=5%; after 2 consecutive closed institutional_mainwave losses, pause new buys for at least 3 trading days, reopen only after market recovery signal or max 15 trading-day recheck; 30m hard stop -12%; take +12% sell half; previous-day low exits remaining."
+            exit_contract = "institutional mainwave: wave_style_score>=88, index_mom60<=5%, same-day industry mainwave count>=2, then first completed 30m volume breakout of prior-20-bar high; 2 slots at 50%; -10% hard stop; +10% sell half; remaining exits on previous-day low break confirmed by 30m."
         elif route == "g2_gap_supplement":
             position_pct = 0.50
             max_position_pct = 0.50
@@ -531,6 +682,7 @@ def _build_shadow_tickets(selected: pd.DataFrame, summary: dict[str, Any]) -> pd
                 "name": item.get("name") or item.get("stock_name", ""),
                 "route": route,
                 "route_label": item.get("route_label", ""),
+                "entry_mode": item.get("entry_mode", "mainwave_continuation"),
                 "trade_strategy": trade_strategy,
                 "trade_strategy_label": trade_strategy_label,
                 "source_strategy_label": source_strategy_label,
@@ -579,6 +731,13 @@ def _build_shadow_tickets(selected: pd.DataFrame, summary: dict[str, Any]) -> pd
                 "wave_style_score": _safe_num(item.get("wave_style_score")),
                 "m30_confirmed": bool(item.get("m30_confirmed", False)),
                 "m30_status": item.get("m30_status", ""),
+                "m30_source": item.get("m30_source", ""),
+                "m30_visibility_status": item.get("m30_visibility_status", ""),
+                "m30_source_ok": bool(item.get("m30_source_ok", False)),
+                "m30_main_rows": int(_safe_num(item.get("m30_main_rows")) or 0),
+                "m30_stage_rows": int(_safe_num(item.get("m30_stage_rows")) or 0),
+                "m30_recovered_rows": int(_safe_num(item.get("m30_recovered_rows")) or 0),
+                "m30_conflict_rows": int(_safe_num(item.get("m30_conflict_rows")) or 0),
                 "inst_regime_ok": bool(item.get("inst_regime_ok", False)),
                 "block_reason": item.get("block_reason", ""),
                 "shadow_status": "qualified_shadow_buy" if qualified else "blocked_shadow_observe",
@@ -607,6 +766,36 @@ def _append_shadow_ledger(runtime_dir: Path, tickets: pd.DataFrame, append_allow
         return ledger
     if tickets.empty:
         return ledger
+
+    # Refreshes rebuild candidate fields, but a matching row may already have
+    # been promoted to an open paper position by the tick monitor.  Preserve
+    # those execution fields before de-duplicating, otherwise `keep=last`
+    # below silently turns an open shadow holding back into a planned ticket.
+    execution_columns = [
+        "trade_status", "position_status", "last_state", "shadow_status",
+        "entry_price", "entry_datetime", "entry_quantity", "entry_notional",
+        "entry_position_pct", "paper_execution_id", "repair_tag", "repair_updated_at",
+        "exit_date", "exit_datetime", "exit_price", "exit_reason", "realized_ret",
+        "remaining_position_pct", "half_take_profit_done", "last_exit_date",
+        "last_exit_datetime", "last_exit_price", "last_exit_reason",
+    ]
+    if not ledger.empty:
+        key_columns = [col for col in ["entry_date", "code", "route"] if col in ledger.columns and col in tickets.columns]
+        if len(key_columns) == 3:
+            existing_by_key = {
+                tuple(str(row.get(col) or "").strip() for col in key_columns): row
+                for row in ledger.to_dict(orient="records")
+            }
+            preserved_rows = []
+            for ticket in tickets.to_dict(orient="records"):
+                existing = existing_by_key.get(tuple(str(ticket.get(col) or "").strip() for col in key_columns))
+                paper_execution_id = str((existing or {}).get("paper_execution_id") or "").strip()
+                if existing and paper_execution_id:
+                    for column in execution_columns:
+                        if column in existing:
+                            ticket[column] = existing.get(column)
+                preserved_rows.append(ticket)
+            tickets = pd.DataFrame(preserved_rows)
 
     combined = pd.concat([ledger, tickets], ignore_index=True, sort=False) if not ledger.empty else tickets.copy()
     logical_key = [col for col in ["entry_date", "code", "route"] if col in combined.columns]
@@ -828,14 +1017,90 @@ def _institutional_current_source(
     return rows, meta
 
 
+def _source_meta_data_wall(meta: dict[str, Any], *, active: bool = True) -> tuple[bool, str]:
+    """Classify source-builder failures without turning them into no-trade."""
+
+    if not active:
+        return False, ""
+    status = str(meta.get("status") or "").strip().lower()
+    if status in {"failed", "error", "builder_failed", "source_failed"}:
+        return True, status
+    snapshot = meta.get("candidate_snapshot") if isinstance(meta.get("candidate_snapshot"), dict) else {}
+    snapshot_write = snapshot.get("write") if isinstance(snapshot.get("write"), dict) else {}
+    snapshot_status = str(snapshot.get("status") or "").strip().lower()
+    write_status = str(snapshot_write.get("status") or "").strip().lower()
+    if snapshot_status in {"snapshot_read_failed", "snapshot_empty_or_invalid"}:
+        return True, snapshot_status
+    if write_status == "snapshot_write_failed":
+        return True, write_status
+    return False, ""
+
+
+def _entry_first_bar_confirmation_window(entry_date: str) -> bool:
+    entry = _date_text(entry_date)
+    now = datetime.now(BUSINESS_TZ)
+    return bool(entry and entry == now.strftime("%Y-%m-%d") and now.time() >= FIRST_COMPLETED_30M_TIME)
+
+
+def _summarize_source_data_walls(source_meta: list[dict[str, Any]], entry_date: str) -> dict[str, Any]:
+    live_confirmation_window = _entry_first_bar_confirmation_window(entry_date)
+    rows: list[dict[str, Any]] = []
+    for meta in source_meta:
+        if not isinstance(meta, dict):
+            continue
+        source = str(meta.get("source") or "")
+        status = str(meta.get("status") or "").strip().lower()
+        active = status != "retired_from_runtime" and source == "institutional_mainwave_current_builder_v1"
+        has_wall, reason = _source_meta_data_wall(meta, active=active)
+        snapshot = meta.get("candidate_snapshot") if isinstance(meta.get("candidate_snapshot"), dict) else {}
+        snapshot_status = str(snapshot.get("status") or "").strip().lower()
+        snapshot_required = bool(meta.get("candidate_snapshot_required"))
+        snapshot_loaded = bool(meta.get("candidate_snapshot_loaded"))
+        if active and live_confirmation_window and snapshot_required and not snapshot_loaded:
+            has_wall = True
+            reason = snapshot_status or "candidate_snapshot_required_not_loaded"
+        if not has_wall:
+            continue
+        rows.append(
+            {
+                "source": source,
+                "status": status,
+                "reason": reason,
+                "rows": int(meta.get("rows") or 0),
+                "candidate_snapshot_required": snapshot_required,
+                "candidate_snapshot_loaded": snapshot_loaded,
+                "candidate_snapshot_status": snapshot_status,
+            }
+        )
+    reasons = sorted({str(item.get("reason") or "") for item in rows if str(item.get("reason") or "")})
+    return {
+        "count": int(len(rows)),
+        "rows": rows,
+        "reasons": reasons,
+        "builder_failure": any(str(item.get("status") or "") in {"failed", "error", "builder_failed", "source_failed"} for item in rows),
+        "candidate_snapshot_failure": any(str(item.get("reason") or "").startswith("snapshot_") or str(item.get("reason") or "") == "candidate_snapshot_required_not_loaded" for item in rows),
+        "live_confirmation_window": live_confirmation_window,
+    }
+
+
+def _breakout_current_source(entry_date: str, decision_date: str, top_n: int, min_amount20: float) -> tuple[pd.DataFrame, dict[str, Any]]:
+    rows, meta = _breakout_current_candidates(entry_date=entry_date, decision_date=decision_date, min_amount20=min_amount20, top_n=top_n)
+    if rows.empty:
+        return rows, meta
+    # Shares the mainwave health ledger and cooldown discipline, but remains a
+    # distinct entry mode with its own loss budget.
+    rows, meta = _apply_route_health(rows, "institutional_mainwave", entry_date, meta)
+    return rows, meta
+
+
 def _old_g3_current_source(entry_date: str, decision_date: str, top_n: int, min_amount20: float, max_codes: int) -> tuple[pd.DataFrame, dict[str, Any]]:
     if not entry_date or not decision_date:
         return pd.DataFrame(), {"source": "old_g3_current_builder_v1", "rows": 0, "status": "missing_dates"}
     try:
-        trade_dates = _load_trade_dates(decision_date, entry_date)
+        trade_dates, index_code = _load_trade_dates_for_current_context(decision_date, entry_date)
         stocks = _load_stock_daily(decision_date, decision_date, max_codes=max_codes)
         features = _add_stock_features(stocks)
-        index = _load_index_daily(decision_date, decision_date)
+        index, _ = _load_index_daily_for_current_context(decision_date, decision_date)
         context = _build_market_context(features, _add_index_features(index), min_amount20=min_amount20)
         candidates = _select_four_path_candidates(features, context, top_n=top_n, min_amount20=min_amount20)
         candidates = _with_entry_date(candidates, trade_dates)
@@ -871,6 +1136,7 @@ def _old_g3_current_source(entry_date: str, decision_date: str, top_n: int, min_
         "eligible_rows": int(candidates["router_eligible"].fillna(False).astype(bool).sum()),
         "blocked_rows": int((~candidates["router_eligible"].fillna(False).astype(bool)).sum()),
         "status": "current_rebuilt",
+        "index_code": index_code,
     }
     candidates, meta = _apply_route_health(candidates, "old_g3_route_v3", entry_date, meta)
     eligible_rows = int(candidates["router_eligible"].fillna(False).astype(bool).sum())
@@ -996,7 +1262,7 @@ def _g2_gap_supplement_source(entry_date: str, top_n: int) -> tuple[pd.DataFrame
 
 def _route_order(context: pd.DataFrame, available: set[str]) -> tuple[list[str], str]:
     if context.empty:
-        return [m for m in ["panic_repair", "institutional_mainwave", "old_g3_route_v3"] if m in available], "missing_market_context_default_priority"
+        return [m for m in ["institutional_mainwave"] if m in available], "missing_market_context_default_priority"
     row = context.iloc[0]
     style = str(row.get("market_style") or "")
     up_rate = _safe_float(row.get("up_rate"))
@@ -1088,7 +1354,7 @@ def _select_router_candidates(all_rows: pd.DataFrame, context: pd.DataFrame) -> 
             "reason": "no_router_eligible_source_candidates",
             "available_routes": sorted(set(all_rows["route"].astype(str))),
         }
-    available = set(eligible["route"].astype(str))
+    available = set(eligible["route"].astype(str)) & {"institutional_mainwave"}
     modes, reason = _route_order(context, available)
     if not modes:
         return all_rows.iloc[0:0].copy(), {"selected_route": "", "reason": reason, "available_routes": sorted(available)}
@@ -1111,24 +1377,6 @@ def _select_router_candidates(all_rows: pd.DataFrame, context: pd.DataFrame) -> 
         if len(picked_rows) >= 2:
             break
     supplement_rows = 0
-    if G2_GAP_SUPPLEMENT_LIVE_ENABLED and len(picked_rows) < 2 and "g2_gap_supplement" in available:
-        supplement = eligible[eligible["route"].astype(str).eq("g2_gap_supplement")].copy()
-        supplement["_score_sort"] = pd.to_numeric(supplement.get("score"), errors="coerce").fillna(-1e9)
-        supplement = supplement.sort_values(["_score_sort", "code"], ascending=[False, True]).copy()
-        for row in supplement.to_dict("records"):
-            sector = _sector_key(row)
-            if any(str(picked.get("code") or "") == str(row.get("code") or "") for picked in picked_rows):
-                skipped_duplicate_code += 1
-                continue
-            if sector and any(_sector_key(picked) == sector and not _allow_same_sector(row, picked) for picked in picked_rows):
-                skipped_same_sector += 1
-                continue
-            row["supplement_role"] = "g2_gap_fill_after_g3_primary"
-            row["route_pick_rank"] = 90
-            picked_rows.append(row)
-            supplement_rows += 1
-            if len(picked_rows) >= 2:
-                break
     selected = pd.DataFrame(picked_rows, columns=ranked.columns).drop(columns=["_score_sort"], errors="ignore")
     if not selected.empty:
         sector_counts = selected.apply(lambda row: _sector_key(row.to_dict()), axis=1).value_counts().to_dict()
@@ -1229,7 +1477,7 @@ def _route_diagnostics(all_rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def _strategy_contract() -> dict[str, Any]:
-    return {
+    contract = {
         "strategy_id": FINAL_G3_STRATEGY_ID,
         "legacy_research_strategy_id": "g3_market_state_router_strategy_v1",
         "strategy_name": FINAL_G3_STRATEGY_NAME,
@@ -1247,7 +1495,7 @@ def _strategy_contract() -> dict[str, Any]:
                 "shadow ledger must record planned/fill/exit states without missing trigger timestamps",
                 "30m confirmation freshness must be available before a qualified shadow buy",
                 "route health must be recorded as observation-only diagnostics and must not hard-block qualified shadow buys",
-                "account risk gate must allow new buys: MTM drawdown and consecutive realized loss; institutional_mainwave must also pass its dynamic consecutive-loss cooldown",
+            "account risk gate must allow new buys: MTM drawdown and consecutive realized loss; no legacy mainwave cooldown gate applies",
                 "exit replay must prove structure stop and hard stop are observable before order integration",
             ],
         },
@@ -1257,17 +1505,17 @@ def _strategy_contract() -> dict[str, Any]:
             "position_framework": "2_slots_compound_default",
             "slots": 2,
             "slot_pct": 0.50,
-            "trade_strategy_framework": "4_live_strategies_plus_g2_observation",
-            "trade_strategy_count": 4,
-            "observation_strategy_count": 1,
+            "trade_strategy_framework": "institutional_mainwave_plus_cash",
+            "trade_strategy_count": 1,
+            "observation_strategy_count": 4,
             "institutional_mainwave_position_pct": 0.50,
             "panic_capitulation_repair_position_pct": 0.25,
             "panic_capitulation_repair_max_position_pct": 0.50,
-            "range_weak_repair_position_pct": 0.50,
-            "old_g3_route_position_pct": 0.50,
             "max_single_name_position_pct": 0.50,
+            "cash_is_valid_decision": True,
+            "cash_policy": "no qualified institutional_mainwave candidate means no new position",
             "g2_gap_supplement_position_pct": 0.0,
-            "g2_gap_supplement_role": "retired from live trading; observation and historical attribution only",
+            "g2_gap_supplement_role": "retired from live/shadow/paper entry; historical attribution only",
             "same_sector_policy": "allow same sector only when both selected candidates are institutional_mainwave; otherwise skip duplicated sector exposure",
         },
         "trade_strategy_policy": [
@@ -1291,15 +1539,15 @@ def _strategy_contract() -> dict[str, Any]:
             }
         ],
         "exit_contract": {
-            "source": "g2_stop_structure_cooldown_migrated",
+            "source": "institutional_mainwave_30m_volume_breakout_contract_v1",
             "hard_stop": {
                 "type": "m30_hard_stop",
-                "loss_pct": 0.12,
+                "loss_pct": 0.10,
                 "action": "sell_all",
             },
             "take_profit": {
                 "type": "m30_take_profit_partial",
-                "profit_pct": 0.12,
+                "profit_pct": 0.10,
                 "sell_ratio": 0.50,
             },
             "structure_exit": {
@@ -1308,12 +1556,8 @@ def _strategy_contract() -> dict[str, Any]:
                 "action": "sell_remaining",
             },
             "cooldown": {
-                "policy": "institutional_mainwave_consecutive_loss_dynamic_recovery",
-                "trigger": "consecutive_closed_institutional_mainwave_loss_count>=2",
-                "min_cooldown_trading_days": 3,
-                "release_condition": "index_mom60<=5% and (index_close>=index_ma20 or index_mom20>=0) and a current institutional_mainwave candidate still passes sector diffusion plus 30m confirmation",
-                "max_recheck_trading_days": 15,
-                "scope": "institutional_mainwave_new_buys",
+                "policy": "not_in_current_mainwave_contract",
+                "scope": "diagnostic_only",
             },
             "risk_limits": {
                 "max_single_trade_account_loss_pct": 0.065,
@@ -1337,7 +1581,7 @@ def _strategy_contract() -> dict[str, Any]:
                 "label": "机构主升浪",
                 "activation": "非恐慌优先场景下，出现机构主升浪确认候选",
                 "source": "institutional_mainwave_current_builder_v1",
-                "router_eligible": "score>=120 && sector_diffusion>=65 && 30m close>=MA20 && index_mom60<=5% && mainwave_dynamic_cooldown_active=false; >5% observation only and no shadow/buy ticket; rolling_240d_institutional_avg_ret is observation only",
+                "router_eligible": "wave_style_score>=88 && same_day_industry_mainwave_count>=2 && first_completed_30m(close>=prior20_high, close>=open, amount>=prior20_avg*1.20) && index_mom60<=5%; >5% observation only and no shadow/buy ticket; rolling_240d_institutional_avg_ret is observation only",
                 "regime_gate": "past exited institutional_mainwave trades within 240 calendar days: count>=2, avg_ret>0, big_loss_rate<=34%, worst_ret>=-25%",
                 "failure_exit_audit_target": "historical upper-bound audit supports studying failed exit near -15%; not yet treated as executable stop without path replay",
             },
@@ -1352,12 +1596,12 @@ def _strategy_contract() -> dict[str, Any]:
             {
                 "route": "g2_gap_supplement",
                 "label": "G2补充买点",
-                "activation": "已退出实盘交易；仅保留源新鲜度、候选质量和历史归因观察",
+                "activation": "按用户当前指令恢复完整204笔G3_with_g2路线；仅当entry_date存在新鲜g2_v2_complete过滤信号且G3主路由未占满时补位",
                 "source": "gen2_risk_cool_shadow_filtered_signals",
-                "router_eligible": "false; retired_from_live_trading=true",
+                "router_eligible": "fresh filtered_signals for entry_date and buy_allowed=true; real order path remains disabled",
                 "regime_gate": "past exited g2 supplement trades within 240 calendar days: count>=3, avg_ret>0, big_loss_rate<=34%, worst_ret>=-12%",
-                "role": "observation only; not a live/shadow/paper buy route",
-                "retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON,
+                "role": "slot gap supplement, not primary route replacement",
+                "reenable_reason": G2_GAP_SUPPLEMENT_REENABLE_REASON,
             },
         ],
         "blocked_observation": [
@@ -1374,6 +1618,31 @@ def _strategy_contract() -> dict[str, Any]:
             "real_order_integration": "disabled",
         },
     }
+    contract["trade_strategy_policy"] = [
+        policy
+        for policy in contract.get("trade_strategy_policy", [])
+        if str(policy.get("trade_strategy") or "") == "institutional_mainwave_score88"
+    ]
+    if not contract["trade_strategy_policy"]:
+        contract["trade_strategy_policy"].append(
+            {
+                "trade_strategy": "institutional_mainwave_score88",
+                "label_cn": "机构主升Score88",
+                "source_routes": ["institutional_mainwave"],
+                "entry_contract": "wave_style_score>=88 && index_mom60<=5% && same_day_industry_mainwave_count>=2 && first_completed_30m_volume_breakout_prior20_high",
+                "position_contract": "two slots; 50% per slot; at most two new buys per day; -10% hard stop; +10% sell half; remaining exits on previous-day low break confirmed by 30m",
+            }
+        )
+    contract["route_priority"] = [
+        route
+        for route in contract.get("route_priority", [])
+        if str(route.get("route") or "") == "institutional_mainwave"
+    ]
+    contract.setdefault("blocked_observation", []).append(
+        "panic_repair, old_g3_route_v3, range_weak_repair, strong_breakout and g2_gap_supplement are research/history only and cannot create tickets or consume slots"
+    )
+    contract["canonical_contract"] = formal_g3_score88_contract_metadata()
+    return contract
 
 
 def _write_outputs(out_dir: Path, runtime_dir: Path, summary: dict[str, Any], all_rows: pd.DataFrame, selected: pd.DataFrame, context: pd.DataFrame) -> None:
@@ -1428,22 +1697,36 @@ def _write_outputs(out_dir: Path, runtime_dir: Path, summary: dict[str, Any], al
     diagnostics.to_csv(runtime_dir / "latest_route_diagnostics.csv", index=False, encoding="utf-8-sig")
     (runtime_dir / "latest_strategy_contract.json").write_text(json.dumps(contract, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
     (runtime_dir / "latest_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+    (STATE_ALPHA_RUNTIME_DIR / "latest_strategy_contract.json").write_text(json.dumps(contract, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+    (STATE_ALPHA_RUNTIME_DIR / "latest_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
     if bool(append_decision.get("allowed", True)):
         tickets.to_csv(STATE_ALPHA_RUNTIME_DIR / "latest_shadow_tickets.csv", index=False, encoding="utf-8-sig")
-        (STATE_ALPHA_RUNTIME_DIR / "latest_strategy_contract.json").write_text(json.dumps(contract, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
-        (STATE_ALPHA_RUNTIME_DIR / "latest_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
     else:
         afterhours_tickets_path = STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_shadow_tickets.csv"
         has_existing_afterhours = False
+        existing_afterhours_entry_date = ""
         if afterhours_tickets_path.exists():
             try:
-                has_existing_afterhours = not pd.read_csv(afterhours_tickets_path, low_memory=False, encoding="utf-8-sig").empty
+                existing_afterhours = pd.read_csv(afterhours_tickets_path, low_memory=False, encoding="utf-8-sig")
+                has_existing_afterhours = not existing_afterhours.empty
+                if has_existing_afterhours and "entry_date" in existing_afterhours.columns:
+                    existing_afterhours_entry_date = _date_text(existing_afterhours["entry_date"].iloc[0])
             except Exception:
                 has_existing_afterhours = False
-        if not tickets.empty or not has_existing_afterhours:
+        current_entry_date = _date_text(summary.get("entry_date"))
+        stale_existing_afterhours = bool(
+            has_existing_afterhours
+            and current_entry_date
+            and existing_afterhours_entry_date
+            and existing_afterhours_entry_date != current_entry_date
+        )
+        # The summary and contract must always be written as a matched pair with
+        # the after-hours tickets.  Otherwise an empty/blocked next-session run
+        # can leave a stale summary next to a newer candidate state.
+        if not tickets.empty or not has_existing_afterhours or stale_existing_afterhours:
             tickets.to_csv(afterhours_tickets_path, index=False, encoding="utf-8-sig")
-            (STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_strategy_contract.json").write_text(json.dumps(contract, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
-            (STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+        (STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_strategy_contract.json").write_text(json.dumps(contract, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+        (STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
 
     preview_cols = [
         "entry_date",
@@ -1522,6 +1805,7 @@ def _write_outputs(out_dir: Path, runtime_dir: Path, summary: dict[str, Any], al
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build current G3 state-router shadow candidates.")
     parser.add_argument("--entry-date", default="")
+    parser.add_argument("--decision-date", default="", help="Intraday use: set equal to entry date after a completed 30m bar for breakout acceptance.")
     parser.add_argument("--out-dir", default=str(OUT_DIR))
     parser.add_argument("--runtime-dir", default=str(RUNTIME_DIR))
     parser.add_argument("--period", type=int, default=30, choices=[15, 30])
@@ -1530,7 +1814,12 @@ def main() -> int:
     parser.add_argument("--max-codes", type=int, default=0)
     args = parser.parse_args()
 
-    entry_date, decision_date = _resolve_entry_date(args.entry_date.strip())
+    if args.decision_date.strip():
+        entry_date = args.entry_date.strip() or args.decision_date.strip()
+        decision_date = args.decision_date.strip()
+        date_resolution_source = "explicit_intraday_entry_and_decision_date"
+    else:
+        entry_date, decision_date, date_resolution_source = _resolve_entry_date_with_source(args.entry_date.strip())
     if not entry_date:
         raise RuntimeError("Cannot resolve entry date.")
 
@@ -1540,24 +1829,15 @@ def main() -> int:
     builders = [
         ("institutional_mainwave_current_builder_v1", lambda: _institutional_current_source(entry_date, decision_date, int(args.top_n), float(args.min_amount20), int(args.period))),
     ]
-    if not FULL_G3_ONLY_MODE:
-        builders.extend(
-            [
-                ("panic_current_builder", lambda: _panic_source(entry_date, int(args.top_n), float(args.min_amount20), int(args.max_codes or 0), int(args.period))),
-                ("old_g3_current_builder_v1", lambda: _old_g3_current_source(entry_date, decision_date, int(args.top_n), float(args.min_amount20), int(args.max_codes or 0))),
-                ("g2_gap_supplement_current_builder_v1", lambda: _g2_gap_supplement_source(entry_date, int(args.top_n))),
-            ]
-        )
-    else:
-        source_meta.extend(
-            {
-                "source": source_name,
-                "rows": 0,
-                "status": "disabled_full_g3_only_mode",
-                "reason": "switched_back_to_full_g3_formal_policy",
-            }
-            for source_name in FULL_G3_DISABLED_SOURCE_NAMES
-        )
+    source_meta.extend(
+        {
+            "source": source_name,
+            "rows": 0,
+            "status": "retired_from_runtime",
+            "reason": "two_hard_fortresses_contract_only_allows_institutional_mainwave_or_panic_repair",
+        }
+        for source_name in ["panic_current_builder", "mainwave_breakout_current_builder_v1", "old_g3_current_builder_v1", "g2_gap_supplement_current_builder_v1"]
+    )
     for name, builder in builders:
         try:
             rows, meta = builder()
@@ -1576,7 +1856,38 @@ def main() -> int:
     account_risk = _account_risk_state(entry_date)
     selected = _apply_account_risk(selected, account_risk)
     route_diagnostics = _route_diagnostics(all_rows)
+    source_data_walls = _summarize_source_data_walls(source_meta, entry_date)
     diagnosis_code = "HAS_STATE_ROUTER_SHADOW_CANDIDATE" if not selected.empty else "NO_STATE_ROUTER_CANDIDATE"
+    minute_data_failure_rows = 0
+    if not all_rows.empty:
+        m30_status = all_rows.get("m30_status", pd.Series("", index=all_rows.index)).fillna("").astype(str)
+        visibility_status = all_rows.get("m30_visibility_status", pd.Series("", index=all_rows.index)).fillna("").astype(str)
+        minute_data_failure_rows = int(
+            (m30_status.map(is_confirmation_data_wall) | visibility_status.map(is_confirmation_data_wall)).sum()
+        )
+        if minute_data_failure_rows:
+            diagnosis_code = "MINUTE_DATA_UNAVAILABLE"
+        elif not selected.empty:
+            diagnosis_code = "HAS_STATE_ROUTER_SHADOW_CANDIDATE"
+        elif len(all_rows):
+            diagnosis_code = "STATE_ROUTER_CANDIDATES_BLOCKED"
+    pending_next_session_rows = int(
+        all_rows.get("shadow_status", pd.Series("", index=all_rows.index))
+        .fillna("")
+        .astype(str)
+        .eq("pending_next_session_confirmation")
+        .sum()
+    ) if not all_rows.empty else 0
+    if source_data_walls.get("count"):
+        diagnosis_code = (
+            "BUILDER_OR_CANDIDATE_SNAPSHOT_UNAVAILABLE"
+            if source_data_walls.get("candidate_snapshot_failure")
+            else "SOURCE_BUILDER_UNAVAILABLE"
+        )
+    if pending_next_session_rows and source_data_walls.get("live_confirmation_window"):
+        diagnosis_code = "PENDING_CONFIRMATION_RETRY_REQUIRED"
+    elif pending_next_session_rows:
+        diagnosis_code = "PENDING_NEXT_TRADE_SESSION_30M_CONFIRMATION"
     if not context_meta.get("ok"):
         diagnosis_code = "MARKET_CONTEXT_UNAVAILABLE"
     if account_risk.get("account_risk_action") == "pause_new_buy":
@@ -1585,6 +1896,7 @@ def main() -> int:
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "entry_date": entry_date,
         "decision_date": decision_date,
+        "date_resolution_source": date_resolution_source,
         "diagnosis_code": diagnosis_code,
         "selected_route": route_meta.get("selected_route", ""),
         "route_reason": route_meta.get("reason", ""),
@@ -1603,13 +1915,24 @@ def main() -> int:
         "order_path_enabled_rows": 0,
         "market_context": context_meta,
         "sources": source_meta,
-        "strategy_system_mode": "full_g3_only" if FULL_G3_ONLY_MODE else "router_fusion",
+        "strategy_system_mode": "institutional_mainwave_30m_volume_breakout_plus_cash",
         "full_g3_formal_policy": FINAL_G3_FORMAL_POLICY,
-        "disabled_strategy_sources": FULL_G3_DISABLED_SOURCE_NAMES if FULL_G3_ONLY_MODE else [],
+        "disabled_strategy_sources": ["panic_current_builder", "mainwave_breakout_current_builder_v1", "old_g3_current_builder_v1", "g2_gap_supplement_current_builder_v1"],
         "shadow_ledger_append": _shadow_ledger_append_decision(),
         "route_diagnostics": route_diagnostics.to_dict("records") if not route_diagnostics.empty else [],
         "eligible_source_rows": int(route_diagnostics["eligible_rows"].sum()) if not route_diagnostics.empty else 0,
         "blocked_source_rows": int(route_diagnostics["blocked_rows"].sum()) if not route_diagnostics.empty else 0,
+        "pending_next_session_confirmation_rows": pending_next_session_rows,
+        "pending_next_session_confirmation": bool(pending_next_session_rows),
+        "minute_data_failure_rows": minute_data_failure_rows,
+        "source_data_wall_rows": source_data_walls.get("rows", []),
+        "source_data_wall_count": int(source_data_walls.get("count") or 0),
+        "source_data_wall_reasons": source_data_walls.get("reasons", []),
+        "source_builder_failure": bool(source_data_walls.get("builder_failure")),
+        "candidate_snapshot_failure": bool(source_data_walls.get("candidate_snapshot_failure")),
+        "candidate_snapshot_required": any(bool(meta.get("candidate_snapshot_required")) for meta in source_meta if isinstance(meta, dict)),
+        "candidate_snapshot_loaded": any(bool(meta.get("candidate_snapshot_loaded")) for meta in source_meta if isinstance(meta, dict)),
+        "live_confirmation_window": bool(source_data_walls.get("live_confirmation_window")),
         "g2_runtime_touched": False,
         "live_order_enabled": False,
         "requires_current_institutional_generator": False,
@@ -1617,6 +1940,7 @@ def main() -> int:
         "g2_gap_supplement_enabled": bool(G2_GAP_SUPPLEMENT_LIVE_ENABLED),
         "g2_gap_supplement_live_enabled": bool(G2_GAP_SUPPLEMENT_LIVE_ENABLED),
         "g2_gap_supplement_retire_reason": G2_GAP_SUPPLEMENT_RETIRE_REASON,
+        "g2_gap_supplement_reenable_reason": "",
         "final_profile": FINAL_G3_PROFILE,
         "final_profile_name": FINAL_G3_PROFILE_NAME,
         "legacy_base_profile": FINAL_G3_LEGACY_BASE_PROFILE,

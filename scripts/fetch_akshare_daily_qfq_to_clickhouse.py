@@ -25,6 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from utils.kline_units import (  # noqa: E402
+    normalize_akshare_daily_units,
+    normalize_baostock_daily_units,
+)
 from utils.market_warehouse import clickhouse_client  # noqa: E402
 
 
@@ -194,6 +198,7 @@ def _fetch_one_akshare(ak, code: str, start_date: str, end_date: str, retries: i
     work = work[(work["open"] > 0) & (work["high"] > 0) & (work["low"] > 0) & (work["close"] > 0)]
     if work.empty:
         return pd.DataFrame()
+    work = normalize_akshare_daily_units(work)
     work["code"] = code
     return work[[
         "code",
@@ -255,6 +260,7 @@ def _fetch_one_baostock(bs, code: str, start_date: str, end_date: str, retries: 
     work = work[(work["open"] > 0) & (work["high"] > 0) & (work["low"] > 0) & (work["close"] > 0)]
     if work.empty:
         return pd.DataFrame()
+    work = normalize_baostock_daily_units(work)
     work["code"] = code
     return work[[
         "code",
@@ -342,6 +348,7 @@ def _normalize_baostock_frame(df: pd.DataFrame, code: str) -> pd.DataFrame:
     work = work[(work["open"] > 0) & (work["high"] > 0) & (work["low"] > 0) & (work["close"] > 0)]
     if work.empty:
         return pd.DataFrame()
+    work = normalize_baostock_daily_units(work)
     work["code"] = code
     return work[[
         "code",

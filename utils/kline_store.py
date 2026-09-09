@@ -64,6 +64,7 @@ TIME_COLUMNS = {
 }
 
 MINUTE_PERIODS = {"1m", "1min", "5m", "5min", "15m", "15min", "30m", "30min", "60m", "60min"}
+TRADING_DAY_GUARDED_PERIODS = {"1d", "daily", *MINUTE_PERIODS}
 
 
 def _get_table_name(period: str) -> str:
@@ -91,6 +92,69 @@ def _to_clickhouse_value(value: Any) -> Any:
 
 def _is_minute_period(period: str) -> bool:
     return period.lower() in MINUTE_PERIODS
+
+
+def _trading_day_series(period: str, df: pd.DataFrame) -> pd.Series:
+    time_col = _get_time_column(period)
+    if time_col not in df.columns:
+        return pd.Series([pd.NaT] * len(df), index=df.index)
+    return pd.to_datetime(df[time_col], errors="coerce").dt.date
+
+
+def _load_valid_trading_days(start_day: date, end_day: date, market: str = "SH") -> set[date]:
+    if not clickhouse_table_exists("trade_calendar"):
+        raise RuntimeError("trade_calendar table is missing; refuse to write guarded K-line rows")
+    calendar = clickhouse_query_df(
+        """
+        SELECT trade_date
+        FROM trade_calendar
+        WHERE market = ?
+          AND is_trading = 1
+          AND trade_date >= ?
+          AND trade_date <= ?
+        """,
+        [market, start_day, end_day],
+    )
+    return {pd.to_datetime(value).date() for value in calendar.get("trade_date", [])}
+
+
+def filter_trading_day_rows(period: str, df: pd.DataFrame, market: str = "SH") -> pd.DataFrame:
+    """Drop daily/minute K-line rows whose date is not an official trading day."""
+    if df.empty or period.lower() not in TRADING_DAY_GUARDED_PERIODS:
+        return df
+
+    trade_days = _trading_day_series(period, df)
+    valid_input_days = sorted({day for day in trade_days.dropna().tolist() if isinstance(day, date)})
+    if not valid_input_days:
+        logger.warning(f"K-line write blocked: period={period}, reason=no_valid_trade_date, rows={len(df)}")
+        return df.iloc[0:0].copy()
+
+    allowed_days = _load_valid_trading_days(valid_input_days[0], valid_input_days[-1], market=market)
+    allowed_mask = trade_days.isin(allowed_days)
+    filtered = df.loc[allowed_mask].copy()
+    dropped = len(df) - len(filtered)
+    if dropped > 0:
+        blocked_days = sorted({str(day) for day in trade_days.loc[~allowed_mask].dropna().tolist()})
+        logger.warning(
+            "K-line write blocked non-trading rows: "
+            f"period={period}, dropped={dropped}, blocked_dates={blocked_days[:10]}"
+        )
+    return filtered
+
+
+def filter_trading_day_tuples(
+    period: str,
+    rows: list[tuple],
+    column_names: list[str],
+    market: str = "SH",
+) -> list[tuple]:
+    if not rows or period.lower() not in TRADING_DAY_GUARDED_PERIODS:
+        return rows
+    df = pd.DataFrame(rows, columns=column_names)
+    filtered = filter_trading_day_rows(period, df, market=market)
+    if filtered.empty:
+        return []
+    return [tuple(row) for row in filtered.itertuples(index=False, name=None)]
 
 
 def query_kline(
@@ -218,6 +282,10 @@ def insert_kline_dataframe(period: str, df: pd.DataFrame, on_conflict: str = "ig
         return 0
 
     table = _get_table_name(period)
+    df = filter_trading_day_rows(period, df)
+    if df.empty:
+        return 0
+
     client = clickhouse_client()
 
     if on_conflict == "upsert":

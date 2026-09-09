@@ -20,6 +20,7 @@ if project_root not in sys.path:
 
 from data_fetcher.sources.tdxquant import TdxQuantDataSource
 from utils.database import db
+from utils.kline_units import normalize_tdxquant_daily_units
 from utils.logger import get_logger
 
 logger = get_logger("EmergencyBackfillDaily")
@@ -100,6 +101,7 @@ def save_daily_to_db(code: str, df: pd.DataFrame):
     from models.stock_models import KlineDaily
     from sqlalchemy import insert
     
+    df = normalize_tdxquant_daily_units(df, instrument_type="stock")
     session = next(db.get_session())
     try:
         insert_data = []

@@ -588,16 +588,16 @@ const visibleCandidates = computed(() => {
 const strategyDetails = computed(() => {
   const definitions = [
     {
-      key: 'institutional_score120_mainwave',
-      label: '机构主升 Score120',
+      key: 'institutional_mainwave_score88',
+      label: '机构主升 Score88',
       role: '主收益引擎',
       badge: '进攻',
       tagType: 'success',
       tone: 'mainwave',
       routes: ['institutional_mainwave', 'score120_core'],
-      aliases: ['institutional_score120_mainwave', 'institutional_score120_core', 'mainwave_breakout_offense'],
-      summary: '只在机构主线扩散和分数确认同时成立时出手，承担 G3 的主要进攻收益。',
-      sources: 'institutional_mainwave；旧 score120 只保留为证据来源。',
+      aliases: ['institutional_mainwave_score88', 'institutional_score120_mainwave', 'institutional_score120_core', 'mainwave_breakout_offense'],
+      summary: '只在 Score88、行业共振和30分钟确认同时成立时出手，承担 G3 的主要进攻收益。',
+      sources: 'institutional_mainwave；旧 Score120 只保留为历史证据来源。',
       entry: 'score>=120、sector_diffusion>=65、30m close>=MA20、index_mom60<=5%。index_mom60>5% 只观察，不进入影子盘或买入候选。',
       exit: '默认单槽 50%；12% 硬止损、12% 先减半、剩余仓以前低或 30m 转弱退出。',
       diagnosis: '重点看主升分数口径是否统一、指数 60 日动量是否过热、连续两笔机构主升亏损后的动态冷却是否触发。'
@@ -751,7 +751,8 @@ function tradeStrategyName(row) {
   const names = {
     range_weak_repair: '震荡弱势修复',
     panic_capitulation_repair: '恐慌出清修复',
-    institutional_score120_mainwave: '机构主升Score120',
+    institutional_mainwave_score88: '机构主升Score88',
+    institutional_score120_mainwave: '机构主升Score120（历史）',
     old_g3_strong_breakout: '强势突破',
     mainwave_breakout_offense: '主升/突破进攻',
     volume_runup_supplement: '量能续强补位'

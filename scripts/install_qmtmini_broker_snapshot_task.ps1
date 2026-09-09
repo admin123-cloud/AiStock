@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $RunnerScript)) {
 }
 
 $PowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-$Args = "-NoProfile -ExecutionPolicy Bypass -File `"$RunnerScript`" -PythonExe `"$PythonExe`""
+$Args = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunnerScript`" -PythonExe `"$PythonExe`""
 
 $Action = New-ScheduledTaskAction -Execute $PowerShell -Argument $Args -WorkingDirectory $RootDir
 $Trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At $At

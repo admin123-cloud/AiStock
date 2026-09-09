@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, and_, or_, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from types import SimpleNamespace
 import io
@@ -22,6 +22,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import pandas as pd
+from zoneinfo import ZoneInfo
 
 from utils.database import db
 from utils.market_warehouse import (
@@ -72,10 +73,207 @@ CLICKHOUSE_KLINE_TABLES = {
     "60m": ("kline_minute_60", "datetime"),
 }
 
+INTRADAY_DAILY_TABLE = "kline_daily_intraday"
+BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _minute_datetime_to_business_time(value: Any) -> datetime:
+    """Return a legacy minute-bar timestamp as an Asia/Shanghai wall time.
+
+    The current full-push writer persisted QMT's China-market wall clock as a
+    naive UTC value.  Consequently all minute bars are eight hours ahead in
+    ClickHouse (for example, 17:35 instead of the 09:35 opening bar).  Keep
+    the correction at the API boundary until the archived minute tables can be
+    repaired, so every intraday UI consumer receives the actual trading time.
+    """
+    timestamp = pd.Timestamp(value)
+    if pd.isna(timestamp):
+        raise ValueError("minute timestamp is empty")
+    # ClickHouse client may attach Asia/Shanghai to the column on read, but
+    # that does not repair the persisted clock value itself.  The stored value
+    # is still consistently eight hours ahead of the actual market session.
+    return timestamp.to_pydatetime().replace(tzinfo=None) - timedelta(hours=8)
+
 
 def _clickhouse_code_filter_params(code: str) -> tuple[str, str]:
     short_code = (code or "")[:6]
     return code, short_code
+
+
+def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
+    """Aggregate today's completed 5-minute bars into a display-only daily bar.
+
+    The result is deliberately kept out of ``kline_daily``.  Formal daily bars
+    are after-close facts used by strategy and historical calculations; this
+    object is only a provisional UI snapshot.
+    """
+    if not clickhouse_available() or not clickhouse_table_exists("kline_minute_5"):
+        return None
+
+    now = datetime.now(BUSINESS_TZ)
+    if now.weekday() >= 5 or not (dt_time(9, 30) <= now.time() <= dt_time(15, 35)):
+        return None
+    trade_date = now.date()
+    try:
+        snapshot_df = clickhouse_query_df(
+            """
+            SELECT
+                argMin(open, datetime) AS open,
+                max(high) AS high,
+                min(low) AS low,
+                argMax(close, datetime) AS close,
+                sum(volume) AS volume,
+                sum(amount) AS amount,
+                max(datetime) AS as_of
+            FROM kline_minute_5 FINAL
+            WHERE code = ?
+              AND toDate(datetime) = ?
+            """,
+            [code, trade_date],
+        )
+        if snapshot_df is None or snapshot_df.empty:
+            return None
+        row = snapshot_df.iloc[0]
+        as_of = row.get("as_of")
+        close = float(row.get("close") or 0)
+        if as_of is None or close <= 0:
+            return None
+
+        previous_close = clickhouse_scalar(
+            """
+            SELECT close
+            FROM kline_daily FINAL
+            WHERE code = ?
+              AND trade_date < ?
+            ORDER BY trade_date DESC
+            LIMIT 1
+            """,
+            [code, trade_date],
+        )
+        previous_close = float(previous_close or 0)
+        high = float(row.get("high") or close)
+        low = float(row.get("low") or close)
+        change_amount = close - previous_close if previous_close > 0 else None
+        change_pct = change_amount / previous_close * 100 if previous_close > 0 else None
+        amplitude = (high - low) / previous_close * 100 if previous_close > 0 else None
+        as_of_dt = _minute_datetime_to_business_time(as_of)
+        snapshot_at = now
+        payload = {
+            "open": float(row.get("open") or close),
+            "high": high,
+            "low": low,
+            "close": close,
+            # kline_minute_5 already follows the persisted lots/yuan contract.
+            # Do not divide stock volume again when aggregating a provisional
+            # daily bar for the page.
+            "volume": float(row.get("volume") or 0),
+            "amount": float(row.get("amount") or 0),
+            "date": trade_date.isoformat(),
+            "previous_close": previous_close or None,
+            "change_amount": change_amount,
+            "change_pct": change_pct,
+            "amplitude": amplitude,
+            "is_provisional": True,
+            "as_of": as_of_dt.isoformat(sep=" ", timespec="seconds"),
+            "snapshot_at": now.replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
+            "source": "clickhouse:kline_minute_5",
+        }
+        # Cache the same display-only fact for list/overview consumers.  A
+        # ReplacingMergeTree row is append-only and never mutates formal daily data.
+        if clickhouse_table_exists(INTRADAY_DAILY_TABLE):
+            try:
+                from utils.market_warehouse import clickhouse_client
+
+                clickhouse_client().insert(
+                    INTRADAY_DAILY_TABLE,
+                    [[
+                        code, trade_date, payload["open"], high, low, close,
+                        payload["volume"], payload["amount"], previous_close or None,
+                        amplitude, change_pct, change_amount, 0.0, snapshot_at,
+                        "clickhouse:kline_minute_5", 1,
+                    ]],
+                    column_names=[
+                        "code", "trade_date", "open", "high", "low", "close", "volume", "amount",
+                        "previous_close", "amplitude", "change_pct", "change_amount", "turnover_rate",
+                        "snapshot_at", "source", "is_provisional",
+                    ],
+                )
+            except Exception as exc:
+                logger.warning(f"intraday daily snapshot cache write failed: code={code}, error={exc}")
+        return payload
+    except Exception as exc:
+        logger.warning(f"intraday daily aggregation failed: code={code}, error={exc}")
+        return None
+
+
+def _overlay_fresh_intraday_list_kline(
+    stocks: List[Any], latest_kline_map: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Overlay the current page with today's fresh 5-minute bars.
+
+    The stock list must never present yesterday's close as though it were a
+    current quote.  This intentionally stays display-only: formal daily bars
+    remain after-close facts in ``kline_daily`` while a live page is enriched
+    from the small set of codes the user is actually viewing.
+    """
+    if not stocks or not clickhouse_available() or not clickhouse_table_exists("kline_minute_5"):
+        return latest_kline_map
+
+    now = datetime.now(BUSINESS_TZ)
+    if now.weekday() >= 5 or not (dt_time(9, 30) <= now.time() <= dt_time(15, 35)):
+        return latest_kline_map
+
+    codes = [stock.code for stock in stocks if getattr(stock, "code", None)]
+    if not codes:
+        return latest_kline_map
+
+    try:
+        placeholders = ",".join(["?"] * len(codes))
+        intraday_df = clickhouse_query_df(
+            f"""
+            SELECT
+                code,
+                argMax(close, datetime) AS close,
+                sum(amount) AS amount,
+                max(datetime) AS as_of
+            FROM kline_minute_5 FINAL
+            WHERE code IN ({placeholders})
+              AND toDate(datetime) = ?
+            GROUP BY code
+            """,
+            [*codes, now.date()],
+        )
+        if intraday_df is None or intraday_df.empty:
+            return latest_kline_map
+
+        result = dict(latest_kline_map)
+        now_wall_time = now.replace(tzinfo=None)
+        for bar in intraday_df.itertuples(index=False):
+            close = float(bar.close or 0)
+            if close <= 0 or bar.as_of is None:
+                continue
+            as_of = _minute_datetime_to_business_time(bar.as_of)
+            # Do not use a stalled minute feed as a live quote.  The normal
+            # five-minute publisher may be a little late, hence a 20-minute
+            # tolerance before the daily close remains the honest fallback.
+            if as_of.date() != now.date() or now_wall_time - as_of > timedelta(minutes=20):
+                continue
+            previous = latest_kline_map.get(bar.code)
+            previous_close = float(getattr(previous, "close", 0) or 0)
+            change_pct = (close / previous_close - 1) * 100 if previous_close > 0 else None
+            result[bar.code] = SimpleNamespace(
+                trade_date=now.date(),
+                close=close,
+                change_pct=change_pct,
+                amount=float(bar.amount or 0),
+                is_provisional=True,
+                as_of=as_of,
+                source="clickhouse:kline_minute_5",
+            )
+        return result
+    except Exception as exc:
+        logger.warning(f"ClickHouse stock list intraday overlay failed: {exc}")
+        return latest_kline_map
 
 
 def _as_date(value: Any):
@@ -266,7 +464,7 @@ def _get_stock_by_code(session, code: str) -> Optional[SimpleNamespace]:
             text(
                 """
                 SELECT code, name, market, type, region, industry, industry_code,
-                       st, quit, list_date, self_selected, holding, float_share, total_share
+                       st, quit, list_date, delist_date, self_selected, holding, float_share, total_share
                 FROM stocks
                 WHERE code = :code
                 LIMIT 1
@@ -287,10 +485,11 @@ def _get_stock_by_code(session, code: str) -> Optional[SimpleNamespace]:
             st=bool(row[7]),
             quit=bool(row[8]),
             list_date=row[9],
-            self_selected=bool(row[10]) if row[10] is not None else False,
-            holding=bool(row[11]) if row[11] is not None else False,
-            float_share=row[12],
-            total_share=row[13],
+            delist_date=row[10],
+            self_selected=bool(row[11]) if row[11] is not None else False,
+            holding=bool(row[12]) if row[12] is not None else False,
+            float_share=row[13],
+            total_share=row[14],
             created_at=None,
             updated_at=None,
         )
@@ -1060,7 +1259,15 @@ def _run_uptrend_backtest_analysis(
         Stock.list_date <= start_date - timedelta(days=config["min_list_days"]),
     )
     if not config["include_quit"]:
-        query = query.filter(Stock.quit == False)
+        # A stock delisted today may still have been a valid constituent at the
+        # beginning of a historical backtest.  Use the delisting date instead
+        # of applying today's quit flag retroactively to old samples.
+        query = query.filter(
+            or_(
+                Stock.quit == False,
+                and_(Stock.delist_date.isnot(None), Stock.delist_date >= start_date),
+            )
+        )
     if not config["include_st"]:
         query = query.filter(Stock.st == False, ~Stock.name.like("ST%"), ~Stock.name.like("*ST%"))
     stocks = query.all()
@@ -2604,6 +2811,7 @@ def get_stocks_with_limit(
                             }
                     except Exception as exc:
                         logger.warning(f"ClickHouse stock list latest kline query failed: {exc}")
+                latest_kline_map = _overlay_fresh_intraday_list_kline(stocks, latest_kline_map)
 
             items = []
             for stock in stocks:
@@ -2630,6 +2838,13 @@ def get_stocks_with_limit(
                         "close": float(latest_kline.close) if latest_kline.close is not None else None,
                         "change_pct": float(latest_kline.change_pct) if latest_kline.change_pct is not None else None,
                         "amount": float(latest_kline.amount) if latest_kline.amount is not None else None,
+                        "is_provisional": bool(getattr(latest_kline, "is_provisional", False)),
+                        "as_of": (
+                            getattr(latest_kline, "as_of", None).isoformat(sep=" ", timespec="seconds")
+                            if getattr(latest_kline, "as_of", None)
+                            else None
+                        ),
+                        "source": getattr(latest_kline, "source", "kline_daily"),
                     }
                 else:
                     row["latest_kline"] = None
@@ -2687,6 +2902,8 @@ def get_stocks_with_limit(
             except Exception as exc:
                 logger.warning(f"ClickHouse stock list latest kline fallback to SQLAlchemy engine: {exc}")
 
+        latest_kline_map = _overlay_fresh_intraday_list_kline(stocks, latest_kline_map)
+
         items = []
         latest_trade_date = _latest_daily_trade_date(session)
         for stock in stocks:
@@ -2718,6 +2935,13 @@ def get_stocks_with_limit(
                     "close": float(latest_kline.close) if latest_kline.close is not None else None,
                     "change_pct": float(latest_kline.change_pct) if latest_kline.change_pct is not None else None,
                     "amount": float(latest_kline.amount) if latest_kline.amount is not None else None,
+                    "is_provisional": bool(getattr(latest_kline, "is_provisional", False)),
+                    "as_of": (
+                        getattr(latest_kline, "as_of", None).isoformat(sep=" ", timespec="seconds")
+                        if getattr(latest_kline, "as_of", None)
+                        else None
+                    ),
+                    "source": getattr(latest_kline, "source", "kline_daily"),
                 }
             else:
                 row["latest_kline"] = None
@@ -2772,6 +2996,7 @@ def get_stock_detail(code: str):
             "st": stock.st,
             "quit": stock.quit,
             "list_date": stock.list_date.isoformat() if stock.list_date else None,
+            "delist_date": stock.delist_date.isoformat() if stock.delist_date else None,
             "float_share": float(stock.float_share) if stock.float_share else 0,
             "total_share": float(stock.total_share) if stock.total_share else 0,
             "self_selected": stock.self_selected,
@@ -2884,7 +3109,7 @@ def get_stock_kline_stats(code: str):
                     """
                     SELECT COUNT(*)
                     FROM kline_daily
-                    WHERE code = ? OR substr(code, 1, 6) = ?
+                    WHERE code IN (?, ?)
                     """,
                     [full_code, short_code],
                 ) or 0
@@ -2909,7 +3134,7 @@ def get_stock_kline_stats(code: str):
                         f"""
                         SELECT COUNT(*)
                         FROM {table_name}
-                        WHERE code = ? OR substr(code, 1, 6) = ?
+                        WHERE code IN (?, ?)
                         """,
                         [full_code, short_code],
                     )
@@ -2935,6 +3160,36 @@ def get_stock_kline_stats(code: str):
 
         return stats
 
+    finally:
+        DatabaseSessionManager.close_session(session)
+
+
+@router.get("/{code}/navigation")
+def get_stock_navigation(code: str):
+    """Return adjacent active stocks without loading the full stock universe."""
+    session = DatabaseSessionManager.get_session()
+    try:
+        base_query = session.query(Stock).filter(
+            Stock.type == "stock",
+            Stock.quit == False,
+        )
+        previous = (
+            base_query
+            .filter(Stock.code < code)
+            .order_by(Stock.code.desc())
+            .first()
+        )
+        following = (
+            base_query
+            .filter(Stock.code > code)
+            .order_by(Stock.code.asc())
+            .first()
+        )
+
+        def _serialize(stock):
+            return {"code": stock.code, "name": stock.name} if stock else None
+
+        return {"code": code, "previous": _serialize(previous), "next": _serialize(following)}
     finally:
         DatabaseSessionManager.close_session(session)
 
@@ -3097,12 +3352,13 @@ def update_stock_list():
         # ClickHouse stocks table uses a simplified schema (no id/self_selected/holding/created_at).
         existing_rows = ch.query(
             """
-            SELECT code
+            SELECT code, name, market, type, industry, region, list_date, delist_date, quit, st
             FROM stocks
             WHERE type = 'stock'
             """
         ).result_rows
         existing_codes = {str(r[0]) for r in existing_rows if r and r[0]}
+        existing_by_code = {str(row[0]): row for row in existing_rows if row and row[0]}
 
         new_count = 0
         update_count = 0
@@ -3110,6 +3366,8 @@ def update_stock_list():
 
         current_codes = set()
         rows_to_insert = []
+        retired_marked = 0
+        unresolved_removed_retained = 0
 
         def _to_date_or_today(value):
             if isinstance(value, dt_date):
@@ -3150,6 +3408,8 @@ def update_stock_list():
             region = str((stock_info or {}).get("region", "") or "")
             raw_list_date = (stock_info or {}).get("list_date")
             list_date = _to_date_or_today(raw_list_date)
+            raw_delist_date = (stock_info or {}).get("delist_date")
+            delist_date = _to_date_or_today(raw_delist_date) if raw_delist_date else None
 
             if code in existing_codes:
                 update_count += 1
@@ -3164,6 +3424,7 @@ def update_stock_list():
                 industry,
                 region,
                 list_date,
+                delist_date,
                 quit_flag,
                 st,
             ])
@@ -3181,6 +3442,48 @@ def update_stock_list():
                     )
                 except Exception:
                     pass
+
+        # The normal QMT A-share sector no longer contains delisted symbols.
+        # Keep prior metadata rows, and convert only the codes that QMT's
+        # expired-contract cache positively confirms through ExpireDate.
+        removed_codes = sorted(existing_codes - current_codes)
+        expired_details: Dict[str, Dict[str, Any]] = {}
+        try:
+            qmt_source = data_sources.get_source("qmt_xtquant")
+            if qmt_source and hasattr(qmt_source, "get_expired_stock_info"):
+                expired_details = qmt_source.get_expired_stock_info(removed_codes)
+        except Exception as exc:
+            logger.warning(f"QMT expired-contract reconciliation failed: {exc}")
+
+        for code in removed_codes:
+            existing = existing_by_code[code]
+            expired = expired_details.get(code)
+            if expired:
+                name = str(expired.get("Name") or expired.get("name") or existing[1])
+                market = str(expired.get("market") or existing[2] or code.split(".")[-1])
+                industry = str(expired.get("industry") or existing[4] or "")
+                region = str(expired.get("region") or existing[5] or "")
+                list_date = _to_date_or_today(expired.get("list_date") or existing[6])
+                delist_date = _to_date_or_today(expired.get("delist_date") or existing[7])
+                quit_flag = 1
+                st = int(expired.get("st", existing[9]) or 0)
+                retired_marked += 1
+            else:
+                # Do not turn a transient upstream omission into a false delist.
+                name = existing[1]
+                market = existing[2]
+                industry = existing[4]
+                region = existing[5]
+                list_date = existing[6]
+                delist_date = existing[7]
+                quit_flag = existing[8]
+                st = existing[9]
+                list_date = _to_date_or_today(list_date)
+                quit_flag = int(quit_flag or 0)
+                st = int(st or 0)
+                unresolved_removed_retained += 1
+            current_codes.add(code)
+            rows_to_insert.append([code, name, market, "stock", industry or "", region or "", list_date, delist_date, quit_flag, st])
 
         deleted_count = len(existing_codes - current_codes)
         t_transform_done = time.perf_counter()
@@ -3206,14 +3509,29 @@ def update_stock_list():
         )
 
         if rows_to_insert:
-            ch.insert(
-                tmp_table,
-                rows_to_insert,
-                column_names=[
-                    "code", "name", "market", "type", "industry", "region", "list_date",
-                    "quit", "st",
-                ],
-            )
+            # clickhouse-connect infers a non-null Date writer from mixed
+            # Python values in one batch.  Split null/non-null delist dates so
+            # the Nullable(Date) column remains stable on every host version.
+            def _has_delist_date(value: Any) -> bool:
+                return value is not None and not bool(pd.isna(value))
+
+            with_delist_date = [row for row in rows_to_insert if _has_delist_date(row[7])]
+            without_delist_date = [row for row in rows_to_insert if not _has_delist_date(row[7])]
+            if without_delist_date:
+                ch.insert(
+                    tmp_table,
+                    [row[:7] + row[8:] for row in without_delist_date],
+                    column_names=["code", "name", "market", "type", "industry", "region", "list_date", "quit", "st"],
+                )
+            if with_delist_date:
+                ch.insert(
+                    tmp_table,
+                    [row[:7] + [_to_date_or_today(row[7])] + row[8:] for row in with_delist_date],
+                    column_names=[
+                        "code", "name", "market", "type", "industry", "region", "list_date", "delist_date",
+                        "quit", "st",
+                    ],
+                )
         t_load_done = time.perf_counter()
 
         # 原子交换表
@@ -3239,6 +3557,8 @@ def update_stock_list():
             "total_ms": int((t_swap_done - t0) * 1000),
             "rows_in": len(stock_list),
             "rows_out": len(rows_to_insert),
+            "retired_marked": retired_marked,
+            "unresolved_removed_retained": unresolved_removed_retained,
         }
         metrics["qps"] = round((metrics["rows_out"] / max(metrics["total_ms"], 1)) * 1000, 2)
 
@@ -3327,7 +3647,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                     f"""
                     SELECT {clickhouse_date_field} AS date_value,
                            code, open, high, low, close, volume, amount
-                    FROM {table_name}
+                    FROM {table_name} FINAL
                     WHERE code = ?
                     ORDER BY {clickhouse_date_field} DESC
                     LIMIT ?
@@ -3345,7 +3665,11 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                     for row in df.itertuples(index=False):
                         date_value = getattr(row, "date_value")
                         if isinstance(date_value, datetime):
-                            date_text = date_value.isoformat()
+                            date_text = (
+                                _minute_datetime_to_business_time(date_value).isoformat()
+                                if period in {"1m", "5m", "15m", "30m", "60m"}
+                                else date_value.isoformat()
+                            )
                         else:
                             date_text = str(date_value)
                         data.append({
@@ -3358,13 +3682,21 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                             "date": date_text,
                         })
 
+                intraday_daily = _build_intraday_daily_bar(code) if period == "1d" else None
+                if intraday_daily:
+                    today_text = str(intraday_daily["date"])[:10]
+                    data = [item for item in data if str(item.get("date") or "")[:10] != today_text]
+                    data.append(intraday_daily)
+                    data = sorted(data, key=lambda item: str(item.get("date") or ""))[-int(limit):]
+
                 return {
                     "code": code,
                     "name": stock.name,
                     "period": period,
                     "data": data,
                     "total": len(data),
-                    "source": "clickhouse",
+                    "source": "clickhouse+intraday_daily" if intraday_daily else "clickhouse",
+                    "intraday_daily": intraday_daily,
                 }
             except Exception as exc:
                 logger.warning(f"ClickHouse kline query fallback to SQLAlchemy engine: {exc}")

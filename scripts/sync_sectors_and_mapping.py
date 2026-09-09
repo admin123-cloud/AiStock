@@ -1,17 +1,19 @@
 """
-行业板块同步（ClickHouse 原子切换版）
+Sync QMT sectors and sector memberships into ClickHouse with atomic swaps.
 
-- 同步一/二/三级行业板块到 sectors
-- 可选同步板块成分到 sector_stocks
-- 全程避免 UPDATE，统一使用临时表 + RENAME 原子切换
+QMT is the canonical source for stock and sector membership. TDX can only be
+used later as a price fallback through alias mapping, never as the owner of the
+sector taxonomy.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, Set
+from pathlib import Path
+from typing import Any, Dict, List, Set, Tuple
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -23,7 +25,9 @@ from utils.market_warehouse import clickhouse_client
 
 logger = get_logger("SyncSectors")
 
-QMT_DEFAULT_SECTOR_NAMES = {
+FALSE_VALUES = {"0", "false", "no", "off"}
+
+QMT_UNIVERSE_SECTOR_NAMES = {
     "上证A股",
     "上证B股",
     "上证转债",
@@ -52,35 +56,88 @@ QMT_DEFAULT_SECTOR_NAMES = {
     "科创板CDR",
 }
 
+QMT_UNIVERSE_KEYWORDS = ("A股", "B股", "ETF", "基金", "债券", "转债", "指数", "CDR")
+QMT_LOCAL_ROOT = Path(os.environ.get("AISTOCK_QMT_ROOT", r"D:\国金QMT\国金证券QMT交易端"))
+QMT_LOCAL_SW_SECTOR_DIRS = (
+    ("申万一级行业板块", 1, "SW1"),
+    ("申万二级行业板块", 2, "SW2"),
+    ("申万三级行业板块", 3, "SW3"),
+)
+QMT_LOCAL_SYSTEM_WEIGHT_FILES = (
+    Path("datadir") / "Weight" / "sectorWeightData.txt",
+    Path("userdata_mini") / "datadir" / "Weight" / "systemSectorWeightData.txt",
+)
+STOCK_CODE_PATTERN = re.compile(r"\b(?:[036]\d{5}\.(?:SH|SZ)|[48]\d{5}\.BJ)\b", re.IGNORECASE)
+
+
+def _is_truthy_env(name: str, default: str = "1") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() not in FALSE_VALUES
+
+
+def _is_qmt_universe_sector(name: str) -> bool:
+    text = str(name or "").strip()
+    if text in QMT_UNIVERSE_SECTOR_NAMES:
+        return True
+    return len(text) <= 12 and any(keyword in text for keyword in QMT_UNIVERSE_KEYWORDS)
+
+
+def _classify_qmt_sector(name: str) -> Tuple[str, int]:
+    if _is_qmt_universe_sector(name):
+        return "qmt_universe", 0
+    if str(name or "").startswith("SW1"):
+        return "industry", 1
+    if str(name or "").startswith("SW2"):
+        return "industry", 2
+    if str(name or "").startswith("SW3"):
+        return "industry", 3
+    # Existing strategy queries use type='industry' AND level=2. QMT does not
+    # expose a stable category field through xtdata, so every non-universe QMT
+    # board is made strategy-visible at level 2.
+    return "industry", 2
+
 
 class SectorSyncer:
     def __init__(self):
+        self.pure_qmt = _is_truthy_env("AISTOCK_QMT_SECTOR_PURE_MODE", "1")
+        self.filter_to_universe = _is_truthy_env("AISTOCK_QMT_SECTOR_FILTER_TO_UNIVERSE", "1")
+        self.include_all_qmt_sectors = _is_truthy_env("AISTOCK_QMT_SECTOR_INCLUDE_ALL", "1")
+        self.include_universe_sectors = _is_truthy_env("AISTOCK_QMT_SECTOR_INCLUDE_UNIVERSE", "0")
         self.stats = {
             "total_sectors": 0,
+            "universe_sectors": 0,
+            "industry_like_sectors": 0,
             "new_sectors": 0,
             "updated_sectors": 0,
             "total_mappings": 0,
             "new_mappings": 0,
+            "dropped_non_universe_mappings": 0,
             "failed": 0,
         }
 
     def sync_all_sectors(self, include_mappings: bool = True):
         logger.info("=" * 80)
         logger.info("Start syncing QMT sectors (atomic swap mode)")
+        logger.info(
+            "QMT sector mode: pure_qmt={}, filter_to_universe={}, include_all_qmt_sectors={}",
+            self.pure_qmt,
+            self.filter_to_universe,
+            self.include_all_qmt_sectors,
+        )
+        logger.info("QMT universe sector mappings enabled={}", self.include_universe_sectors)
         logger.info("=" * 80)
 
         self._ensure_sector_tables()
-
-        merged = self._fetch_qmt_sectors()
-
-        self._atomic_replace_sectors(merged)
+        sectors = self._fetch_qmt_sectors()
+        if not sectors:
+            raise RuntimeError("QMT returned no sectors; abort atomic swap to protect existing sector tables")
+        self._atomic_replace_sectors(sectors)
 
         if include_mappings:
-            self._atomic_replace_sector_mappings(merged)
+            self._atomic_replace_sector_mappings(sectors)
         else:
             logger.info("Skip sector-stock mapping sync for lightweight sector-list run")
 
-        logger.info("板块同步完成，统计={}", self.stats)
+        logger.info("Sector sync completed, stats={}", self.stats)
 
     def _qmt_client(self) -> QmtMiniMarketClient:
         client = QmtMiniMarketClient()
@@ -89,19 +146,149 @@ class SectorSyncer:
 
     def _fetch_qmt_sectors(self) -> List[Dict[str, Any]]:
         client = self._qmt_client()
-        sector_names = sorted({str(item).strip() for item in client.get_sector_list() if str(item).strip()})
-        if str(os.environ.get("AISTOCK_QMT_SECTOR_INCLUDE_ALL") or "").strip().lower() not in {"1", "true", "yes", "on"}:
-            sector_names = [name for name in sector_names if name in QMT_DEFAULT_SECTOR_NAMES]
+        try:
+            xtdata = client._ensure_connected()
+            if hasattr(xtdata, "download_sector_data"):
+                xtdata.download_sector_data()
+                logger.info("QMT download_sector_data completed before sector list fetch")
+        except Exception as exc:
+            logger.warning("QMT download_sector_data failed before sector list fetch: {}", exc)
+
+        try:
+            sector_names = sorted({str(item).strip() for item in client.get_sector_list() if str(item).strip()})
+        except Exception as exc:
+            logger.warning("QMT get_sector_list failed, try local QMT sector files: {}", exc)
+            return self._fetch_local_qmt_sector_files()
+
+        if not self.include_all_qmt_sectors:
+            sector_names = [name for name in sector_names if _is_qmt_universe_sector(name)]
         if not sector_names:
-            logger.warning("No QMT sectors returned")
-            return []
+            logger.warning("No QMT sectors returned, try local QMT sector files")
+            return self._fetch_local_qmt_sector_files()
 
         out: List[Dict[str, Any]] = []
         for name in sector_names:
-            out.append({"code": f"qmt:{name}", "name": name, "qmt_name": name, "level": 1})
+            sector_type, level = _classify_qmt_sector(name)
+            if sector_type == "qmt_universe" and not self.include_universe_sectors:
+                continue
+            out.append(
+                {
+                    "code": f"qmt:{name}",
+                    "name": name,
+                    "qmt_name": name,
+                    "type": sector_type,
+                    "level": level,
+                }
+            )
 
-        logger.info("Fetched QMT sectors count={}", len(out))
+        # QMT's online sector list can omit a recently refreshed SW component
+        # even though the local QMT sector files already contain it.  Merge the
+        # local QMT-owned SW memberships so an online refresh cannot erase a
+        # valid canonical mapping (for example, SW2电池 -> 002245.SZ).
+        local_rows = self._fetch_local_qmt_sector_files()
+        merged: Dict[str, Dict[str, Any]] = {str(row["code"]): row for row in out}
+        for local in local_rows:
+            code = str(local["code"])
+            existing = merged.get(code)
+            if existing is None:
+                merged[code] = local
+                continue
+            existing["members"] = list(local.get("members") or [])
+            existing["qmt_name"] = str(local.get("qmt_name") or existing.get("qmt_name") or "")
+            existing["name"] = str(local.get("name") or existing.get("name") or "")
+            existing["type"] = str(local.get("type") or existing.get("type") or "industry")
+            existing["level"] = int(local.get("level") or existing.get("level") or 2)
+        out = list(merged.values())
+
+        self.stats["universe_sectors"] = sum(1 for row in out if row["type"] == "qmt_universe")
+        self.stats["industry_like_sectors"] = sum(1 for row in out if row["type"] == "industry")
+        logger.info(
+            "Fetched QMT sectors count={}, universe={}, industry_like={}",
+            len(out),
+            self.stats["universe_sectors"],
+            self.stats["industry_like_sectors"],
+        )
         return out
+
+    def _fetch_local_qmt_sector_files(self) -> List[Dict[str, Any]]:
+        base = QMT_LOCAL_ROOT / "datadir" / "Sector"
+        if not base.exists():
+            logger.warning("QMT local sector directory does not exist: {}", base)
+            return []
+
+        rows: List[Dict[str, Any]] = []
+        if self.include_universe_sectors:
+            rows.extend(self._fetch_local_qmt_universe_files())
+        for dirname, level, prefix in QMT_LOCAL_SW_SECTOR_DIRS:
+            folder = base / dirname
+            if not folder.exists():
+                logger.warning("QMT local SW sector folder missing: {}", folder)
+                continue
+            for path in sorted(folder.iterdir()):
+                if not path.is_file() or path.name.lower().endswith(".xml"):
+                    continue
+                raw_name = path.name.strip()
+                if not raw_name.startswith(prefix):
+                    continue
+                name = raw_name[len(prefix) :].strip() or raw_name
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except Exception as exc:
+                    logger.warning("Read QMT local sector file failed: path={}, error={}", path, exc)
+                    continue
+                members = sorted({m.upper() for m in STOCK_CODE_PATTERN.findall(text)})
+                if not members:
+                    continue
+                rows.append(
+                    {
+                        "code": f"qmt:{raw_name}",
+                        "name": name,
+                        "qmt_name": raw_name,
+                        "type": "industry",
+                        "level": level,
+                        "members": members,
+                    }
+                )
+
+        dedup = {str(row["code"]): row for row in rows}
+        rows = list(dedup.values())
+        self.stats["universe_sectors"] = sum(1 for row in rows if row["type"] == "qmt_universe")
+        self.stats["industry_like_sectors"] = sum(1 for row in rows if row["type"] == "industry")
+        logger.info("Fetched local QMT SW sectors count={} from {}", len(rows), base)
+        return rows
+
+    def _fetch_local_qmt_universe_files(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for rel_path in QMT_LOCAL_SYSTEM_WEIGHT_FILES:
+            path = QMT_LOCAL_ROOT / rel_path
+            if not path.exists():
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except Exception as exc:
+                logger.warning("Read QMT local universe file failed: path={}, error={}", path, exc)
+                continue
+            for line in lines:
+                parts = [part.strip() for part in line.split(";") if part.strip()]
+                if len(parts) < 2:
+                    continue
+                name = parts[0]
+                if not _is_qmt_universe_sector(name):
+                    continue
+                members = sorted({m.upper() for item in parts[1:] for m in STOCK_CODE_PATTERN.findall(item)})
+                if not members:
+                    continue
+                rows.append(
+                    {
+                        "code": f"qmt:{name}",
+                        "name": name,
+                        "qmt_name": name,
+                        "type": "qmt_universe",
+                        "level": 0,
+                        "members": members,
+                    }
+                )
+        return rows
 
     def _ensure_sector_tables(self):
         ch = clickhouse_client()
@@ -133,6 +320,19 @@ class SectorSyncer:
             """
         )
 
+    def _official_universe_codes(self) -> Set[str]:
+        if not self.filter_to_universe:
+            return set()
+        ch = clickhouse_client()
+        try:
+            rows = ch.query("SELECT code FROM stocks WHERE type IN ('stock', 'index')").result_rows
+        except Exception as exc:
+            logger.warning("Load official stock universe failed, skip sector member filtering: {}", exc)
+            return set()
+        codes = {str(r[0]).strip().upper() for r in rows if r and str(r[0]).strip()}
+        logger.info("Loaded official universe codes for QMT sector mapping: {}", len(codes))
+        return codes
+
     def _atomic_replace_sectors(self, sector_rows: List[Dict[str, Any]]):
         ch = clickhouse_client()
         now = datetime.now()
@@ -143,7 +343,7 @@ class SectorSyncer:
         items = list(dedup.values())
         self.stats["total_sectors"] = len(items)
 
-        existing_rows = ch.query("SELECT code, name, type, level FROM sectors WHERE type = 'qmt_sector'").result_rows
+        existing_rows = ch.query("SELECT code, name, type, level FROM sectors WHERE startsWith(code, 'qmt:')").result_rows
         existing_map = {
             str(r[0]): {"name": str(r[1] or ""), "type": str(r[2] or ""), "level": int(r[3] or 0)}
             for r in existing_rows
@@ -154,29 +354,33 @@ class SectorSyncer:
         self.stats["updated_sectors"] = 0
         for row in items:
             old = existing_map.get(row["code"])
+            row_type = str(row.get("type") or "industry")
             if old is None:
                 self.stats["new_sectors"] += 1
-            elif old["name"] != row["name"] or old["type"] != "qmt_sector" or old["level"] != row["level"]:
+            elif old["name"] != row["name"] or old["type"] != row_type or old["level"] != row["level"]:
                 self.stats["updated_sectors"] += 1
 
         rows = []
         for row in items:
-            rows.append([
-                row["code"],
-                row["name"],
-                "qmt_sector",
-                None,
-                int(row["level"]),
-                0,
-                now,
-            ])
+            rows.append(
+                [
+                    row["code"],
+                    row["name"],
+                    str(row.get("type") or "industry"),
+                    None,
+                    int(row["level"]),
+                    0,
+                    now,
+                ]
+            )
 
         tmp_table = "sectors_sync_tmp"
         backup_table = "sectors_sync_backup"
         ch.command(f"DROP TABLE IF EXISTS {tmp_table}")
         ch.command(f"DROP TABLE IF EXISTS {backup_table}")
         ch.command(f"CREATE TABLE {tmp_table} AS sectors")
-        ch.command(f"INSERT INTO {tmp_table} SELECT * FROM sectors WHERE type != 'qmt_sector'")
+        if not self.pure_qmt:
+            ch.command(f"INSERT INTO {tmp_table} SELECT * FROM sectors WHERE NOT startsWith(code, 'qmt:')")
 
         if rows:
             ch.insert(
@@ -192,37 +396,57 @@ class SectorSyncer:
         ch = clickhouse_client()
         now = datetime.now()
 
-        client = self._qmt_client()
+        client = None
         sector_by_code: Dict[str, str] = {str(s["code"]): str(s.get("qmt_name") or s["name"]) for s in sectors}
+        sector_members_by_code: Dict[str, List[str]] = {
+            str(s["code"]): list(s.get("members") or [])
+            for s in sectors
+            if s.get("members")
+        }
         sector_codes: Set[str] = set(sector_by_code.keys())
+        universe_codes = self._official_universe_codes()
         rows = []
+        dropped_non_universe = 0
 
         for idx, sector_code in enumerate(sorted(sector_codes), start=1):
-            try:
-                stock_list = client.get_stock_list_in_sector(sector_by_code[sector_code]) or []
-            except Exception as exc:
-                logger.error("获取板块 {} 成分股映射失败: {}", sector_code, exc)
-                self.stats["failed"] += 1
-                continue
+            if sector_code in sector_members_by_code:
+                stock_list = sector_members_by_code[sector_code]
+            else:
+                if client is None:
+                    client = self._qmt_client()
+                try:
+                    stock_list = client.get_stock_list_in_sector(sector_by_code[sector_code]) or []
+                except Exception as exc:
+                    logger.error("Fetch QMT sector members failed: sector={}, error={}", sector_code, exc)
+                    self.stats["failed"] += 1
+                    continue
 
             for stock in stock_list:
                 stock_code = stock.get("Code") if isinstance(stock, dict) else stock
                 if not stock_code:
                     continue
-                rows.append([str(sector_code), str(stock_code), 0.0, now])
+                code_text = str(stock_code).strip().upper()
+                if universe_codes and code_text not in universe_codes:
+                    dropped_non_universe += 1
+                    continue
+                rows.append([str(sector_code), code_text, 0.0, now])
 
             if idx % 10 == 0:
-                logger.info("映射进度: {}/{} 个板块", idx, len(sector_codes))
+                logger.info("Sector mapping progress: {}/{} sectors", idx, len(sector_codes))
 
         self.stats["total_mappings"] = len(rows)
         self.stats["new_mappings"] = len(rows)
+        self.stats["dropped_non_universe_mappings"] = dropped_non_universe
+        if not rows:
+            raise RuntimeError("QMT returned no sector members; abort atomic swap to protect existing sector_stocks")
 
         tmp_table = "sector_stocks_sync_tmp"
         backup_table = "sector_stocks_sync_backup"
         ch.command(f"DROP TABLE IF EXISTS {tmp_table}")
         ch.command(f"DROP TABLE IF EXISTS {backup_table}")
         ch.command(f"CREATE TABLE {tmp_table} AS sector_stocks")
-        ch.command(f"INSERT INTO {tmp_table} SELECT * FROM sector_stocks WHERE NOT startsWith(sector_code, 'qmt:')")
+        if not self.pure_qmt:
+            ch.command(f"INSERT INTO {tmp_table} SELECT * FROM sector_stocks WHERE NOT startsWith(sector_code, 'qmt:')")
 
         if rows:
             ch.insert(
@@ -234,7 +458,6 @@ class SectorSyncer:
         ch.command(f"RENAME TABLE sector_stocks TO {backup_table}, {tmp_table} TO sector_stocks")
         ch.command(f"DROP TABLE IF EXISTS {backup_table}")
 
-        # Refresh stock_count in sectors via atomic rebuild
         tmp2 = "sectors_count_sync_tmp"
         bak2 = "sectors_count_sync_backup"
         ch.command(f"DROP TABLE IF EXISTS {tmp2}")
@@ -256,6 +479,7 @@ class SectorSyncer:
                 FROM sector_stocks
                 GROUP BY sector_code
             ) m ON m.sector_code = s.code
+            WHERE ({1 if not self.pure_qmt else 0}) = 1 OR (startsWith(s.code, 'qmt:') AND ifNull(m.cnt, 0) > 0)
             """
         )
         ch.command(f"RENAME TABLE sectors TO {bak2}, {tmp2} TO sectors")

@@ -1,6 +1,7 @@
 """Migrate ClickHouse minute K-line timestamps to Asia/Shanghai wall-clock time.
 
-Older imports stored minute bars as ``exchange_time - 8 hours``.  This script
+Older imports stored minute bars as ``exchange_time + 8 hours`` after a naive
+timestamp was interpreted as UTC. This script
 rewrites affected kline_minute_* tables so the persisted ``datetime`` is the
 actual A-share business timestamp, e.g. 2026-05-15 15:00:00 for close.
 
@@ -87,13 +88,15 @@ def _table_exists(table: str) -> bool:
 
 def _table_stats(table: str, period_minutes: int) -> dict:
     local_times = _valid_times(period_minutes)
-    legacy_times = _shifted_times(local_times, -8)
+    # The affected legacy rows are exchange close times shifted forward by 8h
+    # (e.g. 09:45 persisted as 17:45). Current QMT rows are already local.
+    legacy_times = _shifted_times(local_times, 8)
     df = clickhouse_query_df(
         f"""
         SELECT
             count() AS rows,
-            uniqExact(tuple(code, datetime)) AS key_rows,
-            uniqExact(tuple(code, datetime + INTERVAL 8 HOUR)) AS shifted_key_rows,
+            count() AS key_rows,
+            count() AS shifted_key_rows,
             min(datetime) AS min_dt,
             max(datetime) AS max_dt,
             countIf((toHour(datetime), toMinute(datetime)) IN ({_time_tuples(local_times)})) AS local_rows,
@@ -159,7 +162,8 @@ def _migrate_table(table: str, period_minutes: int, execute: bool, keep_staging_
             INSERT INTO {staging}
             SELECT
                 code,
-                datetime + INTERVAL 8 HOUR AS datetime,
+                if((toHour(datetime), toMinute(datetime)) IN ({_time_tuples(_shifted_times(_valid_times(period_minutes), 8))}),
+                   datetime - INTERVAL 8 HOUR, datetime) AS datetime,
                 open,
                 high,
                 low,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -85,11 +85,15 @@ def _to_yyyymmdd(value: str) -> str:
     return text.replace("-", "").replace("/", "")[:8]
 
 
+def _expired_date(value: Any) -> str:
+    text = _to_yyyymmdd(value)
+    return text if _has_past_expire_date(text) else ""
+
+
 def _detail_to_stock_row(code: str, detail: Optional[Dict[str, Any]], stock_type: str) -> Dict[str, Any]:
     detail = detail or {}
     full_code = _normalize_code(code)
     name = detail.get("InstrumentName") or _compact_code(full_code)
-    expire_date = str(detail.get("ExpireDate") or "")
     return {
         "code": full_code,
         "Code": full_code,
@@ -98,8 +102,9 @@ def _detail_to_stock_row(code: str, detail: Optional[Dict[str, Any]], stock_type
         "market": _market_from_code(full_code),
         "type": stock_type,
         "list_date": detail.get("OpenDate") or detail.get("CreateDate") or "",
+        "delist_date": _expired_date(detail.get("ExpireDate")),
         "st": 1 if "ST" in str(name).upper() else 0,
-        "quit": 1 if expire_date not in {"", "0", "99999999"} else 0,
+        "quit": 0 if _is_active_stock_detail(detail) else 1,
         "float_share": float(detail.get("FloatVolume") or 0.0),
         "total_share": float(detail.get("TotalVolume") or 0.0),
         "industry": "",
@@ -109,11 +114,25 @@ def _detail_to_stock_row(code: str, detail: Optional[Dict[str, Any]], stock_type
     }
 
 
+def _has_past_expire_date(value: Any) -> bool:
+    text = str(value or "").strip()
+    if text in {"", "0", "99999999"}:
+        return False
+    try:
+        expire = datetime.strptime(text[:8], "%Y%m%d").date()
+    except Exception:
+        return False
+    # QMT's historical-contract cache also exposes values such as ``10011011``.
+    # They are internal sentinels rather than calendar dates; treating them as
+    # year-1001 dates both creates false delistings and cannot be written to a
+    # ClickHouse Date column.  Mainland A-share instruments start in 1990.
+    return date(1990, 1, 1) <= expire <= datetime.now().date()
+
+
 def _is_active_stock_detail(detail: Optional[Dict[str, Any]]) -> bool:
     if not detail:
         return False
-    expire_date = str(detail.get("ExpireDate") or "")
-    if expire_date not in {"", "0", "99999999"}:
+    if _has_past_expire_date(detail.get("ExpireDate")):
         return False
     product_id = str(detail.get("ProductID") or "").upper()
     if product_id in {"R"}:
@@ -212,6 +231,22 @@ class QmtMiniDataSource(BaseDataSource):
             logger.warning(f"QMT stock info failed for {stock_code}: {exc}")
             return None
 
+    def refresh_expired_contracts(self) -> None:
+        """Refresh QMT's expired-contract cache before metadata reconciliation."""
+        self._ensure_client().download_history_contracts(incrementally=True)
+
+    def get_expired_stock_info(self, stock_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Return only stocks whose QMT contract detail has a past ExpireDate."""
+        if not stock_codes:
+            return {}
+        details = self._ensure_client().get_instrument_detail_list(stock_codes, True)
+        result: Dict[str, Dict[str, Any]] = {}
+        for code in stock_codes:
+            detail = details.get(code) or {}
+            if _has_past_expire_date(detail.get("ExpireDate")):
+                result[_normalize_code(code)] = _detail_to_stock_row(code, detail, "stock")
+        return result
+
     def get_stock_list(
         self,
         market: str = "SH",
@@ -231,6 +266,10 @@ class QmtMiniDataSource(BaseDataSource):
                 row_type = "stock"
 
             client = self._ensure_client()
+            # QMT removes delisted instruments from the normal A-share sectors.
+            # Refresh their separate history-contract cache first so the caller
+            # can reconcile removed codes with ExpireDate afterwards.
+            client.download_history_contracts(incrementally=True)
             codes = client.get_stock_list_in_sector(sector_name)
             if not codes:
                 return []

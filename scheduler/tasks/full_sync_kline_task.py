@@ -12,6 +12,7 @@ import pandas as pd
 from utils.logger import get_logger
 from data_fetcher.manager import DataSourceManager
 from scheduler.config import SCHEDULER_CONFIG
+from utils.kline_units import normalize_qmt_daily_units
 
 logger = get_logger("FullSyncKlineTask")
 
@@ -49,7 +50,7 @@ class FullSyncKlineTask:
         self.status = "idle"  # idle, running, completed, failed, paused
         self.start_time = None
         self.end_time = None
-        # 閸愬懎鐡ㄩ惄鎴炲付闁板秶鐤?
+        # Read memory and chunking limits from the minute K-line scheduler configuration.
         self.minute_kline_config = SCHEDULER_CONFIG.get("sync", {}).get("minute_kline", {})
         self.memory_limit_gb = self.minute_kline_config.get("memory_limit_gb", 8)
         self.hard_memory_limit_gb = self.minute_kline_config.get("hard_memory_limit_gb", 12)
@@ -69,30 +70,35 @@ class FullSyncKlineTask:
         self.current_period = ""
 
         try:
-            # 閼惧嘲褰囬幍鈧張澶庡亗缁併劋鍞惍?            from utils.database import db
+            # Load the active stock universe from the application database.
+            from utils.database import db
             from models.stock_models import Stock
 
             session = next(db.get_session())
-            stocks = session.query(Stock.code).filter(
+            stocks = session.query(Stock.code, Stock.type).filter(
                 Stock.type.in_("stock", "index"),
                 or_(Stock.status == 'active', Stock.status.is_(None))
             ).all()
             stock_codes = [stock.code for stock in stocks]
+            stock_types = {
+                str(stock.code).upper(): str(stock.type or "stock").lower()
+                for stock in stocks
+            }
             session.close()
 
             self.total_stocks = len(stock_codes)
             logger.info("full sync task message")
 
-            # 閸氬本顒為惃鍕噯閺堢噦绱欐担璺ㄦ暏缂佺喍绔撮惃鍕闂傛潙宕熸担宥嗙垼閸戝棴绱?
-            # 閺嶅洤鍣弽鐓庣础閿?m, 5m, 15m, 30m, 60m, 1d, 1w, 1mon, 1q, 1y
+            # Use the shared period mapping for daily and minute synchronization.
+            # Supported periods: 5m, 15m, 30m, 60m, 1d, 1w, 1mon, 1q, 1y.
             from utils.period_constants import STANDARD_PERIODS
             periods = STANDARD_PERIODS
             
-            # 娴犲酣鍘ょ純顔款嚢閸欐牕寮弫?            batch_size = self.minute_kline_config.get("batch_size", 50)
+            batch_size = self.minute_kline_config.get("batch_size", 50)
             delay_between_batches = self.minute_kline_config.get("delay_between_batches", 2.0)
             delay_between_stocks = self.minute_kline_config.get("delay_between_stocks", 0.5)
 
-            # 閸掑棙澹掓径鍕倞
+            # Configure delays between symbols and batches.
             total_count = len(stock_codes)
             success_count = 0
             fail_count = 0
@@ -102,11 +108,12 @@ class FullSyncKlineTask:
             minute_periods = ["5m", "15m", "30m", "60m"]
             daily_periods = [p for p in periods if p not in minute_periods]
 
-            # 褰撳墠鏃ユ湡锛堢敤浜庤绠楀垎鍧楁椂闂磋寖鍥达級
+            # 当前日期（用于计算分块时间范围）
             end_date = datetime.now().date()
             start_date = end_date - timedelta(days=365 * 5)
             for i in range(0, total_count, batch_size):
-                # 閸愬懎鐡ㄥΛ鈧弻?- 閸︺劍鐦℃稉顏呭濞嗏€崇磻婵澧犲Λ鈧弻?                memory_status = check_memory_limit(self.memory_limit_gb, self.hard_memory_limit_gb)
+                # Pause or collect garbage when the configured memory threshold is reached.
+                memory_status = check_memory_limit(self.memory_limit_gb, self.hard_memory_limit_gb)
                 if memory_status == "critical":
                     logger.warning("full sync task warning")
                     self.status = "paused"
@@ -127,7 +134,7 @@ class FullSyncKlineTask:
                 for code in batch_codes:
                     self.current_stock = code
                     try:
-                        # 閸忓牆鎮撳銉︽）缁惧灝寮锋禒銉ょ瑐閸涖劍婀￠敍鍫熸殶閹诡噣鍣虹亸蹇ョ礆
+                        # Synchronize supported daily periods before minute-period chunks.
                         for period in daily_periods:
                             self.current_period = period
                             result = self.market_data_source.get_stock_history(
@@ -138,16 +145,22 @@ class FullSyncKlineTask:
                             )
 
                             if result is not None and not result.empty:
-                                self._save_kline_data(code, period, result)
+                                self._save_kline_data(
+                                    code,
+                                    period,
+                                    result,
+                                    instrument_type=stock_types.get(str(code).upper(), "stock"),
+                                )
                                 logger.info("full sync task message")
                             else:
                                 logger.warning("full sync task warning")
 
-                        # 閸掑棝鎸撻崨銊︽埂娴ｈ法鏁ら崚鍡楁健閺傜懓绱￠崥灞绢劄閿涘矂浼╅崗宥勭濞嗏剝鈧冨鏉炲€熺箖婢舵碍鏆熼幑?                        current_chunk_start = start_date
+                        # Fetch minute K-lines in bounded date chunks to control memory use.
+                        current_chunk_start = start_date
                         while current_chunk_start <= end_date:
                             chunk_end = min(current_chunk_start + timedelta(days=self.chunk_days), end_date)
                             
-                            # 閸愬懎鐡ㄥΛ鈧弻?                            memory_status = check_memory_limit(self.memory_limit_gb, self.hard_memory_limit_gb)
+                            memory_status = check_memory_limit(self.memory_limit_gb, self.hard_memory_limit_gb)
                             if memory_status == "critical":
                                 logger.warning("full sync task warning")
                                 paused_count += 1
@@ -165,34 +178,40 @@ class FullSyncKlineTask:
                                 )
 
                                 if result is not None and not result.empty:
-                                    self._save_kline_data(code, period, result)
+                                    self._save_kline_data(
+                                        code,
+                                        period,
+                                        result,
+                                        instrument_type=stock_types.get(str(code).upper(), "stock"),
+                                    )
                                     "task message"
                                 else:
                                     "task message"
                             
                             current_chunk_start = chunk_end + timedelta(days=1)
-                            # 閸掑棗娼￠梻鎾
+                            # Move to the next chunk after a successful fetch.
                             await asyncio.sleep(0.1)
 
                         success_count += 1
                         self.processed_stocks += 1
 
                     except Exception as e:
-                        logger.error(f"  {code}: 閸氬本顒炴径杈Е - {e}")
+                        logger.error(f"  {code}: synchronization failed - {e}")
                         fail_count += 1
                         self.processed_stocks += 1
 
-                    # 鑲＄エ闂村欢?                    await asyncio.sleep(delay_between_stocks)
-                    # 濮ｅ繐顦╅悶鍡楃暚娑撯偓閸欘亣鍋傜粊銊ユ倵濡偓閺屻儱鍞寸€涙ê鑻熼柌濠冩杹
+                    # 股票间延?                    await asyncio.sleep(delay_between_stocks)
+                    # Collect garbage after processing each symbol.
                     gc.collect()
 
-                # 鎵规闂村欢?                if i + batch_size < total_count:
-                    logger.info(f"绛夊?{delay_between_batches} 绉掑悗澶勭悊涓嬩竴鎵?.")
+                if i + batch_size < total_count:
+                    logger.info(f"等?{delay_between_batches} 秒后处理下一?.")
                     await asyncio.sleep(delay_between_batches)
-                    # 閹佃顐肩紒鎾存将閸氬骸宸遍崚璺虹€崷鎯ф礀閺€?                    gc.collect()
-                    logger.info(f"閹佃顐肩紒鎾存将閸氬骸鍞寸€涙ü濞囬悽? {get_memory_usage_gb():.2f}GB")
+                    # Collect garbage between batches and report the memory footprint.
+                    gc.collect()
+                    logger.info(f"Memory usage after batch: {get_memory_usage_gb():.2f}GB")
 
-            # 濮瑰洦鈧崵绮ㄩ弸?            self.end_time = datetime.now()
+            self.end_time = datetime.now()
             duration = (self.end_time - self.start_time).total_seconds()
             self.status = "completed"
 
@@ -202,11 +221,11 @@ class FullSyncKlineTask:
             logger.info("full sync task message")
             logger.info("full sync task message")
             logger.info("full sync task message")
-            logger.info(f"閺堚偓缂佸牆鍞寸€涙ü濞囬悽? {get_memory_usage_gb():.2f}GB")
+            logger.info(f"Final memory usage: {get_memory_usage_gb():.2f}GB")
             logger.info("=" * 60)
 
         except Exception as e:
-            logger.error(f"閸忋劑鍣篕缁炬寧鏆熼幑顔兼倱濮濄儰鎹㈤崝鈩冨⒔鐞涘苯銇戠拹?{e}")
+            logger.error(f"Full K-line synchronization failed: {e}")
             self.status = "failed"
             self.end_time = datetime.now()
             raise
@@ -234,7 +253,7 @@ class FullSyncKlineTask:
         
         return progress
 
-    def _save_kline_data(self, code: str, period: str, klines):
+    def _save_kline_data(self, code: str, period: str, klines, instrument_type: str = "stock"):
         """Save K-line data to database."""
 
 
@@ -245,6 +264,12 @@ class FullSyncKlineTask:
 
         try:
             from utils.database import db
+
+            if period == "1d":
+                klines = normalize_qmt_daily_units(
+                    klines,
+                    instrument_type=instrument_type,
+                )
 
             session = next(db.get_session())
 
@@ -269,7 +294,7 @@ class FullSyncKlineTask:
             elif period == "1y":
                 from models.stock_models import KlineYearly as Model
             else:
-                logger.error(f"閺堫亞鐓￠惃鍕噯閺?{period}")
+                logger.error(f"Unsupported K-line period: {period}")
                 session.close()
                 return
 
@@ -285,7 +310,7 @@ class FullSyncKlineTask:
                     for record in existing_records:
                         existing_data[record.datetime] = record
                 elif period == "1d":
-                    # 杩囨护鏈夋晥鏁版嵁骞惰绠梔ates
+                    # 过滤有效数据并计算dates
                     dates = []
                     for _, row in klines.iterrows():
                         try:
@@ -304,7 +329,7 @@ class FullSyncKlineTask:
                         for record in existing_records:
                             existing_data[record.trade_date] = record
                 elif period == "1w":
-                    # 杩囨护鏈夋晥鏁版嵁骞惰绠梔ates
+                    # 过滤有效数据并计算dates
                     dates = []
                     for _, row in klines.iterrows():
                         try:
@@ -323,7 +348,7 @@ class FullSyncKlineTask:
                         for record in existing_records:
                             existing_data[record.week_start_date] = record
                 elif period == "1mon":
-                    # 杩囨护鏈夋晥鏁版嵁骞惰绠梔ates
+                    # 过滤有效数据并计算dates
                     dates = []
                     for _, row in klines.iterrows():
                         try:
@@ -342,7 +367,7 @@ class FullSyncKlineTask:
                         for record in existing_records:
                             existing_data[record.month_start_date] = record
                 elif period == "1q":
-                    # 杩囨护鏈夋晥鏁版嵁骞惰绠梣uarters
+                    # 过滤有效数据并计算quarters
                     quarters = []
                     for _, row in klines.iterrows():
                         try:
@@ -364,7 +389,7 @@ class FullSyncKlineTask:
                         for record in existing_records:
                             existing_data[(record.year, record.quarter)] = record
                 elif period == "1y":
-                    # 杩囨护鏈夋晥鏁版嵁骞惰绠梱ears
+                    # 过滤有效数据并计算years
                     years = []
                     for _, row in klines.iterrows():
                         try:
@@ -390,14 +415,14 @@ class FullSyncKlineTask:
 
             for _, row in klines.iterrows():
                 try:
-                    # 濡偓閺岊櫔atetime閺勵垰鎯侀張澶嬫櫏
+                    # Convert datetime values before persisting records.
                     if row["datetime"] is None:
                         logger.error("full sync task error")
                         continue
                     
                     logger.debug(f"save row {code} {period} datetime type={type(row['datetime'])} value={row['datetime']}")
                     
-                    # 纭繚datetime鏄痙atetime绫诲瀷锛屽鏋滄槸楃涓插垯杞?
+                    # 确保datetime是datetime类型，如果是符串则转?
                     datetime_value = row["datetime"]
                     if isinstance(datetime_value, str):
                         try:
@@ -410,7 +435,7 @@ class FullSyncKlineTask:
                         logger.error(f"invalid datetime type for {code} {period}: {type(datetime_value)}")
                         continue
                     
-                    # 濡偓閺屻儲鏆熼幑顔芥Ц閸氾箑鍑＄€涙ê婀?
+                    # Skip rows whose datetime cannot be normalized.
                     key = None
                     if period in ["1m", "5m", "15m", "30m", "1h"]:
                         key = datetime_value
@@ -421,7 +446,7 @@ class FullSyncKlineTask:
                                 logger.error("full sync task error")
                                 continue
                         except (AttributeError, ValueError, TypeError) as e:
-                            logger.error(f"璺宠繃鏃犳晥鐨勬棩绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                            logger.error(f"跳过无效的日线数?{code} - datetime格式错误: {str(e)}")
                             continue
                     elif period == "1w":
                         try:
@@ -430,7 +455,7 @@ class FullSyncKlineTask:
                                 logger.error("full sync task error")
                                 continue
                         except (AttributeError, ValueError, TypeError) as e:
-                            logger.error(f"璺宠繃鏃犳晥鐨勫懆绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                            logger.error(f"跳过无效的周线数?{code} - datetime格式错误: {str(e)}")
                             continue
                     elif period == "1mon":
                         try:
@@ -439,7 +464,7 @@ class FullSyncKlineTask:
                                 logger.error("full sync task error")
                                 continue
                         except (AttributeError, ValueError, TypeError) as e:
-                            logger.error(f"璺宠繃鏃犳晥鐨勬湢绾挎暟鎹?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                            logger.error(f"跳过无效的朠线数?{code} - datetime格式错误: {str(e)}")
                             continue
                     elif period == "1q":
                         try:
@@ -452,16 +477,16 @@ class FullSyncKlineTask:
                                 logger.error("full sync task error")
                                 continue
                         except (AttributeError, ValueError, TypeError) as e:
-                            logger.error(f"璺宠繃鏃犳晥鐨勫绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                            logger.error(f"跳过无效的季线数?{code} - datetime格式错误: {str(e)}")
                             continue
                     elif period == "1y":
                         try:
                             key = datetime_value.year
                             if key is None:
-                                logger.error(f"璺宠繃鏃犳晥鐨勫勾绾挎暟?{code} - 骞翠唤涓虹┖")
+                                logger.error(f"跳过无效的年线数?{code} - 年份为空")
                                 continue
                         except (AttributeError, ValueError, TypeError) as e:
-                            logger.error(f"璺宠繃鏃犳晥鐨勫勾绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                            logger.error(f"跳过无效的年线数?{code} - datetime格式错误: {str(e)}")
                             continue
 
                     if key in existing_data:
@@ -474,7 +499,7 @@ class FullSyncKlineTask:
                         existing.volume = row["volume"]
                         existing.amount = row["amount"]
                         
-                        # 鐎甸€涚艾閸涖劎鍤庨弫鐗堝祦閿涘苯顩ч弸婊€绠ｉ崜宄竐ek_end_date娑撶皠ull娑撴梹婀伴崨銊ュ嚒缂佹挻娼敍灞藉灟閺囧瓨鏌?
+                        # Populate week_end_date only once the current week has completed.
                         if period == "1w":
                             if existing.week_end_date is None:
                                 from datetime import datetime, timedelta
@@ -520,17 +545,18 @@ class FullSyncKlineTask:
                                 else:
                                     logger.error("full sync task error")
                             except (AttributeError, ValueError, TypeError) as e:
-                                logger.error(f"璺宠繃鏃犳晥鐨勬棩绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                                logger.error(f"跳过无效的日线数?{code} - datetime格式错误: {str(e)}")
                         elif period == "1w":
                             try:
                                 weekly_date = datetime_value.date()
                                 if weekly_date is not None and not pd.isna(weekly_date):
-                                    # 閸掋倖鏌囬張顒€鎳嗛弰顖氭儊瀹歌尙绮ㄩ弶?                                    from datetime import datetime, timedelta
+                                    # Calculate the Friday that closes the weekly bar.
+                                    from datetime import datetime, timedelta
                                     today = datetime.now().date()
-                                    # 璁＄畻鏈懆浜旂殑鏃ユ?
+                                    # 计算札五的日?
                                     days_until_friday = (4 - weekly_date.weekday()) % 7
                                     friday_date = weekly_date + timedelta(days=days_until_friday)
-                                    # 濡傛灉鏈懆浜旇繕娌埌锛屽垯week_end_date涓篘one
+                                    # Keep week_end_date empty until the week has completed.
                                     week_end_date = friday_date if today >= friday_date else None
                                     
                                     new_record = Model(
@@ -549,7 +575,7 @@ class FullSyncKlineTask:
                                 else:
                                     logger.error("full sync task error")
                             except (AttributeError, ValueError, TypeError) as e:
-                                logger.error(f"璺宠繃鏃犳晥鐨勫懆绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                                logger.error(f"跳过无效的周线数?{code} - datetime格式错误: {str(e)}")
                         elif period == "1mon":
                             try:
                                 month_date = datetime_value.date()
@@ -570,7 +596,7 @@ class FullSyncKlineTask:
                                 else:
                                     logger.error("full sync task error")
                             except (AttributeError, ValueError, TypeError) as e:
-                                logger.error(f"璺宠繃鏃犳晥鐨勬湢绾挎暟鎹?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                                logger.error(f"跳过无效的朠线数?{code} - datetime格式错误: {str(e)}")
                         elif period == "1q":
                             try:
                                 quarter_year = datetime_value.year
@@ -593,7 +619,7 @@ class FullSyncKlineTask:
                                 else:
                                     logger.error("full sync task error")
                             except (AttributeError, ValueError, TypeError) as e:
-                                logger.error(f"璺宠繃鏃犳晥鐨勫绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                                logger.error(f"跳过无效的季线数?{code} - datetime格式错误: {str(e)}")
                         elif period == "1y":
                             try:
                                 year = datetime_value.year
@@ -611,20 +637,20 @@ class FullSyncKlineTask:
                                     batch.append(new_record)
                                     insert_count += 1
                                 else:
-                                    logger.error(f"璺宠繃鏃犳晥鐨勫勾绾挎暟?{code} - 骞翠唤涓虹┖")
+                                    logger.error(f"跳过无效的年线数?{code} - 年份为空")
                             except (AttributeError, ValueError, TypeError) as e:
-                                logger.error(f"璺宠繃鏃犳晥鐨勫勾绾挎暟?{code} - datetime鏍煎紡閿欒: {str(e)}")
+                                logger.error(f"跳过无效的年线数?{code} - datetime格式错误: {str(e)}")
                 except (AttributeError, ValueError, TypeError) as e:
                     logger.error(f"failed to save {code} {period}: {e}")
                     continue
 
-                # 閹靛綊鍣洪幓鎰唉
+                # Commit the batch after all valid records are prepared.
                 if len(batch) >= batch_size:
                     session.add_all(batch)
                     session.flush()
                     batch = []
 
-            # 閹绘劒姘﹂崜鈺€缍戦惃鍕婢跺嫮鎮?
+            # Roll back the transaction and report the persistence error.
             if batch:
                 session.add_all(batch)
                 session.flush()
@@ -639,7 +665,7 @@ class FullSyncKlineTask:
             gc.collect()
 
         except Exception as e:
-            logger.error(f"娣囨繂鐡↘缁炬寧鏆熼幑顔笺亼鐠?{e}")
+            logger.error(f"Failed to persist synchronized K-line data: {e}")
             session.rollback()
             session.close()
             raise

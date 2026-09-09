@@ -20,7 +20,9 @@ from api.stocks import router as stocks_router
 from api.system_config import router as system_router
 from api.trading import router as trading_router
 from api.watchlist import router as watchlist_router
+from services.runtime_health import read_snapshot
 from utils.logger import get_logger
+from utils.paths import runtime_path
 
 logger = get_logger("main")
 
@@ -64,8 +66,11 @@ async def lifespan(app: FastAPI):
             init_v4_manual_holdings_monitor_scheduler_from_config,
         )
 
-        start_core_data_maintenance_scheduler()
-        logger.info("Core data maintenance scheduler started")
+        core_maintenance_status = start_core_data_maintenance_scheduler()
+        if core_maintenance_status is None:
+            logger.info("Core data maintenance scheduler remains disabled; Windows Host QMT tasks own market-data production")
+        else:
+            logger.info("Core data maintenance scheduler started")
         v4_monitor_status = init_v4_manual_holdings_monitor_scheduler_from_config()
         logger.info(f"V4 manual holdings monitor scheduler initialized: {v4_monitor_status}")
         gen2_shadow_monitor_status = init_gen2_shadow_buy_monitor_scheduler_from_config()
@@ -105,11 +110,19 @@ app.add_middleware(
 
 @app.get("/api/health/check")
 async def health_check():
+    runtime_health = read_snapshot(runtime_path("health", "latest.json"))
     return {
         "status": "ok",
         "service": "AiStock Backend",
         "version": "1.0.0",
+        "runtime_health": runtime_health,
     }
+
+
+@app.get("/api/health/runtime")
+async def runtime_health_check():
+    """Read-only data/strategy freshness contract for UI and strategy gates."""
+    return read_snapshot(runtime_path("health", "latest.json"))
 
 
 app.include_router(data_stats_router, prefix="/api", tags=["data-statistics"])

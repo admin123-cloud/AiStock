@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: aistock-backend-dev
-    restart: "no"
+    restart: unless-stopped
     cpus: "2.0"
     mem_limit: 9g
     memswap_limit: 9g
@@ -34,8 +34,11 @@ services:
       AISTOCK_LOCAL_TDX_ROOT: /tdx/vipdoc
       AISTOCK_STRICT_TDXQ_STARTUP: "0"
       AISTOCK_STARTUP_SCHEDULERS_ENABLED: "1"
+      AISTOCK_CORE_DATA_MAINTENANCE_SCHEDULER_ENABLED: "0"
       AISTOCK_STARTUP_TDXQUANT_CHECK_ENABLED: "0"
       AISTOCK_TDX_GATEWAY_URL: http://host.docker.internal:8765
+      AISTOCK_QMT_TICK_BRIDGE_URL: http://host.docker.internal:8766/full-tick
+      AISTOCK_QMT_ACCOUNT_BRIDGE_URL: http://host.docker.internal:8766/account-snapshot
     volumes:
       - .:/app
       - ./config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
@@ -52,10 +55,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     container_name: aistock-frontend-dev
-    restart: "no"
+    restart: unless-stopped
     cpus: "1.5"
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     depends_on:
       - backend
     ports:

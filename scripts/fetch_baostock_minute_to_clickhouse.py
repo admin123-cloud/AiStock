@@ -26,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.kline_store import filter_trading_day_rows
 
 EXPORTS_DIR = REPO_ROOT / "data" / "warehouse" / "exports"
 
@@ -197,6 +198,12 @@ def validate_frame(df: pd.DataFrame) -> Dict[str, Any]:
 def upsert_to_clickhouse(table: str, df: pd.DataFrame, replace: bool) -> int:
     """Insert (or replace) minute data into the target ClickHouse table."""
     if df.empty:
+        return 0
+    period = table.replace("kline_minute_", "") + "m"
+    before_rows = len(df)
+    df = filter_trading_day_rows(period, df)
+    if df.empty:
+        print(f"{table} write blocked by trade_calendar guard: dropped={before_rows}", flush=True)
         return 0
     # kline_minute_* tables use (code, datetime) as natural key for deduplication
     ch = clickhouse_client()
