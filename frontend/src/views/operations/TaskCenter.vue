@@ -55,7 +55,9 @@
       <p v-if="board.operations_publisher?.repair?.verified?.length">本轮复验通过：{{ board.operations_publisher.repair.verified.join('、') }}</p>
     </section>
     <section class="ops-panel"><h2>异常与恢复记录</h2><p>异常先进入恢复窗口，超时后合并提醒；SMTP接受不代表收件人已收到或阅读。</p><el-empty v-if="!events.length" description="尚无已记录事件；这不代表所有数据已通过验收" />
-      <div v-for="event in events" :key="event.key" class="ops-candidate"><div class="ops-toolbar"><strong>{{ event.detail.message || event.detail.reason || event.key }}</strong><el-tag :type="tone(event.status)">{{ label(event.status) }}</el-tag><el-tag type="info">{{ label(event.notification) }}</el-tag></div><p class="ops-meta">首次发现 {{ dateTime(event.first_seen) }} · 恢复窗口 {{ dateTime(event.deadline) }} · 发送尝试 {{ event.attempts }} · 恢复通知 {{ label(event.recovery_notification) }}</p><p v-if="event.error">{{ event.error }}</p></div>
+      <p v-if="events.length" class="ops-meta">已加载最近 {{ events.length }} 条记录，每页10条</p>
+      <div v-for="event in eventsOnPage" :key="event.key" class="ops-candidate"><div class="ops-toolbar"><strong>{{ event.detail.message || event.detail.reason || event.key }}</strong><el-tag :type="tone(event.status)">{{ label(event.status) }}</el-tag><el-tag type="info">{{ label(event.notification) }}</el-tag></div><p class="ops-meta">首次发现 {{ dateTime(event.first_seen) }} · 恢复窗口 {{ dateTime(event.deadline) }} · 发送尝试 {{ event.attempts }} · 恢复通知 {{ label(event.recovery_notification) }}</p><p v-if="event.error">{{ event.error }}</p></div>
+      <el-pagination v-if="events.length>10" v-model:current-page="eventPage" :page-size="10" :total="events.length" :pager-count="5" layout="prev, pager, next" small aria-label="异常记录分页" />
     </section>
   </div>
 </template>
@@ -64,6 +66,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getTasks, getIncidents, label, tone, dateTime } from '@/utils/operations'
 import '@/styles/operations.css'
 const board=ref({}), events=ref([]), loading=ref(false), error=ref(''), filter=ref('all'), search=ref(''), scope=ref('core'), group=ref('delivery')
+const eventPage=ref(1)
+const eventsOnPage=computed(()=>events.value.slice((eventPage.value-1)*10,eventPage.value*10))
 const isRepairStopped=status=>['budget_exhausted','no_progress_requires_review','requires_review'].includes(status)
 const repairStopped=computed(()=>(board.value.operations_publisher?.repair?.held||[]).filter(x=>isRepairStopped(x.status)))
 const metrics=computed(()=>[{label:'Windows已登记',value:board.value.summary?.registered_windows},{label:'运行中',value:board.value.summary?.running},{label:'最近执行失败',value:board.value.summary?.failed},{label:'历史 / 退役入口',value:board.value.summary?.retired}])
@@ -74,7 +78,7 @@ const groupRows=computed(()=>(board.value.tasks||[]).filter(x=>x.group===group.v
 const groupTitle=computed(()=>(board.value.groups||[]).find(x=>x.id===group.value)?.label||'后台任务')
 function changeScope(){group.value=scope.value==='core'?'delivery':scope.value;filter.value='all';search.value=''}
 const filtered=computed(()=>groupRows.value.filter(x=>(filter.value==='all'||(filter.value==='attention'?(['failed','unknown','not_observed'].includes(x.status)||['blocked','stale','degraded'].includes(x.business_status)):x.status===filter.value))&&`${x.name} ${x.title||''} ${x.purpose||''} ${x.produces||''}`.toLowerCase().includes(search.value.toLowerCase())))
-async function load(){if(loading.value)return;loading.value=true;error.value='';try{const [tasks,incidents]=await Promise.all([getTasks(),getIncidents()]);board.value=tasks;events.value=incidents.incidents||[]}catch(e){error.value=e.response?.data?.detail||e.message}finally{loading.value=false}}
+async function load(){if(loading.value)return;loading.value=true;error.value='';try{const [tasks,incidents]=await Promise.all([getTasks(),getIncidents()]);board.value=tasks;events.value=incidents.incidents||[];eventPage.value=Math.min(eventPage.value,Math.max(1,Math.ceil(events.value.length/10)))}catch(e){error.value=e.response?.data?.detail||e.message}finally{loading.value=false}}
 let timer
 onMounted(()=>{load();timer=setInterval(()=>{if(!document.hidden)load()},10000)})
 onUnmounted(()=>clearInterval(timer))
