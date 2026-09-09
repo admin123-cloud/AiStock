@@ -186,7 +186,8 @@ def parse_args() -> argparse.Namespace:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     parser = argparse.ArgumentParser(description="Audit and safely maintain daily K-line calendar coverage.")
     parser.add_argument("--mode", choices=["audit", "repair"], default="audit")
-    parser.add_argument("--start-date", default=f"{now.year}-01-01")
+    parser.add_argument("--start-date", default="")
+    parser.add_argument("--scope", choices=["year", "latest"], default="year")
     parser.add_argument("--end-date", default="")
     parser.add_argument("--max-repair-codes", type=int, default=60)
     parser.add_argument("--batch-size", type=int, default=30)
@@ -249,6 +250,9 @@ def main() -> int:
     args = parse_args()
     client = daily.ch_client()
     end_date = args.end_date or _default_end_date(client)
+    args.start_date = args.start_date or (end_date if args.scope == 'latest' else f'{end_date[:4]}-01-01')
+    if args.start_date > end_date:
+        raise ValueError('start_date must not be after the last closed trading date')
     # Keep the coverage contract aligned with reviewed exchange/issuer events.
     # This is idempotent: raw QMT-absence evidence is retained in its own
     # table, while only verified status intervals are exempted from repair.

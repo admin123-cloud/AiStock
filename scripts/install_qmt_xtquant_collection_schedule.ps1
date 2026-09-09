@@ -240,24 +240,9 @@ Register-CollectorTask `
   -Description "Run bounded QMT daily-bar coverage repair on the Windows host before the backend publishes the overnight audit result." `
   -Action (New-CollectorAction -Mode "daily-coverage-repair" -Scenario "daily-coverage" -Periods "1d" -Universe "stock" -MaxRepairCodes $DailyCoverageMaxRepairCodes -CodeChunkSize 30 -ActiveStart $DailyCoverageAt -ActiveEnd $DailyCoverageAt -SkipTimeWindowCheck) `
   -Trigger $DailyCoverageTrigger
-Set-RegisteredTaskWindowTrigger `
-  -TaskName "$TaskPrefix Daily Coverage Repair" `
-  -TriggerXml (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageStartAt -DaysOfWeek $NightDays)
-
-# Run the identical conservative daily-data policy after the market closes as
-# well as overnight.  The worker only uses closed daily bars after 15:05 and
-# its fallback may write solely cross-validated rows; source conflicts remain
-# auditable rather than being treated as suspensions.
 $DailyCoverageAfterCloseStartAt = Resolve-CollectorStartAt -Now $Now -At $DailyCoverageAfterCloseAt -ActiveStart $DailyCoverageAfterCloseAt -ActiveEnd $DailyCoverageAfterCloseAt
-$DailyCoverageAfterCloseTrigger = New-ScheduledTaskTrigger -Once -At $DailyCoverageAfterCloseStartAt
-Register-CollectorTask `
-  -TaskName "$TaskPrefix Daily Coverage After Close Repair" `
-  -Description "Run bounded daily-bar coverage repair after the Shanghai close using the same verified-status and cross-source policy as the overnight task." `
-  -Action (New-CollectorAction -Mode "daily-coverage-repair" -Scenario "daily-coverage" -Periods "1d" -Universe "stock" -MaxRepairCodes $DailyCoverageMaxRepairCodes -CodeChunkSize 30 -ActiveStart $DailyCoverageAfterCloseAt -ActiveEnd $DailyCoverageAfterCloseAt -SkipTimeWindowCheck) `
-  -Trigger $DailyCoverageAfterCloseTrigger
-Set-RegisteredTaskWindowTrigger `
-  -TaskName "$TaskPrefix Daily Coverage After Close Repair" `
-  -TriggerXml (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageAfterCloseStartAt -DaysOfWeek $Weekdays)
+$DailyCoverageTriggerXml = (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageStartAt -DaysOfWeek $NightDays) + (New-TaskWeeklyTriggerXml -StartAt $DailyCoverageAfterCloseStartAt -DaysOfWeek $Weekdays)
+Set-RegisteredTaskWindowTrigger -TaskName "$TaskPrefix Daily Coverage Repair" -TriggerXml $DailyCoverageTriggerXml
 
 $NightStartAt = Resolve-CollectorStartAt -Now $Now -At $NightRepairAt -ActiveStart $NightRepairAt -ActiveEnd $NightRepairActiveEnd -AllowWeekend $true
 $NightTrigger = New-ScheduledTaskTrigger -Once -At $NightStartAt
@@ -278,7 +263,7 @@ Write-Output "Installed QMT xtquant collection schedule:"
 Write-Output "  - $TaskPrefix Intraday Collector: one long-lived run starts $IntradayAt on weekdays, active window $IntradayActiveStart~$IntradayActiveEnd, mode=intraday-fullpush-aggregate, periods=$IntradayPeriods"
 Write-Output "  - $TaskPrefix After Close Repair: one long-lived run starts $AfterCloseAt on weekdays, active window $AfterCloseAt~$AfterCloseActiveEnd, mode=after-close-finalize"
 Write-Output "  - $TaskPrefix Daily Coverage Repair: host-side 1d bounded repair starts $DailyCoverageAt before the backend audit"
-Write-Output "  - $TaskPrefix Daily Coverage After Close Repair: host-side 1d bounded repair starts $DailyCoverageAfterCloseAt on weekdays using the same abnormal-data policy"
+Write-Output "  - $TaskPrefix Daily Coverage Repair: second trigger for closed-day repair starts $DailyCoverageAfterCloseAt on weekdays using the same abnormal-data policy"
 Write-Output "  - $TaskPrefix Night Rolling Repair: one long-lived run starts $NightRepairAt, active window $NightRepairAt~$NightRepairActiveEnd, date_offset=$NightRepairStartDateOffsetDays~$NightRepairEndDateOffsetDays"
 Write-Output "Runner script: $RunnerScript"
 Write-Output "PythonExe: $PythonExe"

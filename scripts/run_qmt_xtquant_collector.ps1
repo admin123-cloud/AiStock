@@ -34,6 +34,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$DailyStartExplicit = $PSBoundParameters.ContainsKey('StartDate')
+$DailyEndExplicit = $PSBoundParameters.ContainsKey('EndDate')
 
 if (-not $env:AISTOCK_QMT_ROOT) {
   $env:AISTOCK_QMT_ROOT = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("RDpc5Zu96YeRUU1UXOWbvemHkeivgeWIuFFNVOS6pOaYk+errw=="))
@@ -362,12 +364,16 @@ function Write-RollingState {
 function Invoke-CollectorOnce {
   $AppliedRepairCodeOffset = Read-AppliedOffset
   if ($Mode -eq "daily-coverage-repair") {
+    $DailyScope = if ((Get-Date).Hour -ge 15) { 'latest' } else { 'year' }
     $CoverageArgs = @(
       $DailyCoverageScript,
       "--mode", "repair",
+      "--scope", $DailyScope,
       "--max-repair-codes", "$MaxRepairCodes",
       "--batch-size", "$([Math]::Max(1, $RepairCodeChunkSize))"
     )
+    if ($DailyStartExplicit) { $CoverageArgs += @('--start-date', $StartDate) }
+    if ($DailyEndExplicit) { $CoverageArgs += @('--end-date', $EndDate) }
     Write-CollectorLog "START qmt_daily_coverage_repair max_repair_codes=$MaxRepairCodes batch_size=$([Math]::Max(1, $RepairCodeChunkSize))"
     Push-Location $RootDir
     try {

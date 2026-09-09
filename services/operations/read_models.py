@@ -55,7 +55,8 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
         component_name = {'kline_daily': 'daily_kline_coverage', 'kline_minute_after_close': 'qmt_after_close_validation'}.get(owner.get('artifact'))
         evidence = components.get(component_name, {})
         rows.append({**item, 'status': status, 'executor': 'Windows', 'artifact': owner.get('artifact'),
-                     'window': owner.get('window'), 'business_status': evidence.get('status', 'unverified') if health.get('publisher_status') == 'healthy' else 'unknown',
+                     'registered': True,
+                     'window': item.get('window') or owner.get('window'), 'business_status': evidence.get('status', 'unverified') if health.get('publisher_status') == 'healthy' else 'unknown',
                      'business_reason': evidence.get('reason'), 'source_stale': not fresh_host})
     specs = [
         ('G3候选刷新', 'shadow_monitor_state.json', '120秒 / 交易时段'),
@@ -84,15 +85,21 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
     discovered = {row['name'] for row in rows}
     for artifact in manifest.get('artifacts', []):
         if artifact.get('trigger') == 'Windows Task Scheduler' and artifact['owner'] not in discovered:
+            discovered.add(artifact['owner'])
             rows.append({'name': artifact['owner'], 'executor': 'Windows', 'status': 'not_observed',
+                         'registered': False,
                          'artifact': artifact['artifact'], 'window': artifact.get('window'), 'business_status': 'unknown'})
-    return {'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'), 'tasks': rows,
+    from services.operations.task_catalog import describe_tasks
+    rows, groups = describe_tasks(rows, read_json(root/'operations/task_transitions.json'))
+    return {'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'), 'tasks': rows, 'groups':groups,
             'api_runtime': {**api_state, 'fresh': api_fresh, 'source': 'live' if live is not None else 'snapshot',
                             'ready': bool(api_fresh and api_state.get('ready'))},
             'operations_publisher':read_snapshot(root/'operations/latest.json',now=now),
             'host_inventory_status': 'healthy' if fresh_host else 'unknown',
             'host_inventory_at': host.get('generated_at'), 'health': health,
             'summary': {'total': len(rows), 'running': sum(x['status'] == 'running' for x in rows),
+                        'registered_windows':sum(x.get('registered') is True and x.get('status')!='retired' for x in rows),
+                        'retired':sum(x['group']=='retired' for x in rows),
                         'failed': sum(x['status'] == 'failed' for x in rows),
                         'unknown': sum(x['status'] in ('unknown','not_observed') for x in rows)}}
 

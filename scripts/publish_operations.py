@@ -27,7 +27,7 @@ def host_inventory() -> list[dict]:
     script = r"""[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $ErrorActionPreference='Stop';
     @(Get-ScheduledTask | Where-Object {$_.TaskName -like '*AiStock*'} | ForEach-Object {
       $info=$_ | Get-ScheduledTaskInfo
-      [pscustomobject]@{name=$_.TaskName;state=[string]$_.State;last_run=if($info.LastRunTime){$info.LastRunTime.ToString('o')}else{$null};next_run=if($info.NextRunTime){$info.NextRunTime.ToString('o')}else{$null};last_result=$info.LastTaskResult;description=$_.Description}
+      [pscustomobject]@{name=$_.TaskName;state=[string]$_.State;last_run=if($info.LastRunTime){$info.LastRunTime.ToString('o')}else{$null};next_run=if($info.NextRunTime){$info.NextRunTime.ToString('o')}else{$null};last_result=$info.LastTaskResult;description=$_.Description;window=(@($_.Triggers | ForEach-Object { $trigger=$_; "$($trigger.StartBoundary) [$($trigger.CimClass.CimClassName)] interval=$($trigger.Repetition.Interval) duration=$($trigger.Repetition.Duration)" }) -join '; ')}
     }) | ConvertTo-Json -Depth 3 -Compress"""
     result = subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',script],
                             capture_output=True, text=True, encoding='utf-8-sig', timeout=25,

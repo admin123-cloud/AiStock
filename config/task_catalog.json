@@ -1,0 +1,437 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "id": "market",
+      "label": "行情接入",
+      "purpose": "连接QMT并接收盘中行情，为页面和策略提供市场数据。"
+    },
+    {
+      "id": "delivery",
+      "label": "数据交付与补缺",
+      "purpose": "将行情落库、验收完整性，并在盘后和夜间补齐缺口。"
+    },
+    {
+      "id": "g3",
+      "label": "G3主升跟踪",
+      "purpose": "刷新候选、确认30分钟信号并记录每日有效性。"
+    },
+    {
+      "id": "holding",
+      "label": "持仓与做T",
+      "purpose": "同步真实持仓，跟踪退出条件和做T纸面结果。"
+    },
+    {
+      "id": "monitor",
+      "label": "运行监控",
+      "purpose": "汇总任务、数据交付和告警状态，发现静默失败。"
+    },
+    {
+      "id": "backup",
+      "label": "备份恢复",
+      "purpose": "保存独立数据副本，并核验备份与恢复能力。"
+    },
+    {
+      "id": "external",
+      "label": "外部联动",
+      "purpose": "外部Dify工作流的监控触发，与核心生产任务分开。"
+    },
+    {
+      "id": "retired",
+      "label": "已退役",
+      "purpose": "旧调度注册已停用或被替代；保留历史与恢复说明。"
+    }
+  ],
+  "tasks": [
+    {
+      "names": [
+        "AiStock QMT Read-Only Tick Bridge"
+      ],
+      "group": "market",
+      "title": "QMT行情桥接",
+      "purpose": "向AiStock提供QMT实时行情和只读账户桥接接口。",
+      "schedule_description": "登录后常驻",
+      "produces": "本机QMT桥接接口",
+      "failure_impact": "行情页面或账户读取不可用；不能将行情连通当作委托可用。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "AiStock QMT xtquant Intraday Collector"
+      ],
+      "group": "market",
+      "title": "盘中行情采集",
+      "purpose": "将盘中推送聚合为5/15/30/60分钟K线及盘中事实数据。",
+      "schedule_description": "交易日09:25–15:10",
+      "produces": "分钟K线、盘中行情事实表",
+      "failure_impact": "行情落盘滞后，策略可能因分钟数据不完整被阻断。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "AiStock QMT xtquant Daily Coverage Repair"
+      ],
+      "group": "delivery",
+      "title": "日线交付与补缺",
+      "purpose": "核对证券池和交易日历，补齐日线缺失并输出覆盖验收。",
+      "schedule_description": "00:05、16:10；以实际触发器为准",
+      "produces": "日线主表、daily_kline_coverage/latest.json",
+      "failure_impact": "日线缺口可能持续影响市场判断和历史策略计算。",
+      "lifecycle": "active",
+      "consolidation_note": "同一入口保留夜间和16:10两个触发时点。当前仍调用稳态代码的年内补齐；盘后仅补当日的范围修正随正式代码发布生效。"
+    },
+    {
+      "names": [
+        "AiStock QMT xtquant Daily Coverage After Close Repair"
+      ],
+      "group": "delivery",
+      "title": "盘后日线修复（旧独立入口）",
+      "purpose": "原16:10日线补齐入口，与夜间日线修复共用执行脚本。",
+      "schedule_description": "原16:10",
+      "produces": "日线主表、覆盖验收",
+      "failure_impact": "若没有接管就删除，会失去盘后触发。",
+      "lifecycle": "active",
+      "consolidation_note": "由日线交付与补缺的16:10触发接管后退役。"
+    },
+    {
+      "names": [
+        "AiStock QMT xtquant After Close Repair"
+      ],
+      "group": "delivery",
+      "title": "盘后分钟补齐",
+      "purpose": "补齐当天股票与指数分钟K线，反复验收至窗口结束。",
+      "schedule_description": "交易日16:00–18:30",
+      "produces": "5/15/30/60分钟主表、盘后最终验收",
+      "failure_impact": "当天分钟缺失或主表/stage冲突会阻断G3确认。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "AiStock QMT xtquant Night Rolling Repair"
+      ],
+      "group": "delivery",
+      "title": "历史分钟补洞",
+      "purpose": "在夜间修复历史分钟缺口，优先依赖盘后验收结果。",
+      "schedule_description": "00:40–06:30；现有范围为自然日偏移-8至-2",
+      "produces": "历史分钟K线、滚动修复进度与验收",
+      "failure_impact": "历史缺口会影响回测和主升状态计算。",
+      "lifecycle": "active",
+      "consolidation_note": "保留能力；范围按交易日历与已验证缺口逐步收敛。"
+    },
+    {
+      "names": [
+        "AiStock Runtime Health Publisher",
+        "AiStock Operations Monitor"
+      ],
+      "group": "monitor",
+      "title": "运行健康与交付监控",
+      "purpose": "发布健康快照，汇总任务和数据交付验收；通知需通过接管条件。",
+      "schedule_description": "每5分钟；各检查阶段独立失败隔离",
+      "produces": "health/latest.json、operations任务/交付/事件记录",
+      "failure_impact": "缺失数据或后台任务故障可能无法被及时看见。",
+      "lifecycle": "active",
+      "consolidation_note": "健康发布与Operations验收统一入口；是否发送通知由实际配置与接管状态决定。"
+    },
+    {
+      "names": [
+        "AiStock Operations Publisher"
+      ],
+      "group": "monitor",
+      "title": "交付验收与异常通知（兼容入口）",
+      "purpose": "采集Windows任务，独立核验交付；修复窗口超时后合并告警。",
+      "schedule_description": "每5分钟，恢复窗口默认30分钟",
+      "produces": "交付矩阵、持久化故障与通知记录",
+      "failure_impact": "数据已缺失但用户未收到告警。",
+      "lifecycle": "active",
+      "consolidation_note": "统一监控入口接管后不再单独安装。"
+    },
+    {
+      "names": [
+        "AiStock G3 Holding T Paper Monitor",
+        "AiStock G3 Holding T Service"
+      ],
+      "group": "holding",
+      "title": "持仓做T监控与日结",
+      "purpose": "盘中跟踪持仓做T纸面机会，16:00汇总当日快照和复盘。",
+      "schedule_description": "盘中每分钟；16:00日结",
+      "produces": "g3_holding_t_paper盘口快照、纸面记录与复盘",
+      "failure_impact": "错过做T观察或缺少日结证据；本任务不自动下单。",
+      "lifecycle": "active",
+      "consolidation_note": "盘中扫描和日结由同一入口按触发时刻分派，保留原业务步骤。"
+    },
+    {
+      "names": [
+        "AiStock G3 Holding T Daily Review"
+      ],
+      "group": "holding",
+      "title": "持仓做T日结（旧独立入口）",
+      "purpose": "将当日盘口快照和纸面结果汇总成可复盘记录。",
+      "schedule_description": "原16:00",
+      "produces": "每日做T复盘",
+      "failure_impact": "缺少日结证据，无法评估盘中观察结果。",
+      "lifecycle": "active",
+      "consolidation_note": "统一做T入口接管16:00后退役。"
+    },
+    {
+      "names": [
+        "AiStock_ClickHouse_Backup_3AM"
+      ],
+      "group": "backup",
+      "title": "ClickHouse数据备份",
+      "purpose": "为行情数据库保存独立副本，供故障恢复使用。",
+      "schedule_description": "当前实际：每月1日03:00",
+      "produces": "F:/Stock/clickhouse_backup压缩包",
+      "failure_impact": "故障后可能无法恢复行情；退出码0不能证明备份可恢复。",
+      "lifecycle": "active",
+      "consolidation_note": "保留独立职责；频率、整批保留和恢复验证待专项修正。"
+    },
+    {
+      "names": [
+        "AiStock QMT Mini Broker Snapshot Sync"
+      ],
+      "group": "retired",
+      "title": "旧账户同步",
+      "purpose": "曾由独立Windows任务同步账户，当前应由G3盘后同步接管。",
+      "schedule_description": "已停用",
+      "produces": "保留原历史数据与任务定义备份",
+      "failure_impact": "退役注册不应影响已接管能力；不删除历史数据。",
+      "lifecycle": "retired",
+      "consolidation_note": "确认原注册Disabled并导出XML后删除注册。"
+    },
+    {
+      "names": [
+        "AiStock QMT xtquant Daily Coverage Continuous Repair"
+      ],
+      "group": "retired",
+      "title": "旧连续日线修复",
+      "purpose": "早期持续循环补日线，已由有界交付与补缺流程替代。",
+      "schedule_description": "已停用",
+      "produces": "保留原历史数据与任务定义备份",
+      "failure_impact": "退役注册不应影响已接管能力；不删除历史数据。",
+      "lifecycle": "retired",
+      "consolidation_note": "确认原注册Disabled并导出XML后删除注册。"
+    },
+    {
+      "names": [
+        "AiStock TDX Gateway Memory Watchdog"
+      ],
+      "group": "retired",
+      "title": "旧TDX看门狗",
+      "purpose": "早期自动维护TDX网关；当前仅保留显式受控的TDX兜底。",
+      "schedule_description": "已停用",
+      "produces": "保留原历史数据与任务定义备份",
+      "failure_impact": "退役注册不应影响已接管能力；不删除历史数据。",
+      "lifecycle": "retired",
+      "consolidation_note": "确认原注册Disabled并导出XML后删除注册。"
+    },
+    {
+      "names": [
+        "AiStockMonitor-Preopen"
+      ],
+      "group": "external",
+      "title": "外部Dify监控",
+      "purpose": "调用外部Dify工作流分析AiStock状态并执行其既有通知策略。",
+      "schedule_description": "原盘前/盘中/盘后/兜底触发；合并保留原触发器",
+      "produces": "外部工作空间的监控状态与工作流记录",
+      "failure_impact": "外部提醒可能缺失；不承担行情落库职责。",
+      "lifecycle": "external",
+      "consolidation_note": "同脚本多触发器合并；外部通知策略不在本页面隐式修改。"
+    },
+    {
+      "names": [
+        "AiStockMonitor-Intraday-AM"
+      ],
+      "group": "external",
+      "title": "外部上午监控（旧入口）",
+      "purpose": "调用外部Dify工作流分析AiStock状态并执行其既有通知策略。",
+      "schedule_description": "原盘前/盘中/盘后/兜底触发；合并保留原触发器",
+      "produces": "外部工作空间的监控状态与工作流记录",
+      "failure_impact": "外部提醒可能缺失；不承担行情落库职责。",
+      "lifecycle": "external",
+      "consolidation_note": "同脚本多触发器合并；外部通知策略不在本页面隐式修改。"
+    },
+    {
+      "names": [
+        "AiStockMonitor-Intraday-PM"
+      ],
+      "group": "external",
+      "title": "外部下午监控（旧入口）",
+      "purpose": "调用外部Dify工作流分析AiStock状态并执行其既有通知策略。",
+      "schedule_description": "原盘前/盘中/盘后/兜底触发；合并保留原触发器",
+      "produces": "外部工作空间的监控状态与工作流记录",
+      "failure_impact": "外部提醒可能缺失；不承担行情落库职责。",
+      "lifecycle": "external",
+      "consolidation_note": "同脚本多触发器合并；外部通知策略不在本页面隐式修改。"
+    },
+    {
+      "names": [
+        "AiStockMonitor-Afterclose"
+      ],
+      "group": "external",
+      "title": "外部盘后监控（旧入口）",
+      "purpose": "调用外部Dify工作流分析AiStock状态并执行其既有通知策略。",
+      "schedule_description": "原盘前/盘中/盘后/兜底触发；合并保留原触发器",
+      "produces": "外部工作空间的监控状态与工作流记录",
+      "failure_impact": "外部提醒可能缺失；不承担行情落库职责。",
+      "lifecycle": "external",
+      "consolidation_note": "同脚本多触发器合并；外部通知策略不在本页面隐式修改。"
+    },
+    {
+      "names": [
+        "AiStockMonitor-Fallback"
+      ],
+      "group": "external",
+      "title": "外部兜底检查（旧入口）",
+      "purpose": "调用外部Dify工作流分析AiStock状态并执行其既有通知策略。",
+      "schedule_description": "原盘前/盘中/盘后/兜底触发；合并保留原触发器",
+      "produces": "外部工作空间的监控状态与工作流记录",
+      "failure_impact": "外部提醒可能缺失；不承担行情落库职责。",
+      "lifecycle": "external",
+      "consolidation_note": "同脚本多触发器合并；外部通知策略不在本页面隐式修改。"
+    },
+    {
+      "names": [
+        "G3候选刷新",
+        "g3_state_alpha_shadow_monitor"
+      ],
+      "group": "g3",
+      "title": "G3候选刷新",
+      "purpose": "按当前合同刷新主升候选并生成一致的运行批次。",
+      "schedule_description": "交易时段，每120秒检查",
+      "produces": "摘要/候选/票据/诊断完整批次",
+      "failure_impact": "候选过期或数据阻断，不能解释成当天没有机会。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "G3影子退出",
+        "g3_state_alpha_shadow_exit_monitor"
+      ],
+      "group": "holding",
+      "title": "G3影子退出",
+      "purpose": "检查影子持仓退出条件并更新纸面退出证据。",
+      "schedule_description": "交易时段，每120秒",
+      "produces": "影子退出状态与台账",
+      "failure_impact": "退出观察滞后；不等同于真实卖出成交。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "G3趋势退出",
+        "g3_state_alpha_daily_trend_exit_monitor"
+      ],
+      "group": "holding",
+      "title": "G3趋势退出",
+      "purpose": "跟踪持仓的趋势退出条件和风险提示。",
+      "schedule_description": "交易时段，每300秒",
+      "produces": "趋势退出检查结果",
+      "failure_impact": "持仓风险提示可能滞后。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "G3每日观察",
+        "g3_state_alpha_observation_snapshot"
+      ],
+      "group": "g3",
+      "title": "G3每日验收",
+      "purpose": "验收主升策略当天数据和运行结果，累计有效观察日。",
+      "schedule_description": "15:40；次日首根30m补验",
+      "produces": "逐日观察快照与阻断原因",
+      "failure_impact": "无法判断策略当天是否可靠运行。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "G3首根30m补验",
+        "g3_state_alpha_observation_first_bar_retry"
+      ],
+      "group": "g3",
+      "title": "首根30m补验",
+      "purpose": "在次日首根30分钟数据到齐后复验待确认记录。",
+      "schedule_description": "按实际调度计划",
+      "produces": "观察补验结果",
+      "failure_impact": "待确认状态可能长期不更新。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "真实账户同步",
+        "真实账户盘后同步",
+        "g3_state_alpha_broker_sync"
+      ],
+      "group": "holding",
+      "title": "真实账户盘后同步",
+      "purpose": "每个交易日盘后读取真实账户资金和持仓，为决策提供账户基准。",
+      "schedule_description": "交易日17:30；手动刷新单独触发",
+      "produces": "broker_state.json",
+      "failure_impact": "持仓和可用资金可能过期；行情在线不代表账户同步成功。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "G3自动委托（现有开关）",
+        "g3_state_alpha_auto_order_30m"
+      ],
+      "group": "g3",
+      "title": "G3委托调度",
+      "purpose": "在现有下单开关与风控检查通过时处理委托调度。",
+      "schedule_description": "按现有开关与30m计划",
+      "produces": "委托审计记录",
+      "failure_impact": "调度失败或闸门阻断；登记此任务不表示已启用实盘。",
+      "lifecycle": "active",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "持仓监控",
+        "v4_manual_holdings_monitor"
+      ],
+      "group": "retired",
+      "title": "旧V4持仓监控",
+      "purpose": "旧版持仓监控入口，当前持久化开关关闭。",
+      "schedule_description": "已停用",
+      "produces": "原监控历史",
+      "failure_impact": "保留历史，避免与当前持仓监控重复。",
+      "lifecycle": "retired",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "G2影子买点监控",
+        "gen2_shadow_buy_monitor"
+      ],
+      "group": "retired",
+      "title": "旧G2买点监控",
+      "purpose": "旧G2影子买点调度，当前开关关闭；策略历史仍保留。",
+      "schedule_description": "已停用",
+      "produces": "G2历史观察记录",
+      "failure_impact": "不应误开启历史调度或删除G2历史数据。",
+      "lifecycle": "retired",
+      "consolidation_note": ""
+    },
+    {
+      "names": [
+        "G2策略刷新",
+        "gen2_strategy_refresh_30m"
+      ],
+      "group": "retired",
+      "title": "旧G2策略刷新",
+      "purpose": "旧G2自动刷新调度，当前开关关闭。",
+      "schedule_description": "已停用",
+      "produces": "G2历史策略产物",
+      "failure_impact": "保留历史及按需研究能力。",
+      "lifecycle": "retired",
+      "consolidation_note": ""
+    }
+  ]
+}
