@@ -190,6 +190,19 @@
     },
     {
       "names": [
+        "AiStock_ClickHouse_Backup_3AM"
+      ],
+      "group": "retired",
+      "title": "ClickHouse备份（已取消）",
+      "purpose": "旧数据库备份入口；因全库与每日备份方案已取消而停用。",
+      "schedule_description": "已停用；不再执行",
+      "produces": "保留已有归档及任务XML恢复证据",
+      "failure_impact": "不再作为运行风险或告警项；恢复其执行需重新评审备份策略。",
+      "lifecycle": "retired",
+      "consolidation_note": "2026-09-10已Disabled，XML和SHA256存于backup-policy-retirement。"
+    },
+    {
+      "names": [
         "AiStock QMT Mini Broker Snapshot Sync"
       ],
       "group": "retired",
