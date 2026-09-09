@@ -21,7 +21,7 @@ from api.system_config import router as system_router
 from api.trading import router as trading_router
 from api.watchlist import router as watchlist_router
 from api.operations import router as operations_router
-from services.runtime_health import read_snapshot
+from services.operations.health import read_snapshot
 from utils.logger import get_logger
 from utils.paths import runtime_path
 

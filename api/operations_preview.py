@@ -4,7 +4,7 @@ Set AISTOCK_DATA_ROOT to an isolated snapshot directory before starting this app
 """
 from fastapi import FastAPI
 from api.operations import router
-from services.runtime_health import read_snapshot
+from services.operations.health import read_snapshot
 from utils.paths import runtime_path
 
 app = FastAPI(title='AiStock 运行可视化预览（只读）')

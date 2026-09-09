@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys as _bootstrap_sys
+from pathlib import Path as _BootstrapPath
+_bootstrap_sys.path.insert(0, str(_BootstrapPath(__file__).resolve().parents[1]))
+
 import argparse
 import json
 import math
@@ -29,10 +33,7 @@ SEGMENTS = [
 ]
 
 
-def _pct(value: Any) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"{float(value) * 100:.2f}%"
+from research.common.reporting import percent_text as _pct
 
 
 def _safe_sharpe(curve: pd.DataFrame) -> float | None:

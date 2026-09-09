@@ -172,7 +172,7 @@ const getChangeClass = (pct) => {
 ## 测试步骤
 
 1. 修改后端API文件 `backend/src/api/stocks.py`
-2. 修改前端页面文件 `frontend/src/views/pages/Stocks.vue`
+2. 修改前端页面文件 `frontend/src/views/market/Stocks.vue`
 3. 重启后端服务
 4. 刷新前端页面
 5. 查看股票列表是否显示最新价、涨跌幅、成交额

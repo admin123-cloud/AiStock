@@ -25,13 +25,13 @@ from scripts.scan_current_wave_style_candidates_v1 import (  # noqa: E402
     _load_current_candidates,
 )
 from scheduler.trading_calendar import TradingCalendar  # noqa: E402
-from utils.g3_mainwave_confirmation import (  # noqa: E402
+from strategies.g3.confirmation import (  # noqa: E402
     FORMAL_CONFIRMATION_NAME,
     confirmation_contract_metadata,
     confirm_first_completed_30m_breakout,
     is_confirmation_data_wall,
 )
-from utils.g3_minute_visibility import load_visible_minute_bars  # noqa: E402
+from strategies.g3.minute_visibility import load_visible_minute_bars  # noqa: E402
 from utils.market_warehouse import clickhouse_query_df  # noqa: E402
 from utils.paths import report_path, runtime_path  # noqa: E402
 

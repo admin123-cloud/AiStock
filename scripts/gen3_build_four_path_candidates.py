@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys as _bootstrap_sys
+from pathlib import Path as _BootstrapPath
+_bootstrap_sys.path.insert(0, str(_BootstrapPath(__file__).resolve().parents[1]))
+
 import argparse
 import json
 import sys
@@ -42,10 +46,7 @@ def _date(value: Any) -> str:
     return pd.to_datetime(value, errors="coerce").strftime("%Y-%m-%d")
 
 
-def _pct(value: Any) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"{float(value) * 100:.2f}%"
+from research.common.reporting import percent_text as _pct
 
 
 def _load_trade_dates(start_date: str, end_date: str) -> list[str]:

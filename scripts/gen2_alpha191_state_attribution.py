@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys as _bootstrap_sys
+from pathlib import Path as _BootstrapPath
+_bootstrap_sys.path.insert(0, str(_BootstrapPath(__file__).resolve().parents[1]))
+
 import argparse
 import json
 import sys
@@ -22,10 +26,7 @@ DEFAULT_OUTPUT_DIR = ROOT / "reports" / "gen2_alpha191_state_attribution"
 DEFAULT_VARIANTS = ["baseline_trigger_time", "volume5_rank", "volume5_keep80"]
 
 
-def _pct(value: Any) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"{float(value) * 100:.2f}%"
+from research.common.reporting import percent_text as _pct
 
 
 def _money(value: Any) -> str:

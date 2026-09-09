@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from services.runtime_health import ArtifactRule, build_snapshot, write_snapshot
+from services.operations.health import ArtifactRule, build_snapshot, write_snapshot
 from scheduler.trading_calendar import TradingCalendar
 from utils.paths import runtime_path
 

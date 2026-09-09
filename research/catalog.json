@@ -1,0 +1,1719 @@
+{
+  "baseline": "5e9dc5e50f9c7634278ceaa1a93dc24b48bab347",
+  "research_moves": [
+    {
+      "old": "scripts/analyze_g3_native_bridge_30m_integrity_v1.py",
+      "new": "research/g3/analyze_g3_native_bridge_30m_integrity_v1.py",
+      "sha256": "48adfa3b2f1902c299546ac2bff952c0429e6ccff50ca6a1ef77676d1cd5666c"
+    },
+    {
+      "old": "scripts/analyze_g3_native_bridge_native_m30_semantics_v1.py",
+      "new": "research/g3/analyze_g3_native_bridge_native_m30_semantics_v1.py",
+      "sha256": "933c1a44cf55e746d4933d0c76a9e09f1a0e0256aed64ca5372cf7486ca5c84d"
+    },
+    {
+      "old": "scripts/analyze_g3_natural_trading_logic_tuning_v1.py",
+      "new": "research/g3/analyze_g3_natural_trading_logic_tuning_v1.py",
+      "sha256": "b38901cef63fe23387d1875fae7f74e2cea48bbd73db4768c31db236c263e55e"
+    },
+    {
+      "old": "scripts/analyze_g3_range_weak_repair_fusion_v1.py",
+      "new": "research/g3/analyze_g3_range_weak_repair_fusion_v1.py",
+      "sha256": "d4a2357e2d01129b34815483cb15a4e0fcde1582bdedee6a0c991ed3832c46a0"
+    },
+    {
+      "old": "scripts/analyze_g3_strategy_family_convergence_v1.py",
+      "new": "research/g3/analyze_g3_strategy_family_convergence_v1.py",
+      "sha256": "dcbb0a67e90f1e8fc135c0c1151c000e1cbd4e6feb559e2acb71b5446405bb70"
+    },
+    {
+      "old": "scripts/analyze_g3_strategy_reduction_recovery_v1.py",
+      "new": "research/g3/analyze_g3_strategy_reduction_recovery_v1.py",
+      "sha256": "29740b331ed65b6657facff18a11629fc7e7ad6163c7d52a7ea046e677fd31e1"
+    },
+    {
+      "old": "scripts/analyze_g3_trade_strategy_consolidation_v1.py",
+      "new": "research/g3/analyze_g3_trade_strategy_consolidation_v1.py",
+      "sha256": "b2f10107b33d4ce716383dbe350100279b0b1189d8c3e5f456915c54d40b9898"
+    },
+    {
+      "old": "scripts/analyze_g3_unified_contract_return_gap_v1.py",
+      "new": "research/g3/analyze_g3_unified_contract_return_gap_v1.py",
+      "sha256": "57c68e99ab8e5398f8557c10ee506548c9ddc7219652000fed6918ab2c952e31"
+    },
+    {
+      "old": "scripts/analyze_g3_unified_vs_native_strategy_backtest_v1.py",
+      "new": "research/g3/analyze_g3_unified_vs_native_strategy_backtest_v1.py",
+      "sha256": "0e5be247f28e4d3408750ea421402b14ba195378d8c79301930c3d9ee4bfdb50"
+    },
+    {
+      "old": "scripts/analyze_live_trade_15m_rsi_t_overlay.py",
+      "new": "research/cross_strategy/analyze_live_trade_15m_rsi_t_overlay.py",
+      "sha256": "b1ab77ec366eeb916bab9e9e92b15f4706380aa0e31eee6acd4b3c3676e0069b"
+    },
+    {
+      "old": "scripts/analyze_mainline_overlay_g2_g3_validation_v1.py",
+      "new": "research/g3/analyze_mainline_overlay_g2_g3_validation_v1.py",
+      "sha256": "edefc19d9930c83d6e74ec6e929bc3307f3f098363418da13afbff3c531d5a4a"
+    },
+    {
+      "old": "scripts/analyze_v4_dropout_segments_1y.py",
+      "new": "research/g2/analyze_v4_dropout_segments_1y.py",
+      "sha256": "249105f5ad76879a1006e644325bd337c608cef31d3a14dea0980ed12c192436"
+    },
+    {
+      "old": "scripts/audit_breakout_1030_stop_sensitivity_v1.py",
+      "new": "research/cross_strategy/audit_breakout_1030_stop_sensitivity_v1.py",
+      "sha256": "ac8cb9c91fb62de56498d7d5abd52e00740f7229a195a9138ee2afb21e809d0d"
+    },
+    {
+      "old": "scripts/audit_breakout_entry_30m_acceptance_v1.py",
+      "new": "research/cross_strategy/audit_breakout_entry_30m_acceptance_v1.py",
+      "sha256": "8628120420c599eccfac0a453d33f7217b0615f103ed501823d9a09970ffaab6"
+    },
+    {
+      "old": "scripts/audit_formal26_profit_protection_ma_exits_v1.py",
+      "new": "research/g3/audit_formal26_profit_protection_ma_exits_v1.py",
+      "sha256": "88fee524b32677c0226ab9e620e0289034ef529cf388395210f64af34d455b2d"
+    },
+    {
+      "old": "scripts/audit_formal26_signal_recall_v1.py",
+      "new": "research/g3/audit_formal26_signal_recall_v1.py",
+      "sha256": "18a97801dd61bb7b0ce0676f297bbf53cc7b97c25fe4b58cde23195fa6d6865d"
+    },
+    {
+      "old": "scripts/audit_g3_formal_five_strategy_overfit_v1.py",
+      "new": "research/g3/audit_g3_formal_five_strategy_overfit_v1.py",
+      "sha256": "5f9a5a24b7001c839b95e0f76ee21143cfd2d27f66b4b8c2b5a99e1275a8325f"
+    },
+    {
+      "old": "scripts/audit_g3_mainwave_breakout_complementarity_v1.py",
+      "new": "research/g3/audit_g3_mainwave_breakout_complementarity_v1.py",
+      "sha256": "a306da5fe77ca9a82eeef8318d0d5c1db738c5221175d77ca3f034d35e3d10e8"
+    },
+    {
+      "old": "scripts/audit_g3_mainwave_execution_stress_v1.py",
+      "new": "research/g3/audit_g3_mainwave_execution_stress_v1.py",
+      "sha256": "3e0543b8e3911aecda9b7e12475dcda0511111ed6fb6c5cd549ac5a80145ec20"
+    },
+    {
+      "old": "scripts/audit_g3_mainwave_stop_fill_v1.py",
+      "new": "research/g3/audit_g3_mainwave_stop_fill_v1.py",
+      "sha256": "3d8635d8f8866bd2739db388b2e548ab4bff8d9fb62cc44a1fe6e8e7de151ecf"
+    },
+    {
+      "old": "scripts/audit_g3_with_g2_lineage_v1.py",
+      "new": "research/g3/audit_g3_with_g2_lineage_v1.py",
+      "sha256": "559c23adeccaf15861a0c3adb6f085f8bef163da28d5f105dacde237305b9e80"
+    },
+    {
+      "old": "scripts/audit_independent_strategy_profitability_v1.py",
+      "new": "research/cross_strategy/audit_independent_strategy_profitability_v1.py",
+      "sha256": "e7057150acb31f0cc3ce38882daf81034b34fc64af47ac7b7fb13f79e0219f72"
+    },
+    {
+      "old": "scripts/audit_index_mom5_overheat_v1.py",
+      "new": "research/cross_strategy/audit_index_mom5_overheat_v1.py",
+      "sha256": "d9f5f03c3394dc42e187a77fb314dfa864643618a1e95d6d5250cc14f3d7a509"
+    },
+    {
+      "old": "scripts/audit_mainwave_template_robustness_v1.py",
+      "new": "research/g3/audit_mainwave_template_robustness_v1.py",
+      "sha256": "52b9c65a771539409ce5c51146f7ded5ab7977bea940f8d815139806e84145e9"
+    },
+    {
+      "old": "scripts/audit_mainwave_wide_pool_ranking_v1.py",
+      "new": "research/g3/audit_mainwave_wide_pool_ranking_v1.py",
+      "sha256": "a36321323787bfb31837e83b6f41ae335ce3600cc18dc0bdf1b7d827302a2a50"
+    },
+    {
+      "old": "scripts/audit_score120_entry_timing_variants_v1.py",
+      "new": "research/g3/audit_score120_entry_timing_variants_v1.py",
+      "sha256": "de70f8c455f19cc3515e381c4403ed3b7bb689011ce4a216e220c67348557596"
+    },
+    {
+      "old": "scripts/audit_score120_old_candidate_pool_inventory_v1.py",
+      "new": "research/g3/audit_score120_old_candidate_pool_inventory_v1.py",
+      "sha256": "25ef700d045c0327328eccd4b9749c0f4e5219fe115cf78cf6e6683af3b2e231"
+    },
+    {
+      "old": "scripts/audit_score120_old_pool_selector_boundary_v1.py",
+      "new": "research/g3/audit_score120_old_pool_selector_boundary_v1.py",
+      "sha256": "9b5b49cbcc881d9fbf4ac98363a5a3709da51c5b3c61d2b3fc0bf4d53b4e342c"
+    },
+    {
+      "old": "scripts/audit_score120_old_selected_candidates_sw_proxy_v1.py",
+      "new": "research/g3/audit_score120_old_selected_candidates_sw_proxy_v1.py",
+      "sha256": "66f7c19a6738a4d56cc5e2be27583e456bb491d02a012566632d25cb414438d2"
+    },
+    {
+      "old": "scripts/audit_score120_reconstruction_feasibility_v1.py",
+      "new": "research/g3/audit_score120_reconstruction_feasibility_v1.py",
+      "sha256": "78e475314056d50c5139850944a040fbff8be5a02c9080bec1bc84ae34309712"
+    },
+    {
+      "old": "scripts/audit_score120_root_cause_summary_v1.py",
+      "new": "research/g3/audit_score120_root_cause_summary_v1.py",
+      "sha256": "580971300b447f0dcf715d170f3c4b6ce83121df859cec08bdc4448be6324157"
+    },
+    {
+      "old": "scripts/audit_score120_sector_diffusion_rescue_band_v1.py",
+      "new": "research/g3/audit_score120_sector_diffusion_rescue_band_v1.py",
+      "sha256": "20528a069e781574ced8a2692eb5c8f6f50c614577adcb7502c944e4f966e0d2"
+    },
+    {
+      "old": "scripts/audit_score120_sector_family_proxy_v1.py",
+      "new": "research/g3/audit_score120_sector_family_proxy_v1.py",
+      "sha256": "48ca13aa57d330494cbd30d00ced0700bd44a103b7b587542d936bbf74abea86"
+    },
+    {
+      "old": "scripts/audit_score120_sector_natural_gate_v1.py",
+      "new": "research/g3/audit_score120_sector_natural_gate_v1.py",
+      "sha256": "1ad8fc3738473c30701ee68e7417fa546b5922ae2769cfabd9fbd12254cadbb8"
+    },
+    {
+      "old": "scripts/audit_score120_sector_switch_gap_v1.py",
+      "new": "research/g3/audit_score120_sector_switch_gap_v1.py",
+      "sha256": "c295dcc8c58cba3a418ff41e4502a3aa71b447537eb1eb66ad06c8c10f8c7ca7"
+    },
+    {
+      "old": "scripts/audit_score120_source_lineage_v1.py",
+      "new": "research/g3/audit_score120_source_lineage_v1.py",
+      "sha256": "dd546c7bb0799cc66a3e96d302f50c96ec4a86398be80bda4a14888d1c577ece"
+    },
+    {
+      "old": "scripts/audit_score120_tight_stop_payoff_v1.py",
+      "new": "research/g3/audit_score120_tight_stop_payoff_v1.py",
+      "sha256": "ef57e2c266cfb6fce2abf35ef70b1f7bf19b6d5513b5b2858121353be0837c83"
+    },
+    {
+      "old": "scripts/audit_score_threshold_sensitivity_current_sw_v1.py",
+      "new": "research/cross_strategy/audit_score_threshold_sensitivity_current_sw_v1.py",
+      "sha256": "200623ef1bc8e0e5ed4295b0da72fc2fe9561b8ad3fdfb81e4052649c3f1fc8a"
+    },
+    {
+      "old": "scripts/audit_sector_pullback_leader_execution_v2.py",
+      "new": "research/cross_strategy/audit_sector_pullback_leader_execution_v2.py",
+      "sha256": "a9fc5b6005dd796d861c89c0ac3948395841b3125a9a18c5540fc3016b36b950"
+    },
+    {
+      "old": "scripts/backtest_behavior_theme_candidate_source_v1.py",
+      "new": "research/cross_strategy/backtest_behavior_theme_candidate_source_v1.py",
+      "sha256": "223fa68ce72dc3c501dd96c7a07da05bf7e7cb430e1c420371505725cc778b02"
+    },
+    {
+      "old": "scripts/backtest_breakout_1030_exit_horizon_v1.py",
+      "new": "research/cross_strategy/backtest_breakout_1030_exit_horizon_v1.py",
+      "sha256": "3dc6821ca98fcf6caa892906da0a35f78dfc1d351392b433efba21c0cdd50a92"
+    },
+    {
+      "old": "scripts/backtest_breakout_initiation_hypothesis_v1.py",
+      "new": "research/cross_strategy/backtest_breakout_initiation_hypothesis_v1.py",
+      "sha256": "e0d072e42edd813dcae228ea0350519e8ddf7d9db25678267f89116afb62d740"
+    },
+    {
+      "old": "scripts/backtest_breakout_risk_reward_contract_v1.py",
+      "new": "research/cross_strategy/backtest_breakout_risk_reward_contract_v1.py",
+      "sha256": "d5b95e39d01ac8da6f09ae01b072be6090cc4019c0f39d2ee3709e7fc747b2d3"
+    },
+    {
+      "old": "scripts/backtest_g2_behavior_theme_overlay_v1.py",
+      "new": "research/cross_strategy/backtest_g2_behavior_theme_overlay_v1.py",
+      "sha256": "c683c67a88ead6addac656079787c4982d54d1f26fd36a4ffb3b4802d8b3a0d2"
+    },
+    {
+      "old": "scripts/backtest_g2_g3_hourly_emotion_overlay_v1.py",
+      "new": "research/g3/backtest_g2_g3_hourly_emotion_overlay_v1.py",
+      "sha256": "7276e15be806d2bb2bac03ab6d4f1ca26272abb0f6d00c720c563f68a2c010f5"
+    },
+    {
+      "old": "scripts/backtest_g2_mainline_sector_overlay_v1.py",
+      "new": "research/cross_strategy/backtest_g2_mainline_sector_overlay_v1.py",
+      "sha256": "b104d0a4c1083c3a3bcfe6cd568878998a22d5c2eafe41007104458adc5954e3"
+    },
+    {
+      "old": "scripts/backtest_g3_final_mom60_position_policy_v1.py",
+      "new": "research/g3/backtest_g3_final_mom60_position_policy_v1.py",
+      "sha256": "da1a5268e247892e612957354585c2b9489c304371bca39a91bcb9d0716eb4fb"
+    },
+    {
+      "old": "scripts/backtest_g3_mainwave_canonical_baseline_v1.py",
+      "new": "research/g3/backtest_g3_mainwave_canonical_baseline_v1.py",
+      "sha256": "5f3b25d07ee1ea1eca663631927ecbc27dd48b0033417d54fcb9c1d33268e0e2"
+    },
+    {
+      "old": "scripts/backtest_g3_mainwave_full_rebuild_v1.py",
+      "new": "research/g3/backtest_g3_mainwave_full_rebuild_v1.py",
+      "sha256": "dd229dbb14733d32196d26c5049f32a7fe918333603329dc4079560a6f7abbc1"
+    },
+    {
+      "old": "scripts/backtest_icepoint_climax_reversal.py",
+      "new": "research/cross_strategy/backtest_icepoint_climax_reversal.py",
+      "sha256": "3e04f8908761e1b3f6050864012dbedfb2bd4a5b4d0546a4fd7c4c47dfc65fe7"
+    },
+    {
+      "old": "scripts/backtest_mainline_pro_replicate_matrix.py",
+      "new": "research/cross_strategy/backtest_mainline_pro_replicate_matrix.py",
+      "sha256": "4b1cb54319a8e2027b86575fa9284dca7888cd76341d441b5270aed1b88f7507"
+    },
+    {
+      "old": "scripts/backtest_mainline_rotation_after_pullback.py",
+      "new": "research/cross_strategy/backtest_mainline_rotation_after_pullback.py",
+      "sha256": "e3fa2fef9f6b68af30dfaefac234849988334788ae379f12740839fcd2c7e313"
+    },
+    {
+      "old": "scripts/backtest_mainline_sector_index_excess.py",
+      "new": "research/cross_strategy/backtest_mainline_sector_index_excess.py",
+      "sha256": "ede3933e03c9949a2b2bc65507fdf9b35cc6b624ef1c5a6a608810ae8962f5d7"
+    },
+    {
+      "old": "scripts/backtest_post_climax_continuation_hypothesis_v1.py",
+      "new": "research/cross_strategy/backtest_post_climax_continuation_hypothesis_v1.py",
+      "sha256": "1fcdf75162329b9ea2058ff8f1925dc1533c804d804e35dfc3ddbe5b974bf096"
+    },
+    {
+      "old": "scripts/backtest_score120_mom60_position_policy_v1.py",
+      "new": "research/g3/backtest_score120_mom60_position_policy_v1.py",
+      "sha256": "afe6e7d9eb06c2340dc3661d9fdbad659de17ad9cf574970ca7cc547d344915d"
+    },
+    {
+      "old": "scripts/backtest_sector_deep_panic_open_v1.py",
+      "new": "research/cross_strategy/backtest_sector_deep_panic_open_v1.py",
+      "sha256": "dd12d425b1aa1589af8d3c0aeb029e52c1ac1e548aa272a025e5e0ca6e1e2f70"
+    },
+    {
+      "old": "scripts/backtest_v3_audit.py",
+      "new": "research/cross_strategy/backtest_v3_audit.py",
+      "sha256": "e5130b0c56c3054a7bf17b88948e4e18168835aea6ce23218ed6f46ebbca84c8"
+    },
+    {
+      "old": "scripts/backtest_v4_audit.py",
+      "new": "research/cross_strategy/backtest_v4_audit.py",
+      "sha256": "13a8e55f590f9e4b009e8b1f1b21cc0a8ee3b96c3d9709ec96884276476585c6"
+    },
+    {
+      "old": "scripts/backtest_v4_dropout_forward_returns_1y.py",
+      "new": "research/cross_strategy/backtest_v4_dropout_forward_returns_1y.py",
+      "sha256": "e16edae6d3192712a406afb856ee3cc6296ae1cb32a397914a3fbe67ff9902b1"
+    },
+    {
+      "old": "scripts/backtest_v6_daily_baseline.py",
+      "new": "research/cross_strategy/backtest_v6_daily_baseline.py",
+      "sha256": "50d618a226bf601d2eb2aaeb7e2a3899865ef094089f693ae91e642e84196e6c"
+    },
+    {
+      "old": "scripts/backtest_v6_icepoint_hybrid.py",
+      "new": "research/cross_strategy/backtest_v6_icepoint_hybrid.py",
+      "sha256": "c2546a0c5a3ababba8f5334575cab8f44812b9ecd0f7b8dc418c4e427a85d2e7"
+    },
+    {
+      "old": "scripts/backtest_wave_style_model_scheduler_v1.py",
+      "new": "research/g3/backtest_wave_style_model_scheduler_v1.py",
+      "sha256": "cebc70820e2cf016c4b893cfdcc88a848363bc9f503da6cc6ca7112cf2a576ba"
+    },
+    {
+      "old": "scripts/gen2_analyze_30m_candidate_stability.py",
+      "new": "research/g2/gen2_analyze_30m_candidate_stability.py",
+      "sha256": "cb821608a9a568648a60512965a7707ba72c2a3fd70f8cf9216a58afdef20660"
+    },
+    {
+      "old": "scripts/gen2_analyze_alpha191_drawdowns.py",
+      "new": "research/g2/gen2_analyze_alpha191_drawdowns.py",
+      "sha256": "5aee4a731e20fb4f5f663d0d88c83178504b876a590132b472061b2238f0ccb2"
+    },
+    {
+      "old": "scripts/gen2_analyze_exit_opportunity_after_sell.py",
+      "new": "research/g2/gen2_analyze_exit_opportunity_after_sell.py",
+      "sha256": "d72e8c3866e82b0dadf5b3031bab253532e422172f5c272eafb4d038570e525f"
+    },
+    {
+      "old": "scripts/gen2_analyze_pattern_contribution.py",
+      "new": "research/g2/gen2_analyze_pattern_contribution.py",
+      "sha256": "cad0db8957454f496bb52e993134a5ee37f4eb0ca990a0cada56c928dafda208"
+    },
+    {
+      "old": "scripts/gen2_analyze_risk_cool_contribution.py",
+      "new": "research/g2/gen2_analyze_risk_cool_contribution.py",
+      "sha256": "a0b34e88fc5e5d83e8154a63e135810fe4cd05c2c5000adb9fa7e7875f81300e"
+    },
+    {
+      "old": "scripts/gen2_analyze_timing_layer.py",
+      "new": "research/g2/gen2_analyze_timing_layer.py",
+      "sha256": "60ba8bfa3e360427d5a873483529ee911aa8572f9fd5750d4fc4d90180cd372a"
+    },
+    {
+      "old": "scripts/gen2_analyze_v4_factor_profile.py",
+      "new": "research/g2/gen2_analyze_v4_factor_profile.py",
+      "sha256": "c25aeb4e55417d34cc58b39a2f8bfd3a5cea1d65afef9c89fd12ceb125ef28cb"
+    },
+    {
+      "old": "scripts/gen2_audit_no_future_decision_replay.py",
+      "new": "research/g2/gen2_audit_no_future_decision_replay.py",
+      "sha256": "41ee2e05c45310a45b769fb8f51b9f10b09e33458cc63c1d700d711df8cb28cd"
+    },
+    {
+      "old": "scripts/gen2_backtest_open_v1_market_gate_soft.py",
+      "new": "research/g2/gen2_backtest_open_v1_market_gate_soft.py",
+      "sha256": "9c1320ec94fba923bb0f6d22ddf1d3ca8e80e4b7ffb2d25d612460a05c19508c"
+    },
+    {
+      "old": "scripts/gen2_backtest_preference_regime_matrix.py",
+      "new": "research/g2/gen2_backtest_preference_regime_matrix.py",
+      "sha256": "f9f1575d83cba79490edcbbd6d4ad8c65c1bae58b6fe9f8b8bf78bb72a16a0a8"
+    },
+    {
+      "old": "scripts/gen2_backtest_preference_tier_portfolio.py",
+      "new": "research/g2/gen2_backtest_preference_tier_portfolio.py",
+      "sha256": "0cbe72e71db6146caee4b723bf94b724ae5d39cd7a2c1857b88f811b9ed58f0b"
+    },
+    {
+      "old": "scripts/gen2_backtest_pullback_with_reentry.py",
+      "new": "research/g2/gen2_backtest_pullback_with_reentry.py",
+      "sha256": "520ce523ddd6cf7549394f01e43cfc64bd2c88823178d8d69ec432ed0e9e12bc"
+    },
+    {
+      "old": "scripts/gen2_backtest_single_patterns.py",
+      "new": "research/g2/gen2_backtest_single_patterns.py",
+      "sha256": "9e9c0dceca384616affa78410a93825707beab1d61a941db8adc1c1992fb6dcd"
+    },
+    {
+      "old": "scripts/gen2_sweep_alpha191_keep80_constraints.py",
+      "new": "research/g2/gen2_sweep_alpha191_keep80_constraints.py",
+      "sha256": "8776c3243f43e5f22b375be7ed9691f63c9994291344b7c7335b70a542eeb1dd"
+    },
+    {
+      "old": "scripts/gen2_sweep_open_v1_attack_drawdown.py",
+      "new": "research/g2/gen2_sweep_open_v1_attack_drawdown.py",
+      "sha256": "e0da00dc2ad0caa1df1536f78c35411660959515251668ac36d2cd3a381e2495"
+    },
+    {
+      "old": "scripts/gen2_sweep_open_v1_position.py",
+      "new": "research/g2/gen2_sweep_open_v1_position.py",
+      "sha256": "a077fee676f487ced59c6e0a77fc290ed855140c1af097bb57530c0d973ffc99"
+    },
+    {
+      "old": "scripts/gen2_sweep_open_v1_profit_run_exit.py",
+      "new": "research/g2/gen2_sweep_open_v1_profit_run_exit.py",
+      "sha256": "9d865639bfc778ffc4ab7e74cb70a1482ffd4b9029be4b8d5285def73b183975"
+    },
+    {
+      "old": "scripts/gen2_sweep_open_v1_risk.py",
+      "new": "research/g2/gen2_sweep_open_v1_risk.py",
+      "sha256": "74e9893d5a5302cd1ebfb2b97236c747cb942769447aa070beeed8677b7a2e83"
+    },
+    {
+      "old": "scripts/gen2_sweep_open_v1_sorting.py",
+      "new": "research/g2/gen2_sweep_open_v1_sorting.py",
+      "sha256": "067334ee489a90b84564d3ed9ad2ecf0c07c84a6e46b3fe7502ce8bd2fb0f901"
+    },
+    {
+      "old": "scripts/gen2_sweep_open_v1_state_only.py",
+      "new": "research/g2/gen2_sweep_open_v1_state_only.py",
+      "sha256": "14abc2e912e43b23d51741b3ff118cc44ccb0375a3960ad35ed2e33be0df6a9d"
+    },
+    {
+      "old": "scripts/gen2_sweep_pullback_heat_filters.py",
+      "new": "research/g2/gen2_sweep_pullback_heat_filters.py",
+      "sha256": "cf31e5ee7cf4eaa82aeabb05cf9e8ddc2a39191979e60ac439015a04b6ad3663"
+    },
+    {
+      "old": "scripts/gen2_sweep_pullback_holding_timing.py",
+      "new": "research/g2/gen2_sweep_pullback_holding_timing.py",
+      "sha256": "699790b6694806f666cf1df25f25720fccfedba90a060864d2dee30fb90b01be"
+    },
+    {
+      "old": "scripts/gen2_sweep_pullback_new_signal_sorting.py",
+      "new": "research/g2/gen2_sweep_pullback_new_signal_sorting.py",
+      "sha256": "9e833028f9cedc716e7796036a1d949d28c4b722f9354849857af76eddea6859"
+    },
+    {
+      "old": "scripts/gen2_sweep_risk_cool_market_gates.py",
+      "new": "research/g2/gen2_sweep_risk_cool_market_gates.py",
+      "sha256": "6a7d4a9b6ff9f6bd74dc92a1a4df70835bb957626b0c2b4c76f02d06ef8e41ca"
+    },
+    {
+      "old": "scripts/gen2_sweep_risk_cool_params.py",
+      "new": "research/g2/gen2_sweep_risk_cool_params.py",
+      "sha256": "35ba8bf353e4fc44ddf5df53a9ba3252703b235e5b7693401ba605f24d89913a"
+    },
+    {
+      "old": "scripts/gen2_sweep_risk_cool_position_controls.py",
+      "new": "research/g2/gen2_sweep_risk_cool_position_controls.py",
+      "sha256": "3c55987cf956384f77fce652422d516fe863f88278246ae147b93c4049cf1f70"
+    },
+    {
+      "old": "scripts/gen2_test_alpha191_gate.py",
+      "new": "research/g2/gen2_test_alpha191_gate.py",
+      "sha256": "f0e4768b236100f4e8e330ad113d0e4dbaec729960d0450a93e92e8aceb2e554"
+    },
+    {
+      "old": "scripts/gen2_test_alpha191_overlay.py",
+      "new": "research/g2/gen2_test_alpha191_overlay.py",
+      "sha256": "3515d5ae298da9d36c4b335c5118861f1afc7270e49f6a06ed6bed57133dafd1"
+    },
+    {
+      "old": "scripts/gen2_test_reentry_after_prev_low_exit.py",
+      "new": "research/g2/gen2_test_reentry_after_prev_low_exit.py",
+      "sha256": "b03526be656b043d656b53e759e53b42572a53e463870bd4553f27981261542c"
+    },
+    {
+      "old": "scripts/gen2_validate_attack_v1_prev_low.py",
+      "new": "research/g2/gen2_validate_attack_v1_prev_low.py",
+      "sha256": "80253ed5724bd5b015f38d0098035eb72b70fd5495b69e0db546fd3db1cda839"
+    },
+    {
+      "old": "scripts/gen2_validate_open_v1_robustness.py",
+      "new": "research/g2/gen2_validate_open_v1_robustness.py",
+      "sha256": "d61e103c8970c65175e6f5e29ebab589ce06b629f27d74fe42c12ae471a3f719"
+    },
+    {
+      "old": "scripts/gen2_validate_open_v1_second_round.py",
+      "new": "research/g2/gen2_validate_open_v1_second_round.py",
+      "sha256": "dbfa27a181b45ac9237112664a26e286ef40f9ff880c549a090c6a264c7468e9"
+    },
+    {
+      "old": "scripts/gen2_validate_preference_signal_tiers.py",
+      "new": "research/g2/gen2_validate_preference_signal_tiers.py",
+      "sha256": "07965b91a08303d624e4d5ce1820d0b49c7871fcc43727e209f112f3f11d3fc1"
+    },
+    {
+      "old": "scripts/gen3_audit_box_first_panic_strong_reclaim_v1.py",
+      "new": "research/g3/gen3_audit_box_first_panic_strong_reclaim_v1.py",
+      "sha256": "838b8b547f4ceddc08d255523b6a3ea1d4e6868316a748754765c47ed5057d5d"
+    },
+    {
+      "old": "scripts/gen3_audit_combo_chain_contribution_v1.py",
+      "new": "research/g3/gen3_audit_combo_chain_contribution_v1.py",
+      "sha256": "ce7e20cc24712e8fb238b9fbfb3e5919dc7557dfbc4b58671e5835d280910c97"
+    },
+    {
+      "old": "scripts/gen3_audit_down_panic_d1_env_proxy_v1.py",
+      "new": "research/g3/gen3_audit_down_panic_d1_env_proxy_v1.py",
+      "sha256": "43c518a6c519babd5c5e67368cd5ac81b9c60d3ec04a7eee011c26be099a25ec"
+    },
+    {
+      "old": "scripts/gen3_audit_down_panic_v3_regime_windows.py",
+      "new": "research/g3/gen3_audit_down_panic_v3_regime_windows.py",
+      "sha256": "a22bef4c590d29cc6d155a0c86d067aad7cf3e6311be42d2146bdd5190fe5eda"
+    },
+    {
+      "old": "scripts/gen3_audit_dynamic_router_drawdown_v1.py",
+      "new": "research/g3/gen3_audit_dynamic_router_drawdown_v1.py",
+      "sha256": "e9b711440514ddd7bd323be83a8ccd0705cb81032bb16b069afea209fab279f8"
+    },
+    {
+      "old": "scripts/gen3_audit_execution_shock_by_route_v1.py",
+      "new": "research/g3/gen3_audit_execution_shock_by_route_v1.py",
+      "sha256": "491e32dbe5d473744dc6dc38db50b53aaa46a49368b762211c23fd66264a9e82"
+    },
+    {
+      "old": "scripts/gen3_audit_final_candidate_no_future_v1.py",
+      "new": "research/g3/gen3_audit_final_candidate_no_future_v1.py",
+      "sha256": "c98d366821e616c347aae09acd375d2c4f2e4c8f0d70338206b9dc2876b9f217"
+    },
+    {
+      "old": "scripts/gen3_audit_guarded_intraday_visibility_v1.py",
+      "new": "research/g3/gen3_audit_guarded_intraday_visibility_v1.py",
+      "sha256": "bdb5d7b77332af91ae2a043d505dc12b3507d23e426db2ea0103ca61e30fb6e0"
+    },
+    {
+      "old": "scripts/gen3_audit_icepoint_d1_second_accept_concentration_v1.py",
+      "new": "research/g3/gen3_audit_icepoint_d1_second_accept_concentration_v1.py",
+      "sha256": "281a5fd4136d47506752ed7018a7c971b0f9f4195b3fcb137c8566e2dd6c98a4"
+    },
+    {
+      "old": "scripts/gen3_audit_icepoint_d1_structure_rules_v1.py",
+      "new": "research/g3/gen3_audit_icepoint_d1_structure_rules_v1.py",
+      "sha256": "a26752c9b9ca68a523b82f90c199d8866e5cf46ddb58d33379f562a953d4d791"
+    },
+    {
+      "old": "scripts/gen3_audit_live_visible_combo_integrity_v1.py",
+      "new": "research/g3/gen3_audit_live_visible_combo_integrity_v1.py",
+      "sha256": "2d13f56dea9f5d54a7c485de7008e183cad4d140c0af4d9c7ae53b3f6a59b36b"
+    },
+    {
+      "old": "scripts/gen3_audit_market_router_absorb_g2v4_v1.py",
+      "new": "research/g3/gen3_audit_market_router_absorb_g2v4_v1.py",
+      "sha256": "b1e6afd57e625068ff3d2678364d2f4729daceac0ac10fd48041f78550cd77aa"
+    },
+    {
+      "old": "scripts/gen3_audit_neutral_only_concentration_v1.py",
+      "new": "research/g3/gen3_audit_neutral_only_concentration_v1.py",
+      "sha256": "19a9f28643482e5a990214ced8d94ac7b0414454b98985343be20ce4b04fb463"
+    },
+    {
+      "old": "scripts/gen3_audit_neutral_only_shape_probe_v1.py",
+      "new": "research/g3/gen3_audit_neutral_only_shape_probe_v1.py",
+      "sha256": "a3cb056256599672d6bf4bd195e682eddf8472df96c0f394f4dbd6cc5d31e210"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_2023_failure.py",
+      "new": "research/g3/gen3_audit_panic_2023_failure.py",
+      "sha256": "13c8ffb98434283684d44d59d9aa5b99d43fe7ce4ed8cd715f672404ba238d90"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_execution_feasibility.py",
+      "new": "research/g3/gen3_audit_panic_execution_feasibility.py",
+      "sha256": "b780eebbbc02f56ac580e94903d6f63f870ef62cf4eb15f64af7a35faf786b52"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_exit_controls.py",
+      "new": "research/g3/gen3_audit_panic_exit_controls.py",
+      "sha256": "c6dc3ed2428a4b68ef9c9221f1e5bbdfd19e9bf3763c3632c7a8d245dbf3c8e6"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_false_panic_pause.py",
+      "new": "research/g3/gen3_audit_panic_false_panic_pause.py",
+      "sha256": "900e778ead39cf3aa73925a5df59c5d5da5fb43b312e7cd09b48116c0fd5cb4a"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_nextday_exit_impact.py",
+      "new": "research/g3/gen3_audit_panic_nextday_exit_impact.py",
+      "sha256": "74dd1a2c1c6792c14dd018a07e746e13b4555d751583400040bf9cb3e47ef333"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_strong_reference_combo.py",
+      "new": "research/g3/gen3_audit_panic_strong_reference_combo.py",
+      "sha256": "f1ad342ef0fc3c53700f3c9310547e608df09140a5a3014c46440d7d50e39601"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_tail_guards.py",
+      "new": "research/g3/gen3_audit_panic_tail_guards.py",
+      "sha256": "41dcfb8f13f406d0a9cbc53805138266e0a56184ad437dd18f703c434c7e2417"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_trade_risk_path.py",
+      "new": "research/g3/gen3_audit_panic_trade_risk_path.py",
+      "sha256": "668ef5bcc1622243538e20d4fc03675a64d580ceb3eaefea7f49721695fd7512"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_v2_layers.py",
+      "new": "research/g3/gen3_audit_panic_v2_layers.py",
+      "sha256": "94a1d9a9296182015462d82f5ccc26058bc8ff13a093bff8fd54a28e781bcdf2"
+    },
+    {
+      "old": "scripts/gen3_audit_panic_year_contribution.py",
+      "new": "research/g3/gen3_audit_panic_year_contribution.py",
+      "sha256": "98f5aaa9bad6f5ae0a5e852a394d04c26a1678e768d022228bcebe993b0e795e"
+    },
+    {
+      "old": "scripts/gen3_audit_range_30m_confirm_v1.py",
+      "new": "research/g3/gen3_audit_range_30m_confirm_v1.py",
+      "sha256": "610b37e992c549eda86e44171e6e8bab5665e2df154f11e4b67c4b66c33144a9"
+    },
+    {
+      "old": "scripts/gen3_audit_range_30m_no_gapup_strong_bar_quality_v1.py",
+      "new": "research/g3/gen3_audit_range_30m_no_gapup_strong_bar_quality_v1.py",
+      "sha256": "728e4c749a44e6c229b8ffacc16c8e43264b705784f27ddcf860af76fc9f73fd"
+    },
+    {
+      "old": "scripts/gen3_audit_range_30m_no_gapup_valid_failure_features_v1.py",
+      "new": "research/g3/gen3_audit_range_30m_no_gapup_valid_failure_features_v1.py",
+      "sha256": "d9b82d341f6465782cffc9892b0e48d2ca9b517654029fb234777b6dae4c558b"
+    },
+    {
+      "old": "scripts/gen3_audit_range_box_bottom_v1.py",
+      "new": "research/g3/gen3_audit_range_box_bottom_v1.py",
+      "sha256": "f0892703ab740fd831d506b760c0d5e2516c355e541a7ea36bc5d4b937761a56"
+    },
+    {
+      "old": "scripts/gen3_audit_range_box_stress_accept_failure_v1.py",
+      "new": "research/g3/gen3_audit_range_box_stress_accept_failure_v1.py",
+      "sha256": "7d3543eb6115366fc52ae609aa994bbc3e8036d533b19be0ad479b4654d7caf3"
+    },
+    {
+      "old": "scripts/gen3_audit_range_event_curve_v1.py",
+      "new": "research/g3/gen3_audit_range_event_curve_v1.py",
+      "sha256": "a9d1820c9cb46a7a0569d3d23256eafbfed0d726a645690011db231b62889f93"
+    },
+    {
+      "old": "scripts/gen3_audit_range_failure_2024_2026.py",
+      "new": "research/g3/gen3_audit_range_failure_2024_2026.py",
+      "sha256": "d8cd7fe9f9cc58347648bb89ee443f93ea5e26277a6a175ba7476c0e1812ec67"
+    },
+    {
+      "old": "scripts/gen3_audit_range_filtered_haircut2_failure_v1.py",
+      "new": "research/g3/gen3_audit_range_filtered_haircut2_failure_v1.py",
+      "sha256": "3d038b21663bfc62f28615df313dc42ae2574a2a78a0666728170adfd5f09938"
+    },
+    {
+      "old": "scripts/gen3_audit_range_filtered_upgrade_decision_v1.py",
+      "new": "research/g3/gen3_audit_range_filtered_upgrade_decision_v1.py",
+      "sha256": "ccb888ebcb0eb16e16c0cd08977f1861e5d99fb9a11e06c56dc9df5b13126bd1"
+    },
+    {
+      "old": "scripts/gen3_audit_range_floor10_reclaim60_2026_failure_v1.py",
+      "new": "research/g3/gen3_audit_range_floor10_reclaim60_2026_failure_v1.py",
+      "sha256": "62633337b5c0937024c3b1396209bd6340aba29ce95e97851391347895d429c8"
+    },
+    {
+      "old": "scripts/gen3_audit_range_floor10_reclaim60_execution_v1.py",
+      "new": "research/g3/gen3_audit_range_floor10_reclaim60_execution_v1.py",
+      "sha256": "0e8efc861de54ecaf69795791f70a69743d13e5a59f06cab7e47d12147b0f37a"
+    },
+    {
+      "old": "scripts/gen3_audit_range_gap_cost_execution_noise_v1.py",
+      "new": "research/g3/gen3_audit_range_gap_cost_execution_noise_v1.py",
+      "sha256": "9797694f8bb795a3fa38a3de4d92c2ca617ea5969c74ff8dbd75c01ae272862f"
+    },
+    {
+      "old": "scripts/gen3_audit_range_reversal_warning_loss_shape_v1.py",
+      "new": "research/g3/gen3_audit_range_reversal_warning_loss_shape_v1.py",
+      "sha256": "a89648179055cb016569271eef88814e57385e5ff157ac981b09a5d60376e020"
+    },
+    {
+      "old": "scripts/gen3_audit_range_reversal_warning_trades_v1.py",
+      "new": "research/g3/gen3_audit_range_reversal_warning_trades_v1.py",
+      "sha256": "991dc4af601d3dbfb58b9e8aa8249b1760080724cb91453593e362a6737009a3"
+    },
+    {
+      "old": "scripts/gen3_audit_range_second_acceptance_concentration_v1.py",
+      "new": "research/g3/gen3_audit_range_second_acceptance_concentration_v1.py",
+      "sha256": "e8ff451c9b7da38c38bf54513b36bf61de609cb5aeca1a5233dfb3f008ad99ca"
+    },
+    {
+      "old": "scripts/gen3_audit_range_second_acceptance_failure_v1.py",
+      "new": "research/g3/gen3_audit_range_second_acceptance_failure_v1.py",
+      "sha256": "fa45982d48501804131f939902a392cea684deb2e53dde57284c17296d4b8388"
+    },
+    {
+      "old": "scripts/gen3_audit_range_second_acceptance_trade_quality_v1.py",
+      "new": "research/g3/gen3_audit_range_second_acceptance_trade_quality_v1.py",
+      "sha256": "9d47fa40970d47c75b36a15c635f53590c7a0c28886641dc41bda80c88b213d0"
+    },
+    {
+      "old": "scripts/gen3_audit_range_v3_mtm_pressure.py",
+      "new": "research/g3/gen3_audit_range_v3_mtm_pressure.py",
+      "sha256": "15649b3f6f56ca17b60bdc3b7d1775c4e6acb66ce90d7c2468ddf6f26f040aaa"
+    },
+    {
+      "old": "scripts/gen3_audit_range_weak_30m_tail_visibility_v1.py",
+      "new": "research/g3/gen3_audit_range_weak_30m_tail_visibility_v1.py",
+      "sha256": "48f136bb2e1ffcc1c1c898f8f5dba96351296998e5025851fe4a47082c014b94"
+    },
+    {
+      "old": "scripts/gen3_audit_range_weak_gap_v1.py",
+      "new": "research/g3/gen3_audit_range_weak_gap_v1.py",
+      "sha256": "bb31723be397710f525ed925ea0ee2c25ac73ec57f27cee0885284fbfd697f6e"
+    },
+    {
+      "old": "scripts/gen3_audit_range_weak_rank_capacity_v1.py",
+      "new": "research/g3/gen3_audit_range_weak_rank_capacity_v1.py",
+      "sha256": "12cedef24b2b63a2ec6189567ce6085bcae55918d649638550b91c035126b8b5"
+    },
+    {
+      "old": "scripts/gen3_audit_range_weak_source_quality_v1.py",
+      "new": "research/g3/gen3_audit_range_weak_source_quality_v1.py",
+      "sha256": "50d07281e2a22aa3784dc85c79f898e7422e930ce68e20afd0a20c8b69e00e6a"
+    },
+    {
+      "old": "scripts/gen3_audit_range_weak_tail_failure_v1.py",
+      "new": "research/g3/gen3_audit_range_weak_tail_failure_v1.py",
+      "sha256": "6d759d1e46a5477952c795acde7433daf34ec1fb1ffc59b9e6045d7ac26be6ad"
+    },
+    {
+      "old": "scripts/gen3_audit_reclaim60_second_accept_candidate_package_v1.py",
+      "new": "research/g3/gen3_audit_reclaim60_second_accept_candidate_package_v1.py",
+      "sha256": "162a4d9faac2cc01c3bd22bed4efe624a9bb3e61a145fe18c75ae1662accccc8"
+    },
+    {
+      "old": "scripts/gen3_audit_route_exit_visibility_v1.py",
+      "new": "research/g3/gen3_audit_route_exit_visibility_v1.py",
+      "sha256": "ae70c96ada38e2ca3f9cae46942cca7e4fe6bbacd9c3d2dc379525bfe4453167"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_chain_migration.py",
+      "new": "research/g3/gen3_audit_strong_chain_migration.py",
+      "sha256": "8ad20e75dd1b79175bd7fc67e84eb242b7871b8e0d3790c5881bbd1cdf81e0ad"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_main_ranking_proxy_v1.py",
+      "new": "research/g3/gen3_audit_strong_main_ranking_proxy_v1.py",
+      "sha256": "5e9e62f20503ed4e9729267368d7496c01b56049d1222c535287a323be440852"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_quality_layers_v1.py",
+      "new": "research/g3/gen3_audit_strong_quality_layers_v1.py",
+      "sha256": "9894ca20e7967a7cb450436a9b859946ffd88a43651189ed4d3ba0560b1abfa7"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_route_gap_v1.py",
+      "new": "research/g3/gen3_audit_strong_route_gap_v1.py",
+      "sha256": "3b69676b94bb997e6ad5668bef243998ace3b57a005ddca8bbea74d99ae82152"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_volume5_confirm_d3_mtm_risk_v1.py",
+      "new": "research/g3/gen3_audit_strong_volume5_confirm_d3_mtm_risk_v1.py",
+      "sha256": "4b56be80bf58d534efb2531f5d637812b54ea6e5348f6cce4a2e53627f9cf386"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_volume5_confirm_exit_visibility_v1.py",
+      "new": "research/g3/gen3_audit_strong_volume5_confirm_exit_visibility_v1.py",
+      "sha256": "c842f1ebcef10a44ea551b24147057bfd1556fc81e48ffae0437dfb5b7cc976e"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_volume5_event_curve_v1.py",
+      "new": "research/g3/gen3_audit_strong_volume5_event_curve_v1.py",
+      "sha256": "b126b526dc6703224030cd6eed097581b99444bbda7000843a717ccf1dc3c2da"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_volume5_risk_layer_failure_v1.py",
+      "new": "research/g3/gen3_audit_strong_volume5_risk_layer_failure_v1.py",
+      "sha256": "07b26772e2f97bca41d0a99dc95cac8b5e12bb3fbc9f47c8012e52bc5540c877"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_volume5_slot_failure_v1.py",
+      "new": "research/g3/gen3_audit_strong_volume5_slot_failure_v1.py",
+      "sha256": "c51fbf619164bd54d66517d46064d355d0667c96fd2a30d24305b41c43ae8266"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_volume5_stop_quality_features_v1.py",
+      "new": "research/g3/gen3_audit_strong_volume5_stop_quality_features_v1.py",
+      "sha256": "39f44127d5aa012da10a23bf86145067fe55f3697de2b6c0ae9f497dcdcc0701"
+    },
+    {
+      "old": "scripts/gen3_audit_strong_volume5_stop_recovery_v1.py",
+      "new": "research/g3/gen3_audit_strong_volume5_stop_recovery_v1.py",
+      "sha256": "dfacab697ecbdba1ea56dd91fa298b681deb8d8614c6a15e1cc50ef578406ae9"
+    },
+    {
+      "old": "scripts/gen3_audit_struct_veto_combo_e_live_visibility_v1.py",
+      "new": "research/g3/gen3_audit_struct_veto_combo_e_live_visibility_v1.py",
+      "sha256": "d2387b88114ec2c76ebfce1dad888d676a43e21ca51475aabc2a46485a6657a3"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_all_shock_failure_v1.py",
+      "new": "research/g3/gen3_audit_v4_all_shock_failure_v1.py",
+      "sha256": "fb4819232c16834530d9c03d57db0e8eabfa916a282c37e0d1b59337b64bb27f"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_bigbull_30m_delay_capacity_v1.py",
+      "new": "research/g3/gen3_audit_v4_bigbull_30m_delay_capacity_v1.py",
+      "sha256": "b91726e23e7751a22c6eb97e9624463cbd61d55ab4df1b1455acc48595fb0c7a"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_bigbull_entry_fail_d1d2_weak_v1.py",
+      "new": "research/g3/gen3_audit_v4_bigbull_entry_fail_d1d2_weak_v1.py",
+      "sha256": "bdf1775a56e8945973caec606503ab3b4cfd15e779fd2c6e34a18be42c7851c0"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_bigbull_structural_context_v1.py",
+      "new": "research/g3/gen3_audit_v4_bigbull_structural_context_v1.py",
+      "sha256": "b9c5e850d9d96d0bc6feed52af39085dfa4ed15cee7a570de166e654d3d422e8"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_confirm_d3_visible_loss_v1.py",
+      "new": "research/g3/gen3_audit_v4_confirm_d3_visible_loss_v1.py",
+      "sha256": "8dca5f7a5b8a968a2672274c358bbdbba68f3a8bf0e75070d424b747abe7de8e"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_down_panic_neutral_failure_attribution_v1.py",
+      "new": "research/g3/gen3_audit_v4_down_panic_neutral_failure_attribution_v1.py",
+      "sha256": "50d42ed8cbc06dceb27fdb8f24463e14182c2a8396dcbc55e4d6d747b1a8d882"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_guarded_decision_matrix_v1.py",
+      "new": "research/g3/gen3_audit_v4_guarded_decision_matrix_v1.py",
+      "sha256": "b5f73f18a418259ee3875cb971fb62485361cc024da391e02e30100246bde7c1"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_ice_down_panic_failure_attribution_v1.py",
+      "new": "research/g3/gen3_audit_v4_ice_down_panic_failure_attribution_v1.py",
+      "sha256": "848de603b9e2511584911113dad7f1e31335dbfbcd2c91cd31475d55244bbe4d"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_entry_quality_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_entry_quality_v1.py",
+      "sha256": "9cf87626582ac0800a090074c1cfa50b4fd688cd83413aad4d3caba022104517"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_entry_warning_trigger_outcomes_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_entry_warning_trigger_outcomes_v1.py",
+      "sha256": "291142d5e8939b27615fa660421a7c1168fe1672e86a2af5db8db9013eccefb6"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_failure_attribution_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_failure_attribution_v1.py",
+      "sha256": "6913527aae55d4dd4ecba79a55d5cae3a031e5b6a5046144b6b9355206aee48b"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_g2_full_entry_confirmation_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_g2_full_entry_confirmation_v1.py",
+      "sha256": "e4b17c132997a26ca4de248bf145193dadb8f1409ebab6158a990fa89c956d76"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_limit1_trade_delta_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_limit1_trade_delta_v1.py",
+      "sha256": "1ff0a61413136c3bac2bb4a3b7a5c3a91ec6c5919c1491df79958e7eb3aa9d9d"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_minute_visibility_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_minute_visibility_v1.py",
+      "sha256": "fdf27da24c831e378834a0208ffacbff512b1d6338220c944b70f066a07d648b"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_missing_g2_bigbull_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_missing_g2_bigbull_v1.py",
+      "sha256": "c2082af4f53ee156280fed444b0de0f8c42ab3b900c20859a674e957b6de3448"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_offense_current_source_rebuild_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_offense_current_source_rebuild_v1.py",
+      "sha256": "3ce53af4a0c7981f489fcbad9272a8fb6c479b2ed391a32b6e4706a3bc0e8149"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_offense_return_bottleneck_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_offense_return_bottleneck_v1.py",
+      "sha256": "b701af12de877d52f4eb68bb5d7a2eecbd2056c46ec498e57658260e88be0fc6"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_path_shock_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_path_shock_v1.py",
+      "sha256": "9c4ccb556145ddeb5490261892b09a9babf6453eb49d8b22b735f552976698eb"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_position_scale_windows_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_position_scale_windows_v1.py",
+      "sha256": "348bb13d53b94f3753cbf82ceeb23eb813047f7645288a61b17ec1744d3176af"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_second_q75_trade_delta_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_second_q75_trade_delta_v1.py",
+      "sha256": "a8d981d2fb6e1f4eb4a31a0096a242c980fb3da23639f1e751922550edea37ec"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_second_threshold_trade_delta_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_second_threshold_trade_delta_v1.py",
+      "sha256": "33006841eea1adc8ae78a4ceaa09323aec80bad92787f4affa55b43bf75e7a1a"
+    },
+    {
+      "old": "scripts/gen3_audit_v4_strong_visible_confirmation_v1.py",
+      "new": "research/g3/gen3_audit_v4_strong_visible_confirmation_v1.py",
+      "sha256": "f12e5ba20365c5cf426ce6ea72870e7c26c1b14df55bcb4123633c38ed4b881b"
+    },
+    {
+      "old": "scripts/gen3_audit_weak_rebound_g2v4_entry_30m_accept_v1.py",
+      "new": "research/g3/gen3_audit_weak_rebound_g2v4_entry_30m_accept_v1.py",
+      "sha256": "979722bc9ae40e88fd36830e6c9b0fdaf93af68af54bc3aa07c04f9c8376ada4"
+    },
+    {
+      "old": "scripts/gen3_audit_weak_rebound_g2v4_entry_fail_d1_repair_v1.py",
+      "new": "research/g3/gen3_audit_weak_rebound_g2v4_entry_fail_d1_repair_v1.py",
+      "sha256": "3c9451cb525c3b3eeb38f11585df0e27a8f2ceb2566ee40aed5608d2619e85d8"
+    },
+    {
+      "old": "scripts/gen3_audit_weak_rebound_g2v4_quality_v1.py",
+      "new": "research/g3/gen3_audit_weak_rebound_g2v4_quality_v1.py",
+      "sha256": "0cf1205c13f5a895400c9119be192806fc7e91481fea0a6f98d69db370ee8c68"
+    },
+    {
+      "old": "scripts/gen3_audit_weak_rebound_g2v4_source_split_v1.py",
+      "new": "research/g3/gen3_audit_weak_rebound_g2v4_source_split_v1.py",
+      "sha256": "66d8f1fd650586369bafb6449dafd10379df16b812ebe5e9faefd6d6c9914576"
+    },
+    {
+      "old": "scripts/gen3_backtest_combo_panic_strong_execution_stress_v1.py",
+      "new": "research/g3/gen3_backtest_combo_panic_strong_execution_stress_v1.py",
+      "sha256": "ae60884ceba10c046b8c10a99328ebd9dfb1a5fcac94bd11ae168d126557bb32"
+    },
+    {
+      "old": "scripts/gen3_backtest_combo_panic_strong_mtm_v1.py",
+      "new": "research/g3/gen3_backtest_combo_panic_strong_mtm_v1.py",
+      "sha256": "e313eedb6160eb346e4e61d4f1f78339113e21bed741e1aa8b9cbfb69dda12a6"
+    },
+    {
+      "old": "scripts/gen3_backtest_combo_with_range_weak_shadow_v1.py",
+      "new": "research/g3/gen3_backtest_combo_with_range_weak_shadow_v1.py",
+      "sha256": "012cf57a93df75885f21d3206ea5a21aec19ef833cf57e25960142521809e959"
+    },
+    {
+      "old": "scripts/gen3_backtest_combo_with_weak_quality_v2_shadow_v1.py",
+      "new": "research/g3/gen3_backtest_combo_with_weak_quality_v2_shadow_v1.py",
+      "sha256": "0937cf9ae8efa882b42226325264d7f88ce53234c000de00a905294dccf7a582"
+    },
+    {
+      "old": "scripts/gen3_backtest_market_router_fourstate_g2v4_g3range_v1.py",
+      "new": "research/g3/gen3_backtest_market_router_fourstate_g2v4_g3range_v1.py",
+      "sha256": "b9d24aca43d198122907e837780f2ae2dc6cb1a5a4ff7d8e2bf103b3716de227"
+    },
+    {
+      "old": "scripts/gen3_backtest_market_router_g2v4_g3range_v1.py",
+      "new": "research/g3/gen3_backtest_market_router_g2v4_g3range_v1.py",
+      "sha256": "e869550952e3b40d4468a45af77671b0991de615ad5b7cfd82871563d41e8964"
+    },
+    {
+      "old": "scripts/gen3_backtest_market_router_legcash_g2v4_g3range_v1.py",
+      "new": "research/g3/gen3_backtest_market_router_legcash_g2v4_g3range_v1.py",
+      "sha256": "e3de19e067bf946d007b158b699db83c0a7e630e72893a323a79161e71f3ad76"
+    },
+    {
+      "old": "scripts/gen3_backtest_panic_30m_exit_mtm_curve.py",
+      "new": "research/g3/gen3_backtest_panic_30m_exit_mtm_curve.py",
+      "sha256": "475cc38f39403231fd34bc8ce0b257b5001269ecab2992ce03d485821560968a"
+    },
+    {
+      "old": "scripts/gen3_backtest_panic_30m_exit_slot_resim.py",
+      "new": "research/g3/gen3_backtest_panic_30m_exit_slot_resim.py",
+      "sha256": "af59d6387e9e4e38d5fea2ff0a76212efbfc2992395e932cb385262b9b8978a6"
+    },
+    {
+      "old": "scripts/gen3_backtest_panic_capital_curve.py",
+      "new": "research/g3/gen3_backtest_panic_capital_curve.py",
+      "sha256": "be31c47365246e6b631ca36aae391870606c7f5e44761a950dceca290a3f0ce6"
+    },
+    {
+      "old": "scripts/gen3_backtest_panic_final_execution_stress.py",
+      "new": "research/g3/gen3_backtest_panic_final_execution_stress.py",
+      "sha256": "43d8edf54af912d2a5c7e5a9add6fbe1deeab05f4f25e548596f4a66ee680d25"
+    },
+    {
+      "old": "scripts/gen3_backtest_panic_mark_to_market.py",
+      "new": "research/g3/gen3_backtest_panic_mark_to_market.py",
+      "sha256": "de44cd719137528093ea090d0fac39201210af0718c6fbd0f84dd7c48fb63141"
+    },
+    {
+      "old": "scripts/gen3_backtest_range_weak_30m_exit_execution_stress_v1.py",
+      "new": "research/g3/gen3_backtest_range_weak_30m_exit_execution_stress_v1.py",
+      "sha256": "4957cff1a53bc72574b63842cddd7895684dc3c6c8bec0c1b9094a4a1450c3f2"
+    },
+    {
+      "old": "scripts/gen3_backtest_strong_volume5_30m_crash_guard_v1.py",
+      "new": "research/g3/gen3_backtest_strong_volume5_30m_crash_guard_v1.py",
+      "sha256": "fbc536894211648a8c8d4a35ae0f652aefa24a0f145ae9e3fd1bf1fd23b1cf63"
+    },
+    {
+      "old": "scripts/gen3_backtest_strong_volume5_30m_crash_plus_d3_v1.py",
+      "new": "research/g3/gen3_backtest_strong_volume5_30m_crash_plus_d3_v1.py",
+      "sha256": "6400d9e34a524a270504eeb976f62d6f9c25a434836f53702056f9ac893f2ae3"
+    },
+    {
+      "old": "scripts/gen3_backtest_strong_volume5_30m_repair_exit_v2.py",
+      "new": "research/g3/gen3_backtest_strong_volume5_30m_repair_exit_v2.py",
+      "sha256": "c58c4dc9f6651f4f75ebb992a34e45cf4188502c64ea4f395bf9951f355999cc"
+    },
+    {
+      "old": "scripts/gen3_backtest_strong_volume5_antifragile_sort_v1.py",
+      "new": "research/g3/gen3_backtest_strong_volume5_antifragile_sort_v1.py",
+      "sha256": "bbfcff0fe036bf8b498db3c0bf51fcb3286b858ddee42b6458018048f0993706"
+    },
+    {
+      "old": "scripts/gen3_backtest_strong_volume5_risk_layer_guard_probe_v1.py",
+      "new": "research/g3/gen3_backtest_strong_volume5_risk_layer_guard_probe_v1.py",
+      "sha256": "177fd357d62b038c2a8e154b644b83dba82e75c91e8c8bedbd7c2f3b99ce83e1"
+    },
+    {
+      "old": "scripts/gen3_backtest_weak_rebound_g2v4_30m_rescue_v1.py",
+      "new": "research/g3/gen3_backtest_weak_rebound_g2v4_30m_rescue_v1.py",
+      "sha256": "d82c886876db8ab2ec551ce9cf832a3cf7670ac61e34f21e71021c478d419bca"
+    },
+    {
+      "old": "scripts/gen3_backtest_weak_rebound_g2v4_source_router_mtm_v1.py",
+      "new": "research/g3/gen3_backtest_weak_rebound_g2v4_source_router_mtm_v1.py",
+      "sha256": "e460bb734592eacc7811898e5b6dba8b597ffd59799011b0031fcdf8dcaea9b8"
+    },
+    {
+      "old": "scripts/gen3_backtest_weak_rebound_g2v4_source_weight_mtm_v1.py",
+      "new": "research/g3/gen3_backtest_weak_rebound_g2v4_source_weight_mtm_v1.py",
+      "sha256": "d08357b56ea1d74fa59ff8fb7089b76003ee08023c5cf3d6f8b4608f30b3cb95"
+    },
+    {
+      "old": "scripts/gen3_test_box_first_panic_audit_filters_v1.py",
+      "new": "research/g3/gen3_test_box_first_panic_audit_filters_v1.py",
+      "sha256": "1de3c3e9884e26e131bd1781eb549d48b28b615f5f77559e899fb643bfc11a66"
+    },
+    {
+      "old": "scripts/gen3_test_combo_with_strong_panic_range_v1.py",
+      "new": "research/g3/gen3_test_combo_with_strong_panic_range_v1.py",
+      "sha256": "7a068c561656ff76ed654d4fc2bc5c981544179a0292709414bd68d3e5fb959a"
+    },
+    {
+      "old": "scripts/gen3_test_range_30m_no_gapup_early_exit_v1.py",
+      "new": "research/g3/gen3_test_range_30m_no_gapup_early_exit_v1.py",
+      "sha256": "8d0519117f2d93df662a712051357f70f25b4b34eb27f1a9a9ab7c4146b1483c"
+    },
+    {
+      "old": "scripts/gen3_test_range_30m_no_gapup_fixed_structure_candidates_v1.py",
+      "new": "research/g3/gen3_test_range_30m_no_gapup_fixed_structure_candidates_v1.py",
+      "sha256": "73c78f72059448f0cc93d4f699173c370a07bd8e325940a57ce57cef3afae7fc"
+    },
+    {
+      "old": "scripts/gen3_test_range_30m_true_acceptance_structure_v1.py",
+      "new": "research/g3/gen3_test_range_30m_true_acceptance_structure_v1.py",
+      "sha256": "4b44e1fc9c9bf6ac022568f95a29101e353800c9ba9797333d8fdf3f2c6bca15"
+    },
+    {
+      "old": "scripts/gen3_test_range_bad_reversal_combo_v1.py",
+      "new": "research/g3/gen3_test_range_bad_reversal_combo_v1.py",
+      "sha256": "f8c8674253711c2a3c9356a9c692df689fc0360ba41aefa3911ac342c961111b"
+    },
+    {
+      "old": "scripts/gen3_test_range_box_stress_ice_window_source_v1.py",
+      "new": "research/g3/gen3_test_range_box_stress_ice_window_source_v1.py",
+      "sha256": "1262791afdb1473c0f520731877084a96a7f616108f295f004f7abb1ab92ad6d"
+    },
+    {
+      "old": "scripts/gen3_test_range_box_structural_30m_accept_v1.py",
+      "new": "research/g3/gen3_test_range_box_structural_30m_accept_v1.py",
+      "sha256": "9b6ff693d437f4e37dc929fec94f7ceede44ecc4bc085fb2f26292ae27cdbaa9"
+    },
+    {
+      "old": "scripts/gen3_test_range_capitulation_30m_accept_v1.py",
+      "new": "research/g3/gen3_test_range_capitulation_30m_accept_v1.py",
+      "sha256": "21de38162cec103e0375a62c5b131c2f036944eabd2c0e487521e64db6c4f768"
+    },
+    {
+      "old": "scripts/gen3_test_range_d1d2_failure_exit_v1.py",
+      "new": "research/g3/gen3_test_range_d1d2_failure_exit_v1.py",
+      "sha256": "3cef157750b05eaddb404a0f81d8e65b4f35d22491c452b7d6e1edbe304624a8"
+    },
+    {
+      "old": "scripts/gen3_test_range_first_panic_d1_accept_stability_v1.py",
+      "new": "research/g3/gen3_test_range_first_panic_d1_accept_stability_v1.py",
+      "sha256": "fb95a8a65ef5379887ba7a08fe11015b137e16c68c3c8c35f9fec94b9d20438b"
+    },
+    {
+      "old": "scripts/gen3_test_range_floor10_reclaim60_emotion_split_v1.py",
+      "new": "research/g3/gen3_test_range_floor10_reclaim60_emotion_split_v1.py",
+      "sha256": "1a8debf664df56d19a0b9f25f33996080ee9654c35df69b6a12ff6af77873d68"
+    },
+    {
+      "old": "scripts/gen3_test_range_floor10_reclaim60_execution_policy_v1.py",
+      "new": "research/g3/gen3_test_range_floor10_reclaim60_execution_policy_v1.py",
+      "sha256": "2134259199b359ac58c30b15d7b0e235b3db6d768b7dd25ebf069d5bccc863ac"
+    },
+    {
+      "old": "scripts/gen3_test_range_gap_broad_noise_filters_v1.py",
+      "new": "research/g3/gen3_test_range_gap_broad_noise_filters_v1.py",
+      "sha256": "4cfe9ae495a8ab7cc129ea55ddde10eeab532c4362314b0347981c04e5d487fb"
+    },
+    {
+      "old": "scripts/gen3_test_range_ice_recent3_d1d2_exit_v1.py",
+      "new": "research/g3/gen3_test_range_ice_recent3_d1d2_exit_v1.py",
+      "sha256": "4bb3b20ab435d30cbd0106281a07d362800b516341899b24974ad24ad5214b82"
+    },
+    {
+      "old": "scripts/gen3_test_range_ice_recent3_entry_quality_v1.py",
+      "new": "research/g3/gen3_test_range_ice_recent3_entry_quality_v1.py",
+      "sha256": "a29dd4b78ab33517f2cfa00f5bafe3e8d6dd22b915a0276f56063cca869043f4"
+    },
+    {
+      "old": "scripts/gen3_test_range_ice_recent3_quality_quadrants_v1.py",
+      "new": "research/g3/gen3_test_range_ice_recent3_quality_quadrants_v1.py",
+      "sha256": "b1b710aadd728a42688c0fdeb16ae16b4a253afde1e8c3fd2b1b5e2b71a3a652"
+    },
+    {
+      "old": "scripts/gen3_test_range_ice_recent3_second_accept_expanded_source_v1.py",
+      "new": "research/g3/gen3_test_range_ice_recent3_second_accept_expanded_source_v1.py",
+      "sha256": "839b57acf85d5227f796aee0d685c165591288ba7433f3346bbcfd3bfd823ad0"
+    },
+    {
+      "old": "scripts/gen3_test_range_ice_recent3_threshold_stability_v1.py",
+      "new": "research/g3/gen3_test_range_ice_recent3_threshold_stability_v1.py",
+      "sha256": "266aee29ba3e3453f24e2325eb22ae2b84be47436e7135d9309025cb63e92e9b"
+    },
+    {
+      "old": "scripts/gen3_test_range_icepoint_d1_second_accept_overlay_v1.py",
+      "new": "research/g3/gen3_test_range_icepoint_d1_second_accept_overlay_v1.py",
+      "sha256": "018aa267634f2f0f64d0747d219643f0dbd39761db8c5f061dd96de1fc97b154"
+    },
+    {
+      "old": "scripts/gen3_test_range_reclaim60_second_accept_early_exit_v1.py",
+      "new": "research/g3/gen3_test_range_reclaim60_second_accept_early_exit_v1.py",
+      "sha256": "05909653253aac518c5daab383dec781af84e8a35b3ba26d3188114f9bf5ee23"
+    },
+    {
+      "old": "scripts/gen3_test_range_second_acceptance_early_weak_exit_v1.py",
+      "new": "research/g3/gen3_test_range_second_acceptance_early_weak_exit_v1.py",
+      "sha256": "37e0f19b3db43d692fa4a7fe06035f8b0ded284a4947316c222833eba9970a2a"
+    },
+    {
+      "old": "scripts/gen3_test_range_second_acceptance_exit_v1.py",
+      "new": "research/g3/gen3_test_range_second_acceptance_exit_v1.py",
+      "sha256": "a38e3aed85bb7136ee169169223e10eb4d38f0decca182de6467fe4ff469d2a3"
+    },
+    {
+      "old": "scripts/gen3_test_range_second_acceptance_structure_veto_v1.py",
+      "new": "research/g3/gen3_test_range_second_acceptance_structure_veto_v1.py",
+      "sha256": "84266c00a805b05c3ba958c59681b518cedc73d44cdb5437d9faa73391ca6e8a"
+    },
+    {
+      "old": "scripts/gen3_test_range_second_acceptance_v1.py",
+      "new": "research/g3/gen3_test_range_second_acceptance_v1.py",
+      "sha256": "4288e4f12cb1d7c75eec04564d41245b94cc27a47df2bf8111c87b1168d12178"
+    },
+    {
+      "old": "scripts/gen3_test_route_execution_mandate_v1.py",
+      "new": "research/g3/gen3_test_route_execution_mandate_v1.py",
+      "sha256": "836125c7aadbaca7555e3c82298383078dcdce6980b4ae51b411e2b46c2c7c7c"
+    },
+    {
+      "old": "scripts/gen3_test_strong_panic_30m_d1d2_exit_v1.py",
+      "new": "research/g3/gen3_test_strong_panic_30m_d1d2_exit_v1.py",
+      "sha256": "b579e44cbbbad42cb5cbdafc8a1966f6b5a9c7ec62864907d0739de90ffd71f4"
+    },
+    {
+      "old": "scripts/gen3_test_v4_add_g2_bigbull_route_v1.py",
+      "new": "research/g3/gen3_test_v4_add_g2_bigbull_route_v1.py",
+      "sha256": "c439229e2e2b3e0cc12e459d8fc8ffd10f64820c8f44851a138b84f4a7acb4ef"
+    },
+    {
+      "old": "scripts/gen3_test_v4_bigbull_final_execution_stress_v1.py",
+      "new": "research/g3/gen3_test_v4_bigbull_final_execution_stress_v1.py",
+      "sha256": "eadf55f5c66804659b57fd81394724f7c709bc76f5361f603db05a02e3b3e8f3"
+    },
+    {
+      "old": "scripts/gen3_test_v4_bigbull_four_state_gate_combo_v1.py",
+      "new": "research/g3/gen3_test_v4_bigbull_four_state_gate_combo_v1.py",
+      "sha256": "b58f2103fbff9fb90848bc8a884799c637268fa79dcddf86f65aa483a305521a"
+    },
+    {
+      "old": "scripts/gen3_test_v4_down_panic_all_lock5_v1.py",
+      "new": "research/g3/gen3_test_v4_down_panic_all_lock5_v1.py",
+      "sha256": "1fcfa7d28f3f7955806bceb0280b5b043587ea08cf60627d0e4b1dc84df9f654"
+    },
+    {
+      "old": "scripts/gen3_test_v4_down_panic_neutral_d1d2_weak_exit_v1.py",
+      "new": "research/g3/gen3_test_v4_down_panic_neutral_d1d2_weak_exit_v1.py",
+      "sha256": "ec8a36e7d933447f371594702480956803809c2acd5e78fed5674260ccb2ffe3"
+    },
+    {
+      "old": "scripts/gen3_test_v4_down_panic_neutral_d2_no_repair_exit_v1.py",
+      "new": "research/g3/gen3_test_v4_down_panic_neutral_d2_no_repair_exit_v1.py",
+      "sha256": "4501820195ea41111d22cb7083eb7640ee8fa1bd33b4dd77d706c348b8dacd89"
+    },
+    {
+      "old": "scripts/gen3_test_v4_down_panic_neutral_entry_structure_v1.py",
+      "new": "research/g3/gen3_test_v4_down_panic_neutral_entry_structure_v1.py",
+      "sha256": "b8c1b4840eb68760e884d3c46dd7824f6bf53d7138647a863b783648b6993fea"
+    },
+    {
+      "old": "scripts/gen3_test_v4_ice_down_panic_30m_confirm_overlay_v1.py",
+      "new": "research/g3/gen3_test_v4_ice_down_panic_30m_confirm_overlay_v1.py",
+      "sha256": "92ddb68af20d17e09e1a52a103392f888ed54c95d4ef239e09e9557a4a9ae58d"
+    },
+    {
+      "old": "scripts/gen3_test_v4_ice_down_panic_lock5_execution_combo_v1.py",
+      "new": "research/g3/gen3_test_v4_ice_down_panic_lock5_execution_combo_v1.py",
+      "sha256": "7b083b02326b8ac60edd1698355d6d003244267817b1ba8e10a3124c11989de6"
+    },
+    {
+      "old": "scripts/gen3_test_v4_ice_down_panic_profit_lock_v1.py",
+      "new": "research/g3/gen3_test_v4_ice_down_panic_profit_lock_v1.py",
+      "sha256": "e1129e9faa0bedd3786d2073dbc04a86eab3fa66c65dcfe06c531621988062a7"
+    },
+    {
+      "old": "scripts/gen3_test_v4_icepoint_climax_overlay_v1.py",
+      "new": "research/g3/gen3_test_v4_icepoint_climax_overlay_v1.py",
+      "sha256": "d5f399db633e1752b2fff5e8aa4e2a3f73fe90ca80d3be774d515b52737fdf1c"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_confirm_d3_combo_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_confirm_d3_combo_v1.py",
+      "sha256": "ebf907b6d4acb44cd550875767377ac3340247897e908017aa32e4bc118d0f97"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_confirm_d3_visible_combo_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_confirm_d3_visible_combo_v1.py",
+      "sha256": "0221d02d5deed5407a936f67d743e95d7df1c486badfe85c43ade396c39a2ece"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_entry_warning_d1_repair_fail_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_entry_warning_d1_repair_fail_v1.py",
+      "sha256": "97e5019a52bb6f79a3401a43c0c70c69683972d17645044e6502a5da747c3471"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_entry_warning_early_exit_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_entry_warning_early_exit_v1.py",
+      "sha256": "0da55f8d283ef08592af4f09cea22f59b6a50c52a67709bec8b998ec6097d796"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_score_filter_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_score_filter_v1.py",
+      "sha256": "b42b9eda1becf3e4f22c60da02001ddeeff6d9f162be788eaf0226ca011227bb"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_second093_scorecap_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_second093_scorecap_v1.py",
+      "sha256": "585ded219cf78af9e5ee67338cbc35d9049db67e23c6778416497c5c6a721345"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_visible_d1_exit_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_visible_d1_exit_v1.py",
+      "sha256": "14fbe1ffd0a97d0e2bbb8d55e25f2caa32b6f1e23f8b267dd37e9b0fd91cf56e"
+    },
+    {
+      "old": "scripts/gen3_test_v4_strong_visible_d1_half_lock_v1.py",
+      "new": "research/g3/gen3_test_v4_strong_visible_d1_half_lock_v1.py",
+      "sha256": "7fe1469b7effdf9c779ba2edf5c4357ae0d2624c634bda05fb7fb9fa9c9298c0"
+    },
+    {
+      "old": "scripts/gen3_validate_four_path_candidates.py",
+      "new": "research/g3/gen3_validate_four_path_candidates.py",
+      "sha256": "9f10965240129ce757d3f44b8273fb3d41075891143e0d53730a8062ef1f3e84"
+    },
+    {
+      "old": "scripts/gen3_validate_mainline_icepoint_intraday_diffusion_v1.py",
+      "new": "research/g3/gen3_validate_mainline_icepoint_intraday_diffusion_v1.py",
+      "sha256": "f69ff5aeb0a28cbcf1e115ed23a8a6ad7ec5a41a89420b5374609f5387167813"
+    },
+    {
+      "old": "scripts/gen3_validate_v3_v4_pool_ma10_fractal.py",
+      "new": "research/g3/gen3_validate_v3_v4_pool_ma10_fractal.py",
+      "sha256": "14188f54d394e76df456f5333fbb64a100f2951ec73e50137037237a164afc3e"
+    },
+    {
+      "old": "scripts/gen3_validate_v3_v4_pool_ma_rebreak.py",
+      "new": "research/g3/gen3_validate_v3_v4_pool_ma_rebreak.py",
+      "sha256": "16224abb81251a86d77c5dfcfc10952f85b9c23d0ff6120a62da94709f6f95ee"
+    }
+  ],
+  "module_moves": {
+    "services/runtime_health.py": "services/operations/health.py",
+    "services/data_delivery.py": "services/operations/delivery.py",
+    "services/operations_incidents.py": "services/operations/incidents.py",
+    "services/operations.py": "services/operations/read_models.py",
+    "utils/strategy_contracts.py": "strategies/contracts.py",
+    "utils/g3_mainwave_confirmation.py": "strategies/g3/confirmation.py",
+    "utils/g3_minute_visibility.py": "strategies/g3/minute_visibility.py"
+  },
+  "frontend_moves": {
+    "frontend/src/views/pages/ClsNewsRadar.vue": "frontend/src/views/market/ClsNewsRadar.vue",
+    "frontend/src/views/pages/DataHealth.vue": "frontend/src/views/operations/DataHealth.vue",
+    "frontend/src/views/pages/DataStats.vue": "frontend/src/views/operations/DataStats.vue",
+    "frontend/src/views/pages/Gen2Backtest.vue": "frontend/src/views/g2/Gen2Backtest.vue",
+    "frontend/src/views/pages/Gen2FactorLab.vue": "frontend/src/views/g2/Gen2FactorLab.vue",
+    "frontend/src/views/pages/Gen2Live.vue": "frontend/src/views/g2/Gen2Live.vue",
+    "frontend/src/views/pages/Gen2MainlineHotspots.vue": "frontend/src/views/g2/Gen2MainlineHotspots.vue",
+    "frontend/src/views/pages/Gen2SelectionPool.vue": "frontend/src/views/g2/Gen2SelectionPool.vue",
+    "frontend/src/views/pages/Gen2StrategyLab.vue": "frontend/src/views/g2/Gen2StrategyLab.vue",
+    "frontend/src/views/pages/Gen2Timing.vue": "frontend/src/views/g2/Gen2Timing.vue",
+    "frontend/src/views/pages/Gen3HoldingTReview.vue": "frontend/src/views/g3/Gen3HoldingTReview.vue",
+    "frontend/src/views/pages/Gen3StateAlpha.vue": "frontend/src/views/g3/Gen3StateAlpha.vue",
+    "frontend/src/views/pages/Gen3StateAlphaCandidates.vue": "frontend/src/views/g3/Gen3StateAlphaCandidates.vue",
+    "frontend/src/views/pages/Gen3StateAlphaHoldingTicks.vue": "frontend/src/views/g3/Gen3StateAlphaHoldingTicks.vue",
+    "frontend/src/views/pages/Gen3StateAlphaMainwave.vue": "frontend/src/views/g3/Gen3StateAlphaMainwave.vue",
+    "frontend/src/views/pages/Gen3StateAlphaReplacement.vue": "frontend/src/views/g3/Gen3StateAlphaReplacement.vue",
+    "frontend/src/views/pages/Gen3StateAlphaRisk.vue": "frontend/src/views/g3/Gen3StateAlphaRisk.vue",
+    "frontend/src/views/pages/Gen3StateAlphaRoutes.vue": "frontend/src/views/g3/Gen3StateAlphaRoutes.vue",
+    "frontend/src/views/pages/Gen3StateAlphaTrades.vue": "frontend/src/views/g3/Gen3StateAlphaTrades.vue",
+    "frontend/src/views/pages/Home.vue": "frontend/src/views/market/Home.vue",
+    "frontend/src/views/pages/IndexDetail.vue": "frontend/src/views/market/IndexDetail.vue",
+    "frontend/src/views/pages/KlineCheck.vue": "frontend/src/views/operations/KlineCheck.vue",
+    "frontend/src/views/pages/LimitUpLadder.vue": "frontend/src/views/market/LimitUpLadder.vue",
+    "frontend/src/views/pages/MainwaveDaily.vue": "frontend/src/views/g3/MainwaveDaily.vue",
+    "frontend/src/views/pages/NotFound.vue": "frontend/src/views/shared/NotFound.vue",
+    "frontend/src/views/pages/SectorDetail.vue": "frontend/src/views/market/SectorDetail.vue",
+    "frontend/src/views/pages/Sectors.vue": "frontend/src/views/market/Sectors.vue",
+    "frontend/src/views/pages/StockDetail.vue": "frontend/src/views/market/StockDetail.vue",
+    "frontend/src/views/pages/Stocks.vue": "frontend/src/views/market/Stocks.vue",
+    "frontend/src/views/pages/SystemConfig.vue": "frontend/src/views/operations/SystemConfig.vue",
+    "frontend/src/views/pages/TaskCenter.vue": "frontend/src/views/operations/TaskCenter.vue"
+  },
+  "shared_functions": [
+    {
+      "file": "scripts/gen2_alpha191_contribution_audit.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_alpha191_light_constraint_matrix.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_alpha191_portfolio_overlay_matrix.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_alpha191_state_attribution.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_backtest_risk_cool_dynamic_circuit.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_1000_quality_veto_matrix.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_1000_quality_veto_matrix.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_2026ytd_diagnosis.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_2026ytd_diagnosis.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_intraday_combo.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_sector_filter_matrix.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_sector_filter_matrix.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_sector_filter_robustness.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_sector_filter_robustness.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_sector_integration.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_sector_integration.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_wait_1030_fair_price.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_breakout_wait_1030_fair_price.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_volume5_sector_layer.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_volume5_sector_layer.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_research_volume5_sector_sort_bonus.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "scripts/gen2_research_volume5_sector_sort_bonus.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen2_sweep_open_v1_market_gate.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "scripts/gen2_sweep_open_v1_market_gate.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_build_four_path_candidates.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_dynamic_router_g2exec_upper_bound_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_dynamic_router_g2exec_upper_bound_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "scripts/gen3_dynamic_router_strong_absorb_g2_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_dynamic_router_strong_weight_probe_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_dynamic_router_strong_weight_probe_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "scripts/gen3_package_v4_research_candidate_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_package_v4_research_candidate_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "scripts/gen3_stress_strong_quality_filter_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_stress_strong_quality_filter_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "scripts/gen3_test_range_execution_margin_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_test_range_execution_margin_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "scripts/gen3_test_strong_quality_filter_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_test_strong_quality_filter_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "scripts/gen3_update_panic_shadow.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "scripts/gen3_validate_intraday_confirm.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/cross_strategy/backtest_g2_behavior_theme_overlay_v1.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "research/cross_strategy/backtest_g2_mainline_sector_overlay_v1.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "research/g2/gen2_analyze_30m_candidate_stability.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_analyze_alpha191_drawdowns.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_analyze_pattern_contribution.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_analyze_risk_cool_contribution.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_analyze_timing_layer.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_analyze_v4_factor_profile.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_sweep_alpha191_keep80_constraints.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_attack_drawdown.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_attack_drawdown.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_position.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_position.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_profit_run_exit.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_profit_run_exit.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_risk.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_risk.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_sorting.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_sorting.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_state_only.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_sweep_open_v1_state_only.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_validate_attack_v1_prev_low.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_validate_open_v1_robustness.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_validate_open_v1_robustness.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g2/gen2_validate_open_v1_second_round.py",
+      "function": "_json_default",
+      "canonical": "numpy_json_default"
+    },
+    {
+      "file": "research/g2/gen2_validate_open_v1_second_round.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/analyze_mainline_overlay_g2_g3_validation_v1.py",
+      "function": "_json_default",
+      "canonical": "timestamp_json_default"
+    },
+    {
+      "file": "research/g3/gen3_audit_execution_shock_by_route_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/gen3_audit_execution_shock_by_route_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "research/g3/gen3_audit_strong_quality_layers_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/gen3_audit_strong_quality_layers_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "research/g3/gen3_audit_strong_route_gap_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/gen3_audit_strong_volume5_slot_failure_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "research/g3/gen3_audit_v4_all_shock_failure_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/gen3_test_v4_strong_confirm_d3_combo_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/gen3_test_v4_strong_confirm_d3_combo_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "research/g3/gen3_test_v4_strong_confirm_d3_visible_combo_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/gen3_test_v4_strong_confirm_d3_visible_combo_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "research/g3/gen3_test_v4_strong_score_filter_v1.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    },
+    {
+      "file": "research/g3/gen3_test_v4_strong_score_filter_v1.py",
+      "function": "_md_table",
+      "canonical": "markdown_table"
+    },
+    {
+      "file": "research/g3/gen3_validate_four_path_candidates.py",
+      "function": "_pct",
+      "canonical": "percent_text"
+    }
+  ]
+}

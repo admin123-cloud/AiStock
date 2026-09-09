@@ -4,22 +4,22 @@ const APP_TITLE = 'AiStock'
 
 const routes = [
   {
-    path: '/system/tasks', name: 'TaskCenter', component: () => import('@/views/pages/TaskCenter.vue'),
+    path: '/system/tasks', name: 'TaskCenter', component: () => import('@/views/operations/TaskCenter.vue'),
     meta: { title: '任务中心', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 1 }
   },
   {
-    path: '/data/health', name: 'DataHealth', component: () => import('@/views/pages/DataHealth.vue'),
+    path: '/data/health', name: 'DataHealth', component: () => import('@/views/operations/DataHealth.vue'),
     meta: { title: '数据健康', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1 }
   },
   {
-    path: '/gen3/state-alpha/mainwave-evidence', name: 'MainwaveEvidence', component: () => import('@/views/pages/Gen3StateAlphaMainwave.vue'),
+    path: '/gen3/state-alpha/mainwave-evidence', name: 'MainwaveEvidence', component: () => import('@/views/g3/Gen3StateAlphaMainwave.vue'),
     meta: { title: '主升行业证据', group: 'gen3', hiddenInNav: true }
   },
 
   {
     path: '/',
     name: 'Home',
-    component: () => import('@/views/pages/Home.vue'),
+    component: () => import('@/views/market/Home.vue'),
     meta: {
       title: '首页',
       group: 'market',
@@ -33,7 +33,7 @@ const routes = [
   {
     path: '/stocks',
     name: 'Stocks',
-    component: () => import('@/views/pages/Stocks.vue'),
+    component: () => import('@/views/market/Stocks.vue'),
     meta: {
       title: '股票列表',
       group: 'market',
@@ -47,7 +47,7 @@ const routes = [
   {
     path: '/limit-up-ladder',
     name: 'LimitUpLadder',
-    component: () => import('@/views/pages/LimitUpLadder.vue'),
+    component: () => import('@/views/market/LimitUpLadder.vue'),
     meta: {
       title: '连板天梯',
       group: 'market',
@@ -61,7 +61,7 @@ const routes = [
   {
     path: '/news/cls-radar',
     name: 'ClsNewsRadar',
-    component: () => import('@/views/pages/ClsNewsRadar.vue'),
+    component: () => import('@/views/market/ClsNewsRadar.vue'),
     meta: {
       title: '财联社消息雷达',
       group: 'market',
@@ -75,7 +75,7 @@ const routes = [
   {
     path: '/stock/:code',
     name: 'StockDetail',
-    component: () => import('@/views/pages/StockDetail.vue'),
+    component: () => import('@/views/market/StockDetail.vue'),
     meta: {
       title: '股票详情',
       group: 'market',
@@ -87,7 +87,7 @@ const routes = [
   {
     path: '/index/:code',
     name: 'IndexDetail',
-    component: () => import('@/views/pages/IndexDetail.vue'),
+    component: () => import('@/views/market/IndexDetail.vue'),
     meta: {
       title: '指数详情',
       group: 'market',
@@ -99,7 +99,7 @@ const routes = [
   {
     path: '/sectors',
     name: 'Sectors',
-    component: () => import('@/views/pages/Sectors.vue'),
+    component: () => import('@/views/market/Sectors.vue'),
     meta: {
       title: '板块监控',
       group: 'market',
@@ -113,7 +113,7 @@ const routes = [
   {
     path: '/sector/:code',
     name: 'SectorDetail',
-    component: () => import('@/views/pages/SectorDetail.vue'),
+    component: () => import('@/views/market/SectorDetail.vue'),
     meta: {
       title: '板块详情',
       group: 'market',
@@ -125,7 +125,7 @@ const routes = [
   {
     path: '/gen2/live',
     name: 'Gen2Live',
-    component: () => import('@/views/pages/Gen2Live.vue'),
+    component: () => import('@/views/g2/Gen2Live.vue'),
     meta: {
       title: '第二代策略实盘交易',
       group: 'gen2',
@@ -140,7 +140,7 @@ const routes = [
   {
     path: '/gen2/selection-pool',
     name: 'Gen2SelectionPool',
-    component: () => import('@/views/pages/Gen2SelectionPool.vue'),
+    component: () => import('@/views/g2/Gen2SelectionPool.vue'),
     meta: {
       title: '第二代策略选股池',
       group: 'gen2',
@@ -155,7 +155,7 @@ const routes = [
   {
     path: '/gen2/mainline-hotspots',
     name: 'Gen2MainlineHotspots',
-    component: () => import('@/views/pages/Gen2MainlineHotspots.vue'),
+    component: () => import('@/views/g2/Gen2MainlineHotspots.vue'),
     meta: {
       title: '第二代主线热点',
       group: 'gen2',
@@ -170,7 +170,7 @@ const routes = [
   {
     path: '/gen2/lab',
     name: 'Gen2StrategyLab',
-    component: () => import('@/views/pages/Gen2StrategyLab.vue'),
+    component: () => import('@/views/g2/Gen2StrategyLab.vue'),
     meta: {
       title: '第二代策略实验台',
       group: 'gen2',
@@ -185,7 +185,7 @@ const routes = [
   {
     path: '/gen2/backtest',
     name: 'Gen2Backtest',
-    component: () => import('@/views/pages/Gen2Backtest.vue'),
+    component: () => import('@/views/g2/Gen2Backtest.vue'),
     meta: {
       title: '第二代策略历史回测',
       group: 'gen2',
@@ -200,7 +200,7 @@ const routes = [
   {
     path: '/gen2/factors',
     name: 'Gen2FactorLab',
-    component: () => import('@/views/pages/Gen2FactorLab.vue'),
+    component: () => import('@/views/g2/Gen2FactorLab.vue'),
     meta: {
       title: '第二代策略量化因子库',
       group: 'gen2',
@@ -215,7 +215,7 @@ const routes = [
   {
     path: '/gen2/timing',
     name: 'Gen2Timing',
-    component: () => import('@/views/pages/Gen2Timing.vue'),
+    component: () => import('@/views/g2/Gen2Timing.vue'),
     meta: {
       title: '第二代策略交易择时',
       group: 'gen2',
@@ -230,7 +230,7 @@ const routes = [
   {
     path: '/gen3/state-alpha',
     name: 'Gen3StateAlpha',
-    component: () => import('@/views/pages/Gen3StateAlpha.vue'),
+    component: () => import('@/views/g3/Gen3StateAlpha.vue'),
     meta: {
       title: 'G3 工作台',
       group: 'gen3',
@@ -243,7 +243,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/candidates',
     name: 'Gen3StateAlphaCandidates',
-    component: () => import('@/views/pages/Gen3StateAlphaCandidates.vue'),
+    component: () => import('@/views/g3/Gen3StateAlphaCandidates.vue'),
     meta: {
       title: 'G3 State Alpha 候选池',
       group: 'gen3',
@@ -258,7 +258,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/holding-ticks',
     name: 'Gen3StateAlphaHoldingTicks',
-    component: () => import('@/views/pages/Gen3StateAlphaHoldingTicks.vue'),
+    component: () => import('@/views/g3/Gen3StateAlphaHoldingTicks.vue'),
     meta: {
       title: '做T交易',
       group: 'gen3',
@@ -271,7 +271,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/holding-t-review',
     name: 'Gen3HoldingTReview',
-    component: () => import('@/views/pages/Gen3HoldingTReview.vue'),
+    component: () => import('@/views/g3/Gen3HoldingTReview.vue'),
     meta: {
       title: '做T复盘',
       group: 'gen3',
@@ -284,7 +284,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/mainwave',
     name: 'Gen3StateAlphaMainwave',
-    component: () => import('@/views/pages/MainwaveDaily.vue'),
+    component: () => import('@/views/g3/MainwaveDaily.vue'),
     meta: {
       title: '主升每日跟踪',
       group: 'gen3',
@@ -297,7 +297,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/routes',
     name: 'Gen3StateAlphaRoutes',
-    component: () => import('@/views/pages/Gen3StateAlphaRoutes.vue'),
+    component: () => import('@/views/g3/Gen3StateAlphaRoutes.vue'),
     meta: {
       title: '策略有效性诊断',
       group: 'gen3',
@@ -310,7 +310,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/risk',
     name: 'Gen3StateAlphaRisk',
-    component: () => import('@/views/pages/Gen3StateAlphaRisk.vue'),
+    component: () => import('@/views/g3/Gen3StateAlphaRisk.vue'),
     meta: {
       title: '风控合同',
       group: 'gen3',
@@ -323,7 +323,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/trades',
     name: 'Gen3StateAlphaTrades',
-    component: () => import('@/views/pages/Gen3StateAlphaTrades.vue'),
+    component: () => import('@/views/g3/Gen3StateAlphaTrades.vue'),
     meta: {
       title: '历史成交复盘',
       group: 'gen3',
@@ -336,7 +336,7 @@ const routes = [
   {
     path: '/gen3/state-alpha/replacement',
     name: 'Gen3StateAlphaReplacement',
-    component: () => import('@/views/pages/Gen3StateAlphaReplacement.vue'),
+    component: () => import('@/views/g3/Gen3StateAlphaReplacement.vue'),
     meta: {
       title: 'G3融合状态',
       group: 'gen3',
@@ -351,7 +351,7 @@ const routes = [
   {
     path: '/data-stats',
     name: 'DataStats',
-    component: () => import('@/views/pages/DataStats.vue'),
+    component: () => import('@/views/operations/DataStats.vue'),
     meta: {
       title: '数据监控',
       group: 'data',
@@ -365,7 +365,7 @@ const routes = [
   {
     path: '/kline-check',
     name: 'KlineCheck',
-    component: () => import('@/views/pages/KlineCheck.vue'),
+    component: () => import('@/views/operations/KlineCheck.vue'),
     meta: {
       title: 'K线巡检',
       group: 'data',
@@ -379,7 +379,7 @@ const routes = [
   {
     path: '/system-config',
     name: 'SystemConfig',
-    component: () => import('@/views/pages/SystemConfig.vue'),
+    component: () => import('@/views/operations/SystemConfig.vue'),
     meta: {
       title: '系统配置',
       group: 'system',
@@ -393,7 +393,7 @@ const routes = [
   {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
-    component: () => import('@/views/pages/NotFound.vue'),
+    component: () => import('@/views/shared/NotFound.vue'),
     meta: {
       title: '页面未找到',
       hiddenInNav: true

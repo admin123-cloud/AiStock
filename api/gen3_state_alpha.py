@@ -33,11 +33,11 @@ from services.daily_trend_exit_monitor import evaluate_daily_rising_trend_exit, 
 from services.g3_holding_t_daily_review import REVIEW_DIR as HOLDING_T_REVIEW_DIR
 from services.g3_holding_t_daily_review import record_manual_execution, run_daily_review
 from services.g3_holding_t_portfolio_state import confirm_position_action, load_state as load_holding_t_portfolio_state, save_state as save_holding_t_portfolio_state
-from services.runtime_health import read_snapshot, strategy_data_checks, operations_notification_owner
+from services.operations.health import read_snapshot, strategy_data_checks, operations_notification_owner
 from utils.config import config as app_config
 from utils.logger import get_logger
 from utils.paths import report_path, runtime_path
-from utils.strategy_contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata
+from strategies.contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata
 
 
 router = APIRouter(prefix="/gen3-state-alpha", tags=["G3 State Alpha"])

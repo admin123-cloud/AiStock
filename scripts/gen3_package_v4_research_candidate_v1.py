@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys as _bootstrap_sys
+from pathlib import Path as _BootstrapPath
+_bootstrap_sys.path.insert(0, str(_BootstrapPath(__file__).resolve().parents[1]))
+
 import json
 import sys
 from datetime import datetime
@@ -147,29 +151,10 @@ def _summary(curve: pd.DataFrame, closed: pd.DataFrame, variant: str, profile: s
     }
 
 
-def _pct(value: Any) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"{float(value) * 100:.2f}%"
+from research.common.reporting import percent_text as _pct
 
 
-def _md_table(df: pd.DataFrame, pct_cols: set[str] | None = None) -> str:
-    if df.empty:
-        return "_无数据_"
-    pct_cols = pct_cols or set()
-    rows = []
-    for _, row in df.iterrows():
-        item = {}
-        for col in df.columns:
-            value = row[col]
-            if col in pct_cols:
-                item[col] = _pct(value)
-            elif isinstance(value, float):
-                item[col] = f"{value:.4f}"
-            else:
-                item[col] = "" if pd.isna(value) else str(value)
-        rows.append(item)
-    return pd.DataFrame(rows).to_markdown(index=False)
+from research.common.reporting import markdown_table as _md_table
 
 
 def _goal_audit(summary: pd.DataFrame) -> pd.DataFrame:

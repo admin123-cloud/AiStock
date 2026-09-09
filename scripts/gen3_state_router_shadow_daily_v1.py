@@ -36,14 +36,14 @@ from scripts.gen3_update_panic_shadow import (  # noqa: E402
     _prev_index_trade_date,
 )
 from scheduler.trading_calendar import TradingCalendar  # noqa: E402
-from utils.g3_mainwave_confirmation import (  # noqa: E402
+from strategies.g3.confirmation import (  # noqa: E402
     FORMAL_CONFIRMATION_NAME,
     confirmation_contract_metadata,
     is_confirmation_data_wall,
 )
 from utils.market_warehouse import clickhouse_query_df  # noqa: E402
 from utils.paths import report_path, runtime_path  # noqa: E402
-from utils.strategy_contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata  # noqa: E402
+from strategies.contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata  # noqa: E402
 
 
 OUT_DIR = report_path("gen3_state_router_shadow_daily_v1")

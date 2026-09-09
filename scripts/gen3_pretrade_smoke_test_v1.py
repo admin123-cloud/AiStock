@@ -16,8 +16,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_query_df, clickhouse_table_exists  # noqa: E402
-from utils.g3_mainwave_confirmation import is_confirmation_data_wall  # noqa: E402
-from utils.g3_minute_visibility import load_visible_minute_bars  # noqa: E402
+from strategies.g3.confirmation import is_confirmation_data_wall  # noqa: E402
+from strategies.g3.minute_visibility import load_visible_minute_bars  # noqa: E402
 from utils.paths import report_path, runtime_path  # noqa: E402
 
 

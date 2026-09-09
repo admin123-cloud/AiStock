@@ -40,7 +40,7 @@ for stock in stocks:
 
 ### 2. 前端页面修改
 
-**文件**: `frontend/src/views/pages/Stocks.vue`
+**文件**: `frontend/src/views/market/Stocks.vue`
 
 #### 2.1 修改表头（第58-69行）
 
@@ -279,5 +279,5 @@ python main.py
 ## 🔗 相关文件
 
 - `backend/src/api/stocks.py` - 后端股票API
-- `frontend/src/views/pages/Stocks.vue` - 前端股票列表页面
+- `frontend/src/views/market/Stocks.vue` - 前端股票列表页面
 - `backend/src/models/stock.py` - 数据模型定义

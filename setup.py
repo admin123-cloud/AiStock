@@ -31,7 +31,7 @@ setup(
     description="量化交易AI系统 - 集成机器学习、深度学习和强化学习模型",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/aistock",
+    url="https://github.com/admin123-cloud/AiStock",
     packages=find_packages(exclude=["tests", "tests.*", "*.tests", "*.tests.*"]),
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -39,12 +39,10 @@ setup(
         "Topic :: Office/Business :: Financial :: Investment",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=requirements,
     extras_require={
         "dev": [
@@ -69,11 +67,13 @@ setup(
     },
     entry_points={
         "console_scripts": [
+            "aistock-research=research.__main__:main",
             "aistock-update=scripts.update_data:main",
             "aistock-live=scripts.live_trading:main",
             "aistock-cron=scripts.cron_jobs:main",
         ],
     },
     include_package_data=True,
+    package_data={"research": ["catalog.json"]},
     zip_safe=False,
 )

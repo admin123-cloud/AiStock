@@ -14,7 +14,7 @@
 - 交易保护：当前策略合同只允许 `institutional_score120_mainwave` 产生影子交易；`auto_order_allowed=false`、`order_path_enabled=false`、`shadow_trading_enabled=true`。这一边界正确，应保留。
 - 自动化：`AiStock QMT xtquant Night Rolling Repair` 最近结果为 1；日线修复任务最近结果为 0，但报告仍有缺口。因此不能把“任务返回 0”当成数据已闭环。
 - 测试：32 个 pytest 用例中 31 通过、1 失败。失败于成交额快速兜底预测在收盘后返回当前成交额，未满足测试约定的“预测值应大于当前值”。
-- 编码：编码守卫发现项目自有文件的 GBK/CP936 乱码和占位问号，包括 `api/system_config.py`、`frontend/src/views/pages/Gen3StateAlphaRisk.vue`、`scripts/sync_all_klines.py`；另有未跟踪的本地 `Libs/` 运行时造成大量无关噪音。
+- 编码：编码守卫发现项目自有文件的 GBK/CP936 乱码和占位问号，包括 `api/system_config.py`、`frontend/src/views/g3/Gen3StateAlphaRisk.vue`、`scripts/sync_all_klines.py`；另有未跟踪的本地 `Libs/` 运行时造成大量无关噪音。
 
 ## 十个系统域的审计结论
 

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys as _bootstrap_sys
+from pathlib import Path as _BootstrapPath
+_bootstrap_sys.path.insert(0, str(_BootstrapPath(__file__).resolve().parents[1]))
+
 import json
 from pathlib import Path
 from typing import Any
@@ -14,20 +18,10 @@ COMBO = PROBE / "combo_policy_probe"
 OUT = COMBO / "diagnosis_2026ytd"
 
 
-def _json_default(obj: Any) -> Any:
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
-    return str(obj)
+from research.common.reporting import timestamp_json_default as _json_default
 
 
-def _pct(value: Any) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"{float(value) * 100:.2f}%"
+from research.common.reporting import percent_text as _pct
 
 
 def _read_trade_lots(run_dir: Path) -> pd.DataFrame:

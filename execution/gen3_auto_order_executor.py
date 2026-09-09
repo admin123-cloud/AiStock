@@ -18,7 +18,7 @@ import pandas as pd
 
 from execution.qmtmini_gateway import QmtMiniOrderGateway
 from utils.paths import runtime_path
-from utils.strategy_contracts import formal_g3_score88_contract
+from strategies.contracts import formal_g3_score88_contract
 
 
 FORMAL_G3_CONTRACT = formal_g3_score88_contract()

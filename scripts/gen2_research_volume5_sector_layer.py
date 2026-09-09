@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys as _bootstrap_sys
+from pathlib import Path as _BootstrapPath
+_bootstrap_sys.path.insert(0, str(_BootstrapPath(__file__).resolve().parents[1]))
+
 import argparse
 import json
 import sys
@@ -25,20 +29,10 @@ from utils.paths import report_path  # noqa: E402
 
 SOURCE = report_path("gen2_breakout_buy_point_research", "sources", "volume5_dynamic_stop_cd3_mapped.parquet")
 OUT = report_path("g2_volume5_sector_layer_probe")
-def _json_default(obj: Any) -> Any:
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
-    return str(obj)
+from research.common.reporting import timestamp_json_default as _json_default
 
 
-def _pct(value: Any) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"{float(value) * 100:.2f}%"
+from research.common.reporting import percent_text as _pct
 
 
 def _code6(code: Any) -> str:

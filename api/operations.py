@@ -6,9 +6,9 @@ from time import monotonic
 
 from fastapi import APIRouter, HTTPException, Query
 
-from services.operations import task_board, mainwave_daily
-from services.operations_incidents import read_incidents
-from services.data_delivery import build_delivery_calendar
+from services.operations.read_models import task_board, mainwave_daily
+from services.operations.incidents import read_incidents
+from services.operations.delivery import build_delivery_calendar
 from utils.paths import runtime_path
 
 router = APIRouter(prefix='/operations', tags=['operations'])
@@ -34,7 +34,7 @@ def daily():
 
 @router.get('/data-calendar')
 def data_calendar(days: int = Query(30, ge=1, le=60)):
-    from services.runtime_health import read_snapshot
+    from services.operations.health import read_snapshot
     published = read_snapshot(runtime_path('operations','delivery_calendar.json'))
     if published.get('publisher_status') == 'healthy' and len(published.get('dates', [])) >= days:
         return {**published, 'dates':published['dates'][-days:],
