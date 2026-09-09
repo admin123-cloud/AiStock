@@ -405,7 +405,7 @@ function Invoke-CollectorOnce {
       "--universe", $Universe,
       "--periods", $Periods,
       "--duration-sec", "$DurationSec",
-      "--flush-interval-sec", "300",
+      "--flush-interval-sec", "60",
       "--poll-full-tick",
       "--write-daily",
       "--connect-retry-sec", "30",

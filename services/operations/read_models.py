@@ -82,6 +82,10 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
         rows = [x for x in rows if x['executor'] != 'API']
         rows.extend({**x, 'status': x['status'] if api_fresh else 'unknown',
                      'source_stale': not api_fresh} for x in api_state['tasks'])
+    ingestion = read_json(root / 'operations/intraday_ingestion.json')
+    for row in rows:
+        if row['name'] == 'AiStock QMT xtquant Intraday Collector':
+            row['ingestion'] = ingestion
     discovered = {row['name'] for row in rows}
     for artifact in manifest.get('artifacts', []):
         if artifact.get('trigger') == 'Windows Task Scheduler' and artifact['owner'] not in discovered:

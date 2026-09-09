@@ -8,7 +8,7 @@ import os
 import signal
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, time as dt_time
 from pathlib import Path
 from threading import Lock, Thread
@@ -76,7 +76,9 @@ def log(message: str) -> None:
 def write_report(path: str | Path, payload: dict[str, Any]) -> None:
     report = Path(path)
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    temporary = report.with_suffix(report.suffix + ".tmp")
+    temporary.write_bytes(json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode("utf-8"))
+    temporary.replace(report)
 
 
 def quote_sql(value: Any) -> str:
@@ -321,7 +323,9 @@ class FullPushAggregator:
             items = list(self.latest_ticks.items())
             full_tick_items = dict(self.full_tick_ticks)
         for code, tick in items:
-            tick = full_tick_items.get(code, tick)
+            polled = full_tick_items.get(code)
+            if polled and parse_tick_time(polled.get("time"), datetime.min) > parse_tick_time(tick.get("time"), datetime.min):
+                tick = polled
             last_price = tick_number(tick, "lastPrice", "last", "price", "close")
             open_price = tick_number(tick, "open", default=last_price)
             high_price = tick_number(tick, "high", default=max(open_price, last_price))
@@ -573,29 +577,89 @@ def publish_market_snapshot(daily_rows: list[tuple], *, dry_run: bool) -> dict[s
     return {"written": True, "final": is_final, "covered_count": covered, "expected_count": expected}
 
 
-def flush_once(aggregator: FullPushAggregator, *, include_open_bars: bool = False, write_daily: bool = True) -> dict[str, Any]:
+def latest_closed_boundary(now, minutes=5):
+    from datetime import timedelta
+    candidates = []
+    for hour, minute in ((9, 30), (13, 0)):
+        start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        for offset in range(minutes, 121, minutes):
+            value = start + timedelta(minutes=offset)
+            if value <= now:
+                candidates.append(value)
+    return max(candidates) if candidates else None
+
+
+def flush_snapshot(aggregator):
+    started = time.monotonic()
+    daily = aggregator.daily_rows()
     dry_run = bool(aggregator.args.dry_run)
-    summary: dict[str, Any] = {"daily_rows": 0, "minute_rows": {}, "dry_run": dry_run}
-    if aggregator.args.write_daily and write_daily:
-        daily = aggregator.daily_rows()
-        summary["daily_rows"] = insert_rows("kline_daily_intraday", daily, INTRADAY_DAILY_COLUMNS, dry_run)
-        summary["market_snapshot"] = publish_market_snapshot(daily, dry_run=dry_run)
-        if not summary["market_snapshot"]["written"]:
-            log(f"market snapshot pending: {summary['market_snapshot']}")
-    bars_5m = aggregator.drain_closed_bars(include_open=include_open_bars)
-    periods = {item.strip() for item in aggregator.args.periods.split(",") if item.strip()}
-    if "5m" in periods:
-        rows = minute_rows(bars_5m, "5m")
-        summary["minute_rows"]["5m"] = insert_rows(MINUTE_TABLES["5m"], rows, MINUTE_COLUMNS, dry_run)
-    if "15m" in periods:
-        rows = minute_rows(aggregate_bars(bars_5m, "15m"), "15m") if dry_run else derive_higher_rows_from_clickhouse("15m", datetime.now(SH_TZ).date())
-        summary["minute_rows"]["15m"] = insert_rows(MINUTE_TABLES["15m"], rows, MINUTE_COLUMNS, dry_run)
-    if "30m" in periods:
-        rows = minute_rows(aggregate_bars(bars_5m, "30m"), "30m") if dry_run else derive_higher_rows_from_clickhouse("30m", datetime.now(SH_TZ).date())
-        summary["minute_rows"]["30m"] = insert_rows(MINUTE_TABLES["30m"], rows, MINUTE_COLUMNS, dry_run)
-    if "60m" in periods:
-        rows = minute_rows(aggregate_bars(bars_5m, "60m"), "60m") if dry_run else derive_higher_rows_from_clickhouse("60m", datetime.now(SH_TZ).date())
-        summary["minute_rows"]["60m"] = insert_rows(MINUTE_TABLES["60m"], rows, MINUTE_COLUMNS, dry_run)
+    written = insert_rows("kline_daily_intraday", daily, INTRADAY_DAILY_COLUMNS, dry_run) if aggregator.args.write_daily else 0
+    market = publish_market_snapshot(daily, dry_run=dry_run) if aggregator.args.write_daily else {"written": False}
+    now = datetime.now(SH_TZ).replace(tzinfo=None)
+    with aggregator.lock:
+        ticks = dict(aggregator.latest_ticks)
+        for code, tick in aggregator.full_tick_ticks.items():
+            if code not in ticks or parse_tick_time(tick.get("time"), datetime.min) > parse_tick_time(ticks[code].get("time"), datetime.min):
+                ticks[code] = tick
+    expected = set(aggregator.allowed_codes)
+    fresh = {code for code, tick in ticks.items() if code in expected and
+             0 <= (now-parse_tick_time(tick.get("time"), datetime.min)).total_seconds() <= 300}
+    return {"daily_rows": written, "market_snapshot": market,
+            "duration_seconds": round(time.monotonic()-started, 3),
+            "universe_count": len(expected), "source_fresh_300s": len(fresh),
+            "unverified_codes": sorted(expected-fresh),
+            "freshness_note": "Includes indices; suspension/session exemptions require separate evidence",
+            "at": now.isoformat()}
+
+
+def flush_minutes(aggregator, *, include_open_bars=False):
+    # Keep failed 5m writes available for retry; persisted journal survives restarts.
+    pending = getattr(aggregator, "pending_bars", [])
+    pending.extend(aggregator.drain_closed_bars(include_open=include_open_bars))
+    aggregator.pending_bars = pending
+    journal = getattr(aggregator, "minute_journal", None)
+    if journal and pending:
+        write_report(journal, {"bars": [asdict(bar) for bar in pending]})
+    summary = {"minute_rows": {}, "errors": {}}
+    periods = {x.strip() for x in aggregator.args.periods.split(",")}
+    if "5m" in periods or periods.intersection({"15m", "30m", "60m"}):
+        summary["minute_rows"]["5m"] = insert_rows(MINUTE_TABLES["5m"], minute_rows(pending, "5m"), MINUTE_COLUMNS, aggregator.args.dry_run)
+    aggregator.pending_bars = []
+    if journal:
+        write_report(journal, {"bars": []})
+    now = datetime.now(SH_TZ).replace(tzinfo=None)
+    for target in ("15m", "30m", "60m"):
+        if target not in periods:
+            continue
+        # Only query the derived period after one of its boundaries has closed.
+        boundary = latest_closed_boundary(now, int(target[:-1]))
+        completed = getattr(aggregator, "derived_completed", {})
+        if boundary is None or completed.get(target) == boundary:
+            continue
+        blocked = getattr(aggregator, "blocked_derived", {})
+        if target in blocked:
+            summary["errors"][target] = blocked[target]
+            continue
+        try:
+            rows = aggregate_bars(pending, target) if aggregator.args.dry_run else derive_higher_rows_from_clickhouse(target, now.date())
+            if aggregator.args.dry_run:
+                rows = minute_rows(rows, target)
+            summary["minute_rows"][target] = insert_rows(MINUTE_TABLES[target], rows, MINUTE_COLUMNS, aggregator.args.dry_run)
+            completed[target] = boundary
+            aggregator.derived_completed = completed
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            summary["errors"][target] = message
+            from services.operations.ingestion_checkpoint import storage_failure
+            if storage_failure(message):
+                blocked[target] = message
+                aggregator.blocked_derived = blocked
+    return summary
+
+
+def flush_once(aggregator, *, include_open_bars=False, write_daily=True):
+    summary = flush_snapshot(aggregator) if write_daily else {}
+    summary.update(flush_minutes(aggregator, include_open_bars=include_open_bars))
     return summary
 
 
@@ -609,7 +673,7 @@ def main() -> int:
     parser.add_argument("--index-codes", default=DEFAULT_INDEX_CODES)
     parser.add_argument("--periods", default="5m,15m,30m,60m")
     parser.add_argument("--duration-sec", type=int, default=0)
-    parser.add_argument("--flush-interval-sec", type=int, default=300)
+    parser.add_argument("--flush-interval-sec", type=int, default=60)
     parser.add_argument("--full-tick-batch-size", type=int, default=500)
     parser.add_argument("--poll-full-tick", action="store_true")
     parser.add_argument("--write-daily", action="store_true", help="write provisional intraday daily snapshots; never writes kline_daily")
@@ -619,7 +683,17 @@ def main() -> int:
     parser.add_argument("--connect-deadline", default="", help="Asia/Shanghai HH:MM; retry QMT until this session deadline")
     parser.add_argument("--report", default=str(runtime_path("qmt_fullpush_intraday_aggregator.json")))
     args = parser.parse_args()
+    from services.operations.lifecycle import InstanceLock
+    scope = hashlib.sha256(args.codes.encode()).hexdigest()[:12] if args.codes else "full-market"
+    lock = InstanceLock(runtime_path("operations", f"intraday-{scope}.lock"))
+    lock.acquire()
+    try:
+        return run_collector(args)
+    finally:
+        lock.release()
 
+
+def run_collector(args):
     os.environ.setdefault("AISTOCK_QMT_QUOTE_HOST", "127.0.0.1")
     os.environ.setdefault("AISTOCK_QMT_QUOTE_PORT", "58610")
     from xtquant import xtdata  # type: ignore
@@ -675,54 +749,62 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_stop)
     signal.signal(signal.SIGTERM, _handle_stop)
 
+    journal = Path(args.report).with_suffix(".pending.json")
+    aggregator.minute_journal = journal
+    aggregator.pending_bars = []
+    if journal.exists():
+        saved = json.loads(journal.read_text(encoding="utf-8"))
+        for value in saved.get("bars", []):
+            for key in ("end_ts", "last_update"):
+                if value.get(key):
+                    value[key] = datetime.fromisoformat(value[key])
+            aggregator.pending_bars.append(BarState(**value))
+
     seq = xtdata.subscribe_whole_quote(markets, aggregator.on_data)
     log(f"subscribed full-push markets={markets} seq={seq} codes={len(codes)} dry_run={args.dry_run}")
     started = time.monotonic()
-    last_flush = started
-    flushes: list[dict[str, Any]] = []
+    from services.operations.ingestion_lanes import IngestionLane
+    flushes = []
     full_tick_polls = 0
-    full_tick_polling = {"value": False}
     exit_code = 0
 
-    def _poll_full_tick_async() -> None:
+    def snapshot_action():
         nonlocal full_tick_polls
-        full_tick_polling["value"] = True
-        try:
-            count = aggregator.poll_full_tick(xtdata, codes, args.full_tick_batch_size)
-            full_tick_polls += 1
-            log(f"full_tick poll done count={count} received_codes={len(aggregator.received_codes)}")
-        except Exception as exc:
-            log(f"full_tick poll failed: {type(exc).__name__}: {exc}")
-        finally:
-            full_tick_polling["value"] = False
-
-    def _maybe_start_full_tick_poll() -> None:
-        if not args.poll_full_tick or full_tick_polling["value"]:
-            return
-        Thread(target=_poll_full_tick_async, daemon=True).start()
-
-    try:
-        # A late QMT start must recover the homepage immediately rather than
-        # waiting for the next five-minute timer boundary.
+        poll_started = time.monotonic()
+        count = aggregator.poll_full_tick(xtdata, codes, args.full_tick_batch_size) if args.poll_full_tick else 0
         if args.poll_full_tick:
-            count = aggregator.poll_full_tick(xtdata, codes, args.full_tick_batch_size)
             full_tick_polls += 1
-            initial_summary = flush_once(aggregator)
-            initial_summary["at"] = datetime.now(SH_TZ).replace(tzinfo=None)
-            initial_summary["initial"] = True
-            flushes.append(initial_summary)
-            log(f"initial full_tick count={count} received_codes={len(aggregator.received_codes)} flush={initial_summary}")
-        _maybe_start_full_tick_poll()
+        poll_seconds = time.monotonic()-poll_started
+        result = flush_snapshot(aggregator)
+        result.update(poll_seconds=round(poll_seconds, 3), polled_codes=count)
+        log(f"snapshot {result['daily_rows']} rows poll={poll_seconds:.3f}s write={result['duration_seconds']}s fresh={result['source_fresh_300s']}/{result['universe_count']}")
+        return result
+
+    snapshot_lane = IngestionLane("snapshot", snapshot_action)
+    minute_lane = IngestionLane("minutes", lambda: flush_minutes(aggregator))
+    lanes = [snapshot_lane, minute_lane]
+    next_snapshot = started
+    last_boundary = None
+    heartbeat = 0
+    try:
         while not stopped["value"]:
-            now = time.monotonic()
-            if now - last_flush >= max(1, args.flush_interval_sec):
-                summary = flush_once(aggregator)
-                summary["at"] = datetime.now(SH_TZ).replace(tzinfo=None)
-                flushes.append(summary)
-                log(f"flush {summary}")
-                last_flush = now
-                _maybe_start_full_tick_poll()
-            if args.duration_sec > 0 and now - started >= args.duration_sec:
+            clock = time.monotonic()
+            now = datetime.now(SH_TZ).replace(tzinfo=None)
+            if clock >= next_snapshot and snapshot_lane.start():
+                next_snapshot = clock + max(1, args.flush_interval_sec)
+            boundary = latest_closed_boundary(now)
+            if boundary is not None and boundary != last_boundary and (now-boundary).total_seconds() >= 15:
+                if minute_lane.start():
+                    last_boundary = boundary
+            # Retry failed 5m writes without waiting for a new candle.
+            if minute_lane.state["status"] in ("failed", "degraded") and clock-(minute_lane.started or clock) >= 60:
+                minute_lane.start()
+            if clock >= heartbeat:
+                write_report(runtime_path("operations", "intraday_ingestion.json") if not args.codes else Path(args.report).with_suffix(".live.json"),
+                             {"generated_at": now.isoformat()+"+08:00", "lanes": [lane.snapshot() for lane in lanes],
+                              "snapshot_target_seconds": args.flush_interval_sec, "phase": "running"})
+                heartbeat = clock+10
+            if args.duration_sec > 0 and clock-started >= args.duration_sec:
                 break
             time.sleep(0.5)
     except Exception as exc:
@@ -734,10 +816,16 @@ def main() -> int:
                 xtdata.unsubscribe_quote(seq)
         except Exception:
             pass
-        final_flush = flush_once(aggregator, include_open_bars=args.flush_open_bars_on_exit, write_daily=False)
-        final_flush["at"] = datetime.now(SH_TZ).replace(tzinfo=None)
-        final_flush["final"] = True
-        flushes.append(final_flush)
+        for lane in lanes:
+            if not lane.join(10):
+                exit_code = 2
+        if minute_lane.join():
+            try:
+                flushes.append(flush_minutes(aggregator, include_open_bars=args.flush_open_bars_on_exit))
+            except Exception as exc:
+                exit_code = 2
+                log(f"final minute flush failed: {exc}")
+        flushes.extend(lane.snapshot() for lane in lanes)
         report = {
             "ok": exit_code == 0,
             "started_at": datetime.fromtimestamp(time.time() - (time.monotonic() - started), SH_TZ).replace(tzinfo=None),
@@ -758,6 +846,9 @@ def main() -> int:
             "flushes": flushes,
             "dry_run": bool(args.dry_run),
         }
+        write_report(runtime_path("operations", "intraday_ingestion.json") if not args.codes else Path(args.report).with_suffix(".live.json"),
+                     {"generated_at": datetime.now(SH_TZ).isoformat(), "phase": "stopped",
+                      "snapshot_target_seconds": args.flush_interval_sec, "lanes": [lane.snapshot() for lane in lanes]})
         write_report(args.report, report)
         log(f"report={args.report} ok={report['ok']} events={report['received_events']} codes={report['received_codes']}")
     return exit_code

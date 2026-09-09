@@ -1,0 +1,72 @@
+"""Resume isolated stage tables without re-downloading successful phases."""
+import hashlib
+import json
+from pathlib import Path
+from services.operations.health import write_snapshot
+from services.operations.lifecycle import InstanceLock
+
+
+def storage_failure(message):
+    return any(x in message for x in ("CHECKSUM_DOESNT_MATCH", "Sort order of blocks violated", "CORRUPTED_DATA", "UNKNOWN_TABLE"))
+
+
+def report_ok(value):
+    if isinstance(value, dict):
+        if value.get("ok") is False or value.get("failed_batches", 0) or value.get("nonrecoverable_error"):
+            return False
+        return all(report_ok(x) for x in value.values())
+    if isinstance(value, list):
+        return all(report_ok(x) for x in value)
+    return True
+
+
+def run_staged(command, timeout, root, runner, *, phases):
+    root = Path(root)
+    # Include worker bytes: changed algorithms must not reuse an earlier checkpoint.
+    identity = json.dumps(command, ensure_ascii=False) + Path(command[1]).read_text(encoding="utf-8")
+    key = hashlib.sha256(identity.encode()).hexdigest()[:20]
+    directory = root / "batches" / key
+    directory.mkdir(parents=True, exist_ok=True)
+    lock = InstanceLock(directory / "owner.lock")
+    lock.acquire()
+    try:
+        state_path = directory / "checkpoint.json"
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"completed": [], "batch_id": key}
+        if state.get("storage_blocked"):
+            return {"ok": False, "reason": "storage_blocked_requires_recovery", "checkpoint": str(state_path), "batch_id": key}
+        for phase in phases:
+            if phase in state["completed"]:
+                continue
+            cmd = list(command)
+            cmd[cmd.index("--phase")+1] = phase
+            for flag in ("--reset-stage", "--in-process"):
+                if flag in cmd:
+                    cmd.remove(flag)
+            if phase == "fetch":
+                cmd.append("--reset-stage")
+            attempt = state.setdefault("attempts", {}).get(phase, 0) + 1
+            state["attempts"][phase] = attempt
+            write_snapshot(state, state_path)
+            report = directory / f"{phase}-{attempt}.json"
+            cmd[cmd.index("--report")+1] = str(report)
+            cmd.extend(["--stage-table", "ingest_" + key])
+            try:
+                result = runner(cmd, timeout=timeout)
+            except Exception as exc:
+                result = {"ok": False, "stderr_tail": f"{type(exc).__name__}: {exc}"}
+            try:
+                payload = json.loads(report.read_text(encoding="utf-8-sig")) if report.exists() else None
+            except (ValueError, OSError) as exc:
+                payload = None
+                result = {**result, "ok": False, "stderr_tail": f"invalid phase report: {exc}"}
+            if not result.get("ok") or payload is None or not report_ok(payload):
+                state.update(failed_phase=phase, last_result=result,
+                             storage_blocked=storage_failure(str(result)))
+                write_snapshot(state, state_path)
+                return {**result, "ok": False, "failed_phase": phase, "batch_id": key, "checkpoint": str(state_path)}
+            state["completed"].append(phase)
+            state.update(failed_phase=None, last_result=result)
+            write_snapshot(state, state_path)
+        return {"ok": True, "batch_id": key, "checkpoint": str(state_path), "completed": state["completed"]}
+    finally:
+        lock.release()

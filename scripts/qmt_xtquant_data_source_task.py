@@ -403,11 +403,14 @@ def run_after_close_full_refresh(args: argparse.Namespace) -> dict[str, Any]:
             ensure_ascii=False,
         )
     )
-    daily_result = _run_subprocess(daily_cmd, timeout=args.daily_timeout_sec)
+    from services.operations.ingestion_checkpoint import run_staged
+    daily_result = run_staged(daily_cmd, args.daily_timeout_sec, report_dir, _run_subprocess,
+                              phases=("fetch", "validate-stage", "apply", "validate-target"))
     minute_result: dict[str, Any] = {"ok": False, "skipped": True, "reason": "daily_refresh_failed"}
     final_result: dict[str, Any] = {"ok": False, "skipped": True, "reason": "daily_or_minute_refresh_failed"}
-    if daily_result.get("ok"):
-        minute_result = _run_subprocess(minute_cmd, timeout=args.minute_timeout_sec)
+    # Daily and minute products have independent stage ownership.
+    minute_result = run_staged(minute_cmd, args.minute_timeout_sec, report_dir, _run_subprocess,
+                               phases=("fetch", "validate-stage", "apply"))
     if daily_result.get("ok") and minute_result.get("ok"):
         # The bulk refresh owns the full universe.  This final repair/audit is
         # normally audit-only; if QMT leaves a small residual, the existing
