@@ -1,4 +1,0 @@
-interface:
-  display_name: "TdxQuant Core"
-  short_description: "AiStock TdxQuant integration guide"
-  default_prompt: "Use this skill when working with TdxQuant APIs, docs, wrappers, or strategy integration in AiStock."
