@@ -11,7 +11,7 @@ from services.operations.health import BUSINESS_TZ
 
 def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(monkeypatch):
     old = [
-        {'code':'old','type':'index','list_date':date(1991,7,15),'name':'old'},
+        {'code':'old','type':'index','list_date':date(1991,7,15),'name':'old','self_selected':1,'holding':1,'float_share':12.5,'total_share':20.5,'industry_code':'retained','id':42,'created_at':datetime(2020,1,1),'updated_at':datetime(2021,1,1)},
         {'code':'corrected','type':'index','list_date':date(2026,9,9),'name':'old'},
         {'code':'absent','type':'index','list_date':date(2000,1,1),'name':'retained','industry':'retain-extra-fields'},
         {'code':'collision','type':'stock','list_date':date(2001,1,1),'name':'stock'},
@@ -29,7 +29,8 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
     class Client:
         def __init__(self):self.payload=[];self.current=old
         def query(self,sql):
-            return SimpleNamespace(result_rows=[(r['code'],r['type'],r['list_date']) for r in self.current])
+            columns=list(dict.fromkeys(key for row in self.current for key in row))
+            return SimpleNamespace(column_names=columns,result_rows=[tuple(r.get(key) for key in columns) for r in self.current])
         def command(self,sql,parameters=None):
             if sql.strip().startswith('INSERT INTO'):
                 updated=parameters['updated_codes']
@@ -37,8 +38,9 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
             elif sql.startswith('RENAME TABLE'):
                 self.current=self.staged
         def insert(self,table,rows,column_names):
-            self.payload=[dict(zip(column_names,r)) for r in rows]
-            self.staged.extend(self.payload)
+            records=[dict(zip(column_names,r)) for r in rows]
+            self.payload.extend(records)
+            self.staged.extend(records)
     client=Client();calls=[]
     class Manager:
         def call_with_failover(self,*args,**kwargs):calls.append((args,kwargs));return fetched
@@ -48,7 +50,7 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
     for name,value in [('data_fetcher.manager',source),('clickhouse_connect',clickhouse),('api.system_config',system)]:
         monkeypatch.setitem(sys.modules,name,value)
     tree=ast.parse(Path('api/stocks.py').read_text(encoding='utf-8'))
-    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','update_indices')]
+    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','_reference_rows_by_code','_insert_reference_rows','update_indices')]
     for fn in functions:fn.decorator_list=[]
     env={'datetime':datetime,'__name__':'index_test'}
     exec(compile(ast.Module(body=functions,type_ignores=[]),'<index-refresh>','exec'),env)
@@ -57,6 +59,8 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
     assert calls[0][1]['source_name']=='qmt_xtquant'
     payload={r['code']:r for r in client.payload}
     assert payload['old']['list_date']==date(1991,7,15)
+    for key in ('self_selected','holding','float_share','total_share','industry_code','id','created_at','updated_at'):
+        assert payload['old'][key]==old[0][key]
     assert payload['corrected']['list_date']==date(1991,1,1)
     assert payload['open']['list_date']==date(1992,7,1)
     assert payload['unknown']['list_date'] is None and payload['future']['list_date'] is None
@@ -106,10 +110,12 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
     import utils.paths
     monkeypatch.setattr(utils.paths,'runtime_path',lambda *parts:tmp_path.joinpath(*parts))
     existing=[('600000.SH','known','SH','stock','industry','region',date(1999,11,10),None,0,0),
-              ('old.SZ','retained','SZ','stock','','',None,None,0,0)]
+              ('old.SZ','retained','SZ','stock','','',None,None,0,0),
+              ('899050.BJ','Index','BJ','index','','',date(2022,11,21),None,0,0)]
     calls=[];payload=[]
     items=[{'code':'600000.SH','name':'known','source':'qmt_xtquant','list_date':''},
-           {'code':'821028.BJ','name':'821028.BJ','source':'qmt_xtquant','metadata_unknown':True}]
+           {'code':'821028.BJ','name':'821028.BJ','source':'qmt_xtquant','metadata_unknown':True},
+           {'code':'899050.BJ','name':'Index','source':'qmt_xtquant','type':'stock'}]
     class Manager:
         def get_stock_list(self,**kwargs):
             assert kwargs['source_name']=='qmt_xtquant'
@@ -118,7 +124,9 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
             calls.append((args,kwargs));return None
         def get_source(self,name):return SimpleNamespace(get_expired_stock_info=lambda codes:{})
     class Client:
-        def query(self,sql):return SimpleNamespace(result_rows=existing)
+        def query(self,sql):
+            columns=['code','name','market','type','industry','region','list_date','delist_date','quit','st','self_selected','holding','id','created_at']
+            return SimpleNamespace(column_names=columns,result_rows=[tuple(row)+(1,1,42,datetime(2020,1,1)) for row in existing])
         def command(self,*args,**kwargs):pass
         def insert(self,table,rows,column_names):payload.extend(dict(zip(column_names,row)) for row in rows)
     manager=ModuleType('data_fetcher.manager');manager.DataSourceManager=Manager
@@ -127,7 +135,7 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
     for name,value in [('data_fetcher.manager',manager),('clickhouse_connect',clickhouse),('api.system_config',system)]:
         monkeypatch.setitem(sys.modules,name,value)
     tree=ast.parse(Path('api/stocks.py').read_text(encoding='utf-8'))
-    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','update_stock_list')]
+    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','_reference_rows_by_code','_insert_reference_rows','update_stock_list')]
     for fn in functions:fn.decorator_list=[]
     logger=SimpleNamespace(info=lambda *a:None,error=lambda *a:None,warning=lambda *a:None)
     env={'datetime':datetime,'ZoneInfo':ZoneInfo,'__name__':'stock_test','get_logger':lambda *a:logger,
@@ -137,6 +145,10 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
     assert result['success'],result
     rows={r['code']:r for r in payload}
     assert rows['600000.SH']['list_date']==date(1999,11,10)
+    assert rows['600000.SH']['self_selected']==1 and rows['600000.SH']['holding']==1
+    assert rows['600000.SH']['id']==42 and rows['600000.SH']['created_at']==datetime(2020,1,1)
+    assert '899050.BJ' not in rows
+    assert result['metadata']['excluded_from_stock_scope']==[{'code':'899050.BJ','reason':'existing_index_metadata','retained_type':'index'}]
     assert rows['821028.BJ']['list_date'] is None and rows['821028.BJ']['quit']==0
     assert rows['old.SZ']['list_date'] is None
     assert len(calls)==1 and calls[0][1]['source_name']=='qmt_xtquant'

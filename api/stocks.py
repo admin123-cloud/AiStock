@@ -3308,6 +3308,26 @@ def get_stock_boards(code: str):
         return {"boards": []}
 
 
+def _reference_rows_by_code(client):
+    """Read every stored field so reference refresh never resets user-owned values."""
+    result = client.query("SELECT * FROM stocks")
+    records = [dict(zip(result.column_names,row)) for row in result.result_rows]
+    return {str(row['code']):row for row in records if row.get('code')}
+
+
+def _insert_reference_rows(client, table, rows, columns, existing):
+    groups = {}
+    for row in rows:
+        updates = dict(zip(columns,row))
+        merged = {**existing.get(str(updates['code']),{}), **updates}
+        # Missing columns on new rows use the database defaults. Existing rows
+        # carry their complete stored values, including flags and timestamps.
+        keys = tuple(merged)
+        groups.setdefault(keys,[]).append([merged[key] for key in keys])
+    for keys, values in groups.items():
+        client.insert(table,values,column_names=list(keys))
+
+
 @router.post("/update")
 def update_stock_list():
     """更新股票列表到 ClickHouse"""
@@ -3350,13 +3370,10 @@ def update_stock_list():
 
     try:
         # ClickHouse stocks table uses a simplified schema (no id/self_selected/holding/created_at).
-        existing_rows = ch.query(
-            """
-            SELECT code, name, market, type, industry, region, list_date, delist_date, quit, st
-            FROM stocks
-            WHERE type = 'stock'
-            """
-        ).result_rows
+        existing_full = _reference_rows_by_code(ch)
+        reference_columns = ['code','name','market','type','industry','region','list_date','delist_date','quit','st']
+        existing_rows = [tuple(row.get(key) for key in reference_columns)
+                         for row in existing_full.values() if row.get('type') == 'stock']
         existing_codes = {str(r[0]) for r in existing_rows if r and r[0]}
         existing_by_code = {str(row[0]): row for row in existing_rows if row and row[0]}
 
@@ -3370,6 +3387,7 @@ def update_stock_list():
         unresolved_removed_retained = 0
 
         metadata_unknown_codes = []
+        protected_index_codes = []
         def _to_date_or_none(value):
             return _reference_listing_date({'list_date':value})
 
@@ -3380,6 +3398,10 @@ def update_stock_list():
                 skip_count += 1
                 continue
 
+            if existing_full.get(str(code),{}).get('type') == 'index':
+                protected_index_codes.append(str(code))
+                skip_count += 1
+                continue
             current_codes.add(code)
             market = code.split(".")[-1] if "." in code else ""
 
@@ -3523,19 +3545,21 @@ def update_stock_list():
             with_delist_date = [row for row in rows_to_insert if _has_delist_date(row[7])]
             without_delist_date = [row for row in rows_to_insert if not _has_delist_date(row[7])]
             if without_delist_date:
-                ch.insert(
-                    tmp_table,
-                    [row[:7] + row[8:] for row in without_delist_date],
-                    column_names=["code", "name", "market", "type", "industry", "region", "list_date", "quit", "st"],
+                _insert_reference_rows(
+                    ch, tmp_table,
+                    without_delist_date,
+                    columns=["code", "name", "market", "type", "industry", "region", "list_date", "delist_date", "quit", "st"],
+                    existing=existing_full,
                 )
             if with_delist_date:
-                ch.insert(
-                    tmp_table,
+                _insert_reference_rows(
+                    ch, tmp_table,
                     [row[:7] + [_to_date_or_none(row[7])] + row[8:] for row in with_delist_date],
-                    column_names=[
+                    columns=[
                         "code", "name", "market", "type", "industry", "region", "list_date", "delist_date",
                         "quit", "st",
                     ],
+                    existing=existing_full,
                 )
         t_load_done = time.perf_counter()
 
@@ -3562,6 +3586,7 @@ def update_stock_list():
                            'source':'qmt_xtquant', 'returned_pool_count':len(stock_list),
                            'official_pool_count':len(pool_metadata['official_codes']) if 'official_codes' in pool_metadata else None,
                            'pool_evidence':pool_metadata,
+                           'excluded_from_stock_scope':[{'code':code,'reason':'existing_index_metadata','retained_type':'index'} for code in sorted(set(protected_index_codes))],
                            'metadata_unknown_codes':sorted(set(metadata_unknown_codes)),
                            'listing_unknown_codes':sorted(set(listing_unknown_codes)),
                            'metadata_verified':bool(pool_metadata.get('official_codes')) and not metadata_unknown_codes and not listing_unknown_codes}
@@ -3823,12 +3848,8 @@ def update_indices():
         password = os.getenv("AISTOCK_CLICKHOUSE_PASSWORD", "")
         ch = get_client(host=host, port=port, database=database, username=username, password=password)
 
-        existing_rows = ch.query(
-            """
-            SELECT code, type, list_date
-            FROM stocks
-            """
-        ).result_rows
+        existing_full = _reference_rows_by_code(ch)
+        existing_rows = [(row['code'],row.get('type'),row.get('list_date')) for row in existing_full.values()]
         existing_map = {
             str(r[0]): {
                 "type": str(r[1] or ""),
@@ -3903,13 +3924,14 @@ def update_indices():
         )
 
         if index_rows:
-            ch.insert(
-                tmp_table,
+            _insert_reference_rows(
+                ch, tmp_table,
                 index_rows,
-                column_names=[
+                columns=[
                     "code", "name", "market", "type", "industry", "region", "list_date",
                     "quit", "st",
                 ],
+                existing=existing_full,
             )
         t_load_done = time.perf_counter()
 
