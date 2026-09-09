@@ -13,6 +13,15 @@
     <el-alert v-if="board.operations_publisher?.publisher_status!=='healthy'||!board.operations_publisher?.notifications_enabled||!board.operations_publisher?.notification_transport_ok" title="独立数据告警尚未接管或心跳已过期" description="此处记录异常不等于已发送通知；上线需同时部署通知发布器。原G3通知仅在自身运行窗口内兜底。" type="warning" :closable="false" show-icon />
     <p class="ops-meta">通知通道：{{ label(board.operations_publisher?.notification_transport?.state) }} · 最近SMTP接受 {{ dateTime(board.operations_publisher?.notification_transport?.last_smtp_accepted_at) }}</p>
     <el-alert v-if="board.host_inventory_status !== 'healthy'" title="Windows任务清单尚未发布或已过期" description="未把缺少心跳解释为任务正常。请检查 Operations Publisher 的运行状态。" type="warning" :closable="false" show-icon />
+    <section class="ops-panel" aria-label="备份与恢复验收">
+      <div class="ops-toolbar"><h2>备份与恢复验收</h2><el-tag :type="tone(board.backups?.status)">{{ label(board.backups?.status) }}</el-tag></div>
+      <p>最近完成备份 {{ dateTime(board.backups?.last_backup_at) }} · 距今 {{ board.backups?.backup_age_hours ?? '未知' }} 小时</p>
+      <p>最近恢复验证 {{ dateTime(board.backups?.last_restore_verified_at) }} · 距今 {{ board.backups?.restore_age_days ?? '未知' }} 天</p>
+      <p>宿主归档 {{ board.backups?.host_copy_verified === true ? '校验通过' : '尚未验收' }} · 执行状态 {{ label(board.backups?.execution_status) }} · 批次 {{ board.backups?.backup_id || '未知' }}</p>
+      <p v-for="reason in board.backups?.reasons||[]" :key="reason" class="ops-error">{{ label(reason) }}</p>
+      <p v-if="board.backups?.error" class="ops-error">{{ board.backups.error }}</p>
+      <p class="ops-meta">超过25小时无新备份、恢复验证超过7天或备份失败进入统一异常记录。备份异常需排查，不自动重试未知结果的异步备份；不会因文件刚刷新就显示健康。</p>
+    </section>
     <div class="ops-metrics"><div v-for="item in metrics" :key="item.label" class="ops-metric"><span>{{ item.label }}</span><strong>{{ item.value ?? '—' }}</strong></div></div>
     <section v-if="board.historical_recovery?.total" class="ops-panel" aria-label="历史数据恢复进度">
       <div class="ops-toolbar"><h2>历史数据恢复</h2><el-tag type="warning">{{ board.historical_recovery.candidate_complete?'候选已校验，待上线验收':board.historical_recovery.pending?.some(x=>x.state==='blocked')?'恢复已阻断':'候选构建记录' }}</el-tag></div>

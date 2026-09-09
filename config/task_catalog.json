@@ -182,11 +182,11 @@
       "group": "backup",
       "title": "ClickHouse数据备份",
       "purpose": "为行情数据库保存独立副本，供故障恢复使用。",
-      "schedule_description": "当前实际：每月1日03:00",
+      "schedule_description": "以实际触发器为准；旧注册每月1日03:00，迁移目标每日07:00（需激活）",
       "produces": "F:/Stock/clickhouse_backup压缩包",
       "failure_impact": "故障后可能无法恢复行情；退出码0不能证明备份可恢复。",
       "lifecycle": "active",
-      "consolidation_note": "保留独立职责；频率、整批保留和恢复验证待专项修正。"
+      "consolidation_note": "原生备份方案：每周全量、每日增量，新全量后隔离恢复演练；须通过迁移与夜间资源验收后激活。"
     },
     {
       "names": [

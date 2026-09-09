@@ -249,3 +249,36 @@ def operations_notification_owner(path: Path, *, now: datetime | None = None) ->
             and snapshot.get('notifications_enabled') is True
             and snapshot.get('notification_transport_ok') is True
             and snapshot.get('notification', {}).get('status') in ('idle', 'smtp_accepted'))
+
+
+def backup_health(path: Path, *, now=None) -> dict:
+    """Judge backup delivery dates independently from a freshly rewritten status file."""
+    now = now or _now()
+    payload = read_snapshot(path,now=now,max_age_seconds=25*3600)
+    def age(value):
+        try:
+            stamp = datetime.fromisoformat(str(value or ''))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=BUSINESS_TZ)
+            seconds = (now-stamp).total_seconds()
+            return seconds if seconds >= 0 else None
+        except (ValueError,TypeError):
+            return None
+    backup_age = age(payload.get('last_backup_at'))
+    restore_age = age(payload.get('last_restore_verified_at'))
+    source_status = payload.get('status')
+    reasons = []
+    if payload.get('publisher_status') != 'healthy': reasons.append('backup_status_unavailable_or_stale')
+    if source_status == 'failed': reasons.append('backup_execution_failed')
+    if source_status == 'degraded': reasons.append(payload.get('reason') or 'backup_reports_degraded')
+    if backup_age is None: reasons.append('backup_success_not_verified')
+    elif backup_age > 25*3600: reasons.append('backup_older_than_25_hours')
+    if restore_age is None: reasons.append('restore_drill_not_verified')
+    elif restore_age > 7*86400: reasons.append('restore_drill_older_than_7_days')
+    if payload.get('host_copy_verified') is not True: reasons.append('host_archive_not_verified')
+    if source_status not in ('healthy','degraded','failed','running'): reasons.append('backup_execution_unknown')
+    status = 'failed' if source_status=='failed' else 'unknown' if backup_age is None else 'degraded' if reasons else 'healthy'
+    return {**payload,'status':status,'execution_status':source_status or 'unknown','reasons':reasons,
+            'backup_age_hours':None if backup_age is None else round(backup_age/3600,2),
+            'restore_age_days':None if restore_age is None else round(restore_age/86400,2),
+            'delivery_ok':not reasons,'repair_policy':'operator_review_only'}

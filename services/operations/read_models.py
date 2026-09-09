@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from services.operations.health import BUSINESS_TZ, read_snapshot, strategy_data_checks
+from services.operations.health import BUSINESS_TZ, read_snapshot, strategy_data_checks, backup_health
 from strategies.contracts import formal_g3_score88_contract, formal_g3_score88_contract_metadata
 
 
@@ -129,7 +129,7 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
     rows, groups = describe_tasks(rows, read_json(root/'operations/task_transitions.json'))
     return {'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'), 'tasks': rows, 'groups':groups,
             'historical_recovery': recovery_summary(root, now=now),
-            'backups':read_snapshot(root/'operations/backups/latest.json',now=now,max_age_seconds=90000),
+            'backups':backup_health(root/'operations/backups/latest.json',now=now),
             'source_metrics': read_source_metrics(root/'operations/source_metrics.sqlite',now=now),
             'api_runtime': {**api_state, 'fresh': api_fresh, 'source': 'live' if live is not None else 'snapshot',
                             'ready': bool(api_fresh and api_state.get('ready'))},

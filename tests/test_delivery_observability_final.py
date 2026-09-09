@@ -134,3 +134,44 @@ def test_sector_owner_only_receives_verified_missing_day():
     result=plan_repairs({'datasets':[{'id':'sector_daily','cells':[{'date':'2026-09-08','status':'unverified'}, {'date':'2026-09-09','status':'partial'}]}]})
     assert len(result)==1 and result[0]['kind']=='sector_daily'
     assert result[0]['arguments']==['--trade-date','2026-09-09']
+
+
+def test_backup_new_status_file_cannot_hide_stale_backup_or_restore(tmp_path):
+    from services.operations.health import backup_health,write_snapshot
+    path=tmp_path/'backup.json'
+    payload={'generated_at':NOW.isoformat(),'status':'healthy','host_copy_verified':True,
+             'last_backup_at':(NOW-timedelta(hours=26)).isoformat(),
+             'last_restore_verified_at':(NOW-timedelta(days=8)).isoformat()}
+    write_snapshot(payload,path)
+    health=backup_health(path,now=NOW)
+    assert not health['delivery_ok']
+    assert 'backup_older_than_25_hours' in health['reasons']
+    assert 'restore_drill_older_than_7_days' in health['reasons']
+    payload.update(last_backup_at=NOW.isoformat(),last_restore_verified_at=NOW.isoformat())
+    write_snapshot(payload,path)
+    assert backup_health(path,now=NOW)['delivery_ok']
+    payload['status']='failed'
+    write_snapshot(payload,path)
+    assert backup_health(path,now=NOW)['status']=='failed'
+
+
+def test_backup_expiry_notifies_and_recovery_resolves_without_auto_repair(tmp_path):
+    from services.operations.health import backup_health,write_snapshot
+    from services.operations.remediation import plan_repairs
+    path=tmp_path/'backup.json';events=tmp_path/'events.sqlite';sent=[]
+    payload={'generated_at':NOW.isoformat(),'status':'healthy','host_copy_verified':True,
+             'last_backup_at':(NOW-timedelta(hours=26)).isoformat(),'last_restore_verified_at':NOW.isoformat()}
+    write_snapshot(payload,path)
+    def check(now):
+        health=backup_health(path,now=now)
+        return {'name':'backup_recovery','ok':health['delivery_ok'],'reason':','.join(health['reasons'])}
+    reconcile(events,[check(NOW)],now=NOW)
+    reconcile(events,[check(NOW+timedelta(minutes=31))],now=NOW+timedelta(minutes=31))
+    dispatch(events,lambda *args:sent.append(args),now=NOW+timedelta(minutes=31))
+    assert len(sent)==1
+    payload.update(generated_at=(NOW+timedelta(minutes=32)).isoformat(),last_backup_at=NOW.isoformat())
+    write_snapshot(payload,path)
+    reconcile(events,[check(NOW+timedelta(minutes=32))],now=NOW+timedelta(minutes=32))
+    dispatch(events,lambda *args:sent.append(args),now=NOW+timedelta(minutes=32))
+    assert len(sent)==2 and read_incidents(events)[0]['status']=='resolved'
+    assert not plan_repairs({'datasets':[{'id':'backup_recovery','cells':[{'date':'2026-09-09','status':'missing'}]}]})
