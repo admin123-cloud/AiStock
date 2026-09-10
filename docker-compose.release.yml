@@ -10,7 +10,10 @@ services:
     environment:
       TZ: Asia/Shanghai
       AISTOCK_RELEASE_VERSION: ${AISTOCK_RELEASE_VERSION}
-      AISTOCK_CLICKHOUSE_HOST: host.docker.internal
+      # ClickHouse is attached to this Compose project's network under the
+      # stable service alias.  Its host port is deliberately loopback-only,
+      # so host.docker.internal cannot reach it from the backend container.
+      AISTOCK_CLICKHOUSE_HOST: clickhouse
       AISTOCK_DATA_ROOT: /aistock/data
       AISTOCK_REPORTS_ROOT: /aistock/reports
       AISTOCK_ARTIFACTS_ROOT: /aistock/artifacts
