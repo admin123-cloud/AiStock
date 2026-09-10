@@ -186,6 +186,7 @@ def load_codes(universe: str, codes_arg: str, limit: int, include_index: bool, i
             FROM stocks FINAL
             WHERE {type_filter}
               AND (quit = 0 OR quit IS NULL)
+              AND ifNull(listing_status, 'active') = 'active'
               AND (list_date IS NULL OR list_date <= toDate('{current_day}'))
               AND (delist_date IS NULL OR delist_date > toDate('{current_day}'))
             ORDER BY type, code

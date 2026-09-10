@@ -102,6 +102,9 @@ def _detail_to_stock_row(code: str, detail: Optional[Dict[str, Any]], stock_type
         "market": _market_from_code(full_code),
         "type": stock_type,
         "list_date": detail.get("OpenDate") or "",
+        # Preserve the QMT creation date to distinguish its epoch OpenDate
+        # sentinel for a not-yet-listed contract from missing metadata.
+        "CreateDate": detail.get("CreateDate") or "",
         "metadata_unknown": not bool(detail),
         "metadata_reason": "qmt_instrument_detail_missing" if not detail else None,
         "delist_date": _expired_date(detail.get("ExpireDate")),

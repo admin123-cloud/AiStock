@@ -120,6 +120,7 @@ def load_securities(args: argparse.Namespace) -> list[Security]:
             FROM stock.stocks
             WHERE type IN ({type_sql})
               AND (type = 'index' OR quit = 0)
+              AND ifNull(listing_status, 'active') = 'active'
               AND (type = 'index' OR list_date IS NULL OR list_date <= toDate({quote_sql(args.end_date)}))
             ORDER BY type, code
             """

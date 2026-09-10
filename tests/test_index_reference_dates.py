@@ -28,7 +28,9 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
     ]
     class Client:
         def __init__(self):self.payload=[];self.current=old
-        def query(self,sql):
+        def query(self,sql,parameters=None):
+            if 'min(trade_date)' in sql:
+                return SimpleNamespace(result_rows=[('unknown', date(2001, 1, 2))])
             columns=list(dict.fromkeys(key for row in self.current for key in row))
             return SimpleNamespace(column_names=columns,result_rows=[tuple(r.get(key) for key in columns) for r in self.current])
         def command(self,sql,parameters=None):
@@ -50,7 +52,7 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
     for name,value in [('data_fetcher.manager',source),('clickhouse_connect',clickhouse),('api.system_config',system)]:
         monkeypatch.setitem(sys.modules,name,value)
     tree=ast.parse(Path('api/stocks.py').read_text(encoding='utf-8'))
-    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','_reference_rows_by_code','_insert_reference_rows','update_indices')]
+    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_ensure_listing_status_column','_reference_listing_date','_reference_listing_status','_earliest_daily_dates','_reference_rows_by_code','_insert_reference_rows','update_indices')]
     for fn in functions:fn.decorator_list=[]
     env={'datetime':datetime,'__name__':'index_test'}
     exec(compile(ast.Module(body=functions,type_ignores=[]),'<index-refresh>','exec'),env)
@@ -63,7 +65,8 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
         assert payload['old'][key]==old[0][key]
     assert payload['corrected']['list_date']==date(1991,1,1)
     assert payload['open']['list_date']==date(1992,7,1)
-    assert payload['unknown']['list_date'] is None and payload['future']['list_date'] is None
+    assert payload['unknown']['list_date']==date(2001,1,2) and payload['unknown']['listing_status']=='active'
+    assert payload['future']['list_date'] is None and payload['future']['listing_status']=='unknown'
     current={r['code']:r for r in client.current}
     assert current['absent']==old[2] and current['collision']==old[3]
     assert len(current)==len(client.current)==7
@@ -74,7 +77,7 @@ def test_unknown_index_listing_cannot_pass_historical_delivery():
         def query(self,sql):
             rows=[]
             if 'FROM trade_calendar' in sql:rows=[('2026-09-08',)]
-            elif 'FROM stocks' in sql:rows=[('index','index',None,None)]
+            elif 'FROM stocks' in sql:rows=[('index','index',None,'unknown',None)]
             elif 'FROM kline_daily ' in sql:rows=[('index','2026-09-08',1)]
             return SimpleNamespace(result_rows=rows)
     result=build_delivery_calendar(Client(),days=1,now=datetime(2026,9,9,18,tzinfo=BUSINESS_TZ))
@@ -92,16 +95,19 @@ def test_qmt_official_pool_keeps_missing_details_without_false_delist():
     client=SimpleNamespace(download_history_contracts=lambda **kw:None,
         get_stock_list_in_sector=lambda sector:codes,
         get_instrument_detail_list=lambda *args:{'600000.SH':{'InstrumentName':'known','OpenDate':'19991110'},
-                                               '000004.SZ':{'InstrumentName':'retired','ExpireDate':'20260101'}})
+                                               '000004.SZ':{'InstrumentName':'retired','ExpireDate':'20260101'},
+                                               '821028.BJ':{'InstrumentName':'pending','OpenDate':'19700101','CreateDate':'20260910'}})
     source._ensure_client=lambda:client
     source.mark_success=lambda:None
     rows=source.get_stock_list(market='ALL')
     assert {r['code'] for r in rows}==set(codes)-{'000004.SZ'}
     unknown=[r for r in rows if r['metadata_unknown']]
-    assert len(unknown)==3
+    assert len(unknown)==2
+    pending=next(row for row in rows if row['code']=='821028.BJ')
+    assert pending['CreateDate']=='20260910'
     assert source.last_stock_list_metadata['official_codes']==codes
     assert len(source.last_stock_list_metadata['returned_codes'])==4
-    assert source.last_stock_list_metadata['missing_detail_codes']==codes[1:4]
+    assert source.last_stock_list_metadata['missing_detail_codes']==codes[2:4]
     assert all(r['list_date']=='' and r['quit']==0 and r['name']==r['code'] for r in unknown)
 
 
@@ -109,9 +115,9 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
     from zoneinfo import ZoneInfo
     import utils.paths
     monkeypatch.setattr(utils.paths,'runtime_path',lambda *parts:tmp_path.joinpath(*parts))
-    existing=[('600000.SH','known','SH','stock','industry','region',date(1999,11,10),None,0,0),
-              ('old.SZ','retained','SZ','stock','','',None,None,0,0),
-              ('899050.BJ','Index','BJ','index','','',date(2022,11,21),None,0,0)]
+    existing=[('600000.SH','known','SH','stock','industry','region',date(1999,11,10),'active',None,0,0),
+              ('old.SZ','retained','SZ','stock','','',None,'unknown',None,0,0),
+              ('899050.BJ','Index','BJ','index','','',date(2022,11,21),'active',None,0,0)]
     calls=[];payload=[]
     items=[{'code':'600000.SH','name':'known','source':'qmt_xtquant','list_date':''},
            {'code':'821028.BJ','name':'821028.BJ','source':'qmt_xtquant','metadata_unknown':True},
@@ -132,7 +138,7 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
         )
     class Client:
         def query(self,sql):
-            columns=['code','name','market','type','industry','region','list_date','delist_date','quit','st','self_selected','holding','id','created_at']
+            columns=['code','name','market','type','industry','region','list_date','listing_status','delist_date','quit','st','self_selected','holding','id','created_at']
             return SimpleNamespace(column_names=columns,result_rows=[tuple(row)+(1,1,42,datetime(2020,1,1)) for row in existing])
         def command(self,*args,**kwargs):pass
         def insert(self,table,rows,column_names):payload.extend(dict(zip(column_names,row)) for row in rows)
@@ -142,7 +148,7 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
     for name,value in [('data_fetcher.manager',manager),('clickhouse_connect',clickhouse),('api.system_config',system)]:
         monkeypatch.setitem(sys.modules,name,value)
     tree=ast.parse(Path('api/stocks.py').read_text(encoding='utf-8'))
-    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','_reference_rows_by_code','_insert_reference_rows','update_stock_list')]
+    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_ensure_listing_status_column','_reference_listing_date','_reference_listing_status','_reference_rows_by_code','_insert_reference_rows','update_stock_list')]
     for fn in functions:fn.decorator_list=[]
     logger=SimpleNamespace(info=lambda *a:None,error=lambda *a:None,warning=lambda *a:None)
     env={'datetime':datetime,'ZoneInfo':ZoneInfo,'__name__':'stock_test','get_logger':lambda *a:logger,
@@ -184,3 +190,15 @@ def test_reference_metadata_health_does_not_confuse_missing_details_with_quote_f
     payload.update(metadata_verified=True,metadata_unknown_codes=[])
     write_snapshot(payload,path)
     assert build_snapshot([rule],now=now)['strategy_actionable']
+
+
+def test_pending_listing_status_preserves_future_qmt_date_and_epoch_create_contract():
+    tree=ast.parse(Path('api/stocks.py').read_text(encoding='utf-8'))
+    functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_reference_listing_date','_reference_listing_status')]
+    env={'datetime':datetime}
+    exec(compile(ast.Module(body=functions,type_ignores=[]),'<listing-status>','exec'),env)
+    tomorrow=date.today().fromordinal(date.today().toordinal()+1)
+    future=env['_reference_listing_date']({'OpenDate': tomorrow.strftime('%Y%m%d')})
+    assert future == tomorrow
+    assert env['_reference_listing_status']({'OpenDate': tomorrow.strftime('%Y%m%d')}, future) == 'pending_listing'
+    assert env['_reference_listing_status']({'OpenDate':'19700101','CreateDate':date.today().strftime('%Y%m%d')}, None) == 'pending_listing'

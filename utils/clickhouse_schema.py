@@ -18,6 +18,7 @@ MARKET_TABLE_DDL = [
         industry Nullable(String),
         region Nullable(String),
         list_date Nullable(Date),
+        listing_status LowCardinality(String) DEFAULT 'active',
         delist_date Nullable(Date),
         quit UInt8 DEFAULT 0,
         st UInt8 DEFAULT 0,
@@ -361,4 +362,5 @@ def ensure_clickhouse_tables(engine: Engine) -> None:
             connection.execute(text(ddl))
         # The table predates this field on deployed hosts.  Keep the migration
         # idempotent so existing historical metadata remains usable.
-        connection.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS delist_date Nullable(Date) AFTER list_date"))
+        connection.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS listing_status LowCardinality(String) DEFAULT 'active' AFTER list_date"))
+        connection.execute(text("ALTER TABLE stocks ADD COLUMN IF NOT EXISTS delist_date Nullable(Date) AFTER listing_status"))

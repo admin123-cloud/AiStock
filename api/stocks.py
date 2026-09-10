@@ -3308,6 +3308,14 @@ def get_stock_boards(code: str):
         return {"boards": []}
 
 
+def _ensure_listing_status_column(client):
+    """Add the lifecycle column before a reference-table swap on older databases."""
+    client.command(
+        "ALTER TABLE stocks ADD COLUMN IF NOT EXISTS "
+        "listing_status LowCardinality(String) DEFAULT 'active' AFTER list_date"
+    )
+
+
 def _reference_rows_by_code(client):
     """Read every stored field so reference refresh never resets user-owned values."""
     result = client.query("SELECT * FROM stocks")
@@ -3369,9 +3377,11 @@ def update_stock_list():
         return {"success": False, "message": f"初始化股票同步失败: {e}"}
 
     try:
+        # Older deployments receive this additive schema migration before the swap.
+        _ensure_listing_status_column(ch)
         # ClickHouse stocks table uses a simplified schema (no id/self_selected/holding/created_at).
         existing_full = _reference_rows_by_code(ch)
-        reference_columns = ['code','name','market','type','industry','region','list_date','delist_date','quit','st']
+        reference_columns = ['code','name','market','type','industry','region','list_date','listing_status','delist_date','quit','st']
         existing_rows = [tuple(row.get(key) for key in reference_columns)
                          for row in existing_full.values() if row.get('type') == 'stock']
         existing_codes = {str(r[0]) for r in existing_rows if r and r[0]}
@@ -3428,14 +3438,17 @@ def update_stock_list():
             industry_code = str((stock_info or {}).get("industry_code", "") or "")
             region = str((stock_info or {}).get("region", "") or "")
             raw_list_date = (stock_info or {}).get("list_date")
-            list_date = _reference_listing_date(stock_info or {}, existing_by_code.get(code, [None]*7)[6])
+            previous = existing_by_code.get(code, [None] * 8)
+            list_date = _reference_listing_date(stock_info or {}, previous[6])
+            listing_status = _reference_listing_status(stock_info or {}, list_date, previous[7])
             raw_delist_date = (stock_info or {}).get("delist_date")
             delist_date = _to_date_or_none(raw_delist_date) if raw_delist_date else None
             if code in metadata_unknown_codes and code in existing_by_code:
                 retained = existing_by_code[code]
                 industry, region = retained[4] or "", retained[5] or ""
-                delist_date = _to_date_or_none(retained[7])
-                quit_flag, st = int(retained[8] or 0), int(retained[9] or 0)
+                listing_status = str(retained[7] or 'unknown')
+                delist_date = _to_date_or_none(retained[8])
+                quit_flag, st = int(retained[9] or 0), int(retained[10] or 0)
 
             if code in existing_codes:
                 update_count += 1
@@ -3450,6 +3463,7 @@ def update_stock_list():
                 industry,
                 region,
                 list_date,
+                listing_status,
                 delist_date,
                 quit_flag,
                 st,
@@ -3491,9 +3505,10 @@ def update_stock_list():
                 industry = str(expired.get("industry") or existing[4] or "")
                 region = str(expired.get("region") or existing[5] or "")
                 list_date = _reference_listing_date(expired, existing[6])
-                delist_date = _to_date_or_none(expired.get("delist_date") or existing[7])
-                quit_flag = 1 if delist_date else int(existing[8] or 0)
-                st = int(expired.get("st", existing[9]) or 0)
+                listing_status = _reference_listing_status(expired, list_date, existing[7])
+                delist_date = _to_date_or_none(expired.get("delist_date") or existing[8])
+                quit_flag = 1 if delist_date else int(existing[9] or 0)
+                st = int(expired.get("st", existing[10]) or 0)
                 retired_marked += int(bool(delist_date))
             else:
                 # Do not turn a transient upstream omission into a false delist.
@@ -3502,15 +3517,16 @@ def update_stock_list():
                 industry = existing[4]
                 region = existing[5]
                 list_date = existing[6]
-                delist_date = existing[7]
-                quit_flag = existing[8]
-                st = existing[9]
+                listing_status = existing[7]
+                delist_date = existing[8]
+                quit_flag = existing[9]
+                st = existing[10]
                 list_date = _to_date_or_none(list_date)
                 quit_flag = int(quit_flag or 0)
                 st = int(st or 0)
                 unresolved_removed_retained += 1
             current_codes.add(code)
-            rows_to_insert.append([code, name, market, "stock", industry or "", region or "", list_date, delist_date, quit_flag, st])
+            rows_to_insert.append([code, name, market, "stock", industry or "", region or "", list_date, listing_status, delist_date, quit_flag, st])
 
         deleted_count = len(existing_codes - current_codes)
         t_transform_done = time.perf_counter()
@@ -3542,21 +3558,21 @@ def update_stock_list():
             def _has_delist_date(value: Any) -> bool:
                 return value is not None and not bool(pd.isna(value))
 
-            with_delist_date = [row for row in rows_to_insert if _has_delist_date(row[7])]
-            without_delist_date = [row for row in rows_to_insert if not _has_delist_date(row[7])]
+            with_delist_date = [row for row in rows_to_insert if _has_delist_date(row[8])]
+            without_delist_date = [row for row in rows_to_insert if not _has_delist_date(row[8])]
             if without_delist_date:
                 _insert_reference_rows(
                     ch, tmp_table,
                     without_delist_date,
-                    columns=["code", "name", "market", "type", "industry", "region", "list_date", "delist_date", "quit", "st"],
+                    columns=["code", "name", "market", "type", "industry", "region", "list_date", "listing_status", "delist_date", "quit", "st"],
                     existing=existing_full,
                 )
             if with_delist_date:
                 _insert_reference_rows(
                     ch, tmp_table,
-                    [row[:7] + [_to_date_or_none(row[7])] + row[8:] for row in with_delist_date],
+                    [row[:8] + [_to_date_or_none(row[8])] + row[9:] for row in with_delist_date],
                     columns=[
-                        "code", "name", "market", "type", "industry", "region", "list_date", "delist_date",
+                        "code", "name", "market", "type", "industry", "region", "list_date", "listing_status", "delist_date",
                         "quit", "st",
                     ],
                     existing=existing_full,
@@ -3580,7 +3596,8 @@ def update_stock_list():
 
         from services.operations.health import write_snapshot
         from utils.paths import runtime_path
-        listing_unknown_codes = [row[0] for row in rows_to_insert if row[6] is None]
+        listing_unknown_codes = [row[0] for row in rows_to_insert if row[7] == 'unknown']
+        pending_listing_codes = [row[0] for row in rows_to_insert if row[7] == 'pending_listing']
         pool_metadata = getattr(qmt_source,'last_stock_list_metadata',{}) or {}
         # ``official_codes`` is the raw QMT sector membership.  It can include
         # non-stock contracts which QMT itself identifies in instrument detail
@@ -3598,6 +3615,7 @@ def update_stock_list():
                            'excluded_from_stock_scope':[{'code':code,'reason':'existing_index_metadata','retained_type':'index'} for code in sorted(set(protected_index_codes))],
                            'metadata_unknown_codes':sorted(set(metadata_unknown_codes)),
                            'listing_unknown_codes':sorted(set(listing_unknown_codes)),
+                           'pending_listing_codes':sorted(set(pending_listing_codes)),
                            'metadata_verified':(validated_official_count == len(stock_list)
                                                 and not metadata_unknown_codes and not listing_unknown_codes)}
         metadata_status['status'] = 'healthy' if metadata_status['metadata_verified'] else 'unverified'
@@ -3805,8 +3823,9 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
 
 
 def _reference_listing_date(index, previous=None):
-    """Use dated QMT evidence or retained metadata, never the refresh date."""
-    from datetime import date
+    """Use dated QMT evidence, including a near-term IPO date, never the refresh date."""
+    from datetime import date, timedelta
+
     def parse(value):
         if isinstance(value, datetime):
             value = value.date()
@@ -3816,9 +3835,54 @@ def _reference_listing_date(index, previous=None):
                 value = datetime.strptime(text, '%Y%m%d').date() if len(text) == 8 and text.isdigit() else date.fromisoformat(text[:10])
             except (ValueError, TypeError, OverflowError):
                 return None
-        # Zero/epoch and future values are not evidence of a historical listing.
-        return value if date(1900, 1, 1) <= value <= date.today() and value != date(1970, 1, 1) else None
+        # QMT publishes an IPO date shortly before trading begins.  Keep that
+        # evidence, but reject epoch sentinels and implausible far-future data.
+        today = date.today()
+        return value if date(1900, 1, 1) <= value <= today + timedelta(days=366) and value != date(1970, 1, 1) else None
+
     return parse(index.get('list_date')) or parse(index.get('OpenDate')) or parse(previous)
+
+
+def _reference_listing_status(reference, list_date, previous=None):
+    """Classify QMT instruments so unlisted contracts never enter live pools."""
+    from datetime import date
+    today = date.today()
+    if list_date is not None:
+        return 'pending_listing' if list_date > today else 'active'
+
+    raw_open_date = str(reference.get('OpenDate') or reference.get('list_date') or '').strip()
+    raw_create_date = str(reference.get('CreateDate') or '').strip()
+    # QMT uses the epoch OpenDate together with a real CreateDate for a newly
+    # created contract that has not begun trading (for example 301686.SZ).
+    if raw_open_date in {'0', '00000000', '19700101', '1970-01-01'} and raw_create_date:
+        return 'pending_listing'
+    if previous == 'pending_listing':
+        return previous
+    return 'unknown'
+
+
+def _earliest_daily_dates(client, codes):
+    """Return evidence-backed first observed daily date for unresolved indices."""
+    if not codes:
+        return {}
+    result = client.query(
+        "SELECT code, min(trade_date) AS earliest_trade_date "
+        "FROM kline_daily WHERE code IN {codes:Array(String)} GROUP BY code",
+        parameters={'codes': sorted(set(codes))},
+    )
+    from datetime import date
+    dates = {}
+    for code, value in result.result_rows:
+        if isinstance(value, datetime):
+            value = value.date()
+        if isinstance(value, date):
+            dates[str(code)] = value
+        elif value:
+            try:
+                dates[str(code)] = date.fromisoformat(str(value)[:10])
+            except ValueError:
+                continue
+    return dates
 
 
 @router.post("/update-indices")
@@ -3858,12 +3922,14 @@ def update_indices():
         password = os.getenv("AISTOCK_CLICKHOUSE_PASSWORD", "")
         ch = get_client(host=host, port=port, database=database, username=username, password=password)
 
+        _ensure_listing_status_column(ch)
         existing_full = _reference_rows_by_code(ch)
-        existing_rows = [(row['code'],row.get('type'),row.get('list_date')) for row in existing_full.values()]
+        existing_rows = [(row['code'],row.get('type'),row.get('list_date'),row.get('listing_status')) for row in existing_full.values()]
         existing_map = {
             str(r[0]): {
                 "type": str(r[1] or ""),
                 "list_date": r[2],
+                "listing_status": str(r[3] or "active"),
             }
             for r in existing_rows if r and r[0]
         }
@@ -3899,6 +3965,7 @@ def update_indices():
             else:
                 added_count += 1
 
+            list_date = _reference_listing_date(index, (exist or {}).get("list_date"))
             index_rows.append([
                 code,
                 name,
@@ -3906,10 +3973,41 @@ def update_indices():
                 "index",
                 "",
                 "",
-                _reference_listing_date(index, (exist or {}).get("list_date")),
+                list_date,
+                _reference_listing_status(index, list_date, (exist or {}).get("listing_status")),
                 0,
                 0,
             ])
+
+        # QMT does not supply a bulk authoritative publication date for every
+        # index.  When neither QMT nor retained metadata has one, the earliest
+        # actual daily market-data record is a transparent operational fallback.
+        fallback_codes = [row[0] for row in index_rows if row[6] is None]
+        fallback_dates = _earliest_daily_dates(ch, fallback_codes)
+        fallback_evidence = []
+        for row in index_rows:
+            fallback_date = fallback_dates.get(row[0])
+            if row[6] is None and fallback_date is not None:
+                row[6] = fallback_date
+                row[7] = 'active'
+                fallback_evidence.append({
+                    'code': row[0],
+                    'list_date': fallback_date.isoformat(),
+                    'source': 'kline_daily.min(trade_date)',
+                    'reason': 'qmt_index_listing_date_unavailable',
+                })
+
+        try:
+            from services.operations.health import write_snapshot
+            from utils.paths import runtime_path
+            write_snapshot(
+                {'generated_at': datetime.now().astimezone().isoformat(),
+                 'source': 'qmt_xtquant',
+                 'fallbacks': fallback_evidence},
+                runtime_path('operations', 'index_listing_date_fallback.json'),
+            )
+        except Exception as exc:
+            logger.warning('Unable to write index listing-date fallback evidence: %s', exc)
 
         t_transform_done = time.perf_counter()
         try:
@@ -3938,7 +4036,7 @@ def update_indices():
                 ch, tmp_table,
                 index_rows,
                 columns=[
-                    "code", "name", "market", "type", "industry", "region", "list_date",
+                    "code", "name", "market", "type", "industry", "region", "list_date", "listing_status",
                     "quit", "st",
                 ],
                 existing=existing_full,

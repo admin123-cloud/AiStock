@@ -44,8 +44,19 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
     if not dates:
         raise ValueError("交易日历未就绪，不能计算覆盖率")
     start = dates[0]
-    universe = client.query(f"SELECT code, type, list_date, delist_date FROM stocks WHERE type IN ('stock','index') SETTINGS max_execution_time={query_timeout_seconds}").result_rows
-    missing_listing = {kind:[str(code) for code, typ, listed, _ in universe
+    universe_raw = client.query(f"SELECT code, type, list_date, listing_status, delist_date FROM stocks WHERE type IN ('stock','index') SETTINGS max_execution_time={query_timeout_seconds}").result_rows
+    # Four-column rows are accepted only for older read-only test adapters;
+    # deployed ClickHouse records always contain the explicit lifecycle field.
+    universe = [
+        (row[0], row[1], row[2], row[3] if len(row) >= 5 else 'active', row[4] if len(row) >= 5 else row[3])
+        for row in universe_raw
+    ]
+    # Newly-created QMT contracts may exist before their first tradable day.
+    # Keep them visible in reference diagnostics, but do not make them expected
+    # market-data keys or turn them into a strategy/coverage failure.
+    pending_listing = {str(code) for code, _typ, _listed, status, _delisted in universe if str(status or 'active') == 'pending_listing'}
+    eligible_universe = [row for row in universe if str(row[3] or 'active') != 'pending_listing']
+    missing_listing = {kind:[str(code) for code, typ, listed, _status, _ in eligible_universe
                              if typ == kind and (not listed or str(listed)[:10] in ('1970-01-01','0000-00-00'))]
                        for kind in ('stock','index')}
     # Verified business absences only; unresolved QMT empty responses remain missing.
@@ -58,7 +69,7 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
     for day in dates:
         absent = {str(code) for code, first, last in exclusions if str(first)[:10] <= day <= str(last)[:10]}
         for kind in ('stock', 'index'):
-            eligible = {str(code) for code, typ, listed, delisted in universe if typ == kind
+            eligible = {str(code) for code, typ, listed, _status, delisted in eligible_universe if typ == kind
                         and (not listed or str(listed)[:10] <= day)
                         and (not delisted or str(delisted)[:10] in ('1970-01-01', '0000-00-00') or day <= str(delisted)[:10])}
             expected[kind, day] = eligible - absent
@@ -109,6 +120,7 @@ def build_delivery_calendar(client, *, days: int = 30, now: datetime | None = No
     datasets.append({'id': 'sector_daily', 'label': '板块日线', 'cells': sector_cells})
     return {'generated_at': now.isoformat(timespec='seconds'), 'dates': dates, 'datasets': datasets,
             'contract': policy,
+            'pending_listing_codes': sorted(pending_listing),
             'scope': '唯一时间键覆盖；含上市/退市及有依据的业务豁免。完整表示覆盖齐全，价格质量与主表/stage冲突由G3独立验收。板块以有时效与生效日期的QMT全集验收，缺少证据时分母未知。'}
 
 
