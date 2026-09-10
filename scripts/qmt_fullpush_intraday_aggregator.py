@@ -29,6 +29,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from services.operations.ingestion_store import clickhouse_client, clickhouse_query_df, observe
 from utils.paths import runtime_path
 from utils.qmt_universe import qmt_universe_filter_sql
+from utils.derived_minute_live import ensure_live_derived_table, live_derived_table
 
 
 SH_TZ = ZoneInfo("Asia/Shanghai")
@@ -437,7 +438,12 @@ def is_target_boundary(ts: datetime, target: str) -> bool:
     return elapsed > 0 and elapsed % minutes == 0
 
 
-def derive_higher_rows_from_clickhouse(target: str, trade_day: date) -> list[tuple]:
+def derive_higher_rows_from_clickhouse(
+    target: str,
+    trade_day: date,
+    *,
+    target_boundary: datetime | None = None,
+) -> list[tuple]:
     group_size = {"15m": 3, "30m": 6, "60m": 12}.get(target)
     if not group_size:
         return []
@@ -458,24 +464,6 @@ def derive_higher_rows_from_clickhouse(target: str, trade_day: date) -> list[tup
     if work.empty:
         return []
     work = work.drop_duplicates(subset=["code", "datetime"], keep="last")
-    target_table = MINUTE_TABLES[target]
-    existing_df = clickhouse_query_df(
-        f"""
-        SELECT code, datetime
-        FROM {target_table}
-        WHERE toDate(datetime) = ?
-        """,
-        [trade_day],
-    )
-    existing_keys: set[tuple[str, datetime]] = set()
-    if not existing_df.empty:
-        existing_df = existing_df.copy()
-        existing_df["datetime"] = pd.to_datetime(existing_df["datetime"], errors="coerce")
-        existing_df = existing_df.dropna(subset=["code", "datetime"])
-        existing_keys = {
-            (str(row.code), row.datetime.to_pydatetime())
-            for row in existing_df.itertuples(index=False)
-        }
     rows: list[tuple] = []
     created_at = ch_datetime(datetime.now(SH_TZ).replace(tzinfo=None))
     for code, code_df in work.groupby("code", dropna=True):
@@ -484,11 +472,11 @@ def derive_higher_rows_from_clickhouse(target: str, trade_day: date) -> list[tup
         for end_ts in sorted(by_dt):
             if not is_target_boundary(end_ts, target):
                 continue
+            if target_boundary is not None and end_ts != target_boundary:
+                continue
             required = [end_ts - pd.Timedelta(minutes=5 * idx) for idx in range(group_size - 1, -1, -1)]
             required_dt = [item.to_pydatetime() if isinstance(item, pd.Timestamp) else item for item in required]
             if any(session_name(item) != session_name(end_ts) or item not in by_dt for item in required_dt):
-                continue
-            if (str(code), end_ts) in existing_keys:
                 continue
             bucket = [by_dt[item] for item in required_dt]
             rows.append(
@@ -680,10 +668,19 @@ def flush_minutes(aggregator, *, include_open_bars=False):
             summary["errors"][target] = blocked[target]
             continue
         try:
-            rows = aggregate_bars(pending, target) if aggregator.args.dry_run else derive_higher_rows_from_clickhouse(target, now.date())
+            target_table = (
+                live_derived_table(target)
+                if aggregator.args.dry_run
+                else ensure_live_derived_table(clickhouse_client(), target)
+            )
+            rows = (
+                aggregate_bars(pending, target)
+                if aggregator.args.dry_run
+                else derive_higher_rows_from_clickhouse(target, now.date(), target_boundary=boundary)
+            )
             if aggregator.args.dry_run:
                 rows = minute_rows(rows, target)
-            summary["minute_rows"][target] = insert_rows(MINUTE_TABLES[target], rows, MINUTE_COLUMNS, aggregator.args.dry_run)
+            summary["minute_rows"][target] = insert_rows(target_table, rows, MINUTE_COLUMNS, aggregator.args.dry_run)
             completed[target] = boundary
             aggregator.derived_completed = completed
         except Exception as exc:

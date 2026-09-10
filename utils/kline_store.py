@@ -13,6 +13,7 @@ from utils.market_warehouse import (
     clickhouse_scalar,
     clickhouse_table_exists,
 )
+from utils.derived_minute_live import is_live_derived_period, live_derived_table
 
 logger = get_logger("KlineStore")
 
@@ -76,6 +77,29 @@ def _get_table_name(period: str) -> str:
 
 def _get_time_column(period: str) -> str:
     return TIME_COLUMNS.get(period.lower(), "trade_date")
+
+
+def _get_query_source(period: str) -> str:
+    """Read today's derived bars from the safe live materialization.
+
+    Legacy 15/30/60-minute tables remain the historical source until a
+    verified whole-history candidate is published.  When the live table
+    exists, it owns the current business date so stale legacy rows cannot
+    silently fill an intraday gap.
+    """
+    table = _get_table_name(period)
+    period_key = period.lower()
+    normalized = {"15min": "15m", "30min": "30m", "60min": "60m"}.get(period_key, period_key)
+    if not is_live_derived_period(normalized):
+        return table
+    live_table = live_derived_table(normalized)
+    if not clickhouse_table_exists(live_table):
+        return table
+    today = "toDate(now('Asia/Shanghai'))"
+    return (
+        f"(SELECT * FROM {live_table} WHERE toDate(datetime) = {today} "
+        f"UNION ALL SELECT * FROM {table} WHERE toDate(datetime) != {today})"
+    )
 
 
 def _quote(value: Any) -> str:
@@ -164,7 +188,7 @@ def query_kline(
     end_date: Optional[date] = None,
     limit: Optional[int] = None,
 ) -> pd.DataFrame:
-    table = _get_table_name(period)
+    table = _get_query_source(period)
     time_col = _get_time_column(period)
     sql = f"SELECT * FROM {table} WHERE code = ?"
     params: list[Any] = [code]
@@ -193,7 +217,7 @@ def query_kline_batch(
     if not codes:
         return pd.DataFrame()
 
-    table = _get_table_name(period)
+    table = _get_query_source(period)
     time_col = _get_time_column(period)
     placeholders = ", ".join(["?"] * len(codes))
     sql = f"SELECT * FROM {table} WHERE code IN ({placeholders})"
@@ -213,7 +237,7 @@ def query_kline_batch(
 
 
 def get_latest_trade_date(period: str = "1d") -> Optional[date]:
-    table = _get_table_name(period)
+    table = _get_query_source(period)
     time_col = _get_time_column(period)
     try:
         if clickhouse_table_exists("trade_calendar"):
@@ -244,7 +268,7 @@ def get_latest_trade_date(period: str = "1d") -> Optional[date]:
 
 
 def get_kline_date_range(code: str, period: str) -> tuple[Optional[date], Optional[date]]:
-    table = _get_table_name(period)
+    table = _get_query_source(period)
     time_col = _get_time_column(period)
     df = clickhouse_query_df(
         f"SELECT min({time_col}) AS min_date, max({time_col}) AS max_date FROM {table} WHERE code = ?",
@@ -256,7 +280,7 @@ def get_kline_date_range(code: str, period: str) -> tuple[Optional[date], Option
 
 
 def check_kline_exists(code: str, period: str, trade_date: date) -> bool:
-    table = _get_table_name(period)
+    table = _get_query_source(period)
     time_col = _get_time_column(period)
     value = clickhouse_scalar(
         f"SELECT count() FROM {table} WHERE code = ? AND {time_col} = ?",

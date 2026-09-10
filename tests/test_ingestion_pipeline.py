@@ -99,12 +99,35 @@ def test_damaged_derived_period_does_not_block_other_periods(monkeypatch):
     monkeypatch.setattr(f,'datetime',Clock)
     a=SimpleNamespace(args=SimpleNamespace(periods='5m,15m,30m,60m',dry_run=False))
     a.drain_closed_bars=lambda **kw:[]
-    def derive(period,day):
+    def derive(period, day, **kwargs):
         if period=='30m':raise RuntimeError('damaged table')
         return [(period,)]
     monkeypatch.setattr(f,'derive_higher_rows_from_clickhouse',derive)
+    monkeypatch.setattr(f,'ensure_live_derived_table',lambda _client, period:f'kline_minute_{period[:-1]}_live_derived')
     monkeypatch.setattr(f,'insert_rows',lambda table,rows,*args:len(rows))
     result=f.flush_minutes(a)
     assert result['minute_rows']['15m']==1
     assert result['minute_rows']['60m']==1
     assert '30m' in result['errors']
+
+
+def test_dry_run_derived_flush_does_not_create_tables(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 9, 10, 0, 20, tzinfo=tz)
+
+    monkeypatch.setattr(f, 'datetime', Clock)
+    bars = [
+        f.BarState('000001.SZ', Clock(2026, 9, 9, 9, minute), 1, 1, 1, 1, volume=100, amount=100)
+        for minute in (50, 55)
+    ]
+    bars.append(f.BarState('000001.SZ', Clock(2026, 9, 9, 10, 0), 1, 1, 1, 1, volume=100, amount=100))
+    a = SimpleNamespace(args=SimpleNamespace(periods='15m', dry_run=True))
+    a.drain_closed_bars = lambda **kw: list(bars)
+    monkeypatch.setattr(f, 'clickhouse_client', lambda: (_ for _ in ()).throw(AssertionError('must not create table')))
+    writes = []
+    monkeypatch.setattr(f, 'insert_rows', lambda table, rows, *args: writes.append((table, rows)) or len(rows))
+    result = f.flush_minutes(a)
+    assert result['minute_rows']['15m'] == 1
+    assert writes[-1][0] == 'kline_minute_15_live_derived'
