@@ -122,7 +122,14 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
             return items
         def call_with_failover(self,*args,**kwargs):
             calls.append((args,kwargs));return None
-        def get_source(self,name):return SimpleNamespace(get_expired_stock_info=lambda codes:{})
+        def get_source(self,name):return SimpleNamespace(
+            get_expired_stock_info=lambda codes:{},
+            last_stock_list_metadata={
+                'official_codes':['600000.SH','821028.BJ','899050.BJ'],
+                'returned_codes':['600000.SH','821028.BJ'],
+                'excluded_with_detail_evidence':['899050.BJ'],
+            },
+        )
     class Client:
         def query(self,sql):
             columns=['code','name','market','type','industry','region','list_date','delist_date','quit','st','self_selected','holding','id','created_at']
@@ -153,6 +160,9 @@ def test_stock_insert_dates_are_nullable_and_batch_details_are_reused(tmp_path,m
     assert rows['old.SZ']['list_date'] is None
     assert len(calls)==1 and calls[0][1]['source_name']=='qmt_xtquant'
     assert result['metadata']['metadata_unknown_codes']==['821028.BJ']
+    assert result['metadata']['qmt_raw_sector_count']==3
+    assert result['metadata']['official_pool_count']==2
+    assert result['metadata']['returned_pool_count']==3
     assert not result['metadata']['metadata_verified']
     assert (tmp_path/'operations/reference_metadata.json').exists()
 

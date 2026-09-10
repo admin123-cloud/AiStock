@@ -3582,14 +3582,24 @@ def update_stock_list():
         from utils.paths import runtime_path
         listing_unknown_codes = [row[0] for row in rows_to_insert if row[6] is None]
         pool_metadata = getattr(qmt_source,'last_stock_list_metadata',{}) or {}
+        # ``official_codes`` is the raw QMT sector membership.  It can include
+        # non-stock contracts which QMT itself identifies in instrument detail
+        # (for example ProductID=R).  Treating that raw count as the expected
+        # A-share stock count made a correct source-side exclusion look like a
+        # backend data loss.  Publish both facts, but use the detail-validated
+        # QMT stock pool for the reference-data contract.
+        raw_official_count = len(pool_metadata['official_codes']) if 'official_codes' in pool_metadata else None
+        validated_official_count = len(pool_metadata['returned_codes']) if 'returned_codes' in pool_metadata else None
         metadata_status = {'generated_at':datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),
                            'source':'qmt_xtquant', 'returned_pool_count':len(stock_list),
-                           'official_pool_count':len(pool_metadata['official_codes']) if 'official_codes' in pool_metadata else None,
+                           'official_pool_count':validated_official_count,
+                           'qmt_raw_sector_count':raw_official_count,
                            'pool_evidence':pool_metadata,
                            'excluded_from_stock_scope':[{'code':code,'reason':'existing_index_metadata','retained_type':'index'} for code in sorted(set(protected_index_codes))],
                            'metadata_unknown_codes':sorted(set(metadata_unknown_codes)),
                            'listing_unknown_codes':sorted(set(listing_unknown_codes)),
-                           'metadata_verified':bool(pool_metadata.get('official_codes')) and not metadata_unknown_codes and not listing_unknown_codes}
+                           'metadata_verified':(validated_official_count == len(stock_list)
+                                                and not metadata_unknown_codes and not listing_unknown_codes)}
         metadata_status['status'] = 'healthy' if metadata_status['metadata_verified'] else 'unverified'
         write_snapshot(metadata_status,runtime_path('operations','reference_metadata.json'))
         metrics = {
