@@ -464,6 +464,11 @@ def derive_higher_rows_from_clickhouse(
     if work.empty:
         return []
     work = work.drop_duplicates(subset=["code", "datetime"], keep="last")
+    # ClickHouse returns Asia/Shanghai-aware timestamps while the collector's
+    # closed-boundary clock is intentionally a local wall-clock value. Compare
+    # both as the same naive business-time representation; otherwise every
+    # live derived boundary compares unequal and produces an empty batch.
+    boundary_wall = ch_datetime(target_boundary) if target_boundary is not None else None
     rows: list[tuple] = []
     created_at = ch_datetime(datetime.now(SH_TZ).replace(tzinfo=None))
     for code, code_df in work.groupby("code", dropna=True):
@@ -472,7 +477,7 @@ def derive_higher_rows_from_clickhouse(
         for end_ts in sorted(by_dt):
             if not is_target_boundary(end_ts, target):
                 continue
-            if target_boundary is not None and end_ts != target_boundary:
+            if boundary_wall is not None and ch_datetime(end_ts) != boundary_wall:
                 continue
             required = [end_ts - pd.Timedelta(minutes=5 * idx) for idx in range(group_size - 1, -1, -1)]
             required_dt = [item.to_pydatetime() if isinstance(item, pd.Timestamp) else item for item in required]

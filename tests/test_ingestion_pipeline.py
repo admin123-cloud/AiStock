@@ -2,6 +2,8 @@ from datetime import datetime
 from threading import Event
 from types import SimpleNamespace
 import json
+from zoneinfo import ZoneInfo
+import pandas as pd
 import pytest
 from services.operations.ingestion_lanes import IngestionLane
 from services.operations.ingestion_checkpoint import run_staged
@@ -131,3 +133,19 @@ def test_dry_run_derived_flush_does_not_create_tables(monkeypatch):
     result = f.flush_minutes(a)
     assert result['minute_rows']['15m'] == 1
     assert writes[-1][0] == 'kline_minute_15_live_derived'
+
+
+def test_live_derived_query_matches_aware_clickhouse_timestamp_to_wall_clock_boundary(monkeypatch):
+    tz = ZoneInfo('Asia/Shanghai')
+    source = pd.DataFrame([
+        {'code':'000001.SZ','datetime':datetime(2026,9,9,9,minute,tzinfo=tz),
+         'open':1.0,'high':2.0,'low':0.5,'close':1.5,'volume':100.0,'amount':1000.0,
+         'created_at':datetime(2026,9,9,9,minute,tzinfo=tz)}
+        for minute in (35,40,45)
+    ])
+    monkeypatch.setattr(f, 'clickhouse_query_df', lambda *args, **kwargs: source)
+    rows = f.derive_higher_rows_from_clickhouse(
+        '15m', datetime(2026,9,9).date(), target_boundary=datetime(2026,9,9,9,45))
+    assert len(rows) == 1
+    assert rows[0][0] == '000001.SZ'
+    assert rows[0][1] == datetime(2026,9,9,9,45)
