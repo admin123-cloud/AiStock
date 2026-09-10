@@ -9,7 +9,7 @@ from services.operations.delivery import build_delivery_calendar
 from services.operations.health import BUSINESS_TZ
 
 
-def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(monkeypatch):
+def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(monkeypatch, tmp_path):
     old = [
         {'code':'old','type':'index','list_date':date(1991,7,15),'name':'old','self_selected':1,'holding':1,'float_share':12.5,'total_share':20.5,'industry_code':'retained','id':42,'created_at':datetime(2020,1,1),'updated_at':datetime(2021,1,1)},
         {'code':'corrected','type':'index','list_date':date(2026,9,9),'name':'old'},
@@ -43,6 +43,8 @@ def test_index_refresh_insert_payload_uses_qmt_dates_and_retains_absent_rows(mon
             records=[dict(zip(column_names,r)) for r in rows]
             self.payload.extend(records)
             self.staged.extend(records)
+    import utils.paths
+    monkeypatch.setattr(utils.paths, 'runtime_path', lambda *parts: tmp_path.joinpath(*parts))
     client=Client();calls=[]
     class Manager:
         def call_with_failover(self,*args,**kwargs):calls.append((args,kwargs));return fetched
