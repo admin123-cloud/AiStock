@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from services.operations.health import BUSINESS_TZ, read_snapshot, strategy_data_checks, write_snapshot
 from services.operations.read_models import read_json, mainwave_daily, record_mainwave_tracking, task_board
-from services.operations.incidents import reconcile, dispatch, send_digest, read_incidents, notification_configured, notification_transport_status
+from services.operations.incidents import reconcile, dispatch, send_digest, read_incidents, notification_configured, notification_transport_status, baseline_notifications
 from services.operations.delivery import build_delivery_calendar, delivery_contract
 from utils.paths import runtime_path
 
@@ -55,7 +55,11 @@ def main():
     parser.add_argument('--runtime-root', type=Path, default=runtime_path())
     parser.add_argument('--notify', action='store_true')
     parser.add_argument('--repair', action='store_true')
+    parser.add_argument('--baseline-notifications', action='store_true',
+                        help='Adopt existing incidents without emitting historic failure or recovery mail.')
     args = parser.parse_args()
+    if args.baseline_notifications:
+        return baseline(args)
     from services.operations.lifecycle import InstanceLock
     lock = InstanceLock(args.runtime_root/'operations/publisher-owner.lock')
     lock.acquire()
@@ -117,6 +121,12 @@ def publish(args):
                     'notification_transport_ok':transport['ok'], 'notification_transport':transport,
                     'incidents':len(events)},root/'operations/latest.json')
     print(json.dumps({'incidents':len(events),'notification':result},ensure_ascii=False))
+    return 0
+
+
+def baseline(args):
+    result = baseline_notifications(args.runtime_root/'operations/incidents.sqlite3')
+    print(json.dumps({'baseline_notifications': result}, ensure_ascii=False))
     return 0
 
 

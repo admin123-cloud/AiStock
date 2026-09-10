@@ -103,6 +103,43 @@ def read_incidents(path: Path, *, limit=200):
     return rows
 
 
+def baseline_notifications(path: Path, *, now=None) -> dict[str, int]:
+    """Adopt existing incidents without sending their historic failure or recovery mail.
+
+    A notifier can be enabled long after incidents have accumulated.  Those
+    records are useful operational history, but they are not new alerts.  A
+    later material worsening still resets the failure notification to waiting
+    through ``reconcile`` and therefore remains eligible for delivery.
+    """
+    now = now or datetime.now(BUSINESS_TZ)
+    stamp = now.isoformat(timespec='seconds')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path, timeout=10) as db:
+        _schema(db)
+        failure = db.execute(
+            "SELECT key FROM incidents WHERE status NOT IN ('resolved','superseded') "
+            "AND notification IN ('waiting','failed')"
+        ).fetchall()
+        recovery = db.execute(
+            "SELECT key FROM incidents WHERE status='resolved' "
+            "AND recovery_notification IN ('waiting','failed')"
+        ).fetchall()
+        db.execute(
+            "UPDATE incidents SET notification='baselined',error=NULL "
+            "WHERE status NOT IN ('resolved','superseded') AND notification IN ('waiting','failed')"
+        )
+        db.execute(
+            "UPDATE incidents SET recovery_notification='baselined',error=NULL "
+            "WHERE status='resolved' AND recovery_notification IN ('waiting','failed')"
+        )
+        for (key,) in [*failure, *recovery]:
+            db.execute(
+                'INSERT INTO incident_history(event_key,at,status,payload) VALUES(?,?,?,?)',
+                (key, stamp, 'notification_baselined', json.dumps({'reason':'notification_takeover'}, ensure_ascii=False)),
+            )
+    return {'failure': len(failure), 'recovery': len(recovery)}
+
+
 def _dispatch_failures(path: Path, sender, *, now=None):
     now = now or datetime.now(BUSINESS_TZ)
     if not path.exists():

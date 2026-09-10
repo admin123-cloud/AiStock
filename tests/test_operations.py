@@ -5,7 +5,7 @@ from pathlib import Path
 from services.runtime_health import BUSINESS_TZ, read_snapshot, write_snapshot, strategy_data_checks, ArtifactRule, evaluate_artifact
 from services.data_delivery import bar_times, expected_times, coverage_cell, build_delivery_calendar
 from services.operations import mainwave_daily, task_board
-from services.operations_incidents import reconcile, dispatch, read_incidents
+from services.operations_incidents import reconcile, dispatch, read_incidents, baseline_notifications
 
 NOW = datetime(2026, 9, 9, 10, 1, tzinfo=BUSINESS_TZ)
 
@@ -81,6 +81,20 @@ def test_notifications_wait_for_repair_window_and_retry_without_ticket_dependenc
     assert dispatch(path,sender,now=NOW+timedelta(minutes=31))['status']=='smtp_accepted'
     assert dispatch(path,sender,now=NOW+timedelta(hours=1))['count']==0
     assert len(sent)==1
+
+
+def test_notification_takeover_baselines_historic_failure_and_recovery_but_sends_new_failure(tmp_path):
+    path = tmp_path/'incidents.db'
+    historic = [{'name':'historic_failure','ok':False}]
+    reconcile(path, historic, now=NOW, grace_minutes=0)
+    reconcile(path, historic, now=NOW+timedelta(minutes=1), grace_minutes=0)
+    sent=[]
+    assert baseline_notifications(path, now=NOW+timedelta(minutes=2)) == {'failure':1, 'recovery':0}
+    assert dispatch(path, lambda *args: sent.append(args), now=NOW+timedelta(minutes=2))['count'] == 0
+    reconcile(path, [{'name':'new_failure','ok':False}], now=NOW+timedelta(minutes=2), grace_minutes=0)
+    reconcile(path, [{'name':'new_failure','ok':False}], now=NOW+timedelta(minutes=3), grace_minutes=0)
+    assert dispatch(path, lambda *args: sent.append(args), now=NOW+timedelta(minutes=3))['status'] == 'smtp_accepted'
+    assert len(sent) == 1
 
 
 def test_smtp_failure_is_persistent_and_rate_limited(tmp_path):
