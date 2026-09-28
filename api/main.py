@@ -53,7 +53,8 @@ async def lifespan(app: FastAPI):
     logger.info("AiStock Backend API started")
     logger.info("API docs: http://localhost:8000/docs")
 
-    _log_startup_scheduler_policy()
+    if "_log_startup_scheduler_policy" in globals():
+        _log_startup_scheduler_policy()
 
     try:
         from api.system_config import (
