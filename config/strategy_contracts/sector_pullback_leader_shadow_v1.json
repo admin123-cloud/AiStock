@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "strategy_id": "sector_pullback_leader_shadow_v1",
+  "trade_strategy": "sector_pullback_leader",
+  "display_name": "强势行业首次回撤龙头（研究影子）",
+  "status": "research_shadow_only",
+  "entry": {
+    "sector_runup_lookback_days": 15,
+    "minimum_sector_runup": 0.2,
+    "minimum_up_down_day_ratio": 2.0,
+    "minimum_positive_negative_sum_ratio": 2.0,
+    "first_pullback_min": 0.05,
+    "first_pullback_max": 0.08,
+    "minimum_market_down_ratio": 0.6,
+    "leader_selection": "highest_constituent_return_over_prior_15_trading_days",
+    "execution": "next_trading_day_open_skip_unfillable_limit_up"
+  },
+  "portfolio": {
+    "slots": 1,
+    "slot_pct": 1.0,
+    "overlap_policy": "skip_signal_until_previous_trade_exits",
+    "cash_is_valid_decision": true
+  },
+  "exit": {
+    "holding_days": 1,
+    "round_trip_cost_bps": 20
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": true,
+    "promotion_blockers": [
+      "2026_current_sample_has_only_one_event",
+      "sector_membership_history_requires_independent_audit",
+      "capacity_and_same_day_cluster_controls_not_yet_verified"
+    ]
+  }
+}

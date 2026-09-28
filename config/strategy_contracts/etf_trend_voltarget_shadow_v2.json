@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "strategy_id": "etf_trend_voltarget_shadow_v2",
+  "trade_strategy": "etf_basket_ma60_250_voltarget_10pct",
+  "display_name": "A股核心指数ETF趋势组合（研究影子 v2）",
+  "status": "research_shadow_only",
+  "entry": {
+    "signal": "each_ETF_prior_close_MA60_above_MA250",
+    "execution": "next_session_open",
+    "exit": "following_session_open",
+    "target_annualized_volatility": 0.1,
+    "volatility_window": 20,
+    "symbols": [
+      "510300.SS",
+      "159919.SZ",
+      "510500.SS"
+    ]
+  },
+  "portfolio": {
+    "allocation": "equal_weight_three_etfs",
+    "cash_is_valid_decision": true,
+    "rebalance": "daily_signal_state_only"
+  },
+  "cost": {
+    "round_trip_bps_stress": 100,
+    "price_basis": "yfinance_auto_adjusted_ohlc"
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": false,
+    "promotion_blockers": [
+      "independent_forward_paper_period_required",
+      "real_time_spread_and_fill_audit_required",
+      "adjusted_to_raw_execution_reconciliation_required",
+      "ETF_liquidity_and_tracking_error_audit_required",
+      "portfolio_rebalance_cost_audit_required",
+      "drawdown_budget_approval_required"
+    ]
+  },
+  "validation_note": "Fixed v1 parameters; equal basket historical replay. 2013-2026 +77.60%/-16.10%; 2020-23 +5.72%; 2024-26 +16.43%; research only."
+}
+

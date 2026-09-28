@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "strategy_id": "etf_trend_entryfixed_shadow_v4",
+  "trade_strategy": "multiasset_etf_ma40_250_entry_fixed_voltarget_10pct",
+  "display_name": "A股多资产ETF趋势组合（入场固定仓位研究影子 v4）",
+  "status": "research_shadow_only",
+  "selection": {
+    "selection_window": "2013-2019",
+    "selection_method": "economic_role_basket_plus_training_grid_audit",
+    "validation_window": "2020-2023",
+    "blind_window": "2024-2026",
+    "baseline_contract": "etf_trend_voltarget_shadow_v2"
+  },
+  "entry": {
+    "signal": "prior_close_MA40_above_MA250",
+    "execution": "next_session_open",
+    "exit": "following_open_after_trend_exit_signal",
+    "position_scale": "calculate_20d_realized_vol_at_entry_and_hold_until_exit",
+    "target_annualized_volatility": 0.1,
+    "volatility_window": 20,
+    "symbols": [
+      "510300.SS",
+      "159919.SZ",
+      "510500.SS",
+      "511010.SS",
+      "518880.SS"
+    ]
+  },
+  "portfolio": {
+    "allocation": "equal_weight_five_etfs",
+    "cash_is_valid_decision": true,
+    "rebalance": "only_at_signal_entry_or_exit",
+    "turnover_cost_is_charged_on_position_scale_change": true
+  },
+  "cost": {
+    "round_trip_bps_stress": 200,
+    "price_basis": "yfinance_raw_ohlc_primary_adjusted_ohlc_sensitivity"
+  },
+  "liquidity": {
+    "gate": "20d_median_raw_close_times_volume",
+    "minimum_daily_value_cny": 100000000,
+    "action_when_failed": "cash_and_block_entry"
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": false,
+    "promotion_blockers": [
+      "independent_forward_paper_period_required",
+      "real_time_spread_and_fill_audit_required",
+      "adjusted_to_raw_execution_reconciliation_required",
+      "ETF_liquidity_and_tracking_error_audit_required",
+      "delayed_or_missing_asset_data_policy_required",
+      "multi_asset_weight_and_turnover_audit_required",
+      "drawdown_budget_approval_required"
+    ]
+  },
+  "validation_note": "At 200bps per position-scale turnover on raw OHLC, entry-fixed MA40/250 replay is +49.69%/-17.39% full, +9.54% validation, +14.97% blind/-7.51% blind DD. Adjusted OHLC sensitivity was +52.18%/-16.68% full, +10.56% validation, +15.39% blind. Research only; no live execution claim."
+}

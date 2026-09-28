@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "strategy_id": "index_trend_voltarget_shadow_v1",
+  "trade_strategy": "index_ma60_250_voltarget_5pct",
+  "display_name": "指数趋势波动率目标（研究代理）",
+  "status": "research_proxy_only",
+  "entry": {
+    "signal": "prior_close_fast_ma60_above_slow_ma250",
+    "execution": "next_session_open",
+    "exit": "following_session_open",
+    "target_annualized_vol": 0.05,
+    "index_universe": [
+      "000300.SH",
+      "000016.SH",
+      "000905.SH",
+      "000852.SH"
+    ]
+  },
+  "portfolio": {
+    "cash_is_valid_decision": true,
+    "single_position": true
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": false,
+    "promotion_blockers": [
+      "real_etf_mapping_and_price_history_required",
+      "t_plus_1_fill_audit_required",
+      "independent_untouched_validation_required",
+      "100bps_cost_and_slippage_gate_required",
+      "index_proxy_not_tradeable"
+    ]
+  },
+  "validation_note": "000300.SH指数代理 2005-01-01..2026-09-24：100bps、目标波动5%，收益约+64.39%，最大回撤-11.55%；2020-2023约+0.13%，2024-2026约+7.46%。仅研究线索，不代表ETF可交易收益。"
+}

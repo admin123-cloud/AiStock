@@ -1,0 +1,7 @@
+csv window ready: 1971780
+scan clicked
+file list count: 8
+export clicked, polling...
+tail 6 targets: 61
+{"output": "F:\\AiStock\\data\\data\\warehouse\\wstock_restore_20260919\\staged_tail6.json", "accepted_code_days": 60, "blocked_code_days": 1, "rows": 0}
+{"state": "applied", "written": 0, "skipped_existing": 0, "readback_fail": [], "source": "wstock_wdz_csv_sample", "code_days": 60, "applied_at": "2026-09-19T16:18:12.071103"}

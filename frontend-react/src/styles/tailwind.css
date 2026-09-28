@@ -1,0 +1,68 @@
+@import 'tailwindcss';
+
+/* 暗色模式由 <html class="dark"> 切换控制 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: Inter, 'Microsoft YaHei', 'PingFang SC', 'Segoe UI', sans-serif;
+}
+
+/* 涨跌语义色（A股约定：红涨绿跌） */
+@theme {
+  --color-up: var(--color-red-600);
+  --color-up-soft: var(--color-red-50);
+  --color-down: var(--color-green-600);
+  --color-down-soft: var(--color-green-50);
+  --color-flat: var(--color-zinc-500);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+}
+
+/* 明确的页面底色：亮色 slate 系、暗色 zinc 系，避免任何空隙露默认白/黑 */
+body {
+  background-color: var(--color-slate-100);
+}
+
+.dark body {
+  background-color: var(--color-zinc-950);
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 全站细滚动条：融入底色，不再出现粗黑滚动条（含侧边栏内部滚动） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 135, 0.45) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 135, 0.45);
+  border-radius: 8px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 135, 0.7);
+}
+
+/* 数据表格等宽数字 */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

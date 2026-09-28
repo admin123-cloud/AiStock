@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "strategy_id": "sector_mainwave_leader_shadow_v2",
+  "trade_strategy": "sector_index_mainwave_then_stock_leader_t1",
+  "display_name": "板块主升浪跟随强势股（重建影子版）",
+  "status": "research_shadow_only",
+  "entry": {
+    "sector_signal": "sector_index_20d_60d_strength_plus_breadth",
+    "leader_selection": "top_3_prior_15d_return_and_amount_ratio_within_asof_membership",
+    "execution": "next_session_open_T_plus_1",
+    "holding_days_candidates": [3, 5],
+    "skip_conditions": ["limit_up_unfillable", "missing_open", "liquidity_fail"]
+  },
+  "portfolio": {
+    "max_slots": 3,
+    "equal_weight": true,
+    "same_sector_cap": 2,
+    "cash_is_valid_decision": true
+  },
+  "data_contract": {
+    "historical_membership": "must_have_snapshot_date_on_or_before_signal_date",
+    "current_warehouse_status": "only_single_2026_07_06_membership_snapshot",
+    "historical_proxy_allowed": "sector_index_only_no_stock_leader_claim",
+    "price_basis": "raw_daily_ohlc"
+  },
+  "risk": {
+    "cost_stress_bps": [100, 200, 300],
+    "no_same_day_exit": true,
+    "fixed_stop_from_daily_ohlc": false
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": false,
+    "promotion_blockers": [
+      "dated_historical_membership_rebuild_required",
+      "forward_daily_membership_snapshots_required",
+      "T_plus_1_fill_and_limit_state_audit_required",
+      "sector_cluster_and_capacity_audit_required"
+    ]
+  }
+}

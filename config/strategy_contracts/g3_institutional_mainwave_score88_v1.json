@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "strategy_id": "g3_institutional_mainwave_score88_v1",
+  "trade_strategy": "institutional_mainwave_score88",
+  "display_name": "G3\u673a\u6784\u4e3b\u5347 Score88",
+  "status": "formal_shadow_only",
+  "legacy_aliases": [
+    "g3_mainwave_continuation_breakout_cash_v1",
+    "institutional_score120_mainwave"
+  ],
+  "entry": {
+    "score_field": "wave_style_score",
+    "minimum_score": 88,
+    "index_mom60_max": 0.05,
+    "minimum_same_day_industry_mainwave_count": 2,
+    "confirmation": "first_completed_30m_volume_breakout_prior20_high"
+  },
+  "portfolio": {
+    "slots": 2,
+    "slot_pct": 0.5,
+    "daily_open_limit": 2,
+    "cash_is_valid_decision": true
+  },
+  "exit": {
+    "hard_stop_loss_pct": 0.1,
+    "take_profit_pct": 0.1,
+    "take_profit_sell_ratio": 0.5,
+    "remaining_position_exit": "previous_day_low_break_confirmed_by_30m"
+  },
+  "cooldown": {
+    "policy": "diagnostic_only",
+    "entry_blocking": false
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": true
+  },
+  "research_only_contracts": [
+    "score120_sector_diffusion_12pct_dynamic_cooldown"
+  ]
+}

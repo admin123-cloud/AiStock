@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "timezone": "Asia/Shanghai",
+  "daily_deadline": "16:10",
+  "minute_delivery_lag_minutes": 5,
+  "repair_grace_minutes": 30,
+  "verified_absence_statuses": ["suspended", "delisted"],
+  "stock_index_owner": "Windows QMT 数据维护",
+  "sector_owner": "板块日线维护",
+  "sector_universe_verified": false
+}

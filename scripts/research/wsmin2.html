@@ -1,0 +1,854 @@
+<HTML>
+
+<!-- WSTOCK.NET ：沪深市场5分钟数据 wdz格式 转 通达信程序，沪深5分钟,通达信,lc5,tdx -->
+
+<HEAD>
+	<meta http-equiv='Content-Language' content='zh-cn'>
+	<meta http-equiv='Content-Type' content='text/html; charset=gb2312'>
+	<META name="keywords" content='wdz,沪深市场,港股,1分钟,5分钟数据,5分钟,通达信,tdx,同花顺,钱龙,大智慧'>
+	<META name="Title" content='沪深市场1分钟数据,5分钟数据 wdz格式 转 通达信程序，沪深5分钟,通达信,lc5,tdx'>
+	<META name=description content='沪深市场1分钟,5分钟数据 wdz格式 转 通达信程序，沪深5分钟,通达信,lc5,tdx'>
+
+	<title>：沪深港股日线、1分钟、5分钟数据 wdz格式 转 txt、通达信，大智慧dad，飞狐dad，钱龙，同花顺，json,xml,csv,dad,lc5,tdx,nmn,sql等</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<LINK href="inc/wstockV2.css" type=text/css rel=STYLESHEET>
+	<SCRIPT src="inc/wstockV2.js"></script>
+	<SCRIPT Language="javascript" Src="inc/pubDown.js"> </SCRIPT>
+</HEAD>
+
+<BODY text=#000000 bgColor=#ffffff leftMargin=0 topMargin=0 marginheight="0" marginwidth="0">
+
+<SCRIPT language="javascript">
+// 产生沪深数据下载表格
+// wstock.net 2005/04/05 2013/02/13
+// Copyright wstock.net
+// vDay："r"：日线；        "f"：5分钟线
+function funSHSZ_wdz_down(vDay){
+	var tDate=M_SHSZ_DATE;
+	var tPath=funSiteSelect(vDay);
+	var tYear=tDate.getFullYear(),tMonth=tDate.getMonth()+1;
+	var tStr,tHTML;
+	var tD,tWeekday;
+	var i,j,tH,tDay;
+	
+	tDateStr=tYear + "-" + tMonth + "-" + tDate.getDate();
+
+	tDay=vDay; tStr =  "<table width=260 border=0 cellspacing=0 cellpadding=0><tr><td height=24 width=190>";
+	if (vDay ==  "r") {
+		tStr += "<img src=/wstock/imgs/downs_r.gif width=190 height=24 border=0 alt='沪深日线数据免费下载' title='沪深日线数据免费下载'></td>";
+	} else if (vDay ==  "f") {
+		tStr += "<img src=/wstock/imgs/downs_f.gif width=190 height=24 border=0 alt='沪深5分钟数据免费下载' title='沪深5分钟数据免费下载'></td>";
+	} else if (vDay ==  "shsz1min") {
+		tDay="f";	tStr += "<B>沪深每日最新1分钟数据</B></td>";
+	} else if (vDay ==  "hk5min") {
+		tDay="f";	tStr += "<B>港股每日最新5分钟数据</B></td>";
+	} else if (vDay ==  "hkday") {
+		tDay="r";	tStr += "<B>港股每日最新日线数据</B></td>";
+	}
+	tStr += "<td height=20 width=70 align=center><font color=red><b>" + tDateStr + "</b></font></td></tr></table>\n\n";
+	document.write(tStr);
+
+	tStr =  "<table width=260 border=0 cellspacing=1 cellpadding=2 bgcolor=#3366CC><tr><td bgcolor=#FFFFFF>\n";
+	tStr += "<table border=0 cellspacing=1 cellpadding=3 bgcolor=#99B6EA width=100%><tr bgcolor=#EEF3FD>";
+	tHTML = "<td width=40 align=center>";
+	tStr += tHTML + "周一</td>";
+	tStr += tHTML + "周二</td>";
+	tStr += tHTML + "周三</td>";
+	tStr += tHTML + "周四</td>";
+	tStr += tHTML + "周五</td><td width=60 align=center rowspan=8>";
+
+	if (vDay == "r" ) { tStr += "数据格式：wdz格式</td></tr>";
+	} else { tStr += "数据格式：wdz格式</A></td></tr>" }
+	document.write(tStr);
+
+	tWeekday =-1*(36+tDate.getDay()-1); 
+
+	for (j=1;j<7;j++) {
+		if (j==2 || j==4 || j==6) { tStr="<tr bgcolor=#EEF3FD>"} else {tStr="<tr bgcolor=#FFFFFF>"}
+		for (i=0;i<5;i++) {
+			tWeekday += 1;
+			tD = funGetDatePlusDay(tDate , tWeekday);
+			if (vDay ==  "hk5min" || vDay ==  "hkday") {tH = funIsHKHoliday(tD);} else {tH = funIsSSHoliday(tD);}
+			if (tH != -1) {
+				if (vDay ==  "hk5min" || vDay ==  "hkday" ) {
+						tStr +=  "<td align=center><A target=_blank href='/wstock/hholiday.htm' class=HideInBody title=" + mHKHoliStr[tH] + ">休市</A></td>";
+				} else {
+					tStr +=  "<td align=center><A target=_blank href='/wstock/sholiday.htm' class=HideInBody title=" + mSSHoliStr[tH] + ">休市</A></td>";
+				}
+			} else {
+				if (tWeekday <= 0 ) {
+					tYear=tD.getFullYear();tMonth=tD.getMonth()+1;
+					if (vDay ==  "shsz1min") {
+						tStr +=  "<td align=center><A target=_blank href='" + tPath + tYear + funGetMonthDay2(tD) + ".wdz' class=";
+					} else {
+						tStr +=  "<td align=center><A target=_blank href='" + tPath + tYear + funGetMonthDay2(tD) + "_" + (tDay=="r" ? "Day" : "5Min") + ".wdz' class=";
+					}
+					if (tD.getMonth()<tDate.getMonth()) {tStr += "LastMonth>"} else { tStr += "HideInBody>" }
+
+					tStr += funGetDay2(tD) + "</A></td>";
+				} else {tStr += "<td>&nbsp</td>"}
+			}
+		}
+		document.write(tStr);
+		tWeekday += 2;
+	}
+
+	if (vDay != "r") {
+		tStr  = "<tr bgcolor=#FFFFFF><td align=center colspan=5>每个交易日下午17:30更新</td></tr>";
+	} else {
+		tStr  = "<tr bgcolor=#FFFFFF>";
+		tStr += "<td align=center colspan=5>每个交易日下午17:30更新</td></tr>";
+	}
+	document.write(tStr);
+
+	tStr = "</table></td</tr></table>\n\n";
+	document.write(tStr);
+
+	return;
+}
+
+// 选择站点，作为返回值
+// wstock.net 2005/04/05
+function funSiteSelect(vDay) {
+	var tSite;
+	var tSA = new Array("dw.wstock.cn","dw.wstock.cn","dw.wstock.cn","dw.wstock.cn");
+	var tNum = Math.random() ;
+
+	tNum = Math.round( tNum * 3 );
+	if (vDay ==  "hk5min" || vDay=="hkday" ) {
+		tSite = "http://" + tSA[tNum] + "/wstock/download/wdz/hk_5min/wstock_HK_";
+	} else {
+		if (vDay ==  "shsz1min") {
+			tSite = "http://" + tSA[tNum] + "/wstock/download/wdz/shsz_5min/SHSZ_1Min_";
+		}	else {
+			// tDay="f";	tStr += "<B>港股每日最新5分钟数据</B></td>";
+			tSite = "http://" + tSA[tNum] + "/wstock/download/wdz/shsz_5min/wstock_SHSZ_";
+		}
+	}
+
+	return tSite;
+}
+</SCRIPT>
+
+
+	<!-- 开始：顶部图片及快捷菜单 -->
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0>
+        <TR>
+          <TD vAlign=top width="1%" height=64 bgColor=#a30207>
+		<A href="https://www.wstock.net/">
+			<IMG width=175 height=64 border=0 src="imgs/icon_v2.gif" title="WSTOCK图标"></A></TD>
+          <TD vAlign=top align=right width="99%" height=64 bgColor=#a30207>
+            <TABLE cellSpacing=0 cellPadding=0 width=550 border=0><TR>
+                <TD valign=center align=right height=64 width=550 background="imgs/top_r.jpg">
+			<TABLE border=0><TR>
+			<TD vAlign="bottom"><A href="https://www.wstock.net/wstock/big5/wsmin.htm"><img border="0" height="57" width="48" alt="Chinese BIG5 text" title="Chinese BIG5 text" src="imgs/cn.jpg"></A></TD>
+			<TD>
+			   <TABLE border=0><TR><TD><A href="down.htm" class="WhiteLink">数据下载</A></TD></TR>
+				<TR><TD><A href="buy.htm" class="WhiteLink">产品购买</A></TD></TR>
+				<TR><TD><A href="board.htm" class="WhiteLink"><font face="宋体">留&nbsp;言&nbsp;板</font></A></TD></TR>
+			   </TABLE></TD>
+			<TD width=20>&nbsp;</TD></TR></TABLE>
+	    </TD></TR></TABLE>
+	  </TD></TR></TABLE>
+	<!-- 结束：顶部图片及快捷菜单 -->
+
+
+
+
+
+      <!-- 开始：顶部横向一级菜单 -->
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0><TBODY><TR>
+          <TD bgColor=#214a73><IMG height=1 src="imgs/b.gif" width=1></TD></TR></TBODY></TABLE>
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0><TBODY><TR class=TopMenuBGColor>
+	<TD width="500">
+            <TABLE cellSpacing=0 cellPadding=0 border=0 width="100%"><TBODY><TR>
+                <TD noWrap bgColor=#214a73><IMG height=4 src="imgs/b.gif" width=4></TD>
+                <TD vAlign=bottom noWrap><IMG height=19 src="imgs/b.gif" width=1></TD>
+
+                <TD noWrap><A class=TopMenu 
+                  href="index.htm">&nbsp;首页&nbsp;</A></TD>
+                <TD vAlign=bottom noWrap><IMG height=19 src="imgs/barre.gif" width=1></TD>
+
+
+                <TD noWrap><A class=TopMenu 
+                  href="services.htm">&nbsp;产品与服务&nbsp;</A></TD>
+                <TD vAlign=bottom noWrap><IMG height=19 src="imgs/b.gif" width=1></TD>
+
+                <TD noWrap><A class=TopMenuOn 
+                  href="buy.htm">&nbsp;购买&nbsp;</A></TD>
+                <TD vAlign=bottom noWrap><IMG height=19 src="imgs/b.gif" width=1></TD>
+
+                <TD noWrap><A class=TopMenu 
+                  href="free.htm">&nbsp;免费服务&nbsp;</A></TD>
+                <TD vAlign=bottom noWrap><IMG height=19 src="imgs/barre.gif" width=1></TD>
+
+                <TD noWrap><A class=TopMenu 
+                  href="supports.htm">&nbsp;技术支持&nbsp;</A></TD>
+                <TD vAlign=bottom noWrap><IMG height=19 src="imgs/barre.gif" width=1></TD>
+
+                <TD noWrap><A class=TopMenu 
+                  href="formula.htm">&nbsp;公式定制&nbsp;</A></TD>
+
+		</TR></TBODY></TABLE></TD>
+
+	<TD>&nbsp;</TD>
+
+		<!-- 动态字幕开始 -->
+	<TD WIDTH="180">
+		<MARQUEE behavior=scroll direction=up scrollamount=14 scrolldelay=3000 height=14 onmouseover="this.stop()" onmouseout="this.start()">
+			<SCRIPT Language="javascript">	funMarquee()	</SCRIPT>
+		</MARQUEE>
+	</TD>
+		<!-- 动态字幕结束 -->
+	</TR></TBODY></TABLE>
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0>
+        <TBODY><TR><TD bgColor=#214a73><IMG height=1 src="imgs/b.gif" width=1></TD></TR></TBODY></TABLE>
+      <!-- 结束：顶部横向一级菜单 -->
+
+
+
+
+
+
+      <!-- 此处为留空 -->
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0><TR>
+		<TD height=13><IMG height=1 src="imgs/b.gif" width=1></TD></TR></TABLE>
+
+
+      <!--  开始：中间的二级菜单 及 主体内容 -->
+      <TABLE cellSpacing=0 cellPadding=0 width=100% border=0><TBODY><TR>
+          <TD width=8><IMG height=1 src="imgs/b.gif" width=8></TD>
+
+	  <!-- 开始：二级菜单 -->
+          <TD vAlign=top width="1%">
+            <TABLE cellSpacing=2 cellPadding=0 width="100%" border=0><TBODY>
+              <TR><TD><IMG height=43 src="imgs/LeftMenu.jpg" width=162></TD></TR>
+
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+                  href="buy.htm">购买综览</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+                  href="highfreq.htm">各种分笔数据</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenuOn><A class=LeftMenu 
+                  href="buy_shsz.htm">沪深数据购买</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+		  href="forex.htm">外汇数据购买</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+		  href="futures.htm">期货数据购买</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+		  href="finance.htm">财务及权息数据</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+                  href="convert.htm">股票数据转换</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+                  href="education.htm">股票操作培训</A> </TD></TR>
+              <TR>
+                <TD width="100%" class=LeftMenu><A class=LeftMenu 
+		  href="pay.htm">已汇款登记</A> </TD></TR>
+
+	  </TBODY></TABLE>
+	  <!-- 结束：二级菜单 -->
+
+	  <BR>
+	  <TABLE width="162" Class="BorderGreen">
+		<TD align="center"><A href="/wstock/wsmin.htm" style="FONT-WEIGHT: bold; FONT-SIZE: 14px; ">通达信等格式股票数据</A></TD>
+	  </TABLE>
+
+
+<!-- 链接开始 -->
+<BR><BR>
+
+		<CENTER>
+<A href="board.htm#ad" class="HideInBody">相关链接</A></CENTER>
+
+	  <TABLE width="162" Class="BorderGreen">
+		<TR><TD align="center"><A href="/wstock/wsmin.htm" style="FONT-WEIGHT: bold; FONT-SIZE: 14px; ">沪深5分钟数据下载</A></TD></TR>
+		<TR><TD>
+			<A href="/wstock/wsmin.htm" class="HideInBody">
+				多种格式的2000年至今的沪深5分钟数据下载
+			</A>
+		</TD></TR>
+	  </TABLE>
+	  <TABLE width="162" border="0"><TR><TD height="5"></TD></TR></TABLE>
+
+	  <TABLE width="162" Class="BorderGreen">
+		<TR><TD align="center"><A href="/wstock/futures.htm" target="_blank" style="FONT-WEIGHT: bold; FONT-SIZE: 14px;">内地期货分笔数据</A></TD></TR>
+		<TR><TD>
+			<A href="/wstock/futures.htm" class="HideInBody" target="_blank">
+				上期所、大商所、郑商所、中金所、上期能源等分笔数据
+			</A>
+		</TD></TR>
+	  </TABLE>
+	  <TABLE width="162" border="0"><TR><TD height="5"></TD></TR></TABLE>
+
+	  <TABLE width="162" Class="BorderGreen">
+		<TR><TD align="center"><A href="/wstock/highfreq.htm" style="FONT-WEIGHT: bold; FONT-SIZE: 14px; ">超高频分笔数据</A></TD></TR>
+		<TR><TD>
+			<A href="/wstock/highfreq.htm" class="HideInBody">
+				沪深、港股、中金、期货、黄金等五档分笔数据
+			</A>
+		</TD></TR>
+	  </TABLE>
+	  <TABLE width="162" border="0"><TR><TD height="5"></TD></TR></TABLE>
+
+	  <TABLE width="162" Class="BorderGreen">
+		<TR><TD align="center"><A href="/wstock/buy_d.htm" target="_blank" style="FONT-WEIGHT: bold; FONT-SIZE: 14px; ">港股美股分钟数据</A></TD></TR>
+		<TR><TD>
+			<A href="/wstock/buy_d.htm" target="_blank" class="HideInBody">
+				港股美股1分钟、5分钟等高频数据<BR>
+			</A>
+		</TD></TR>
+	  </TABLE>
+	  <TABLE width="162" border="0"><TR><TD height="5"></TD></TR></TABLE>
+
+	  <TABLE width="162" Class="BorderGreen">
+		<TR><TD align="center"><img src="imgs/u8i9.png" /></TD></TR>
+	  </TABLE>
+	  <TABLE width="162" border="0"><TR><TD height="5"></TD></TR></TABLE>
+	  
+<!-- 链接结束 -->
+
+
+
+
+
+
+
+	  </TD>
+
+
+
+
+          <TD width=8><IMG height=1 src="imgs/b.gif" width=8></TD>
+
+	  <!-- 开始：本页的内容 -->
+          <TD vAlign=top><BR>
+            <TABLE cellSpacing=0 cellPadding=0 border=0 width="90%"><TBODY>
+		<TR><TD class=TitleRedNoSpacing>&gt;&nbsp;&nbsp;<A href="buy.htm" 
+class="TitleRedNoSpacing">购买登记</A>&nbsp;--&gt;&nbsp;沪深市场日线、5分钟数据、1分钟数据wdz格式 下载 及 转化程序（可转为 通达信、大智慧、钱龙、txt、excel、sql,数据库等多种格式）</TD></TR>
+		<TR><TD height=12><IMG height=3 src="imgs/b.gif" width=1></TD></TR>
+		<TR><TD>
+			<TABLE border=0><TR>
+				<TD width=10><IMG width=10 height=1 src="imgs/b.gif"></TD>
+				<TD vAlign="Top" class=TextBody>
+
+<!-- 开始：具体的内容 -->
+				<ul>
+					<LI><B><font color="red">数据品质说明：我方已对数据进行了纠错，但仍然不保证数据100%正确。我方对数据品质不做任何承诺，使用前请慎重。</font></B></LI>
+				<LI><B><font color="red">以下价格均为个人版优惠价（个人版费用为企业版费用的10%，企业客户请来信说明）</font></B></LI>
+					<LI><B>自助服务，无技术支持</B>：wdz程序为自助服务程序，我方不提供技术支持（<B>包括wdz付费用户，我方也不提供技术支持</B>）。</LI>
+					
+					<LI><B>微盛wdz处理程序下载地址：</B><A href="wdz_help.htm" target="_blank"><B>使用帮助</B></A>、
+						<A href="https://pan.baidu.com/s/1gLMi02PuzMw6cLxLhwGGFQ?pwd=acnp" target="_blank">微盛wdz程序（20260903以及后续新版，支持64位新版Windows）通过百度网盘链接下载[也包括以前老版本](提取码: acnp)</A>、
+						<A href="./wdz/wsWDZ_Setup_20201203.zip" target="_blank">微盛wdz程序（20201203版，支持老版Windows）</A>
+					</LI>
+					
+					<LI><B>wdz程序可用的免费试用用户名 及 说明</B>：<BR>
+						免费用户名wstock.net；密码1111；可处理沪深所有尾码为6的股票，<B>每天均可使用</B><BR>
+						免费用户名wstock3；密码3333；可处理沪深所有尾码为3的股票，仅限当天日期尾号为3，例如3日、13日、23日可用<BR>
+						免费用户名wstock4；密码4444；可处理沪深所有尾码为4的股票，仅限当天日期尾号为4，例如4日、14日、24日可用<BR>
+						免费用户名wstock5，wstock6，wstock7以此类推<BR>
+						假设今天为12月6日，则用户名wstock6（密码6666）可用，可输出沪深所有尾码为6的股票；明日（12月7日）则用户名wstock7可用，可输出沪深所有尾码为7的股票。<BR>
+						<!-- 以上总共8个免费用户名，在8天内可处理尾号8、9之外的 1990年沪深开市以来日线、以及2000年1月至今的沪深5分钟线数据。<BR>  -->
+						<B>2020年1月起，免费账户不再支持尾号8、9的输出；2020年2月起，免费账户不再支持尾号1、2的输出</B><BR>
+					</LI>
+						
+					<LI><B>欢迎付费购买wdz程序，获得正式用户名</B><BR>
+						沪深<B>日线历史数据</B>：1990开市至今￥98元；购买一年￥38元/年。赠送<B>周线</B>、<B>月线</B>；日线每日数据：￥88元/年<BR>
+						沪深<B>5分钟历史数据</B>：￥58元/年；五年共￥138元；十年共￥200元；二十年共298元。赠送10分钟、15分钟、30分钟、60分钟数据；5分钟线每日数据：￥128元/年<BR>
+						沪深<B>1分钟历史数据</B>：购买1分钟数据，赠送5分钟数据。从2000年1月1日开始。支持合成3分钟等别的分钟。<BR>
+						支持<B>复权输出</B>，支持向前复权、向后复权、定点复权输出数据：￥100元。
+					</LI>
+					
+					<LI><A href="wdz_help.htm" target="_blank"><B>程序使用帮助，请点击这里</B></A>
+						<BR><span style="font-family: 微软雅黑,Microsoft YaHei; background-color: #ffc000;"><B>使用本程序，可将wdz格式转化为“通达信”、大智慧（分析家）、飞狐（金狐、奇狐胜券）、钱龙、MT4、MetaStock、AmiBroker、txt、csv（兼容excel）、sql(mysql,ms-sqlserver,access sql[accdb,mdb])、xml、javascript(.js,json)等多种格式。</B></span>
+						<BR><B>支持复权输出</B>、合成为其它分钟（<B>支持3分钟、15分钟、30分钟、60分钟等</B>）输出、合成为<B>周线、月线</B>输出；也支持自定义股票组合输出。
+					</LI>
+					
+					<BR>
+					<BR>
+					<BR>					
+					<LI><A href='http://dw.wstock.cn/wstock/wdz.htm'><font size="+3">每天的最新数据，请点击这里下载</font></A></LI>
+					<BR>
+					<BR>
+					<BR>
+
+					
+					<LI>
+						1分钟数据：wdz格式的2000年至今的全部<B>沪深1分钟数据</B>已上线，支持转换为通达信、钱龙、大智慧、excel、txt、sql、json、xml等多种格式，需要的用户请与我方联系<BR>
+				  </LI>
+
+					<LI><B>上证指数（SH000001）的5分钟数据：</B><A href="https://pan.baidu.com/share/link?shareid=355599&uk=2617602953" target="_blank">2000年1月 ——2013年2月</A>；
+							<A href="./imgs/wdz/SH000001_TDX_lc5.png" target="_blank">点此查看 通达信 同一屏中显示上证指数2000年1月--2013年2月，超过13年的30分钟走势图</A><BR>
+					</LI>
+				
+					<LI><B>2000年至今的全部沪深5分钟数据下载：</B><BR>
+						<A href="https://pan.baidu.com/s/1ZsjKx7X-LPtAIPI6RlAblw?pwd=3wxe" target="_blank"><B>文件夹方式，方便<font color='red'>批量下载</font>2000年至今的全部沪深5分钟数据</B></A>（提取码:3wxe）<BR>
+						
+						<A href="https://pan.baidu.com/share/link?shareid=355575&uk=2617602953" target="_blank">2000年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=355576&uk=2617602953" target="_blank">2001年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=355578&uk=2617602953" target="_blank">2002年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=355579&uk=2617602953" target="_blank">2003年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=355581&uk=2617602953" target="_blank">2004年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=355582&uk=2617602953" target="_blank">2005年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356822&uk=2617602953" target="_blank">2006年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356823&uk=2617602953" target="_blank">2007年</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+
+						<A href="https://pan.baidu.com/share/link?shareid=356825&uk=2617602953" target="_blank">2008年1月——2008年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356828&uk=2617602953" target="_blank">2008年7月——2008年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356829&uk=2617602953" target="_blank">2009年1月——2009年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356830&uk=2617602953" target="_blank">2009年7月——2009年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						
+						<A href="https://pan.baidu.com/share/link?shareid=356831&uk=2617602953" target="_blank">2010年1月——2010年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356832&uk=2617602953" target="_blank">2010年7月——2010年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356833&uk=2617602953" target="_blank">2011年1月——2011年4月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356835&uk=2617602953" target="_blank">2011年5月——2011年8月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356836&uk=2617602953" target="_blank">2011年9月——2011年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/share/link?shareid=356837&uk=2617602953" target="_blank">2012年1月——2012年4月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356838&uk=2617602953" target="_blank">2012年5月——2012年8月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=356839&uk=2617602953" target="_blank">2012年9月——2012年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/share/link?shareid=381339&uk=2617602953" target="_blank">2013年1月——2013年3月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/share/link?shareid=1710539708&uk=2617602953" target="_blank">2013年4月——2013年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1bysaU" target="_blank">2013年7月——2013年9月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1i33bl0h" target="_blank">2013年10月——2013年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1i3kg2rj" target="_blank">2014年1月--2014年3月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1jGoR9xO" target="_blank">2014年4月--2014年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1sjEw6dB" target="_blank">2014年7月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1kT5fTcF" target="_blank">2014年8月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1o6HlWTW" target="_blank">2014年9月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1c0EjjeK" target="_blank">2014年10月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1ntMET89" target="_blank">2014年11月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1i3tbDuX" target="_blank">2014年12月</A>
+						<BR>
+						<A href="https://pan.baidu.com/s/1ntGBazR" target="_blank">2015年1月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1sj5Ep9z" target="_blank">2015年2月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1i3jBanz" target="_blank">2015年3月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1jGBu8v0" target="_blank">2015年4月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/18ot7w" target="_blank">2015年5月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1sjDRzEt" target="_blank">2015年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1sjp6UAT" target="_blank">2015年7月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1i3IVGHn" target="_blank">2015年8月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1dDCurg1" target="_blank">2015年9月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1i36OAih" target="_blank">2015年10月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1bngEPH1" target="_blank">2015年11月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1mhcI16o" target="_blank">2015年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						
+						<BR>
+						<A href="https://pan.baidu.com/s/1o7u0V82" target="_blank">2016年1月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1hrc8Ngo" target="_blank">2016年2月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1nvAIR0H" target="_blank">2016年3月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1c1EQgaW" target="_blank">2016年4月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1nvF57Jz" target="_blank">2016年5月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1hshRwtm" target="_blank">2016年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1gf4V9pL" target="_blank">2016年7月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1hsfmXDi" target="_blank">2016年8月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1boDE2uF" target="_blank">2016年9月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1bUDcsu" target="_blank">2016年10月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1gf7Kcin" target="_blank">2016年11月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1slAjhjn" target="_blank">2016年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+
+						<BR>
+						<A href="https://pan.baidu.com/s/1qYpUbEW" target="_blank">2017年1月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1i496H7n" target="_blank">2017年2月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1bX3nnK" target="_blank">2017年3月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1slHHzPz" target="_blank">2017年4月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1qXD1kJE" target="_blank">2017年5月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1miuojGG" target="_blank">2017年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1dEX33Y5" target="_blank">2017年7月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1geVz23T" target="_blank">2017年8月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1kVgis5L" target="_blank">2017年9月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1mhM5fp2" target="_blank">2017年10月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1i5kt8nb" target="_blank">2017年11月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1eRGFcRK" target="_blank">2017年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						
+						<BR>
+						<A href="https://pan.baidu.com/s/1kWJkZfp" target="_blank">2018年1月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1nvXLlTB" target="_blank">2018年2月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1g7XCdUDtUU4XEwldd3Fzyg" target="_blank">2018年3月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Svm8fuZvBQdlwlHzmPh1Qg" target="_blank">2018年4月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1eVQNwtTEr3XJMTtQFDvhVQ" target="_blank">2018年5月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1-DVbdAxRmG6iRE0XLFsrJQ" target="_blank">2018年6月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+
+						<BR>
+						<A href="https://pan.baidu.com/s/11fjRvx6lkrizKNYyR9QcwQ" target="_blank">2018年7月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1mYJDRnkTcthezkbabOaY1Q" target="_blank">2018年8月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1CqyHLXOgNMFH7H8baQy1KA" target="_blank">2018年9月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Fup9avG2tYc6bcLlhtn8lg" target="_blank">2018年10月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1bNiFQ6qYkOEM4bzj9TLqsQ" target="_blank">2018年11月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Jpu5AcKdEX35fHPaLkXC-Q" target="_blank">2018年12月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+
+						<BR>
+						<A href="https://pan.baidu.com/s/1vuArxRUk0Kedc3Oqp5fVAQ" target="_blank">2019年1月</A>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1ejiXkg7CAedllMdLx1e9hw?pwd=q3tt" target="_blank">2019年2月</A>(提取码: q3tt)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Kzkj-79xTYGLhmWUPsMqVQ?pwd=nyxq" target="_blank">2019年3月</A>(提取码: nyxq)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/10f2gwcy7lkj0x8IQyyLsFg?pwd=yg58" target="_blank">2019年4月</A>(提取码: yg58)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1yJaM8tfke08J25JPZq9lWA?pwd=yfut" target="_blank">2019年5月</A>(提取码: yfut)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1eEGbEJ0nKjwCK--iqb7Kug?pwd=15wm" target="_blank">2019年6月</A>(提取码: 15wm)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1deU4noXleauiJrmY9Z9eEw?pwd=igy9" target="_blank">2019年7月</A>(提取码: igy9)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1v66FQnwbfIpQksHEsc4f_Q?pwd=2s5u" target="_blank">2019年8月</A>(提取码: 2s5u)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1VF9V4F0q4GQWWcynw6RdJw?pwd=1fhy" target="_blank">2019年9月</A>(提取码: 1fhy)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1LrZNJMJ2wL2QNrGFOs2YHw?pwd=45kn" target="_blank">2019年10月</A>(提取码: 45kn)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1MeJ2A-A7ZJthqo0PVeNNJw?pwd=qqv4" target="_blank">2019年11月</A>(提取码: qqv4)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1eTeo8OEMlFBWmwokXLcRcw?pwd=rxxa" target="_blank">2019年12月</A>(提取码: rxxa)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/12bCr8AOV1UT3wuysfIFUsw?pwd=cfiv" target="_blank">2020年1月</A>(提取码: cfiv)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1-hLNEdBg4fJfOhdnEXZB4A?pwd=t36x" target="_blank">2020年2月</A>(提取码: t36x)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1btdvb2Tv0PuQKZX6Ho3vyw?pwd=9jgt" target="_blank">2020年3月</A>(提取码: 9jgt)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1-rygIdMRz8EJEh1MZ-kNQQ?pwd=py6v" target="_blank">2020年4月</A>(提取码: py6v)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1aKofLcyAfI0NSJvwqEEFOg?pwd=acbc" target="_blank">2020年5月</A>(提取码: acbc)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Rt2uJNzAYxWw0IpGnJidGA?pwd=he62" target="_blank">2020年6月</A>(提取码: he62)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/10u80kR1Uu7Ez-1rzg6V_tA?pwd=hhb3" target="_blank">2020年7月</A>(提取码: hhb3)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Nb8ldRbQwahloyOZQ8dH8A?pwd=9i6d" target="_blank">2020年8月</A>(提取码: 9i6d)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/173zpAfQuqpUShJNygpb4Mg?pwd=hbtd" target="_blank">2020年9月</A>(提取码: hbtd)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1A5lwoZYB4xYn3raNIAh0HQ?pwd=p5yc" target="_blank">2020年10月</A>(提取码: p5yc)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/16ULLn1-Aq9tVHrALmpa53g?pwd=4rgi" target="_blank">2020年11月</A>(提取码: 4rgi)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1jhPIRpmJkholoDdy8Onz9Q?pwd=x2qa" target="_blank">2020年12月</A>(提取码: x2qa)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1woV4BSfc4z2DSV7h4F9FNA?pwd=7sqm" target="_blank">2021年01月</A>(提取码: 7sqm)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1m6eJHoOru_FMPjFbVR2zCw?pwd=j3qr" target="_blank">2021年02月</A>(提取码: j3qr)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1DuAn_Y1nAdhV3zM6VqVuPg?pwd=xyx9" target="_blank">2021年03月</A>(提取码: xyx9)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1ZmlXEV6cQW2TS-I8ghhRtQ?pwd=ypkj" target="_blank">2021年04月</A>(提取码: ypkj)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1uMBpG-Kd63E6ZBaaWpjvmg?pwd=vcr7" target="_blank">2021年05月</A>(提取码: vcr7)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/15kHmZtJzazhPr4l2H-VlbA?pwd=gbq3" target="_blank">2021年06月</A>(提取码: gbq3)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1RFsa8AjyLZS5BB579L2a_w?pwd=ar9x" target="_blank">2021年07月</A>(提取码: ar9x)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1wfMnwlXBFMJ3ZyTSMpB21Q?pwd=6jd4" target="_blank">2021年08月</A>(提取码: 6jd4)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1P3F1okugY6U6SxrGaxtQXA?pwd=3vsn" target="_blank">2021年09月</A>(提取码: 3vsn)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1bZTbAH-YH0QHj5YXS1Xb_g?pwd=43ba" target="_blank">2021年10月</A>(提取码: 43ba)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1yF8ZE-HvgHOt-Lw2MiepSQ?pwd=95du" target="_blank">2021年11月</A>(提取码: 95du)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Dqqr3n_xdFf1PJe_W1Y8WA?pwd=nqmm" target="_blank">2021年12月</A>(提取码: nqmm)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1KGhh-2BDjdU8qSf2HZ9yjQ?pwd=ckkv" target="_blank">2022年01月</A>(提取码: ckkv)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1fUc1R79anTW7Kyod5C7YAg?pwd=ai2b" target="_blank">2022年02月</A>(提取码: ai2b)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/16ghBf-potZAhJK2c2SbJlw?pwd=duxj" target="_blank">2022年03月</A>(提取码: duxj)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/15ZtSk_tLUjyjXsPtsoeWEw?pwd=gvti" target="_blank">2022年04月</A>(提取码: gvti)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1kGm0hJnSc0sznclbAc6Jqg?pwd=68nr" target="_blank">2022年05月</A>(提取码: 68nr)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1sNePhF9DO363jZU6PJ38Kw?pwd=rqdy" target="_blank">2022年06月</A>(提取码: rqdy)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/16f65z7_R99tQPb5vI8vB2w?pwd=wrsn" target="_blank">2022年07月</A>(提取码: wrsn)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1ZNSd8msDhr2MQIHdSe6wow?pwd=r7va" target="_blank">2022年08月</A>(提取码: r7va)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1TpzEh2Gnspm614UMgcJyYQ?pwd=9dne" target="_blank">2022年09月</A>(提取码: 9dne)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1ETowWMjIiwR8IeC9cLbZfw?pwd=2igp" target="_blank">2022年10月</A>(提取码: 2igp)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1UauwN38ng0X7inePJq8wOg?pwd=76eb" target="_blank">2022年11月</A>(提取码: 76eb)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1uIkPttaoBJ63ByELxnjFbQ?pwd=k5ec" target="_blank">2022年12月</A>(提取码: k5ec)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1CpporjiBKQykTuw4d7-twA?pwd=tjid" target="_blank">2023年01月</A>(提取码: tjid)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1om3yttzUodBcVdkr4BPWZg?pwd=62hn" target="_blank">2023年02月</A>(提取码: 62hn)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1sz1lphgU8g_cxwsALApmog?pwd=f9h6" target="_blank">2023年03月</A>(提取码: f9h6)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/114KvwwqiDKNch7Cq_jgqPg?pwd=jk8h" target="_blank">2023年04月</A>(提取码: jk8h)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1bBqNAdXs0Mt8jUJCjGpFog?pwd=66b2" target="_blank">2023年05月</A>(提取码: 66b2)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/12XfQivUPvJSIf2LoL_yDnQ?pwd=4twy" target="_blank">2023年06月</A>(提取码: 4twy)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Rqq-2U5x3xQpElBCgtnuqA?pwd=wium" target="_blank">2023年07月</A>(提取码: wium)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1xWFMqab_wVmRmy7N6xyI8w?pwd=y5xp" target="_blank">2023年08月</A>(提取码: y5xp)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1vSWtP8cnl9hv_1BFrivADw?pwd=5599" target="_blank">2023年09月</A>(提取码: 5599)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1wDDFhEjrbNXQ04AoK7m7fQ?pwd=gc3k" target="_blank">2023年10月</A>(提取码: gc3k)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1rsYBnlgysBKxmYy2atcWAw?pwd=dbe4" target="_blank">2023年11月</A>(提取码: dbe4)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1dXld4aSIH5bajoWDdPXEjw?pwd=h3sm" target="_blank">2023年12月</A>(提取码: h3sm)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1eYqQFPHCKNBJlRAMltS7QQ?pwd=67er" target="_blank">2024年01月</A>(提取码: 67er)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/12HxaCGOYCmSD_HLg1gA37g?pwd=53cw" target="_blank">2024年02月</A>(提取码: 53cw)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1u0AXmiBjUp0aQbNiQ-HBxg?pwd=8466" target="_blank">2024年03月</A>(提取码: 8466)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1tQHhA12pxwYto-SuqldHMQ?pwd=qpbk" target="_blank">2024年04月</A>(提取码: qpbk)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1i5asf070jCiyc8nOtLUP_Q?pwd=mqm6" target="_blank">2024年05月</A>(提取码: mqm6)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Aa1PBNEoljK2wrqDO8gAGw?pwd=mg26" target="_blank">2024年06月</A>(提取码: mg26)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1jO869sVvcZbPiNQP-wb_HQ?pwd=ejiv" target="_blank">2024年07月</A>(提取码: ejiv)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1EcZBqmJndJmY2qwONdZsoA?pwd=v3dw" target="_blank">2024年08月</A>(提取码: v3dw)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/14qN_o5UmD88McC-iVD-iWw?pwd=6f3i" target="_blank">2024年09月</A>(提取码: 6f3i)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1pSE8enof1ZfvP7o_JjZmjg?pwd=si25" target="_blank">2024年10月</A>(提取码: si25)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1a6ayAeXWT6PZZISwvjVwlw?pwd=mvks" target="_blank">2024年11月</A>(提取码: mvks)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1XgSZqccgzalnGzK3okzAdQ?pwd=3ufy" target="_blank">2024年12月</A>(提取码: 3ufy)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1LmxdRgNbJEC9vVQ5CpD7mg?pwd=mt9c" target="_blank">2025年01月</A>(提取码: mt9c)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1jZU0hcL4kDUD1IRsLHnhHw?pwd=krua" target="_blank">2025年02月</A>(提取码: krua)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1ALSAQzestGZlVPOI8dFmWg?pwd=wnhi" target="_blank">2025年03月</A>(提取码: wnhi)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1YLb49z3Gd_2YNtXV3fVhdw?pwd=cfzi" target="_blank">2025年04月</A>(提取码: cfzi)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1htwm6flwrvrYRDNk9esyhg?pwd=23tt" target="_blank">2025年05月</A>(提取码: 23tt)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Hmhv4WIaappEvH6xeC0YXA?pwd=x8ad" target="_blank">2025年06月</A>(提取码: x8ad)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Om6Qaf3UtRHE2kldVbs1aA?pwd=dsi9" target="_blank">2025年07月</A>(提取码: dsi9)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1a09HEv_RvC-CkZfsrCpUCw?pwd=y6ft" target="_blank">2025年08月</A>(提取码: y6ft)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1wKinpzL2AYeGJ_Rv5xxyHQ?pwd=xhk6" target="_blank">2025年09月</A>(提取码: xhk6)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1__1yyV5HMZXTJZOGvh5Whg?pwd=1d6w" target="_blank">2025年10月</A>(提取码: 1d6w)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1LYIxYeQFa5bCi3ny6zdoTQ?pwd=kwq5" target="_blank">2025年11月</A>(提取码: kwq5)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1W55Z31GOKkbBhJEgSmzfCg?pwd=r54y" target="_blank">2025年12月</A>(提取码: r54y)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/17cR-nHh9BoJfYsMghRLzyA?pwd=xymy" target="_blank">2026年01月</A>(提取码: xymy)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1sFiudDhPo8j30SpNYxEMRg?pwd=5f6w" target="_blank">2026年02月</A>(提取码: 5f6w)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1l1cgcPnblEKr2qXglGcpfw?pwd=dtss" target="_blank">2026年03月</A>(提取码: dtss)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1Z2w54pqY1WVRLyDmuGswxw?pwd=y6z5" target="_blank">2026年04月</A>(提取码: y6z5)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<BR>
+						<A href="https://pan.baidu.com/s/1dJn3d94_hhQXY0ZC6xZgxw?pwd=5wub" target="_blank">2026年05月</A>(提取码: 5wub)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1okNXaq0levZtGoHG9w-Eow?pwd=j9f2" target="_blank">2026年06月</A>(提取码: j9f2)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1c1xqN3FYzBbrCwYGn4ssMQ?pwd=i9he" target="_blank">2026年07月</A>(提取码: i9he)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+						<A href="https://pan.baidu.com/s/1vBb9xbO36WBZpWen1GDZbA?pwd=vxpa" target="_blank">2026年08月</A>(提取码: vxpa)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+
+
+						<BR>
+						<SCRIPT Language="javascript">
+							var tDate=M_SHSZ_DATE;
+							var tYear=tDate.getFullYear(),tMonth=tDate.getMonth()+1;
+							document.write( tYear + "年" + tMonth + "月1日 --- " + tYear + "年" + tMonth + "月" + tDate.getDate() + "日 沪深5分钟数据，请在右下日历表格中下载");
+						</SCRIPT>
+
+						<BR>
+					</LI>
+
+					<LI><B>1990年 至今的沪深日线数据下载：</B>
+						<A href="https://pan.baidu.com/s/1wyYitb1lTATHjvwseXIS9w?pwd=3qiw" target="_blank"><B>文件夹方式：1990年至今沪深日线数据</B></A>(提取码:3qiw)
+						（<B>数据已更新到2026-08-31</B>）
+				</LI>
+						
+						<BR>
+						<SCRIPT Language="javascript">
+							var tDate=M_SHSZ_DATE;
+							var tYear=tDate.getFullYear(),tMonth=tDate.getMonth()+1;
+							var tStr="<A href='http://dw.wstock.cn/wstock/download/wdz/shsz_5min/wstock_SHSZ_Month_Day.wdz' target='_blank'>";
+							document.write(tStr + tYear + "年" + tMonth + "月1日 --- " + tYear + "年" + tMonth + "月" + tDate.getDate() + "日 沪深日线数据</A>");
+						</SCRIPT>
+						<BR>
+					</LI>
+
+					<LI><B>港股历史日线数据下载：</B>
+						<A href="https://pan.baidu.com/s/1Is0xc3uo14Aq9YJLRdTN0w?pwd=2jw9" target="_blank"><B>文件夹方式：1998年至今港股日线数据</B></A>(提取码:2jw9)
+						（<B>数据已更新到2026-08-31</B>）
+					</LI>
+
+
+					<BR>
+					<BR>
+					<BR>					
+					<LI><A href='http://dw.wstock.cn/wstock/wdz.htm'><font size="+3">每天的最新数据，请点击这里下载</font></A></LI>
+					<BR>
+					<BR>
+					<BR>
+
+
+					<LI>以下日历表格中为 最近一个月的沪深日线，以及沪深5分钟数据（wdz格式）下载：
+  <!--  开始：数据下载区 及 分析家格式的日线数据、5分钟数据 免费下载 -->
+  <TABLE>
+  	<TR>
+	   <TD><SCRIPT Language="javascript">	funSHSZ_wdz_down("r")	</SCRIPT></TD>
+	   <TD>&nbsp;</TD>
+	   <TD><SCRIPT Language="javascript">	funSHSZ_wdz_down("f")	</SCRIPT></TD>
+	   <TD>&nbsp;</TD>
+	   <TD><SCRIPT Language="javascript">	funSHSZ_wdz_down("shsz1min")	</SCRIPT></TD>
+  </TR>
+  
+  	<TR>
+	   <TD><SCRIPT Language="javascript">	funSHSZ_wdz_down("hkday")	</SCRIPT></TD>
+	   <TD>&nbsp;</TD>
+	   <TD><SCRIPT Language="javascript">	funSHSZ_wdz_down("hk5min")	</SCRIPT></TD>
+	   <TD>&nbsp;</TD>
+	   <TD>&nbsp;</TD>
+  </TR>
+  </TABLE>
+  <!--  结束：数据下载区 及 分析家格式的日线数据、5分钟数据 免费下载 -->
+	<BR>
+				</LI>
+				   	
+
+				   <!-- <LI><A href="http://down.wstock.cn/cgi-bin/alipay/wdz_login.htm" target="_blank">点击此处，付款后立即自动开通</A> -->
+				   	<BR>如需开通，请填写下表。对每一登记，我们均将在正常工作日的24小时内回复。
+				<BR><img src='imgs/u8i8.gif' border=0 width=521 height=38><BR> 
+				   </LI>
+				
+				</ul>
+				</TD></TR>
+
+				<TR><TD>&nbsp;</TD><TD>
+
+	<form method="POST" action="https://www.wstock.net/cgi-bin/wstockV2/savebd.pl" name="frmBoard">
+	<ol>
+		<LI><B>请填写您的联系方式</B>&nbsp;&nbsp;&nbsp;&nbsp;（<font color='red'>红字为必填项</font>，其余均可不填）<BR>
+		<TABLE border=0 cellspacing=2 cellpadding=2 class="BorderGreen" width="290">
+			<tr><td noWrap align="right">
+	<!-- 以下定义用户配置信息 -->
+				<input type='hidden' name='hidTemplate' value='v2Template'>
+				<input type='hidden' name='hidType' value='Board'>
+				<input type='hidden' name='txtReferrer' value=''>
+				<input type='hidden' name='txtBrowser' value=''>
+				<input type='hidden' name='txtTypeDescr' value='咨询wdz格式的沪深5分钟数据'>
+	<!-- 用户配置信息定义完毕 -->
+
+				<A name="board" class="HideInBody">公司名</A></td><td><input type="text" name="Company" size="38" class="BorderBlack">
+			</td></tr>
+			<tr><td noWrap align="right">
+				<font color='red'>联系人</font></td><td><input type="text" name="Contactman" size="8" class="BorderBlack">
+				<input type='radio' name='optMrMrs' checked value='先生'>先生
+				<input type='radio' name='optMrMrs' value='女士'>女士
+				<input type='radio' name='optMrMrs' value='小姐'>小姐
+			</td></tr>
+			<tr><td noWrap align="right"><font color='red'>电子邮件</font></td><td><input type="text" name="Email" size="22" class="BorderBlack"></td></tr>
+			<tr><td noWrap align="right">电话</td><td><input type="text" name="Telphone" size="22" class="BorderBlack"></td></tr>
+			<tr><td noWrap align="right">传真</td><td><input type="text" name="Fax" size="22" class="BorderBlack"></td></tr>
+			<tr><td noWrap align="right">邮编</td><td><input type="text" name="Postcode" size="22" class="BorderBlack"></td></tr>
+			<tr><td align="right">地址</td><td><input type="text" name="Address" size="38" class="BorderBlack"></td></tr>
+		</TABLE>
+
+		<BR><BR>
+
+		<LI><B>请选择数据</B>
+		<TABLE border=0 cellspacing=2 cellpadding=2 width="430" class="BorderGreen">
+			<tr><td>
+				<input type='checkbox' name='SHSZ_daily' value="沪深日线数据">沪深日线数据：1990开市至今全部历史数据￥98元；购买一年￥38元/年。每日数据：￥88元/年
+				<BR><input type='checkbox' name='SHSZ_min5' value="沪深5分钟数据">沪深5分钟数据：￥58元/年；五年共￥138元；十年共￥200元；二十年共298元。每日数据：￥128元/年
+				<BR><input type='checkbox' name='SHSZ_min1p' value="沪深1分钟数据">WDZ格式的沪深1分钟数据已上线(购买1分钟，赠送5分钟数据)。
+				<BR><input type='checkbox' name='SHSZ_power' value="需要复权">需要可复权输出数据，￥100元。
+				<BR><input type='checkbox' name='SHSZ_min3' value="3分钟数据">购买1分钟数据，wdz程序即可输出3分钟数据
+				<BR><input type='checkbox' name='SHSZ_min10' value="沪深10分钟数据">购买5分钟数据，wdz程序即可输出10分钟数据
+				<BR><input type='checkbox' name='SHSZ_min15' value="沪深15分钟数据">购买5分钟数据，wdz程序即可输出15分钟数据
+				<BR><input type='checkbox' name='SHSZ_min30' value="沪深30分钟数据">购买5分钟数据，wdz程序即可输出30分钟数据
+				<BR><input type='checkbox' name='SHSZ_min60' value="沪深60分钟数据">购买5分钟数据，wdz程序即可输出60分钟数据
+				<BR><input type='checkbox' name='SHSZ_weekly' value="沪深周线数据">购买日线数据，wdz程序即可输出周线数据
+				<BR><input type='checkbox' name='SHSZ_monthly' value="沪深月线数据">购买日线数据，wdz程序即可输出月线数据
+				
+				<BR>其它说明：<input type='text' name='txtMyMin' size="33" class="BorderBlack">
+			</td></tr>
+		</TABLE>
+		<BR><BR>
+
+
+		<LI><B>请选择期望的数据格式</B>
+		<TABLE border=0 cellspacing=2 cellpadding=2 width="430" class="BorderGreen">
+			<tr><td>
+						 <input type='checkbox' name='chkInternet' value="通达信">通达信
+				<BR><input type='checkbox' name='chkDZH' value="大智慧">大智慧（分析家）、飞狐（奇狐胜券、金狐、和讯股道等）
+				<BR><input type='checkbox' name='chkQL' value="钱龙">钱龙
+				<BR><input type='checkbox' name='chkTHS' value="同花顺">同花顺
+				<BR><input type='checkbox' name='chkCSV'  checked value="CSV_txt_EXCEL">csv（txt,兼容excel）
+				<BR><input type='checkbox' name='chkTXT' value="text ascii format">txt格式（ASCII，纯文本格式）
+				<BR><input type='checkbox' name='chkDatabase' value="mdb,ms-sql,mysql">数据库（例如Access、MySQL、MS-SQLServer）
+				<BR>其它格式：<input type='text' name='txtMyFormat' size="33" class="BorderBlack">
+			</td></tr>
+		</TABLE>
+
+		<BR><BR>
+
+		<LI><B>详细说明</B>（如有详细要求，请填写在下栏中）
+		<TABLE border=0 cellspacing=0 cellpadding=0 width="430">
+			<tr><td>
+				<textarea name="Comments" rows="12" cols="54" class="BorderGreen"></textarea>
+			</td></tr>
+			<td align='center'>
+				<input type="button" value="提交" onclick='funBoard()'>
+				&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+				<input type="reset" value="清除">
+			</td>
+		</TABLE>
+
+	</ol>
+	</form><BR>
+
+<!-- 结束：具体的内容 -->
+
+				</TD>
+			</TR></TABLE>
+		</TD></TR>
+	     </TBODY></TABLE></TD>
+	  <!-- 结束：本页的内容 -->
+
+          <TD vAlign=top width=18>&nbsp;</TD></TR></TBODY></TABLE><BR>
+      <!--  结束：中间的二级菜单 及 主体内容 -->
+
+
+
+
+
+
+
+
+  <!--  开始：底部菜单 -->
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0><TR><TD 
+		bgColor=#214a73><IMG height=1 src="imgs/b.gif" width=1></TD></TR></TABLE>
+
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0>
+        <TBODY>
+        <TR>
+          <TD class=TextWhite noWrap align=left
+          height=20>&nbsp; &nbsp; Copyright &nbsp;&copy;2001 - 2026&nbsp;&nbsp; <A class=WhiteLink 
+		href="https://www.wstock.net/"></A></TD>
+
+          <TD noWrap class=TextWhite align=center width="10%"
+          height=20><A class=WhiteLink 
+            href="contact.htm">联系方式</A></TD>
+          <TD class=TextWhite noWrap align=center width="1%"
+          height=20>&nbsp;|&nbsp;</TD>
+
+          <TD noWrap class=TextWhite align=center width="10%"
+          height=20><A class=WhiteLink 
+            href="terms.htm">使用条款</A></TD>
+          <TD class=TextWhite noWrap align=center width="1%"
+          height=20>&nbsp;|&nbsp;</TD>
+
+          <TD noWrap class=TextWhite align=center width="10%"
+          height=20><A class=WhiteLink 
+            href="map.htm">站点地图</A></TD>
+          <TD class=TextWhite noWrap align=center width="1%"
+          height=20>&nbsp;|&nbsp;</TD>
+
+          <TD noWrap class=TextWhite align=center width="10%"
+          height=20><A class=WhiteLink 
+            href="cooperation.htm">合作机会</A></TD>
+          <TD class=TextWhite noWrap align=center width="1%"
+          height=20>&nbsp;|&nbsp;</TD>
+
+          <TD noWrap class=TextWhite align=center width="10%"
+          height=20><A class=WhiteLink 
+            href="links.htm">友情链接</A></TD>
+
+	</TR></TBODY></TABLE>
+      <TABLE cellSpacing=0 cellPadding=0 width="100%" border=0><TR>
+          <TD bgColor=#214a73><IMG height=1 src="imgs/b.gif" 
+          width=1></TD></TR></TABLE>
+
+  <!--  结束：底部菜单 -->
+
+
+
+<script language='Javascript'>
+function funBoard() {
+	if (document.frmBoard.Contactman.value == "")  {
+		window.alert("请输入联系人，谢谢！");document.frmBoard.Contactman.focus();return
+	}
+	if (document.frmBoard.Email.value == "")  {window.alert("请输入电子邮件地址，谢谢！");document.frmBoard.Email.focus();return}
+	document.frmBoard.txtReferrer.value = document.referrer;
+	document.frmBoard.txtBrowser.value = navigator.systemLanguage?navigator.systemLanguage:navigator.language;
+//	if (document.frmBoard.Title.value == "")  {window.alert("请输入留言标题，谢谢！");document.frmBoard.Title.focus();return}
+//	if (document.frmBoard.Pic.value == "")  {window.alert("请输入验证图片中的内容，谢谢！");document.frmBoard.Pic.focus();return}
+
+	if (document.frmBoard.Comments.value.length > 10240)  {window.alert("留言内容太多，请勿超过10KB，谢谢！");document.frmBoard.Comments.focus();return}
+
+	document.frmBoard.submit();
+
+	return;
+}
+
+</script>
+
+
+</BODY></HTML>

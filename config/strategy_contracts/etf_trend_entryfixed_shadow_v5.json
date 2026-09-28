@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "strategy_id": "etf_trend_entryfixed_shadow_v5",
+  "trade_strategy": "four_asset_etf_ma40_250_entry_fixed_voltarget_10pct",
+  "display_name": "A股四资产ETF趋势组合（去重复沪深300研究影子 v5）",
+  "status": "research_shadow_only",
+  "selection": {
+    "selection_window": "2013-2019",
+    "selection_method": "remove_duplicate_index_exposure_and_keep_higher_liquidity_proxy",
+    "validation_window": "2020-2023",
+    "blind_window": "2024-2026",
+    "baseline_contract": "etf_trend_entryfixed_shadow_v4"
+  },
+  "entry": {
+    "signal": "prior_close_MA40_above_MA250",
+    "execution": "next_session_open",
+    "exit": "following_open_after_trend_exit_signal",
+    "position_scale": "calculate_20d_realized_vol_at_entry_and_hold_until_exit",
+    "target_annualized_volatility": 0.1,
+    "volatility_window": 20,
+    "symbols": [
+      "510300.SS",
+      "510500.SS",
+      "511010.SS",
+      "518880.SS"
+    ]
+  },
+  "portfolio": {
+    "allocation": "equal_weight_four_etfs",
+    "cash_is_valid_decision": true,
+    "rebalance": "only_at_signal_entry_or_exit",
+    "turnover_cost_is_charged_on_position_scale_change": true
+  },
+  "cost": {
+    "round_trip_bps_stress": 200,
+    "price_basis": "yfinance_raw_ohlc_primary_adjusted_ohlc_sensitivity"
+  },
+  "liquidity": {
+    "gate": "20d_median_raw_close_times_volume",
+    "minimum_daily_value_cny": 100000000,
+    "action_when_failed": "cash_and_block_entry"
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": false,
+    "promotion_blockers": [
+      "independent_forward_paper_period_required",
+      "real_time_spread_and_fill_audit_required",
+      "adjusted_to_raw_execution_reconciliation_required",
+      "ETF_liquidity_and_tracking_error_audit_required",
+      "multi_asset_weight_and_turnover_audit_required",
+      "drawdown_budget_approval_required"
+    ]
+  },
+  "validation_note": "At 200bps and 100-share lots, 500k simulation is +49.28%/-23.07% full, +10.01% validation, +20.42% blind. Research only; no live execution claim."
+}

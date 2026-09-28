@@ -1,0 +1,499 @@
+{
+  "source": "wstock_wdz_csv_sample",
+  "state": "staged",
+  "tail": "6",
+  "code_days": 61,
+  "accepted_code_days": 60,
+  "blocked_code_days": 1,
+  "rows": 0,
+  "staged_rows": [],
+  "accepted": [
+    {
+      "code": "000006.SH",
+      "trade_date": "2002-01-31",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000056.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000676.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000736.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000786.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000796.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000926.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "001696.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "399106.SZ",
+      "trade_date": "2003-07-03",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000026.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000056.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000066.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000506.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000536.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000566.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000586.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000636.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000716.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000776.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000826.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000886.SZ",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600016.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600026.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600036.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600056.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600076.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600166.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600186.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600216.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600246.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600316.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600416.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600436.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600456.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600496.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600556.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600576.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600636.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600866.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "600966.SH",
+      "trade_date": "2006-01-09",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000006.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000036.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000056.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000066.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000096.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000506.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000576.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000676.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000756.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000766.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000786.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000796.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000826.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000876.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000886.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000926.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "000936.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "002006.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "002046.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    },
+    {
+      "code": "002066.SZ",
+      "trade_date": "2006-12-15",
+      "formal_rows": 48,
+      "overlap": 0,
+      "overlap_price_match_ratio": null,
+      "missing": 0
+    }
+  ],
+  "blocked": [
+    {
+      "code": "002046.SZ",
+      "trade_date": "2006-01-09",
+      "reason": "wstock_not_48:0"
+    }
+  ]
+}

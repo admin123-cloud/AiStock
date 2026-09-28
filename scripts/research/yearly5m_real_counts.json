@@ -1,0 +1,817 @@
+{
+ "purchased_history|source_5m_file_invalid_no_datetime|5m|000010.SH|2002-01-14": {
+  "csv": false
+ },
+ "purchased_history|source_5m_file_invalid_no_datetime|5m|000006.SH|2002-01-31": {
+  "csv": false
+ },
+ "purchased_history|source_5m_file_invalid_no_datetime|5m|000008.SH|2002-01-31": {
+  "csv": false
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600222.SH|2002-06-28": {
+  "csv": true,
+  "rows": 48,
+  "real": 42,
+  "pad": 6,
+  "queue_missing": 6,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600468.SH|2002-06-28": {
+  "csv": true,
+  "rows": 48,
+  "real": 44,
+  "pad": 4,
+  "queue_missing": 4,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600714.SH|2002-06-28": {
+  "csv": true,
+  "rows": 48,
+  "real": 42,
+  "pad": 6,
+  "queue_missing": 6,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000028.SZ|2003-05-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 29,
+  "pad": 19,
+  "queue_missing": 19,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000060.SZ|2003-05-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 29,
+  "pad": 19,
+  "queue_missing": 19,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600212.SH|2003-05-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 29,
+  "pad": 19,
+  "queue_missing": 19,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600581.SH|2003-05-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 29,
+  "pad": 19,
+  "queue_missing": 19,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600612.SH|2003-05-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 28,
+  "pad": 20,
+  "queue_missing": 20,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600643.SH|2003-05-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 29,
+  "pad": 19,
+  "queue_missing": 19,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600808.SH|2003-05-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 29,
+  "pad": 19,
+  "queue_missing": 19,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000001.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000002.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000014.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000017.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000019.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000027.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000029.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000030.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000031.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000035.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000048.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000055.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000056.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000058.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000078.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000410.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000425.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000498.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000503.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000507.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000524.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000528.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000531.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000533.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000552.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000557.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000561.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000568.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000589.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000592.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000593.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000597.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000620.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000625.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000627.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000628.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000629.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000630.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000631.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000632.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000663.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000672.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000676.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000680.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000688.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000695.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000701.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000702.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000708.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000717.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000718.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000727.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000728.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000729.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000735.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000736.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000751.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 31,
+  "pad": 17,
+  "queue_missing": 17,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000755.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000757.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000767.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000779.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000786.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000796.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 31,
+  "pad": 17,
+  "queue_missing": 17,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000800.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000820.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000825.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000829.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000839.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000890.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000898.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000912.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000926.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000927.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000929.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000932.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000949.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000958.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000967.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000980.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000987.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000989.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000999.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|001696.SZ|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|399106.SZ|2003-07-03": {
+  "csv": false
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600888.SH|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600893.SH|2003-07-03": {
+  "csv": true,
+  "rows": 48,
+  "real": 30,
+  "pad": 18,
+  "queue_missing": 18,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600847.SH|2003-07-29": {
+  "csv": true,
+  "rows": 48,
+  "real": 24,
+  "pad": 24,
+  "queue_missing": 24,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000875.SZ|2003-08-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 41,
+  "pad": 7,
+  "queue_missing": 7,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600050.SH|2003-08-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 17,
+  "pad": 31,
+  "queue_missing": 31,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|600104.SH|2003-08-20": {
+  "csv": true,
+  "rows": 48,
+  "real": 17,
+  "pad": 31,
+  "queue_missing": 31,
+  "issue": "source_5m_incomplete_bars"
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000010.SH|2003-11-20": {
+  "csv": false
+ },
+ "purchased_history|source_5m_incomplete_bars|5m|000420.SZ|2005-09-14": {
+  "csv": true,
+  "rows": 48,
+  "real": 33,
+  "pad": 15,
+  "queue_missing": 15,
+  "issue": "source_5m_incomplete_bars"
+ }
+}

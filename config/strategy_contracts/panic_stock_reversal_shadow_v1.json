@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "strategy_id": "panic_stock_reversal_shadow_v1",
+  "trade_strategy": "panic_gap_reversal_top3",
+  "display_name": "市场恐慌强势股低开反转（研究影子）",
+  "status": "invalid_execution_research_only",
+  "entry": {
+    "minimum_market_down_ratio": 0.6,
+    "market_index": "000300.SH",
+    "market_above_ma_days": 60,
+    "minimum_stock_return_lookback_days": 15,
+    "minimum_stock_return": 0.2,
+    "next_open_gap_min": -0.1,
+    "next_open_gap_max": -0.05,
+    "rank_field": "stock_return_15d",
+    "max_positions": 3,
+    "execution": "next_trading_day_open_to_close"
+  },
+  "portfolio": {
+    "position_weight": "equal_weight_top3",
+    "cooldown_trading_days": 5,
+    "cash_is_valid_decision": true
+  },
+  "exit": {
+    "same_day_close": true,
+    "round_trip_cost_bps_assumption": 50
+  },
+  "guardrails": {
+    "formal_buy_signal": false,
+    "auto_order_allowed": false,
+    "order_path_enabled": false,
+    "shadow_trading_enabled": false,
+    "promotion_blockers": [
+      "current_source_ends_2026_08_12",
+      "forward_paper_period_required",
+      "intraday_fill_and_limit_state_audit_required",
+      "max_drawdown_budget_not_yet_approved",
+      "a_share_t_plus_1_same_day_exit_invalid",
+      "minute_daily_adjustment_basis_mismatch",
+      "historical_parameter_selection_not_independent_validation"
+    ]
+  },
+  "validation_note": "撤销可执行交易资格：新买A股当日卖出违反T+1；历史收益仅为价格代理。分钟/日线复权差异使此前分钟止损结论无效。"
+}
