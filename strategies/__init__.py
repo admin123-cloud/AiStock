@@ -1,24 +1,8 @@
-"""
-策略模块
+"""AiStock strategy package.
 
-提供各种交易策略，包括：
-- 策略基类
-- 动量策略
-- 均值回归策略
-- 机器学习策略
-- 策略工具函数
+Legacy strategy modules were removed during the core/refactor consolidation.
+Import active machine-readable contracts from :mod:`strategies.contracts` and
+G3 helpers from :mod:`strategies.g3`.
 """
 
-from .base_strategy import BaseStrategy
-from .momentum_strategy import MomentumStrategy
-from .mean_reversion import MeanReversionStrategy
-from .ml_strategy import MLStrategy
-from .strategy_utils import StrategyUtils
-
-__all__ = [
-    'BaseStrategy',
-    'MomentumStrategy',
-    'MeanReversionStrategy',
-    'MLStrategy',
-    'StrategyUtils',
-]
+__all__: list[str] = []
