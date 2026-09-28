@@ -1,20 +1,20 @@
-# AiStock-core Agent Rules
+# AiStock unified app Agent Rules
 
 ## Repository Shape
 
-This repository is the lightweight core codebase. Keep it small and friendly to Codex, Git, and TortoiseGit.
+This repository is the unified AiStock application source under F:\AiStock\app. Keep runtime data and research artifacts in the sibling directories managed by this root.
 
 External layers:
 
 - Data/runtime: `F:\AiStock\data`
 - Research archive: `F:\AiStock\research`
-- Original legacy tree: `F:\AiStock`
+- Unified root: `F:\AiStock`
 
 ## Path Rules
 
 - Use `utils.paths` for runtime/data/report/log paths.
 - Prefer `data_path(...)`, `runtime_path(...)`, `cache_path(...)`, `warehouse_path(...)`, and `report_path(...)`.
-- Do not add root-level `data/`, `reports/`, `artifacts/`, `logs/`, `Libs/`, `node_modules/`, or generated output directories to this repo.
+- Runtime data is stored in `F:\AiStock\data`; research reports are stored in `F:\AiStock\research`. Keep generated heavy outputs outside the app source when possible.
 - Do not create junctions or symlinks from this repo to the external heavy directories unless the user explicitly requests it.
 
 ## Secrets
