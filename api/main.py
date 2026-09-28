@@ -38,6 +38,7 @@ def _log_startup_scheduler_policy() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger = __import__("logging").getLogger("aistock.main")
     try:
         from utils.database import db
 
