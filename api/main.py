@@ -126,6 +126,7 @@ app.add_middleware(
 
 
 @app.get("/api/health/check")
+@app.get("/api/health/ready")
 async def health_check():
     runtime_health = read_snapshot(runtime_path("health", "latest.json"))
     return {
