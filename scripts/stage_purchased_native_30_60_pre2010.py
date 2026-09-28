@@ -38,7 +38,7 @@ from utils.market_warehouse import clickhouse_client
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 SOURCE_BASE = Path(r"E:\AStockHistory\A股数据\A股分时数据\A股_分时数据_沪深")
 DEFAULT_BATCH_PREFIX = "purchased_native_{freq}_pre2010_v20260921"
-OUT_BASE = Path(r"F:\AiStockData\data\runtime")
+OUT_BASE = Path(r"F:\AiStock\data\data\runtime")
 
 SLOTS = {
     30: {"10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00"},
@@ -449,3 +449,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

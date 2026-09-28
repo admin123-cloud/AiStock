@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 from utils.market_warehouse import clickhouse_client
 
 OUT = Path(r"F:\AiDevelop\ai-workspace\projects\AiStock\changes\pre2010_review_samples_20260921")
-RUNTIME = Path(r"F:\AiStockData\data\runtime")
+RUNTIME = Path(r"F:\AiStock\data\data\runtime")
 PRICE_TOL = 0.005
 VOL_TOL = 0.001
 AMT_TOL = 0.01
@@ -200,3 +200,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

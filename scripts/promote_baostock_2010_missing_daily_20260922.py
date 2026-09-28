@@ -25,7 +25,7 @@ from utils.market_warehouse import clickhouse_client
 
 RUN = "purchased_history_review_20260922_formal5m_reaggregate_a_auto_b_c_manual"
 CANDIDATE = "stock.baostock_2010_missing_daily_candidate_20260922"
-REPORT = Path(r"F:\AiStockData\data\runtime\quality_plan\baostock_2010_missing_daily_20260922\report.json")
+REPORT = Path(r"F:\AiStock\data\data\runtime\quality_plan\baostock_2010_missing_daily_20260922\report.json")
 
 
 def q(s: str) -> str:
@@ -171,3 +171,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

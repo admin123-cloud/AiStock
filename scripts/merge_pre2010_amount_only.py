@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 
-BASE = Path(r"F:\AiStockData\data\runtime\quality_plan\pre2010_policy_reclassification_20260921\manifest.json")
-DETAIL = Path(r"F:\AiStockData\data\runtime\quality_plan\pre2010_amount_only_subset_20260921\manifest.json")
+BASE = Path(r"F:\AiStock\data\data\runtime\quality_plan\pre2010_policy_reclassification_20260921\manifest.json")
+DETAIL = Path(r"F:\AiStock\data\data\runtime\quality_plan\pre2010_amount_only_subset_20260921\manifest.json")
 
 
 def main() -> int:
@@ -47,3 +47,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

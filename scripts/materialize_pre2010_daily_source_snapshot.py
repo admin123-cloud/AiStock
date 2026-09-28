@@ -17,7 +17,7 @@ from utils.market_warehouse import clickhouse_client
 STAGE = "stock.purchased_history_daily_snapshot_stage"
 BATCH = "purchased_daily_snapshot_pre2010_20260921"
 TARGET = "stock.kline_daily_pre2010_source_v20260921"
-OUT = Path(r"F:\AiStockData\data\runtime\pre2010_daily_source_v20260921")
+OUT = Path(r"F:\AiStock\data\data\runtime\pre2010_daily_source_v20260921")
 
 
 DDL = f"""CREATE TABLE {TARGET}
@@ -76,3 +76,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

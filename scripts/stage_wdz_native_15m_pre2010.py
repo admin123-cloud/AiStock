@@ -42,7 +42,7 @@ DEFAULT_ROOT = Path(r"E:\AStockHistory\A股数据\A股分时数据\A股_分时�
 DEFAULT_BATCH = "wdz_native_15_pre2010_v20260921"
 TARGET = "stock.wdz_native_15_pre2010_v20260921_stage"
 AUDIT = "stock.wdz_native_15_pre2010_v20260921_file_audit"
-OUT = Path(r"F:\AiStockData\data\runtime\wdz_native_15_pre2010_v20260921")
+OUT = Path(r"F:\AiStock\data\data\runtime\wdz_native_15_pre2010_v20260921")
 EXPECTED_SLOTS = {
     "09:45", "10:00", "10:15", "10:30", "10:45", "11:00", "11:15", "11:30",
     "13:15", "13:30", "13:45", "14:00", "14:15", "14:30", "14:45", "15:00",
@@ -330,7 +330,7 @@ def main() -> int:
     global TARGET, AUDIT, OUT
     TARGET = f"stock.{args.target_prefix}_stage"
     AUDIT = f"stock.{args.target_prefix}_file_audit"
-    OUT = args.output_dir or (Path(r"F:\AiStockData\data\runtime") / args.target_prefix)
+    OUT = args.output_dir or (Path(r"F:\AiStock\data\data\runtime") / args.target_prefix)
     archives = [args.source_root / f"{year}_15min.zip" for year in range(args.start_year, args.end_year + 1)]
     missing_archives = [str(path) for path in archives if not path.exists()]
     if missing_archives:
@@ -458,3 +458,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

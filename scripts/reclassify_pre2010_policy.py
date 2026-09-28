@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-RUNTIME = Path(r"F:\AiStockData\data\runtime\quality_plan")
+RUNTIME = Path(r"F:\AiStock\data\data\runtime\quality_plan")
 OUT = RUNTIME / "pre2010_policy_reclassification_20260921"
 
 
@@ -190,3 +190,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

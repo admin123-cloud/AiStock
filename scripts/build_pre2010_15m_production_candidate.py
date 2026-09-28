@@ -27,7 +27,7 @@ from utils.market_warehouse import clickhouse_client
 TZ = ZoneInfo("Asia/Shanghai")
 SCOPE = (int(os.getenv("AISTOCK_NATIVE15_START_YEAR", "2000")), int(os.getenv("AISTOCK_NATIVE15_END_YEAR", "2009")))
 RUN_ID = os.getenv("AISTOCK_NATIVE15_RUN_ID", "purchased_native_15_pre2010_v20260921_candidate")
-OUT = Path(r"F:\AiStockData\data\runtime") / RUN_ID
+OUT = Path(r"F:\AiStock\data\data\runtime") / RUN_ID
 CANDIDATE = f"stock.{RUN_ID}"
 DAY_AUDIT = f"stock.{RUN_ID}_day_audit"
 YEAR_AUDIT = f"stock.{RUN_ID}_year_audit"
@@ -377,3 +377,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

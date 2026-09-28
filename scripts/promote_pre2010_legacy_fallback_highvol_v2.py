@@ -39,7 +39,7 @@ T15 = BASE15 + SUFFIX
 T30 = BASE30 + SUFFIX
 T60 = BASE60 + SUFFIX
 TD = BASED + SUFFIX
-OUT = Path(r"F:\AiStockData\data\runtime\pre2010_fallback_high_volume_v20260921")
+OUT = Path(r"F:\AiStock\data\data\runtime\pre2010_fallback_high_volume_v20260921")
 
 
 def ddl_minute(name: str) -> str:
@@ -209,3 +209,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

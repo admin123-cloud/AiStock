@@ -105,7 +105,7 @@ def classify(cand_rows, formal_rows, formal_dup_groups):
 
 
 def main() -> int:
-    out = Path(r"F:\AiStockData\data\runtime\quality_plan\pre2010_amount_only_subset_2006_2009_20260921")
+    out = Path(r"F:\AiStock\data\data\runtime\quality_plan\pre2010_amount_only_subset_2006_2009_20260921")
     out.mkdir(parents=True, exist_ok=True)
     client = clickhouse_client()
     report = {"schema_version": "pre2010-amount-only-subset-v1", "scope": [2006, 2009],
@@ -150,3 +150,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

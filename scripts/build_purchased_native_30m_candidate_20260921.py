@@ -237,7 +237,7 @@ def main() -> int:
     args = ap.parse_args()
     if not 2000 <= args.start_year <= args.end_year <= 2010:
         raise SystemExit("scope supports 2000-2010")
-    manifest_path = Path(r"F:\AiStockData\data\runtime") / RUN_ID / "manifest.json"
+    manifest_path = Path(r"F:\AiStock\data\data\runtime") / RUN_ID / "manifest.json"
     c = connect()
     exists = bool(query(c, f"SELECT count() FROM system.tables WHERE database='stock' AND name='{RUN_ID}'")[0][0])
     if exists and not args.resume:
@@ -283,3 +283,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
