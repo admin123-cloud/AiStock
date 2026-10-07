@@ -99,8 +99,12 @@ def validate_day(day, frame, daily, instrument_type, code=None):
     if instrument_type == 'stock':
         active = (values[:, 4:] > 0).any(axis=1)
         inactive = values[~active, :4]
-        if len(inactive) and not np.isclose(inactive, inactive[:, -1:], rtol=0, atol=1e-8).all():
-            return 'native_zero_quantity_bar_not_flat'
+        # Native OHLC can move even when the supplied quantity fields are zero.
+        # Preserve these quotes; never infer their missing intrabar trades.
+        # Only a flat carry quote may lie outside today's transaction range.
+        nonflat = inactive[~np.isclose(inactive, inactive[:, -1:], rtol=0, atol=1e-8).all(axis=1)]
+        if len(nonflat) and (nonflat.min() < float(daily.low)-0.011 or nonflat.max() > float(daily.high)+0.011):
+            return 'native_zero_quantity_quote_outside_daily_range'
         if active.any():
             prices = values[active]
     if prices[:, 2].min() < float(daily.low) - 0.011 or prices[:, 1].max() > float(daily.high) + 0.011:
@@ -204,6 +208,9 @@ def aggregate(frame, minutes, instrument_type='stock'):
     slots = [key[8:] for key in keys]
     if not keys or len({key[:8] for key in keys}) != 1 or slots not in (SLOTS, CROSS_BORDER_SLOTS):
         raise ValueError('Aggregation requires an independently validated closed day')
+    if minutes == 5:
+        # Base bars are the exact native record, including zero-quantity OHLC.
+        return list(zip(keys, field_values(frame).tolist()))
     if slots == CROSS_BORDER_SLOTS:
         # Session-local chunks retain genuine partial bars at 12:00 and 16:10.
         values = field_values(frame)
@@ -391,6 +398,7 @@ def main():
     bond_index_codes = []
     normalizations = []
     quantity_contracts = []
+    zero_quantity_quotes = []
     now = datetime.now(TZ).replace(microsecond=0)
     with (out / 'code_day_issues.jsonl').open('w', encoding='utf-8') as ledger:
         for offset in range(0, len(codes), args.batch_size):
@@ -467,6 +475,18 @@ def main():
                         ledger.write(json.dumps({'code': code, 'day': day, 'issue': issue,
                                                 'native_minute_rows': len(m)}, ensure_ascii=False) + '\n')
                         continue
+                    if kind == 'stock':
+                        values = field_values(m)
+                        zero = (values[:, 4:] == 0).all(axis=1)
+                        nonflat = zero & ~np.isclose(values[:, :4], values[:, 3, None], rtol=0, atol=1e-8).all(axis=1)
+                        if nonflat.any():
+                            zero_quantity_quotes.append({'code':code,'day':day,
+                                'rule':'native_zero_quantity_ohlc_preserved_with_daily_range_and_quantity_checks',
+                                'quotes':m.loc[nonflat,FIELDS].reset_index().to_dict('records'),
+                                'minute_source_sha256':manifest['files'][f'{code}_5m']['sha256'],
+                                'daily_source_sha256':manifest['files'][f'{code}_1d']['sha256'],
+                                'minute_volume':float(values[:,4].sum()),'daily_volume':float(d.volume),
+                                'intrabar_transaction_quantity_verified':False})
                     for period in (5, 15, 30, 60):
                         for timestamp, values in aggregate(m, period, kind):
                             dt = market_datetime(timestamp)
@@ -491,6 +511,7 @@ def main():
             summary['price_scope_codes'] = len(codes) - len(non_price_codes) - len(bond_index_codes)
             summary['native_daily_volume_normalizations'] = normalizations
             summary['bse_quantity_contracts'] = quantity_contracts
+            summary['native_zero_quantity_quotes'] = zero_quantity_quotes
             dump(out / 'summary.json', summary)
             print(json.dumps({'codes_done': min(offset+len(batch),len(codes)), 'total':len(codes),
                               'tables':summary['tables'], 'issues':dict(issues)}, ensure_ascii=False), flush=True)

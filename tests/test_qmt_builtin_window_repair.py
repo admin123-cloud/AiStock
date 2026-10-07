@@ -276,7 +276,18 @@ def test_zero_trade_previous_quote_does_not_change_stock_transaction_extremes():
     frame.iloc[:3]=[12.,12.,12.,12.,0.,0.]
     assert aggregate(frame,15,'stock')[0][1]==[12.,12.,12.,12.,0.,0.]
     frame.iloc[0,1]=13.
-    assert validate_day('20260930',frame,daily,'stock','600000.SH')=='native_zero_quantity_bar_not_flat'
+    assert validate_day('20260930',frame,daily,'stock','600000.SH')=='native_zero_quantity_quote_outside_daily_range'
+
+
+def test_native_zero_quantity_moving_quote_preserves_base_bar_and_checks_daily_contract():
+    frame,daily=sample()
+    frame.iloc[0]=[10.,10.8,9.8,10.6,0.,0.]
+    daily.volume=frame.volume.sum();daily.amount=frame.amount.sum()
+    assert validate_day('20260930',frame,daily,'stock','600000.SH') is None
+    assert aggregate(frame,5,'stock')[0][1]==[10.,10.8,9.8,10.6,0.,0.]
+    assert aggregate(frame,15,'stock')[0][1]==[10.,11.,9.,10.5,200.,200000.]
+    daily.volume += 100
+    assert validate_day('20260930',frame,daily,'stock','600000.SH')=='native_minute_daily_volume_mismatch'
 
 
 def test_runtime_stock_aggregation_excludes_zero_trade_quote_but_index_keeps_it():
