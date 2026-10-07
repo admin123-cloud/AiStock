@@ -288,6 +288,8 @@ def test_native_zero_quantity_moving_quote_preserves_base_bar_and_checks_daily_c
     assert aggregate(frame,15,'stock')[0][1]==[10.,11.,9.,10.5,200.,200000.]
     daily.volume += 100
     assert validate_day('20260930',frame,daily,'stock','600000.SH')=='native_minute_daily_volume_mismatch'
+    daily.volume=frame.volume.sum()+1
+    assert validate_day('20260930',frame,daily,'stock','600000.SH')=='native_zero_quantity_quote_volume_not_exact'
 
 
 def test_runtime_stock_aggregation_excludes_zero_trade_quote_but_index_keeps_it():

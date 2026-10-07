@@ -113,6 +113,8 @@ def validate_day(day, frame, daily, instrument_type, code=None):
         return 'native_minute_daily_volume_mismatch'
     if not math.isclose(float(values[:, 5].sum()), float(daily.amount), rel_tol=0.005, abs_tol=1):
         return 'native_minute_daily_amount_mismatch'
+    if instrument_type == 'stock' and len(nonflat) and float(values[:, 4].sum()) != float(daily.volume):
+        return 'native_zero_quantity_quote_volume_not_exact'
     return None
 
 
