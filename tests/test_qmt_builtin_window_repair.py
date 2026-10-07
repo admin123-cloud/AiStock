@@ -8,6 +8,7 @@ import pandas as pd
 from scripts.repair_qmt_builtin_window import (
     FIELDS, SLOTS, aggregate, epoch, same, validate_day, validate_daily,
     load_raw,
+    verified_absence,
 )
 from scripts.qmtmini_daily_backfill_validate import reconcile_verified_pending_listing_metadata
 
@@ -99,3 +100,10 @@ def test_source_manifest_cannot_reference_a_file_outside_root(tmp_path):
     manifest={'files':{'600000.SH_5m':{'file':str(path),'rows':48,'sha256':'unused'}}}
     with pytest.raises(RuntimeError,match='outside frozen artifact root'):
         load_raw(root,'600000.SH','5m',manifest)
+
+
+def test_retirement_trading_day_is_not_excluded_by_earlier_suspension():
+    metadata={'verified_events':[{'code':'301139.SZ','start_date':'2026-08-31','end_date':'2026-09-29',
+                'status':'suspended','evidence_url':'https://www.szse.cn/notice'}]}
+    assert verified_absence(metadata,'301139.SZ','20260929') is not None
+    assert verified_absence(metadata,'301139.SZ','20260930') is None

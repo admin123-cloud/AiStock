@@ -38,6 +38,15 @@ def test_expected_daily_coverage_retains_unknown_listing_date_for_review():
     assert counts["metadata_review_codes"] == 1
 
 
+def test_confirmed_pending_listing_does_not_create_fake_bar_obligations():
+    expected, counts=expected_daily_coverage_keys(['301569.SZ','301139.SZ'],[date(2026,9,30)],{
+        '301569.SZ':{'list_date':None,'delist_date':None,'listing_status':'pending_listing'},
+        '301139.SZ':{'list_date':date(2022,7,8),'delist_date':None,'listing_status':'delisting_period'},
+    })
+    assert expected=={('301139.SZ',date(2026,9,30))}
+    assert counts['excluded_pre_listing_code_dates']==1 and counts['metadata_review_codes']==0
+
+
 def test_known_market_status_excludes_only_matching_announcement_interval():
     expected = {
         ("000001.SZ", date(2026, 1, 5)),

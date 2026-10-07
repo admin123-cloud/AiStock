@@ -125,8 +125,8 @@ def _record_qmt_source_absences(client, args: argparse.Namespace, codes: list[st
         f"SELECT trade_date FROM trade_calendar WHERE market='SH' AND is_trading=1 "
         f"AND trade_date >= toDate({daily.quote_sql(args.start_date)}) AND trade_date <= toDate({daily.quote_sql(args.end_date)})"
     ).result_rows]
-    metadata = {str(row[0]).upper(): {"list_date": row[1], "delist_date": row[2]} for row in client.query(
-        f"SELECT code, list_date, delist_date FROM stocks WHERE code IN ({code_sql})"
+    metadata = {str(row[0]).upper(): {"list_date": row[1], "delist_date": row[2], "listing_status":row[3]} for row in client.query(
+        f"SELECT code, list_date, delist_date, listing_status FROM stocks FINAL WHERE code IN ({code_sql})"
     ).result_rows}
     expected, _ = daily.expected_daily_coverage_keys(codes, trade_dates, metadata)
     staged = {(str(row[0]).upper(), row[1]) for row in client.query(

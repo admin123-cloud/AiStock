@@ -590,6 +590,9 @@ def expected_daily_coverage_keys(
         item = metadata.get(code, {})
         list_date = item.get("list_date")
         delist_date = item.get("delist_date")
+        if item.get('listing_status') == 'pending_listing':
+            excluded_pre_listing += len(trade_dates)
+            continue
         if list_date is None:
             missing_list_date_codes += 1
         for trade_date in trade_dates:
@@ -645,10 +648,10 @@ def coverage_summary(client, args: argparse.Namespace, table: str, candidate_lim
         ).result_rows
     ]
     listing_rows = client.query(
-        f"SELECT code, list_date, delist_date FROM stocks WHERE code IN ({code_sql})"
+        f"SELECT code, list_date, delist_date, listing_status FROM stocks FINAL WHERE code IN ({code_sql})"
     ).result_rows
     metadata = {
-        str(row[0]).upper(): {"list_date": row[1], "delist_date": row[2]}
+        str(row[0]).upper(): {"list_date": row[1], "delist_date": row[2], "listing_status":row[3]}
         for row in listing_rows
     }
     expected, contract_counts = expected_daily_coverage_keys(codes, trade_dates, metadata)

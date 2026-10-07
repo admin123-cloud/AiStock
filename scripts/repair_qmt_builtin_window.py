@@ -106,6 +106,15 @@ def validate_daily(daily, instrument_type):
     return None
 
 
+def verified_absence(metadata, code, day):
+    for event in metadata.get('verified_events', []):
+        if event['status'] not in {'suspended','pending_listing','not_trading','delisted'} or not event.get('evidence_url'):
+            raise RuntimeError('Invalid business absence evidence')
+        if event['code'] == code and event['start_date'].replace('-','') <= day <= event['end_date'].replace('-',''):
+            return event
+    return None
+
+
 def aggregate(frame, minutes):
     size = minutes // 5
     values = field_values(frame).reshape(48 // size, size, 6)
@@ -251,6 +260,7 @@ def main():
                'codes': len(codes), 'complete': False, 'tables': {}, 'issues': {}, 'batches': []}
     ch = ch_client()
     issues = Counter()
+    business_exclusions = Counter()
     now = datetime.now(TZ).replace(microsecond=0)
     with (out / 'code_day_issues.jsonl').open('w', encoding='utf-8') as ledger:
         for offset in range(0, len(codes), args.batch_size):
@@ -272,11 +282,24 @@ def main():
                 if detail.get('OpenDate') and str(detail['OpenDate']) > '19900101':
                     list_date = str(detail['OpenDate'])
                 delist_date = str(record[4]).replace('-', '') if record and record[4] else None
+                override = native_meta.get('lifecycle_overrides', {}).get(code, {})
+                if 'delist_date' in override:
+                    delist_date = str(override['delist_date']).replace('-','') if override['delist_date'] else None
                 for day in dates:
                     if list_date and day < list_date or delist_date and day > delist_date:
                         continue
                     d = daily.loc[day] if day in daily.index else None
                     m = minute_days.get(day, minute.iloc[:0])
+                    event = verified_absence(native_meta, code, day)
+                    if event:
+                        if d is not None and float(d.volume) > 0:
+                            issues['source_conflicts_with_verified_absence'] += 1
+                            kind_issue='source_conflicts_with_verified_absence'
+                        else:
+                            business_exclusions[event['status']] += 1
+                            kind_issue='verified_business_absence'
+                        ledger.write(json.dumps({'code':code,'day':day,'issue':kind_issue,'evidence':event},ensure_ascii=False)+'\n')
+                        continue
                     issue = 'native_daily_missing' if d is None else validate_daily(d, kind)
                     if issue:
                         issues[issue] += 1
@@ -314,6 +337,7 @@ def main():
                     totals[name] += result[name]
             summary['batches'].append({'offset': offset, 'codes': batch, 'results': results})
             summary['issues'] = dict(issues)
+            summary['business_exclusions'] = dict(business_exclusions)
             dump(out / 'summary.json', summary)
             print(json.dumps({'codes_done': min(offset+len(batch),len(codes)), 'total':len(codes),
                               'tables':summary['tables'], 'issues':dict(issues)}, ensure_ascii=False), flush=True)
