@@ -10,6 +10,7 @@ from scripts.repair_qmt_builtin_window import (
     load_raw,
     verified_absence,
     repair_table,
+    fetch_existing,
     validate_absence_source,
     CROSS_BORDER_SLOTS, normalize_native_daily_volume,
 )
@@ -219,3 +220,9 @@ def test_duplicate_source_target_keys_stop_before_insert(tmp_path, monkeypatch):
     row=('600000.SH',date(2026,9,30),10.,11.,9.,10.5,100.,100000.,0.,0.,0.,0.,datetime.now(),1)
     with pytest.raises(RuntimeError,match='Duplicate native target'):
         repair_table(None,'kline_daily',[row,row],['600000.SH'],tmp_path,'probe',True,daily=True)
+
+
+def test_empty_price_scope_does_not_query_preserved_excluded_rows():
+    client = SimpleNamespace(query=lambda *a, **k: pytest.fail('Excluded scope must not be queried'))
+    assert fetch_existing(client, 'kline_daily', [], daily=True) == {}
+    assert fetch_existing(client, 'kline_minute_5', []) == {}

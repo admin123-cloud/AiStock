@@ -206,6 +206,8 @@ def load_raw(root, code, period, manifest):
 
 
 def fetch_existing(ch, table, codes, daily=False):
+    if not codes:
+        return {}
     key = 'trade_date' if daily else 'datetime'
     columns = DAILY_COLUMNS if daily else MINUTE_COLUMNS
     select = ','.join(columns)
@@ -425,9 +427,12 @@ def main():
                             values[4] = int(round(values[4])) if period == 5 else values[4]
                             targets[period].append((code, dt, *values, now, stable_id(period, code, timestamp)))
             results = []
+            # Scope exclusions apply to both sides of the reconciliation.
+            # Their preserved historical rows are outside this price contract.
+            price_batch = [code for code in batch if code not in non_price_codes and code not in bond_index_codes]
             for period, rows in targets.items():
                 table = 'kline_daily' if period == '1d' else f'kline_minute_{period}'
-                result = repair_table(ch, table, rows, batch, out, f'{offset:05d}', args.apply, period == '1d')
+                result = repair_table(ch, table, rows, price_batch, out, f'{offset:05d}', args.apply, period == '1d')
                 results.append(result)
                 totals = summary['tables'].setdefault(table, Counter())
                 for name in ('missing', 'corrections', 'unchanged', 'canonical_only', 'native_target_rows', 'formal_rows'):
@@ -437,6 +442,7 @@ def main():
             summary['business_exclusions'] = dict(business_exclusions)
             summary['non_price_scope_exclusions'] = non_price_codes
             summary['bond_index_scope_exclusions'] = bond_index_codes
+            summary['price_scope_codes'] = len(codes) - len(non_price_codes) - len(bond_index_codes)
             summary['native_daily_volume_normalizations'] = normalizations
             dump(out / 'summary.json', summary)
             print(json.dumps({'codes_done': min(offset+len(batch),len(codes)), 'total':len(codes),
