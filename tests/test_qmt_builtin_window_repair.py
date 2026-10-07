@@ -1,10 +1,12 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 import pandas as pd
 
 from scripts.repair_qmt_builtin_window import (
     FIELDS, SLOTS, aggregate, epoch, same, validate_day, validate_daily,
 )
+from scripts.qmtmini_daily_backfill_validate import reconcile_verified_pending_listing_metadata
 
 
 def sample():
@@ -59,3 +61,19 @@ def test_source_suspension_is_not_a_filled_trading_day():
     _, daily = sample()
     daily.suspendFlag = 1
     assert validate_daily(daily, 'stock') == 'native_suspended'
+
+
+def test_old_pending_ipo_evidence_preserves_later_confirmed_listing():
+    commands=[]
+    client=SimpleNamespace(query=lambda sql:SimpleNamespace(result_rows=[
+        ('301686.SZ',date(2026,9,22)),('920201.BJ',date(2026,9,24))]),command=commands.append)
+    assert reconcile_verified_pending_listing_metadata(client) == 0
+    assert commands == []
+
+
+def test_pending_ipo_update_keeps_date_guard_against_concurrent_refresh():
+    commands=[]
+    client=SimpleNamespace(query=lambda sql:SimpleNamespace(result_rows=[
+        ('301686.SZ',date(2026,9,11)),('920201.BJ',date(2026,9,24))]),command=commands.append)
+    assert reconcile_verified_pending_listing_metadata(client) == 1
+    assert len(commands) == 1 and 'list_date <= toDate' in commands[0]

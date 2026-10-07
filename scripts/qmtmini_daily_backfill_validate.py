@@ -329,14 +329,26 @@ def sync_verified_market_status_events(client) -> int:
 
 
 def reconcile_verified_pending_listing_metadata(client) -> int:
-    """Exclude reviewed, assigned IPO codes until the exchange confirms listing."""
+    """Apply dated IPO evidence without reverting a later confirmed listing."""
+    code_sql = ','.join(quote_sql(item[0]) for item in VERIFIED_PENDING_LISTING_SECURITIES)
+    if not code_sql:
+        return 0
+    current = {row[0]: row[1] for row in client.query(
+        f'SELECT code, list_date FROM stocks FINAL WHERE code IN ({code_sql})'
+    ).result_rows}
+    count = 0
     for code, effective_after, _url, _reason in VERIFIED_PENDING_LISTING_SECURITIES:
+        listed = current.get(code)
+        if listed is not None and listed > date.fromisoformat(effective_after):
+            continue
         client.command(
             "ALTER TABLE stocks UPDATE "
             f"listing_status = 'pending_listing', list_date = toDate({quote_sql(effective_after)}) "
-            f"WHERE code = {quote_sql(code)}"
+            f"WHERE code = {quote_sql(code)} "
+            f"AND (list_date IS NULL OR list_date <= toDate({quote_sql(effective_after)}))"
         )
-    return len(VERIFIED_PENDING_LISTING_SECURITIES)
+        count += 1
+    return count
 
 
 def reconcile_verified_delist_metadata(client) -> int:

@@ -213,7 +213,9 @@ def main():
     if manifest['source'] != 'qmt_builtin_contextinfo' or manifest['dividend_type'] != 'none' or manifest['fill_data']:
         raise RuntimeError('Unexpected source or price contract')
     metadata = {r[0]: r for r in scope['stock_metadata']}
-    native_meta = json.loads((root / 'native_scope_metadata.json').read_text(encoding='utf-8'))
+    metadata_path = root / 'native_scope_metadata.json'
+    metadata_bytes = metadata_path.read_bytes()
+    native_meta = json.loads(metadata_bytes.decode('utf-8'))
     dates = native_meta['calendar']
     if dates != sorted(set(dates)) or not dates or any(not '20260801' <= day <= '20260930' for day in dates):
         raise RuntimeError('Calendar outside the fixed August/September 2026 repair window')
@@ -228,6 +230,7 @@ def main():
     out.mkdir(parents=True)
     summary = {'source_manifest': str(root / args.manifest), 'manifest_sha256': sha(root / args.manifest),
                'script_sha256': sha(Path(__file__)), 'apply_requested': args.apply,
+               'metadata_file': str(metadata_path), 'metadata_sha256': hashlib.sha256(metadata_bytes).hexdigest(),
                'codes': len(codes), 'complete': False, 'tables': {}, 'issues': {}, 'batches': []}
     ch = ch_client()
     issues = Counter()
