@@ -10,6 +10,7 @@ from scripts.repair_qmt_builtin_window import (
     load_raw,
     verified_absence,
     repair_table,
+    validate_absence_source,
 )
 from scripts.qmtmini_daily_backfill_validate import reconcile_verified_pending_listing_metadata
 
@@ -108,6 +109,36 @@ def test_retirement_trading_day_is_not_excluded_by_earlier_suspension():
                 'status':'suspended','evidence_url':'https://www.szse.cn/notice'}]}
     assert verified_absence(metadata,'301139.SZ','20260929') is not None
     assert verified_absence(metadata,'301139.SZ','20260930') is None
+
+
+def test_notice_does_not_hide_minute_trading_when_daily_is_absent():
+    minute, daily = sample()
+    assert validate_absence_source(None, minute) == 'source_conflicts_with_verified_absence'
+    daily.volume = 0
+    daily.amount = 0
+    daily.suspendFlag = 1
+    assert validate_absence_source(daily, minute) == 'source_conflicts_with_verified_absence'
+
+
+def test_notice_does_not_hide_amount_only_or_invalid_source():
+    minute, daily = sample()
+    empty = minute.iloc[:0]
+    daily.volume = 0
+    assert validate_absence_source(daily, empty) == 'source_conflicts_with_verified_absence'
+    daily.amount = float('nan')
+    assert validate_absence_source(daily, empty) == 'invalid_native_absence_source'
+    daily.amount = -1
+    assert validate_absence_source(daily, empty) == 'invalid_native_absence_source'
+
+
+def test_absence_requires_empty_source_or_explicit_zero_suspension():
+    minute, daily = sample()
+    empty = minute.iloc[:0]
+    assert validate_absence_source(None, empty) is None
+    daily.volume = daily.amount = 0
+    assert validate_absence_source(daily, empty) == 'native_zero_row_without_suspension'
+    daily.suspendFlag = 1
+    assert validate_absence_source(daily, empty) is None
 
 
 def test_reconciliation_reports_canonical_only_keys_without_removing_them(tmp_path, monkeypatch):

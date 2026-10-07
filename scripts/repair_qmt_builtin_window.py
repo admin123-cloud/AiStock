@@ -116,6 +116,23 @@ def verified_absence(metadata, code, day):
     return None
 
 
+def validate_absence_source(daily, minute):
+    """A notice never overrides actual daily or minute trading evidence."""
+    quantities = []
+    if daily is not None:
+        quantities.extend([daily.volume, daily.amount])
+    if len(minute):
+        quantities.extend(minute[['volume', 'amount']].to_numpy().reshape(-1))
+    values = np.asarray(quantities, dtype=float)
+    if not np.isfinite(values).all() or (values < 0).any():
+        return 'invalid_native_absence_source'
+    if (values > 0).any():
+        return 'source_conflicts_with_verified_absence'
+    if daily is not None and int(daily.get('suspendFlag', 0)) != 1:
+        return 'native_zero_row_without_suspension'
+    return None
+
+
 def aggregate(frame, minutes):
     size = minutes // 5
     values = field_values(frame).reshape(48 // size, size, 6)
@@ -312,9 +329,10 @@ def main():
                     m = minute_days.get(day, minute.iloc[:0])
                     event = verified_absence(native_meta, code, day)
                     if event:
-                        if d is not None and float(d.volume) > 0:
-                            issues['source_conflicts_with_verified_absence'] += 1
-                            kind_issue='source_conflicts_with_verified_absence'
+                        absence_issue = validate_absence_source(d, m)
+                        if absence_issue:
+                            issues[absence_issue] += 1
+                            kind_issue=absence_issue
                         else:
                             business_exclusions[event['status']] += 1
                             kind_issue='verified_business_absence'
