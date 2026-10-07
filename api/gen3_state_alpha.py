@@ -14301,6 +14301,7 @@ def _read_qmt_ticks(codes: list[str], source: dict[str, Any]) -> dict[str, Any]:
         xtdata.connect(host, port)
         source["provider"] = ("QMT 大客户端内置行情桥接" if getattr(xtdata, "transport", "xtquant") == "builtin"
                               else "QMT xtdata local runtime")
+        source["transport"] = getattr(xtdata, "transport", "xtquant")
         return xtdata.get_full_tick(codes) or {}
     except Exception as exc:
         raise RuntimeError(f"QMT Tick local runtime unavailable: {type(exc).__name__}: {exc}") from exc

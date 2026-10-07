@@ -280,6 +280,7 @@ class FullPushAggregator:
                 if self.market_transport == "builtin":
                     if "volume" not in tick:
                         raise ValueError("Native tick volume in lots is missing")
+                    self.volume_field = "volume"
                     cum_volume = tick_number(tick, "volume")
                 else:
                     cum_volume = tick_number(tick, "pvolume", "volume")
@@ -783,8 +784,9 @@ def main() -> int:
             "ok": exit_code == 0,
             "started_at": datetime.fromtimestamp(time.time() - (time.monotonic() - started), SH_TZ).replace(tzinfo=None),
             "finished_at": datetime.now(SH_TZ).replace(tzinfo=None),
-            "quote_host": host,
-            "quote_port": port,
+            "market_transport": aggregator.market_transport,
+            "quote_host": host if aggregator.market_transport == "xtquant" else None,
+            "quote_port": port if aggregator.market_transport == "xtquant" else None,
             "markets": markets,
             "loaded_codes": len(codes),
             "subscribe_seq": seq,

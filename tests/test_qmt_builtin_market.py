@@ -41,6 +41,7 @@ def test_native_tick_aggregation_uses_volume_lots_independent_of_pvolume(code, p
                                "volume": 123, "pvolume": pvolume, "amount": 123000}})
     assert aggregator.daily_rows()[0][6] == 123
     assert minute_rows(list(aggregator.current_bars.values()), "5m")[0][6] == 123
+    assert aggregator.volume_field == "volume"
 
 
 def test_source_history_preserves_native_units_through_higher_period_reshape(native):
