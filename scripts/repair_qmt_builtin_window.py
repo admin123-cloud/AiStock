@@ -33,6 +33,11 @@ DAILY_COLUMNS = ['code', 'trade_date', *FIELDS, 'amplitude', 'change_pct',
 SETTINGS = {'max_threads': 2, 'max_memory_usage': 2_000_000_000}
 SLOTS = [f'{h:02d}{m:02d}00' for start in (570, 780)
          for minute in range(start + 5, start + 121, 5) for h, m in [divmod(minute, 60)]]
+CROSS_BORDER_CODES = frozenset({'980001.SZ', '980023.SZ', '980068.SZ', '988201.SZ'})
+CROSS_BORDER_SLOTS = [f'{h:02d}{m:02d}00' for start, end in ((570, 720), (780, 970))
+                      for minute in range(start + 5, end + 1, 5) for h, m in [divmod(minute, 60)]]
+# Observed native signed-int32 overflow; do not generalize to other securities.
+UINT32_VOLUME_CODES = frozenset({'399379.SZ', '399380.SZ'})
 
 
 def sha(path: Path) -> str:
@@ -75,9 +80,10 @@ def valid_values(values):
             and v >= 0 and a >= 0 and h + 1e-8 >= max(o, c, l) and l - 1e-8 <= min(o, c, h))
 
 
-def validate_day(day, frame, daily, instrument_type):
+def validate_day(day, frame, daily, instrument_type, code=None):
     """No approximate slot closure, unit guessing, or daily synthesis."""
-    if list(map(str, frame.index)) != [day + slot for slot in SLOTS]:
+    slots = CROSS_BORDER_SLOTS if instrument_type == 'index' and code in CROSS_BORDER_CODES else SLOTS
+    if list(map(str, frame.index)) != [day + slot for slot in slots]:
         return 'minute_slots_not_closed'
     values = field_values(frame)
     if (not np.isfinite(values).all() or values[:, :4].min() <= 0 or values[:, 4:].min() < 0
@@ -94,6 +100,30 @@ def validate_day(day, frame, daily, instrument_type):
     if not math.isclose(float(values[:, 5].sum()), float(daily.amount), rel_tol=0.005, abs_tol=1):
         return 'native_minute_daily_amount_mismatch'
     return None
+
+
+def normalize_native_daily_volume(code, day, daily, minute, instrument_type):
+    """Correct only a proved int32 wrap, preserving the original source file."""
+    if daily is None or instrument_type != 'index' or code not in UINT32_VOLUME_CODES:
+        return daily, None
+    raw = float(daily.volume)
+    if not math.isfinite(raw) or not -(2**31) <= raw < 0 or raw != round(raw):
+        return daily, None
+    candidate = daily.copy()
+    candidate.volume = raw + 2**32
+    if validate_daily(candidate, instrument_type) or validate_day(day, minute, candidate, instrument_type, code):
+        return daily, None
+    values = field_values(minute)
+    if float(values[:, 4].sum()) != candidate.volume:
+        return daily, None
+    if not math.isclose(float(values[:, 5].sum()), float(candidate.amount), rel_tol=1e-7, abs_tol=1):
+        return daily, None
+    if abs(float(values[0, 0]) - float(candidate.open)) > 0.011 or abs(float(values[-1, 3]) - float(candidate.close)) > 0.011:
+        return daily, None
+    return candidate, {'code': code, 'day': day, 'rule': 'proved_signed_int32_volume_wrap',
+                       'raw_volume': raw, 'normalized_volume': float(candidate.volume),
+                       'minute_volume_sum': float(values[:, 4].sum()),
+                       'minute_amount_sum': float(values[:, 5].sum()), 'daily_amount': float(candidate.amount)}
 
 
 def validate_daily(daily, instrument_type):
@@ -135,7 +165,24 @@ def validate_absence_source(daily, minute):
 
 
 def aggregate(frame, minutes):
+    if minutes not in (5, 15, 30, 60):
+        raise ValueError('Unsupported aggregation period')
     size = minutes // 5
+    keys = list(map(str, frame.index))
+    slots = [key[8:] for key in keys]
+    if not keys or len({key[:8] for key in keys}) != 1 or slots not in (SLOTS, CROSS_BORDER_SLOTS):
+        raise ValueError('Aggregation requires an independently validated closed day')
+    if slots == CROSS_BORDER_SLOTS:
+        # Session-local chunks retain genuine partial bars at 12:00 and 16:10.
+        values = field_values(frame)
+        rows = []
+        for start, end in ((0, 30), (30, 68)):
+            for offset in range(start, end, size):
+                stop = min(offset + size, end)
+                part = values[offset:stop]
+                rows.append((keys[stop-1], [part[0, 0], part[:, 1].max(), part[:, 2].min(),
+                                          part[-1, 3], part[:, 4].sum(), part[:, 5].sum()]))
+        return rows
     values = field_values(frame).reshape(48 // size, size, 6)
     result = np.column_stack((values[:, 0, 0], values[:, :, 1].max(axis=1),
                               values[:, :, 2].min(axis=1), values[:, -1, 3],
@@ -295,6 +342,7 @@ def main():
     business_exclusions = Counter()
     non_price_codes = []
     bond_index_codes = []
+    normalizations = []
     now = datetime.now(TZ).replace(microsecond=0)
     with (out / 'code_day_issues.jsonl').open('w', encoding='utf-8') as ledger:
         for offset in range(0, len(codes), args.batch_size):
@@ -346,6 +394,9 @@ def main():
                             kind_issue='verified_business_absence'
                         ledger.write(json.dumps({'code':code,'day':day,'issue':kind_issue,'evidence':event},ensure_ascii=False)+'\n')
                         continue
+                    d, normalization = normalize_native_daily_volume(code, day, d, m, kind)
+                    if normalization:
+                        normalizations.append(normalization)
                     issue = 'native_daily_missing' if d is None else validate_daily(d, kind)
                     if issue:
                         issues[issue] += 1
@@ -362,7 +413,7 @@ def main():
                     pct = change/pre*100 if pre > 0 else 0.0
                     targets['1d'].append((code, key_date, *map(float, d[FIELDS]), amp, pct,
                                           change, 0.0, now, stable_id('1d', code, day)))
-                    issue = validate_day(day, m, d, kind)
+                    issue = validate_day(day, m, d, kind, code)
                     if issue:
                         issues[issue] += 1
                         ledger.write(json.dumps({'code': code, 'day': day, 'issue': issue,
@@ -386,6 +437,7 @@ def main():
             summary['business_exclusions'] = dict(business_exclusions)
             summary['non_price_scope_exclusions'] = non_price_codes
             summary['bond_index_scope_exclusions'] = bond_index_codes
+            summary['native_daily_volume_normalizations'] = normalizations
             dump(out / 'summary.json', summary)
             print(json.dumps({'codes_done': min(offset+len(batch),len(codes)), 'total':len(codes),
                               'tables':summary['tables'], 'issues':dict(issues)}, ensure_ascii=False), flush=True)

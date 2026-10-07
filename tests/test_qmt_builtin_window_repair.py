@@ -11,6 +11,7 @@ from scripts.repair_qmt_builtin_window import (
     verified_absence,
     repair_table,
     validate_absence_source,
+    CROSS_BORDER_SLOTS, normalize_native_daily_volume,
 )
 from scripts.qmtmini_daily_backfill_validate import reconcile_verified_pending_listing_metadata
 
@@ -38,6 +39,49 @@ def test_closed_slots_and_aggregation_do_not_cross_lunch():
     rows = aggregate(frame, 60)
     assert [row[0][-6:] for row in rows] == ['103000', '113000', '140000', '150000']
     assert len(rows) == 4 and sum(row[1][4] for row in rows) == daily.volume
+
+
+def test_cross_border_slots_require_explicit_index_identity_and_close():
+    frame, daily = sample()
+    frame = pd.DataFrame([frame.iloc[0].tolist()] * 68, columns=FIELDS,
+                         index=['20260930' + slot for slot in CROSS_BORDER_SLOTS])
+    daily.volume = 6800
+    daily.amount = 6800000
+    assert validate_day('20260930', frame, daily, 'index', '980001.SZ') is None
+    assert validate_day('20260930', frame, daily, 'stock', '980001.SZ') == 'minute_slots_not_closed'
+    assert validate_day('20260930', frame, daily, 'index', '399001.SZ') == 'minute_slots_not_closed'
+    assert validate_day('20260930', frame.iloc[:-1], daily, 'index', '980001.SZ') == 'minute_slots_not_closed'
+    for period, count in ((15, 23), (30, 12), (60, 7)):
+        rows = aggregate(frame, period)
+        assert len(rows) == count
+        assert sum(row[1][4] for row in rows) == daily.volume
+        assert sum(row[1][5] for row in rows) == daily.amount
+        assert any(row[0].endswith('120000') for row in rows)
+        assert rows[-1][0].endswith('161000')
+    rows = aggregate(frame, 60)
+    assert rows[2][1][4] == 600 and rows[3][0].endswith('140000')
+    with pytest.raises(ValueError, match='closed day'):
+        aggregate(frame.iloc[:-1], 60)
+
+
+def test_int32_wrap_needs_exact_complete_minute_proof_and_index_allowlist():
+    frame, daily = sample()
+    frame.volume = 50000000
+    frame.amount = 50000000000
+    daily.volume = 2400000000 - 2**32
+    daily.amount = 2400000000000
+    original = daily.copy()
+    normalized, evidence = normalize_native_daily_volume('399379.SZ', '20260930', daily, frame, 'index')
+    assert normalized.volume == 2400000000 and evidence['raw_volume'] == original.volume
+    assert daily.equals(original)
+    assert normalize_native_daily_volume('399001.SZ', '20260930', daily, frame, 'index')[1] is None
+    assert normalize_native_daily_volume('399379.SZ', '20260930', daily, frame, 'stock')[1] is None
+    assert normalize_native_daily_volume('399379.SZ', '20260930', daily, frame.iloc[:-1], 'index')[1] is None
+    frame.iloc[0, 4] += 1
+    assert normalize_native_daily_volume('399379.SZ', '20260930', daily, frame, 'index')[1] is None
+    frame.iloc[0, 4] -= 1
+    frame.iloc[0, 5] *= 2
+    assert normalize_native_daily_volume('399379.SZ', '20260930', daily, frame, 'index')[1] is None
 
 
 def test_fractional_five_minute_lots_are_not_truncated():
