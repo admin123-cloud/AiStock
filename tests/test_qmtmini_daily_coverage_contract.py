@@ -90,3 +90,24 @@ def test_abnormal_data_policy_never_auto_exempts_or_writes_a_provider_conflict()
 
     assert policy["recovery_windows"] == ["after_close", "overnight"]
     assert "never auto-written or auto-exempted" in policy["conflict_rule"]
+
+
+def test_stage_lifecycle_gate_covers_delete_insert_and_count(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from scripts import qmtmini_daily_backfill_validate as daily
+    queries, commands = [], []
+    class Client:
+        def query(self, sql):
+            queries.append(sql)
+            return SimpleNamespace(result_rows=[], first_row=(0,))
+        def command(self, sql):
+            commands.append(sql)
+    monkeypatch.setattr(daily, 'ch_client', lambda: Client())
+    monkeypatch.setattr(daily, 'select_codes_for_args', lambda *_: ['920201.BJ'])
+    result=daily.apply_stage(SimpleNamespace(stage_table='isolated_stage',start_date='2026-09-01',
+        end_date='2026-09-30',delete_chunk_size=100,report=str(tmp_path/'report.json')))
+    insert=next(sql for sql in commands if 'INSERT INTO kline_daily' in sql)
+    for sql in [queries[0],insert,queries[-1]]:
+        assert daily.stage_lifecycle_predicate() in sql and 'FROM stocks FINAL' in sql
+    assert not any('DELETE WHERE' in sql for sql in commands)
+    assert result['inserted_rows']==0

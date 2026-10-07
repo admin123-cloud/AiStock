@@ -1061,23 +1061,35 @@ def validate_stage(args: argparse.Namespace) -> dict[str, Any]:
     return summary
 
 
+def stage_lifecycle_predicate(stage_alias: str = 's', master_alias: str = 'master') -> str:
+    """Current canonical metadata bounds every stage-to-formal operation."""
+    return (f"ifNull({master_alias}.listing_status,'') != 'pending_listing' "
+            f"AND ({master_alias}.list_date IS NULL OR {stage_alias}.trade_date >= {master_alias}.list_date) "
+            f"AND ({master_alias}.delist_date IS NULL OR {stage_alias}.trade_date <= {master_alias}.delist_date)")
+
+
 def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
     client = ch_client()
     # Existing staged rows retain NULL and the historical fallback calculation.
     client.command(f'ALTER TABLE {args.stage_table} ADD COLUMN IF NOT EXISTS reference_close Nullable(Float64)')
     codes = select_codes_for_args(client, args)
     total_inserted = 0
+    lifecycle_predicate = stage_lifecycle_predicate()
     for chunk_no, code_chunk in enumerate(chunked(codes, args.delete_chunk_size), start=1):
         code_sql = ",".join(quote_sql(code) for code in code_chunk)
+        master_join = (f"INNER JOIN (SELECT code,list_date,delist_date,listing_status FROM stocks FINAL "
+                       f"WHERE code IN ({code_sql})) AS master ON master.code=s.code")
         staged_keys = client.query(
             f"""
             SELECT s.code, s.trade_date
             FROM {args.stage_table} AS s
             INNER JOIN trade_calendar AS c
                 ON c.market = 'SH' AND c.is_trading = 1 AND c.trade_date = s.trade_date
+            {master_join}
             WHERE s.code IN ({code_sql})
               AND s.trade_date >= toDate({quote_sql(args.start_date)})
               AND s.trade_date <= toDate({quote_sql(args.end_date)})
+              AND {lifecycle_predicate}
             """
         ).result_rows
         log(f"apply chunk {chunk_no}: replace staged keys={len(staged_keys)} codes={len(code_chunk)}")
@@ -1114,12 +1126,18 @@ def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
                       AND trade_date <= toDate({quote_sql(args.end_date)})
                 ),
                 trading_staged AS (
-                    SELECT s.*
+                    SELECT s.code AS code, s.trade_date AS trade_date,
+                           s.open AS open, s.high AS high, s.low AS low, s.close AS close,
+                           s.volume AS volume, s.amount AS amount,
+                           s.reference_close AS reference_close,
+                           s.turnover_rate AS turnover_rate, s.created_at AS created_at
                     FROM staged AS s
                     INNER JOIN trade_calendar AS c
                         ON c.market = 'SH'
                        AND c.is_trading = 1
                        AND c.trade_date = s.trade_date
+                    {master_join}
+                    WHERE {lifecycle_predicate}
                 ),
                 prev AS (
                     SELECT
@@ -1176,13 +1194,16 @@ def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
                 ON c.market = 'SH'
                AND c.is_trading = 1
                AND c.trade_date = s.trade_date
+            {master_join}
             WHERE s.code IN ({code_sql})
               AND s.trade_date >= toDate({quote_sql(args.start_date)})
               AND s.trade_date <= toDate({quote_sql(args.end_date)})
+              AND {lifecycle_predicate}
             """
         ).first_row[0]
         total_inserted += int(inserted or 0)
-    summary = {"phase": "apply", "codes": len(codes), "inserted_rows": total_inserted}
+    summary = {"phase": "apply", "codes": len(codes), "inserted_rows": total_inserted,
+               "lifecycle_guard": "canonical_list_delist_dates_and_pending_listing"}
     write_report(args.report, {"summary": summary})
     log("apply summary " + json.dumps(summary, ensure_ascii=False))
     return summary
