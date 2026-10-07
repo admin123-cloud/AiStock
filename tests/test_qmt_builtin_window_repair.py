@@ -14,6 +14,7 @@ from scripts.repair_qmt_builtin_window import (
     CROSS_BORDER_SLOTS, normalize_native_daily_volume,
 )
 from scripts.qmtmini_daily_backfill_validate import reconcile_verified_pending_listing_metadata
+from data_fetcher.sources.qmtmini import _aggregate_5m_history
 
 
 def sample():
@@ -82,6 +83,22 @@ def test_int32_wrap_needs_exact_complete_minute_proof_and_index_allowlist():
     frame.iloc[0, 4] -= 1
     frame.iloc[0, 5] *= 2
     assert normalize_native_daily_volume('399379.SZ', '20260930', daily, frame, 'index')[1] is None
+
+
+def test_runtime_history_keeps_cross_border_tail_without_merging_missing_slots():
+    frame, _ = sample()
+    frame = pd.DataFrame([frame.iloc[0].tolist()] * 68, columns=FIELDS)
+    frame['datetime'] = pd.to_datetime(['20260930' + slot for slot in CROSS_BORDER_SLOTS], format='%Y%m%d%H%M%S')
+    for period, count in (('15m', 23), ('30m', 12), ('60m', 7)):
+        rows = _aggregate_5m_history(frame, period, '980001.SZ')
+        assert len(rows) == count and rows.volume.sum() == 6800
+        assert rows.datetime.iloc[-1].strftime('%H:%M') == '16:10'
+    ordinary = _aggregate_5m_history(frame, '60m', '399001.SZ')
+    assert len(ordinary) == 4 and ordinary.datetime.iloc[-1].strftime('%H:%M') == '15:00'
+    missing = _aggregate_5m_history(frame.drop(index=1), '60m', '980001.SZ')
+    assert len(missing) == 6 and missing.datetime.iloc[0].strftime('%H:%M') == '11:30'
+    no_close = _aggregate_5m_history(frame.iloc[:-1], '15m', '980001.SZ')
+    assert len(no_close) == 22 and no_close.datetime.iloc[-1].strftime('%H:%M') == '16:00'
 
 
 def test_fractional_five_minute_lots_are_not_truncated():

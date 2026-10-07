@@ -23,7 +23,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.qmtmini_daily_backfill_validate import ch_client
 from utils.qmt_universe import (is_market_statistics_code, MARKET_STATISTICS_EVIDENCE_URL,
-                                is_bond_index, BOND_INDEX_EVIDENCE_URL)
+                                is_bond_index, BOND_INDEX_EVIDENCE_URL, CROSS_BORDER_EQUITY_INDEX_CODES)
 
 TZ = ZoneInfo('Asia/Shanghai')
 FIELDS = ['open', 'high', 'low', 'close', 'volume', 'amount']
@@ -33,7 +33,7 @@ DAILY_COLUMNS = ['code', 'trade_date', *FIELDS, 'amplitude', 'change_pct',
 SETTINGS = {'max_threads': 2, 'max_memory_usage': 2_000_000_000}
 SLOTS = [f'{h:02d}{m:02d}00' for start in (570, 780)
          for minute in range(start + 5, start + 121, 5) for h, m in [divmod(minute, 60)]]
-CROSS_BORDER_CODES = frozenset({'980001.SZ', '980023.SZ', '980068.SZ', '988201.SZ'})
+CROSS_BORDER_CODES = CROSS_BORDER_EQUITY_INDEX_CODES
 CROSS_BORDER_SLOTS = [f'{h:02d}{m:02d}00' for start, end in ((570, 720), (780, 970))
                       for minute in range(start + 5, end + 1, 5) for h, m in [divmod(minute, 60)]]
 # Observed native signed-int32 overflow; do not generalize to other securities.

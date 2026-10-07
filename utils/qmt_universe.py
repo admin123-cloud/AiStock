@@ -22,6 +22,10 @@ BOND_INDEX_EVIDENCE_URL = "https://www.cnindex.com.cn/docs/gz_399298.pdf"
 # https://www.szse.cn/disclosure/notice/general/t20041011_499305.html
 MARKET_STATISTICS_EVIDENCE_URL = "https://www.szse.cn/disclosure/notice/general/t20041011_499305.html"
 
+# Publisher-confirmed mainland/Hong Kong equity indices. Native 5m ends at
+# 12:00 and 16:10, including the Hong Kong closing auction.
+CROSS_BORDER_EQUITY_INDEX_CODES = frozenset({'980001.SZ', '980023.SZ', '980068.SZ', '988201.SZ'})
+
 
 def is_market_statistics_code(code: str) -> bool:
     text = str(code or "").strip().upper()

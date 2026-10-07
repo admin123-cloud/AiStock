@@ -8,7 +8,7 @@ import pandas as pd
 from core.base import DataSourceStatus
 from data_fetcher.base_fetcher import BaseDataSource
 from utils.logger import get_logger
-from utils.qmt_universe import is_market_statistics_code
+from utils.qmt_universe import is_market_statistics_code, CROSS_BORDER_EQUITY_INDEX_CODES
 
 from .qmtmini_client import QmtMiniMarketClient
 
@@ -148,7 +148,7 @@ def _market_data_field(data: Dict[str, Any], lower_name: str) -> Optional[pd.Dat
     return value
 
 
-def _aggregate_5m_history(df: pd.DataFrame, target_period: str) -> pd.DataFrame:
+def _aggregate_5m_history(df: pd.DataFrame, target_period: str, code: str = '') -> pd.DataFrame:
     if df is None or df.empty or target_period not in {"15m", "30m", "60m"}:
         return df
 
@@ -160,15 +160,29 @@ def _aggregate_5m_history(df: pd.DataFrame, target_period: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     out: list[dict[str, Any]] = []
+    cross_border = code in CROSS_BORDER_EQUITY_INDEX_CODES
     for _, day_df in work.groupby(work["datetime"].dt.strftime("%Y-%m-%d")):
         day_df = day_df.sort_values("datetime").copy()
         times = day_df["datetime"].dt.strftime("%H:%M")
-        morning = day_df[(times >= "09:35") & (times <= "11:30")]
-        afternoon = day_df[(times >= "13:05") & (times <= "15:00")]
+        morning = day_df[(times >= "09:35") & (times <= ("12:00" if cross_border else "11:30"))]
+        afternoon = day_df[(times >= "13:05") & (times <= ("16:10" if cross_border else "15:00"))]
         for session_df in (morning, afternoon):
-            for idx in range(0, len(session_df), group_size):
-                bucket = session_df.iloc[idx : idx + group_size]
-                if len(bucket) < group_size:
+            if cross_border:
+                start, end = (570, 720) if session_df is morning else (780, 970)
+                minute_of_day = session_df['datetime'].dt.hour * 60 + session_df['datetime'].dt.minute
+                groups = (minute_of_day - start - 5) // (group_size * 5)
+                buckets = []
+                for group, bucket in session_df.groupby(groups):
+                    expected = list(range(start + int(group) * group_size * 5 + 5,
+                                          min(start + (int(group)+1) * group_size * 5, end) + 1, 5))
+                    actual = list(bucket['datetime'].dt.hour * 60 + bucket['datetime'].dt.minute)
+                    if actual == expected and (bucket['datetime'].dt.second == 0).all():
+                        buckets.append(bucket)
+            else:
+                buckets = [session_df.iloc[idx : idx + group_size]
+                           for idx in range(0, len(session_df), group_size)]
+            for bucket in buckets:
+                if not cross_border and len(bucket) < group_size:
                     continue
                 dt = pd.Timestamp(bucket.iloc[-1]["datetime"])
                 out.append(
@@ -390,7 +404,7 @@ class QmtMiniDataSource(BaseDataSource):
                 )
             result = pd.DataFrame(rows)
             if qmt_period in {"15m", "30m", "60m"} and not result.empty:
-                result = _aggregate_5m_history(result, qmt_period)
+                result = _aggregate_5m_history(result, qmt_period, code)
             result.attrs.update(close_df.attrs)
             self.mark_success()
             return result
