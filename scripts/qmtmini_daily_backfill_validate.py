@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from data_fetcher.sources.qmtmini_client import QmtMiniMarketClient
 from utils.kline_units import normalize_qmt_daily_units
+from utils.qmt_daily_prices import daily_price_metrics
 from utils.paths import report_path
 from utils.qmt_universe import qmt_universe_filter_sql
 
@@ -268,6 +269,7 @@ def ensure_stage_table(client, stage_table: str) -> None:
             amplitude Float64,
             change_pct Float64,
             change_amount Float64,
+            reference_close Nullable(Float64),
             turnover_rate Float64,
             created_at Nullable(DateTime),
             id UInt64 DEFAULT 0
@@ -276,6 +278,7 @@ def ensure_stage_table(client, stage_table: str) -> None:
         ORDER BY (code, trade_date)
         """
     )
+    client.command(f'ALTER TABLE {stage_table} ADD COLUMN IF NOT EXISTS reference_close Nullable(Float64)')
 
 
 def ensure_market_status_table(client) -> None:
@@ -758,6 +761,7 @@ def rows_from_qmt(
     start_date: str,
     end_date: str,
     index_codes: set[str] | None = None,
+    include_reference: bool = False,
 ) -> tuple[list[tuple], dict[str, int]]:
     close_df = _field_frame(data, "close")
     if close_df.empty:
@@ -765,6 +769,9 @@ def rows_from_qmt(
 
     index_codes = {str(item).upper() for item in (index_codes or set())}
     frames = {field: _field_frame(data, field) for field in FIELD_LIST}
+    native_reference = close_df.attrs.get('qmt_market_transport') == 'builtin'
+    if native_reference:
+        frames['preClose'] = _field_frame(data, 'preClose')
     rows: list[tuple] = []
     counts: dict[str, int] = {}
     for code in batch_codes:
@@ -802,10 +809,14 @@ def rows_from_qmt(
         one = normalize_qmt_daily_units(one, instrument_type=instrument_type,
                                         transport=close_df.attrs.get("qmt_market_transport", "xtquant"))
 
-        prev_close = one["close"].shift(1)
-        change_amount = (one["close"] - prev_close).fillna(0.0)
-        change_pct = ((change_amount / prev_close.replace(0, pd.NA)) * 100).fillna(0.0)
-        amplitude = (((one["high"] - one["low"]) / prev_close.replace(0, pd.NA)) * 100).fillna(0.0)
+        if native_reference:
+            metrics = daily_price_metrics(one)
+            amplitude, change_pct, change_amount = (metrics[col] for col in ('amplitude','change_pct','change_amount'))
+        else:
+            prev_close = one["close"].shift(1)
+            change_amount = (one["close"] - prev_close).fillna(0.0)
+            change_pct = ((change_amount / prev_close.replace(0, pd.NA)) * 100).fillna(0.0)
+            amplitude = (((one["high"] - one["low"]) / prev_close.replace(0, pd.NA)) * 100).fillna(0.0)
         count = 0
         for idx, values in one.iterrows():
             if _is_unclosed_current_daily_bar(idx.date(), created_at):
@@ -827,6 +838,9 @@ def rows_from_qmt(
                     created_at,
                 )
             )
+            if include_reference:
+                reference = metrics.reference_close.loc[idx] if native_reference else None
+                rows[-1] = (*rows[-1], float(reference) if reference is not None and pd.notna(reference) else None)
             count += 1
         counts[code] = count
     return rows, counts
@@ -891,7 +905,7 @@ def fetch_to_stage(args: argparse.Namespace) -> dict[str, Any]:
                         raise
                     time.sleep(args.retry_sleep)
             data = market.get_market_data(
-                field_list=FIELD_LIST,
+                field_list=FIELD_LIST + (['preClose'] if getattr(market,'transport',None)=='builtin' and args.dividend_type=='none' else []),
                 stock_list=qmt_batch_codes,
                 period="1d",
                 start_time=args.start_date.replace("-", ""),
@@ -907,10 +921,11 @@ def fetch_to_stage(args: argparse.Namespace) -> dict[str, Any]:
                 args.start_date,
                 args.end_date,
                 index_codes=index_codes,
+                include_reference=True,
             )
             empty_codes.extend([code for code, count in counts.items() if count == 0])
             if rows:
-                client.insert(args.stage_table, rows, column_names=TARGET_COLUMNS)
+                client.insert(args.stage_table, rows, column_names=TARGET_COLUMNS + ['reference_close'])
                 total_rows += len(rows)
             elapsed = time.perf_counter() - batch_started
             insert_request_log(
@@ -1048,6 +1063,8 @@ def validate_stage(args: argparse.Namespace) -> dict[str, Any]:
 
 def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
     client = ch_client()
+    # Existing staged rows retain NULL and the historical fallback calculation.
+    client.command(f'ALTER TABLE {args.stage_table} ADD COLUMN IF NOT EXISTS reference_close Nullable(Float64)')
     codes = select_codes_for_args(client, args)
     total_inserted = 0
     for chunk_no, code_chunk in enumerate(chunked(codes, args.delete_chunk_size), start=1):
@@ -1088,6 +1105,7 @@ def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
                         close,
                         volume,
                         amount,
+                        reference_close,
                         turnover_rate,
                         created_at
                     FROM {args.stage_table}
@@ -1138,9 +1156,12 @@ def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
                 s.close,
                 s.volume,
                 s.amount,
-                if(m.prev_close > 0, (s.high - s.low) / m.prev_close * 100, 0.0) AS amplitude,
-                if(m.prev_close > 0, (s.close - m.prev_close) / m.prev_close * 100, 0.0) AS change_pct,
-                if(m.prev_close > 0, s.close - m.prev_close, 0.0) AS change_amount,
+                if(if(ifNull(s.reference_close,0)>0,s.reference_close,m.prev_close)>0,
+                   (s.high-s.low)/if(ifNull(s.reference_close,0)>0,s.reference_close,m.prev_close)*100,0.0) AS amplitude,
+                if(if(ifNull(s.reference_close,0)>0,s.reference_close,m.prev_close)>0,
+                   (s.close-if(ifNull(s.reference_close,0)>0,s.reference_close,m.prev_close))/if(ifNull(s.reference_close,0)>0,s.reference_close,m.prev_close)*100,0.0) AS change_pct,
+                if(if(ifNull(s.reference_close,0)>0,s.reference_close,m.prev_close)>0,
+                   s.close-if(ifNull(s.reference_close,0)>0,s.reference_close,m.prev_close),0.0) AS change_amount,
                 s.turnover_rate,
                 s.created_at
             FROM trading_staged s

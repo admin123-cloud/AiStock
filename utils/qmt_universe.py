@@ -27,6 +27,15 @@ MARKET_STATISTICS_EVIDENCE_URL = "https://www.szse.cn/disclosure/notice/general/
 CROSS_BORDER_EQUITY_INDEX_CODES = frozenset({'980001.SZ', '980023.SZ', '980068.SZ', '988201.SZ'})
 
 
+def is_a_share_stock_code(code: str) -> bool:
+    base, _, market = str(code or '').upper().partition('.')
+    if len(base) != 6 or not base.isdigit():
+        return False
+    return (market == 'SZ' and base.startswith(('000','001','002','003','300','301'))
+            or market == 'SH' and base.startswith(('600','601','603','605','688','689'))
+            or market == 'BJ' and base.startswith('92'))
+
+
 def is_market_statistics_code(code: str) -> bool:
     text = str(code or "").strip().upper()
     base, separator, exchange = text.partition(".")

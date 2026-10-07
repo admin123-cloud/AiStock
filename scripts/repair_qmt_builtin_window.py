@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.qmtmini_daily_backfill_validate import ch_client
 from utils.qmt_universe import (is_market_statistics_code, MARKET_STATISTICS_EVIDENCE_URL,
                                 is_bond_index, BOND_INDEX_EVIDENCE_URL, CROSS_BORDER_EQUITY_INDEX_CODES)
+from utils.qmt_daily_prices import daily_price_metrics
 
 TZ = ZoneInfo('Asia/Shanghai')
 FIELDS = ['open', 'high', 'low', 'close', 'volume', 'amount']
@@ -38,6 +39,7 @@ CROSS_BORDER_SLOTS = [f'{h:02d}{m:02d}00' for start, end in ((570, 720), (780, 9
                       for minute in range(start + 5, end + 1, 5) for h, m in [divmod(minute, 60)]]
 # Observed native signed-int32 overflow; do not generalize to other securities.
 UINT32_VOLUME_CODES = frozenset({'399379.SZ', '399380.SZ'})
+BSE_TRADING_RULES_URL = 'https://www.bse.cn/jygl_list/200028217.html'
 
 
 def sha(path: Path) -> str:
@@ -93,7 +95,15 @@ def validate_day(day, frame, daily, instrument_type, code=None):
         return 'invalid_ohlc_or_quantity'
     if not np.isclose(values[:, 4], np.rint(values[:, 4]), rtol=0, atol=1e-5).all():
         return 'native_minute_volume_not_integer_lots'
-    if values[:, 2].min() < float(daily.low) - 0.011 or values[:, 1].max() > float(daily.high) + 0.011:
+    prices = values
+    if instrument_type == 'stock':
+        active = (values[:, 4:] > 0).any(axis=1)
+        inactive = values[~active, :4]
+        if len(inactive) and not np.isclose(inactive, inactive[:, -1:], rtol=0, atol=1e-8).all():
+            return 'native_zero_quantity_bar_not_flat'
+        if active.any():
+            prices = values[active]
+    if prices[:, 2].min() < float(daily.low) - 0.011 or prices[:, 1].max() > float(daily.high) + 0.011:
         return 'minute_outside_native_daily_range'
     if not math.isclose(float(values[:, 4].sum()), float(daily.volume), rel_tol=0.005, abs_tol=1):
         return 'native_minute_daily_volume_mismatch'
@@ -138,6 +148,28 @@ def validate_daily(daily, instrument_type):
     return None
 
 
+def validate_bse_total_quantity(day, minute, daily, code, list_date):
+    """BSE total quantity includes block trades outside the auction price band.
+
+    This changes no numeric field. Require a listed stock, legal 30% price
+    limits, and complete native minute agreement; IPO days are excluded.
+    """
+    if (not code.endswith('.BJ') or not list_date or not str(list_date).isdigit()
+            or len(str(list_date)) != 8 or day <= str(list_date)):
+        return None
+    pre = float(daily.get('preClose', 0) or 0)
+    if not math.isfinite(pre) or pre <= 0 or validate_day(day, minute, daily, 'stock', code):
+        return None
+    lower, upper = pre * 0.7, pre * 1.3
+    vwap = float(daily.amount)/(float(daily.volume)*100)
+    if not (lower-.011 <= float(daily.low) <= float(daily.high) <= upper+.011
+            and lower-.011 <= vwap <= upper+.011):
+        return None
+    return {'code':code,'day':day,'rule':'bse_block_trade_inclusive_total_quantity',
+            'vwap':vwap,'auction_low':float(daily.low),'auction_high':float(daily.high),
+            'price_limit_low':lower,'price_limit_high':upper,'evidence_url':BSE_TRADING_RULES_URL}
+
+
 def verified_absence(metadata, code, day):
     for event in metadata.get('verified_events', []):
         if event['status'] not in {'suspended','pending_listing','not_trading','delisted'} or not event.get('evidence_url'):
@@ -164,7 +196,7 @@ def validate_absence_source(daily, minute):
     return None
 
 
-def aggregate(frame, minutes):
+def aggregate(frame, minutes, instrument_type='stock'):
     if minutes not in (5, 15, 30, 60):
         raise ValueError('Unsupported aggregation period')
     size = minutes // 5
@@ -180,14 +212,24 @@ def aggregate(frame, minutes):
             for offset in range(start, end, size):
                 stop = min(offset + size, end)
                 part = values[offset:stop]
-                rows.append((keys[stop-1], [part[0, 0], part[:, 1].max(), part[:, 2].min(),
-                                          part[-1, 3], part[:, 4].sum(), part[:, 5].sum()]))
+                rows.append((keys[stop-1], aggregate_values(part[None, :, :], instrument_type)[0].tolist()))
         return rows
     values = field_values(frame).reshape(48 // size, size, 6)
-    result = np.column_stack((values[:, 0, 0], values[:, :, 1].max(axis=1),
-                              values[:, :, 2].min(axis=1), values[:, -1, 3],
-                              values[:, :, 4].sum(axis=1), values[:, :, 5].sum(axis=1)))
+    result = aggregate_values(values, instrument_type)
     return list(zip(frame.index[size-1::size].map(str), result.tolist()))
+
+
+def aggregate_values(values, instrument_type):
+    active = (values[:, :, 4:] > 0).any(axis=2) if instrument_type == 'stock' else np.ones(values.shape[:2], dtype=bool)
+    empty = ~active.any(axis=1)
+    first = active.argmax(axis=1)
+    last = values.shape[1]-1-active[:, ::-1].argmax(axis=1)
+    row = np.arange(len(values))
+    result = np.column_stack((values[row, first, 0], np.where(active, values[:, :, 1], -np.inf).max(axis=1),
+                              np.where(active, values[:, :, 2], np.inf).min(axis=1), values[row, last, 3],
+                              values[:, :, 4].sum(axis=1), values[:, :, 5].sum(axis=1)))
+    result[empty, :4] = values[empty, -1, 3, None]
+    return result
 
 
 def load_raw(root, code, period, manifest):
@@ -238,7 +280,7 @@ def repair_table(ch, table, candidates, codes, output, label, apply, daily=False
         old = existing.get(key)
         if old is None:
             missing.append(row)
-        elif not same(row[2:8], old[2:8]):
+        elif not same(row[2:11] if daily else row[2:8], old[2:11] if daily else old[2:8]):
             if daily:
                 row = list(row)
                 # Historical float-share counts are unavailable. Preserve existing
@@ -253,6 +295,7 @@ def repair_table(ch, table, candidates, codes, output, label, apply, daily=False
               'unchanged': unchanged, 'canonical_only': len(canonical_only),
               'native_target_rows': len(candidates), 'formal_rows': len(existing),
               'applied': False, 'readback_verified': False}
+    report['compared_fields'] = FIELDS + (['amplitude', 'change_pct', 'change_amount'] if daily else [])
     if canonical_only:
         # Preserve both directions of the reconciliation. These keys may be
         # outside lifecycle, suspended, or blocked by source validation; their
@@ -279,7 +322,7 @@ def repair_table(ch, table, candidates, codes, output, label, apply, daily=False
     for row in additions:
         key = (row[0], row[1] if daily else int(row[1].timestamp()))
         got = readback.get(key)
-        if got is None or not same(row[2:8], got[2:8]) or int(got[-1]) != int(row[-1]):
+        if got is None or not same(row[2:11] if daily else row[2:8], got[2:11] if daily else got[2:8]) or int(got[-1]) != int(row[-1]):
             dump(journal, report)
             raise RuntimeError('Stable key readback failed: ' + str(key))
     report['readback_verified'] = True
@@ -336,6 +379,8 @@ def main():
     out.mkdir(parents=True)
     summary = {'source_manifest': str(root / args.manifest), 'manifest_sha256': manifest_digest,
                'script_sha256': sha(Path(__file__)), 'apply_requested': args.apply,
+               'dependency_sha256': {name:sha(Path(__file__).resolve().parents[1]/name)
+                                      for name in ('utils/qmt_daily_prices.py','utils/qmt_universe.py')},
                'metadata_file': str(metadata_path), 'metadata_sha256': hashlib.sha256(metadata_bytes).hexdigest(),
                'minute_overlay': str(overlay_path) if overlay_digest else None, 'minute_overlay_sha256': overlay_digest,
                'codes': len(codes), 'complete': False, 'tables': {}, 'issues': {}, 'batches': []}
@@ -345,6 +390,7 @@ def main():
     non_price_codes = []
     bond_index_codes = []
     normalizations = []
+    quantity_contracts = []
     now = datetime.now(TZ).replace(microsecond=0)
     with (out / 'code_day_issues.jsonl').open('w', encoding='utf-8') as ledger:
         for offset in range(0, len(codes), args.batch_size):
@@ -363,6 +409,7 @@ def main():
                                              'evidence_url':BOND_INDEX_EVIDENCE_URL})+'\n')
                     continue
                 daily = load_raw(root, code, '1d', manifest)
+                metrics = daily_price_metrics(daily)
                 minute = load_raw(root, code, '5m', manifest)
                 minute_days = {str(day):frame for day,frame in minute.groupby(minute.index.str[:8], sort=False)}
                 foreign_days = {str(i)[:8] for i in minute.index} - set(dates)
@@ -400,19 +447,18 @@ def main():
                     if normalization:
                         normalizations.append(normalization)
                     issue = 'native_daily_missing' if d is None else validate_daily(d, kind)
+                    if issue == 'native_daily_lots_yuan_contract_mismatch' and kind == 'stock':
+                        contract = validate_bse_total_quantity(day, m, d, code, list_date)
+                        if contract:
+                            quantity_contracts.append(contract)
+                            issue = None
                     if issue:
                         issues[issue] += 1
                         ledger.write(json.dumps({'code': code, 'day': day, 'issue': issue,
                                                 'native_minute_rows': len(m)}, ensure_ascii=False) + '\n')
                         continue
                     key_date = datetime.strptime(day, '%Y%m%d').date()
-                    pre = float(d.get('preClose', 0))
-                    previous = daily.loc[daily.index < day]
-                    if pre <= 0 and len(previous):
-                        pre = float(previous.close.iloc[-1])
-                    amp = (float(d.high)-float(d.low))/pre*100 if pre > 0 else 0.0
-                    change = float(d.close)-pre if pre > 0 else 0.0
-                    pct = change/pre*100 if pre > 0 else 0.0
+                    amp, pct, change = map(float, metrics.loc[day, ['amplitude','change_pct','change_amount']])
                     targets['1d'].append((code, key_date, *map(float, d[FIELDS]), amp, pct,
                                           change, 0.0, now, stable_id('1d', code, day)))
                     issue = validate_day(day, m, d, kind, code)
@@ -422,7 +468,7 @@ def main():
                                                 'native_minute_rows': len(m)}, ensure_ascii=False) + '\n')
                         continue
                     for period in (5, 15, 30, 60):
-                        for timestamp, values in aggregate(m, period):
+                        for timestamp, values in aggregate(m, period, kind):
                             dt = market_datetime(timestamp)
                             values[4] = int(round(values[4])) if period == 5 else values[4]
                             targets[period].append((code, dt, *values, now, stable_id(period, code, timestamp)))
@@ -444,6 +490,7 @@ def main():
             summary['bond_index_scope_exclusions'] = bond_index_codes
             summary['price_scope_codes'] = len(codes) - len(non_price_codes) - len(bond_index_codes)
             summary['native_daily_volume_normalizations'] = normalizations
+            summary['bse_quantity_contracts'] = quantity_contracts
             dump(out / 'summary.json', summary)
             print(json.dumps({'codes_done': min(offset+len(batch),len(codes)), 'total':len(codes),
                               'tables':summary['tables'], 'issues':dict(issues)}, ensure_ascii=False), flush=True)

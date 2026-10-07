@@ -8,7 +8,7 @@ import pandas as pd
 from core.base import DataSourceStatus
 from data_fetcher.base_fetcher import BaseDataSource
 from utils.logger import get_logger
-from utils.qmt_universe import is_market_statistics_code, CROSS_BORDER_EQUITY_INDEX_CODES
+from utils.qmt_universe import is_market_statistics_code, CROSS_BORDER_EQUITY_INDEX_CODES, is_a_share_stock_code
 
 from .qmtmini_client import QmtMiniMarketClient
 
@@ -185,14 +185,23 @@ def _aggregate_5m_history(df: pd.DataFrame, target_period: str, code: str = '') 
                 if not cross_border and len(bucket) < group_size:
                     continue
                 dt = pd.Timestamp(bucket.iloc[-1]["datetime"])
+                prices = bucket
+                if is_a_share_stock_code(code):
+                    active = (pd.to_numeric(bucket['volume'], errors='coerce').fillna(0) > 0) | (pd.to_numeric(bucket['amount'], errors='coerce').fillna(0) > 0)
+                    prices = bucket[active]
+                if prices.empty:
+                    last_quote = float(bucket.iloc[-1]['close'])
+                    price_values = dict(open=last_quote, high=last_quote, low=last_quote, close=last_quote)
+                else:
+                    price_values = dict(open=float(prices.iloc[0]['open']),
+                                        high=float(pd.to_numeric(prices['high'],errors='coerce').max()),
+                                        low=float(pd.to_numeric(prices['low'],errors='coerce').min()),
+                                        close=float(prices.iloc[-1]['close']))
                 out.append(
                     {
                         "date": dt,
                         "datetime": dt,
-                        "open": float(bucket.iloc[0]["open"]),
-                        "high": float(pd.to_numeric(bucket["high"], errors="coerce").max()),
-                        "low": float(pd.to_numeric(bucket["low"], errors="coerce").min()),
-                        "close": float(bucket.iloc[-1]["close"]),
+                        **price_values,
                         "volume": float(pd.to_numeric(bucket["volume"], errors="coerce").fillna(0).sum()),
                         "amount": float(pd.to_numeric(bucket["amount"], errors="coerce").fillna(0).sum()),
                     }
