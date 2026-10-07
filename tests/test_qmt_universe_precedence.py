@@ -3,6 +3,7 @@ from datetime import datetime
 import pandas as pd
 from scripts import qmt_fullpush_intraday_aggregator as collector
 from utils.qmt_universe import qmt_universe_filter_sql
+from data_fetcher.sources.qmtmini import _detail_to_stock_row
 
 
 def test_real_sql_or_does_not_bypass_quit_and_realtime_dates(monkeypatch):
@@ -19,6 +20,8 @@ def test_real_sql_or_does_not_bypass_quit_and_realtime_dates(monkeypatch):
         ('000001.SH','active index','index',0,None,'active',None),
         ('000002.SH','retired index','index',1,None,'active','2020-01-01'),
         ('301686.SZ','pending','stock',0,None,'pending_listing',None),
+        ('395001.SZ','主板Ａ股','index',0,None,'active',None),
+        ('395099.SZ','总成交','market_statistic',0,None,'active',None),
     ])
     monkeypatch.setattr(collector,'clickhouse_query_df',lambda sql:pd.read_sql_query(sql.replace(' FINAL',''),db))
     assert set(collector.load_codes('stock,index','',0,False,''))=={'600001.SH','000001.SH'}
@@ -28,3 +31,10 @@ def test_real_sql_or_does_not_bypass_quit_and_realtime_dates(monkeypatch):
     current=db.execute('SELECT code FROM stocks WHERE '+qmt_universe_filter_sql('stock,index')+' AND quit=0').fetchall()
     assert ('600002.SH',) not in current
     db.close()
+
+
+def test_reference_pool_preserves_statistics_identity_without_price_index_type():
+    row=_detail_to_stock_row('395001.sz',{'InstrumentName':'主板Ａ股'},'index')
+    assert row['code']=='395001.SZ' and row['type']=='market_statistic'
+    assert _detail_to_stock_row('399001.SZ',{'InstrumentName':'深证成指'},'index')['type']=='index'
+    assert _detail_to_stock_row('000001.SH',{'InstrumentName':'上证指数'},'index')['type']=='index'

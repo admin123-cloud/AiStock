@@ -8,6 +8,7 @@ import pandas as pd
 from core.base import DataSourceStatus
 from data_fetcher.base_fetcher import BaseDataSource
 from utils.logger import get_logger
+from utils.qmt_universe import is_market_statistics_code
 
 from .qmtmini_client import QmtMiniMarketClient
 
@@ -100,7 +101,7 @@ def _detail_to_stock_row(code: str, detail: Optional[Dict[str, Any]], stock_type
         "name": name,
         "Name": name,
         "market": _market_from_code(full_code),
-        "type": stock_type,
+        "type": "market_statistic" if is_market_statistics_code(full_code) else stock_type,
         "list_date": detail.get("OpenDate") or detail.get("CreateDate") or "",
         "delist_date": _expired_date(detail.get("ExpireDate")),
         "st": 1 if "ST" in str(name).upper() else 0,

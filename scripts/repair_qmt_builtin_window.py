@@ -22,6 +22,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.qmtmini_daily_backfill_validate import ch_client
+from utils.qmt_universe import is_market_statistics_code, MARKET_STATISTICS_EVIDENCE_URL
 
 TZ = ZoneInfo('Asia/Shanghai')
 FIELDS = ['open', 'high', 'low', 'close', 'volume', 'amount']
@@ -274,12 +275,18 @@ def main():
     ch = ch_client()
     issues = Counter()
     business_exclusions = Counter()
+    non_price_codes = []
     now = datetime.now(TZ).replace(microsecond=0)
     with (out / 'code_day_issues.jsonl').open('w', encoding='utf-8') as ledger:
         for offset in range(0, len(codes), args.batch_size):
             batch = codes[offset:offset+args.batch_size]
             targets = {period: [] for period in ('1d', 5, 15, 30, 60)}
             for code in batch:
+                if is_market_statistics_code(code):
+                    non_price_codes.append(code)
+                    ledger.write(json.dumps({'code':code,'issue':'verified_non_price_scope',
+                                             'evidence_url':MARKET_STATISTICS_EVIDENCE_URL})+'\n')
+                    continue
                 daily = load_raw(root, code, '1d', manifest)
                 minute = load_raw(root, code, '5m', manifest)
                 minute_days = {str(day):frame for day,frame in minute.groupby(minute.index.str[:8], sort=False)}
@@ -351,6 +358,7 @@ def main():
             summary['batches'].append({'offset': offset, 'codes': batch, 'results': results})
             summary['issues'] = dict(issues)
             summary['business_exclusions'] = dict(business_exclusions)
+            summary['non_price_scope_exclusions'] = non_price_codes
             dump(out / 'summary.json', summary)
             print(json.dumps({'codes_done': min(offset+len(batch),len(codes)), 'total':len(codes),
                               'tables':summary['tables'], 'issues':dict(issues)}, ensure_ascii=False), flush=True)

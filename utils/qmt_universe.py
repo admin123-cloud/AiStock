@@ -14,6 +14,16 @@ System Config coverage panel from drifting apart.
 # only to ``type = 'index'``; it never filters A-share stocks.
 BOND_INDEX_NAME_KEYWORDS: tuple[str, ...] = ("债", "信用")
 
+# SZSE defines 395xxx as turnover-statistics records, without OHLC prices.
+# https://www.szse.cn/disclosure/notice/general/t20041011_499305.html
+MARKET_STATISTICS_EVIDENCE_URL = "https://www.szse.cn/disclosure/notice/general/t20041011_499305.html"
+
+
+def is_market_statistics_code(code: str) -> bool:
+    text = str(code or "").strip().upper()
+    base, separator, exchange = text.partition(".")
+    return separator == "." and exchange == "SZ" and len(base) == 6 and base.isdigit() and base.startswith("395")
+
 
 def bond_index_exclusion_sql(name_expr: str = "name") -> str:
     """Return a ClickHouse predicate that excludes debt-index names."""
@@ -40,9 +50,10 @@ def qmt_universe_filter_sql(
     if "stock" in kinds:
         parts.append(f"{type_expr} = 'stock'")
     if "index" in kinds:
-        parts.append(f"({type_expr} = 'index' AND {bond_index_exclusion_sql(name_expr)})")
+        parts.append(f"({type_expr} = 'index' AND {bond_index_exclusion_sql(name_expr)} "
+                     f"AND NOT ({code_expr} LIKE '395___.SZ'))")
     if "etf" in kinds:
         parts.append(
             f"match({code_expr}, '^(159|510|511|512|513|515|516|517|518|588)[0-9]{{3}}\\\\.(SH|SZ)$')"
         )
-    return " OR ".join(parts) if parts else "1"
+    return "(" + " OR ".join(parts) + ")" if parts else "1"
