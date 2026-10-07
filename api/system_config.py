@@ -1088,7 +1088,7 @@ def _query_data_source_counts(
     join_key = "k.code" if table_name == "kline_daily" else "assumeNotNull(k.code)"
     from utils.qmt_universe import bond_index_exclusion_sql
 
-    side_filter = "s.type = 'stock'" if stock_side else f"s.type = 'index' AND {bond_index_exclusion_sql('s.name')}"
+    side_filter = "s.type = 'stock'" if stock_side else f"s.type = 'index' AND {bond_index_exclusion_sql('s.name', 's.code')}"
     listing_filter = f"AND (toDateOrNull(toString(s.list_date)) IS NULL OR toDateOrNull(toString(s.list_date)) <= toDate('{target_date}'))"
     rows = client.query(
         f"""
@@ -1122,7 +1122,7 @@ def _query_minute_data_source_counts(
     join_key = "assumeNotNull(k.code)"
     from utils.qmt_universe import bond_index_exclusion_sql
 
-    side_filter = "s.type = 'stock'" if stock_side else f"s.type = 'index' AND {bond_index_exclusion_sql('s.name')}"
+    side_filter = "s.type = 'stock'" if stock_side else f"s.type = 'index' AND {bond_index_exclusion_sql('s.name', 's.code')}"
     rows = client.query(
         f"""
         WITH daily_codes AS (

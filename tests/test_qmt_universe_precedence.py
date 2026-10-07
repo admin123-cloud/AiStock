@@ -3,6 +3,7 @@ from datetime import datetime
 import pandas as pd
 from scripts import qmt_fullpush_intraday_aggregator as collector
 from utils.qmt_universe import qmt_universe_filter_sql
+from utils.qmt_universe import is_bond_index
 from data_fetcher.sources.qmtmini import _detail_to_stock_row
 
 
@@ -22,6 +23,8 @@ def test_real_sql_or_does_not_bypass_quit_and_realtime_dates(monkeypatch):
         ('301686.SZ','pending','stock',0,None,'pending_listing',None),
         ('395001.SZ','主板Ａ股','index',0,None,'active',None),
         ('395099.SZ','总成交','market_statistic',0,None,'active',None),
+        ('399298.SZ','深信中高','index',0,None,'active',None),
+        ('399299.SZ','深信中低','index',0,None,'active',None),
     ])
     monkeypatch.setattr(collector,'clickhouse_query_df',lambda sql:pd.read_sql_query(sql.replace(' FINAL',''),db))
     assert set(collector.load_codes('stock,index','',0,False,''))=={'600001.SH','000001.SH'}
@@ -38,3 +41,16 @@ def test_reference_pool_preserves_statistics_identity_without_price_index_type()
     assert row['code']=='395001.SZ' and row['type']=='market_statistic'
     assert _detail_to_stock_row('399001.SZ',{'InstrumentName':'深证成指'},'index')['type']=='index'
     assert _detail_to_stock_row('000001.SH',{'InstrumentName':'上证指数'},'index')['type']=='index'
+
+
+def test_abbreviated_bond_indices_are_separate_from_stock_price_indices(monkeypatch):
+    assert is_bond_index('399298.sz','深信中高')
+    assert is_bond_index('399299.SZ','深信中低')
+    assert is_bond_index('000012.SH','国债指数')
+    assert not is_bond_index('399300.SZ','沪深300')
+    assert collector.load_codes('stock,index','399298.SZ,399299.SZ,399300.SZ',0,False,'') == ['399300.SZ']
+
+
+def test_aliased_index_sql_uses_aliased_codes():
+    sql=qmt_universe_filter_sql('index',code_expr='s.code',type_expr='s.type',name_expr='s.name')
+    assert "s.code IN ('399298.SZ', '399299.SZ')" in sql

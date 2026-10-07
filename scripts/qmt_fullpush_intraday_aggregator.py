@@ -28,7 +28,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from utils.market_warehouse import clickhouse_client, clickhouse_query_df
 from utils.paths import runtime_path
-from utils.qmt_universe import qmt_universe_filter_sql, is_market_statistics_code
+from utils.qmt_universe import qmt_universe_filter_sql, is_market_statistics_code, is_bond_index
 
 
 SH_TZ = ZoneInfo("Asia/Shanghai")
@@ -208,7 +208,8 @@ def load_codes(universe: str, codes_arg: str, limit: int, include_index: bool, i
     codes = [
         code
         for code in dict.fromkeys(codes)
-        if is_regular_stock_code(code) and code not in RETIRED_INDEX_CODES and not is_market_statistics_code(code)
+        if is_regular_stock_code(code) and code not in RETIRED_INDEX_CODES
+        and not is_market_statistics_code(code) and not is_bond_index(code)
     ]
     return codes[:limit] if limit > 0 else codes
 

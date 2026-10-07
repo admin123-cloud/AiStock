@@ -13,6 +13,10 @@ System Config coverage panel from drifting apart.
 # terms (for example: 国债指数, 上证转债, 5年信用).  This intentionally applies
 # only to ``type = 'index'``; it never filters A-share stocks.
 BOND_INDEX_NAME_KEYWORDS: tuple[str, ...] = ("债", "信用")
+# These QMT abbreviations omit both keywords: 深信中高 / 深信中低.
+# The publisher's methodology identifies both as credit-bond benchmarks.
+BOND_INDEX_CODE_EXCLUSIONS: tuple[str, ...] = ("399298.SZ", "399299.SZ")
+BOND_INDEX_EVIDENCE_URL = "https://www.cnindex.com.cn/docs/gz_399298.pdf"
 
 # SZSE defines 395xxx as turnover-statistics records, without OHLC prices.
 # https://www.szse.cn/disclosure/notice/general/t20041011_499305.html
@@ -25,13 +29,19 @@ def is_market_statistics_code(code: str) -> bool:
     return separator == "." and exchange == "SZ" and len(base) == 6 and base.isdigit() and base.startswith("395")
 
 
-def bond_index_exclusion_sql(name_expr: str = "name") -> str:
-    """Return a ClickHouse predicate that excludes debt-index names."""
+def is_bond_index(code: str, name: str = "") -> bool:
+    return (str(code or "").strip().upper() in BOND_INDEX_CODE_EXCLUSIONS
+            or any(keyword in str(name or "") for keyword in BOND_INDEX_NAME_KEYWORDS))
+
+
+def bond_index_exclusion_sql(name_expr: str = "name", code_expr: str = "code") -> str:
+    """Exclude debt indices by name and publisher-confirmed abbreviated codes."""
     checks = " OR ".join(
         f"positionUTF8(ifNull({name_expr}, ''), '{keyword}') > 0"
         for keyword in BOND_INDEX_NAME_KEYWORDS
     )
-    return f"NOT ({checks})"
+    codes = ", ".join(f"'{code}'" for code in BOND_INDEX_CODE_EXCLUSIONS)
+    return f"NOT ({checks} OR {code_expr} IN ({codes}))"
 
 
 def qmt_universe_filter_sql(
@@ -50,7 +60,7 @@ def qmt_universe_filter_sql(
     if "stock" in kinds:
         parts.append(f"{type_expr} = 'stock'")
     if "index" in kinds:
-        parts.append(f"({type_expr} = 'index' AND {bond_index_exclusion_sql(name_expr)} "
+        parts.append(f"({type_expr} = 'index' AND {bond_index_exclusion_sql(name_expr, code_expr)} "
                      f"AND NOT ({code_expr} LIKE '395___.SZ'))")
     if "etf" in kinds:
         parts.append(
