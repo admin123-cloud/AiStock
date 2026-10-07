@@ -13,6 +13,7 @@ import shutil
 import sys
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -52,8 +53,18 @@ def stable_id(period, code, key):
     return int.from_bytes(hashlib.blake2b(f'{period}|{code}|{key}'.encode(), digest_size=8).digest(), 'big')
 
 
+@lru_cache(maxsize=4096)
 def epoch(text):
     return int(datetime.strptime(str(text), '%Y%m%d%H%M%S').replace(tzinfo=TZ).timestamp())
+
+
+@lru_cache(maxsize=4096)
+def market_datetime(text):
+    return datetime.fromtimestamp(epoch(text), TZ)
+
+
+def field_values(frame):
+    return (frame if list(frame.columns) == FIELDS else frame[FIELDS]).to_numpy(dtype=float, copy=False)
 
 
 def valid_values(values):
@@ -66,16 +77,19 @@ def validate_day(day, frame, daily, instrument_type):
     """No approximate slot closure, unit guessing, or daily synthesis."""
     if list(map(str, frame.index)) != [day + slot for slot in SLOTS]:
         return 'minute_slots_not_closed'
-    values = frame[FIELDS].to_numpy(dtype=float)
-    if not all(valid_values(row) for row in values) or not valid_values(daily[FIELDS]):
+    values = field_values(frame)
+    if (not np.isfinite(values).all() or values[:, :4].min() <= 0 or values[:, 4:].min() < 0
+            or (values[:, 1]+1e-8 < values[:, [0, 2, 3]].max(axis=1)).any()
+            or (values[:, 2]-1e-8 > values[:, [0, 1, 3]].min(axis=1)).any()
+            or not valid_values(daily[FIELDS])):
         return 'invalid_ohlc_or_quantity'
-    if not all(math.isclose(float(v), round(float(v)), abs_tol=1e-5) for v in values[:, 4]):
+    if not np.isclose(values[:, 4], np.rint(values[:, 4]), rtol=0, atol=1e-5).all():
         return 'native_minute_volume_not_integer_lots'
-    if float(frame.low.min()) < float(daily.low) - 0.011 or float(frame.high.max()) > float(daily.high) + 0.011:
+    if values[:, 2].min() < float(daily.low) - 0.011 or values[:, 1].max() > float(daily.high) + 0.011:
         return 'minute_outside_native_daily_range'
-    if not math.isclose(float(frame.volume.sum()), float(daily.volume), rel_tol=0.005, abs_tol=1):
+    if not math.isclose(float(values[:, 4].sum()), float(daily.volume), rel_tol=0.005, abs_tol=1):
         return 'native_minute_daily_volume_mismatch'
-    if not math.isclose(float(frame.amount.sum()), float(daily.amount), rel_tol=0.005, abs_tol=1):
+    if not math.isclose(float(values[:, 5].sum()), float(daily.amount), rel_tol=0.005, abs_tol=1):
         return 'native_minute_daily_amount_mismatch'
     return None
 
@@ -94,7 +108,7 @@ def validate_daily(daily, instrument_type):
 
 def aggregate(frame, minutes):
     size = minutes // 5
-    values = frame[FIELDS].to_numpy(dtype=float).reshape(48 // size, size, 6)
+    values = field_values(frame).reshape(48 // size, size, 6)
     result = np.column_stack((values[:, 0, 0], values[:, :, 1].max(axis=1),
                               values[:, :, 2].min(axis=1), values[:, -1, 3],
                               values[:, :, 4].sum(axis=1), values[:, :, 5].sum(axis=1)))
@@ -267,7 +281,7 @@ def main():
                         continue
                     for period in (5, 15, 30, 60):
                         for timestamp, values in aggregate(m, period):
-                            dt = datetime.fromtimestamp(epoch(timestamp), TZ)
+                            dt = market_datetime(timestamp)
                             values[4] = int(round(values[4])) if period == 5 else values[4]
                             targets[period].append((code, dt, *values, now, stable_id(period, code, timestamp)))
             results = []

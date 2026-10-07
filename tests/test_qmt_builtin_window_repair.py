@@ -38,6 +38,14 @@ def test_fractional_five_minute_lots_are_not_truncated():
     assert validate_day('20260930', frame, daily, 'stock') == 'native_minute_volume_not_integer_lots'
 
 
+def test_aggregation_preserves_open_close_and_extremes():
+    frame, _ = sample()
+    frame.iloc[:3] = [[10,12,9,11,100,100000], [11,13,10,12,200,220000], [12,14,8,10,300,330000]]
+    timestamp, values = aggregate(frame, 15)[0]
+    assert timestamp == '20260930094500'
+    assert values == [10,14,8,10,600,650000]
+
+
 def test_epoch_is_independent_of_host_timezone():
     assert epoch('20260930150000') == int(datetime(2026, 9, 30, 7, tzinfo=timezone.utc).timestamp())
 
