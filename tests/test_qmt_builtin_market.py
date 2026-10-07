@@ -56,6 +56,33 @@ def test_source_history_preserves_native_units_through_higher_period_reshape(nat
     assert frame.volume.iloc[0] == 123
 
 
+def test_native_batch_download_and_details_use_serial_sdk_and_exact_codes(native):
+    api, context, downloads, worker = native
+    codes = ["600000.SH", "000001.SZ"]
+    api.connect()
+    progress = []
+    api.download_history_data2(codes, "15m", "20260801", "20260930", callback=progress.append)
+    assert downloads == [(code, "5m", "20260801", "20260930") for code in codes]
+    assert [item["stockcode"] for item in progress] == codes
+    assert [item["finished"] for item in progress] == [1, 2]
+    assert set(api.get_instrument_detail_list(codes)) == set(codes)
+
+
+def test_native_batch_partial_download_error_keeps_success_and_failure_identity(native, monkeypatch):
+    api = native[0]
+    api.connect()
+    def download(code, *args):
+        if code == "000001.SZ":
+            raise ValueError("download rejected")
+    monkeypatch.setattr(model, "download_history_data", download)
+    result = api._request("download_history_data2", {"codes": ["600000.SH", "000001.SZ"], "period": "1d"})
+    assert result["completed"] == ["600000.SH"]
+    assert result["failures"][0]["code"] == "000001.SZ"
+    assert result["data_delivery_verified"] is False
+    with pytest.raises(QmtBuiltinError, match="failed codes"):
+        api.download_history_data2(["600000.SH", "000001.SZ"], "1d")
+
+
 class Context:
     def __init__(self):
         self.calls = []

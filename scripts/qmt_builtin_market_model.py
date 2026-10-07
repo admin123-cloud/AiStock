@@ -19,6 +19,7 @@ ALLOWED = frozenset([
     "get_full_tick", "get_market_data_ex", "download_history_data",
     "get_stock_list_in_sector", "get_instrument_detail", "get_trading_dates",
     "get_sector_list", "download_sector_data", "download_history_contracts",
+    "download_history_data2", "get_instrument_detail_list",
     "subscribe_whole_quote", "unsubscribe_quote"])
 _state = {"ready": False, "session": None, "streams": {}, "busy": False}
 
@@ -77,6 +78,10 @@ def _capabilities(C):
     for name in ["download_history_data", "download_sector_data", "download_history_contracts"]:
         if callable(globals().get(name)):
             available.append(name)
+    if "download_history_data" in available:
+        available.append("download_history_data2")
+    if "get_instrument_detail" in available:
+        available.append("get_instrument_detail_list")
     return sorted(available)
 
 
@@ -126,18 +131,35 @@ def _dispatch(C, operation, args):
         return {code: {"index": [str(i) for i in frame.index],
                        "columns": list(frame.columns), "data": frame.values.tolist()}
                 for code, frame in (result or {}).items()}
-    if operation == "download_history_data":
-        code = _codes([args["code"]])[0]
+    if operation in ["download_history_data", "download_history_data2"]:
+        codes = _codes(args["codes"] if operation == "download_history_data2" else [args["code"]])
+        if len(codes) > 16:
+            raise ValueError("native download batch must contain at most 16 codes")
         period = args["period"]
         if period not in ["1d", "5m", "15m", "30m", "60m", "1h"]:
             raise ValueError("unsupported download period")
         period = "5m" if period in ["15m", "30m", "60m", "1h"] else period
-        download_history_data(code, period, args.get("start_time", ""), args.get("end_time", ""))
-        return {"request_completed": True, "base_period": period, "data_delivery_verified": False}
+        completed, failures = [], []
+        for code in codes:
+            try:
+                download_history_data(code, period, args.get("start_time", ""), args.get("end_time", ""))
+                completed.append(code)
+            except Exception as exc:
+                failures.append({"code": code, "error_type": type(exc).__name__, "error": str(exc)})
+            _heartbeat(C)
+        if operation == "download_history_data" and failures:
+            raise RuntimeError(failures[0]["error"])
+        return {"request_completed": not failures, "base_period": period,
+                "completed": completed, "failures": failures, "data_delivery_verified": False}
     if operation == "get_stock_list_in_sector":
         return C.get_stock_list_in_sector(args["sector"], args.get("real_timetag", -1))
     if operation == "get_instrument_detail":
         return C.get_instrument_detail(_codes([args["code"]])[0])
+    if operation == "get_instrument_detail_list":
+        codes = _codes(args["codes"])
+        if len(codes) > 32:
+            raise ValueError("native detail batch must contain at most 32 codes")
+        return {code: C.get_instrument_detail(code) for code in codes}
     if operation == "get_trading_dates":
         # Big QMT requires a security code and a positive count, not a market and -1.
         return C.get_trading_dates(_codes([args["code"]])[0], args.get("start_time", ""),

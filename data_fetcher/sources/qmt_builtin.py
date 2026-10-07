@@ -136,6 +136,22 @@ class QmtBuiltinMarketApi:
                                end_time: str = "", callback=None, incrementally=None) -> None:
         if incrementally is not None:
             raise QmtBuiltinCapabilityError("Native downloader has no confirmed incrementally parameter")
+        if "download_history_data2" in self.health().get("capabilities", []):
+            finished = 0
+            for offset in range(0, len(stock_list), 16):
+                batch = stock_list[offset:offset + 16]
+                result = self._request("download_history_data2", {
+                    "codes": batch, "period": period, "start_time": start_time, "end_time": end_time},
+                    timeout=float(os.getenv("AISTOCK_QMT_BUILTIN_DOWNLOAD_TIMEOUT", "120")))
+                if (set(result.get("completed", [])) | {item["code"] for item in result.get("failures", [])}) != set(batch):
+                    raise QmtBuiltinError("Native download batch completion identity mismatch")
+                for code in result["completed"]:
+                    finished += 1
+                    if callback is not None:
+                        callback({"finished": finished, "total": len(stock_list), "stockcode": code})
+                if result.get("failures"):
+                    raise QmtBuiltinError("Native download batch has failed codes: " + json.dumps(result, ensure_ascii=False))
+            return
         for offset, code in enumerate(stock_list, 1):
             self.download_history_data(code, period, start_time, end_time)
             if callback is not None:
@@ -183,6 +199,17 @@ class QmtBuiltinMarketApi:
         return self._request("get_instrument_detail", {"code": stock_code}) or {}
 
     def get_instrument_detail_list(self, stock_list: list[str], iscomplete: bool = False) -> dict[str, Any]:
+        if iscomplete:
+            raise QmtBuiltinCapabilityError("Complete/expired instrument metadata is not confirmed on native API")
+        if "get_instrument_detail_list" in self.health().get("capabilities", []):
+            details = {}
+            for offset in range(0, len(stock_list), 32):
+                batch = stock_list[offset:offset + 32]
+                result = self._request("get_instrument_detail_list", {"codes": batch}) or {}
+                if set(result) != set(batch):
+                    raise QmtBuiltinError("Native instrument detail batch identity mismatch")
+                details.update(result)
+            return details
         return {code: self.get_instrument_detail(code, iscomplete) for code in stock_list}
 
     def download_history_contracts(self, incrementally: bool = True) -> Any:
