@@ -1,10 +1,13 @@
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
+import hashlib
+import pytest
 
 import pandas as pd
 
 from scripts.repair_qmt_builtin_window import (
     FIELDS, SLOTS, aggregate, epoch, same, validate_day, validate_daily,
+    load_raw,
 )
 from scripts.qmtmini_daily_backfill_validate import reconcile_verified_pending_listing_metadata
 
@@ -77,3 +80,22 @@ def test_pending_ipo_update_keeps_date_guard_against_concurrent_refresh():
         ('301686.SZ',date(2026,9,11)),('920201.BJ',date(2026,9,24))]),command=commands.append)
     assert reconcile_verified_pending_listing_metadata(client) == 1
     assert len(commands) == 1 and 'list_date <= toDate' in commands[0]
+
+
+def test_changed_source_file_blocks_loading_before_any_write(tmp_path):
+    path=tmp_path/'native_raw'/'600000.SH_5m.parquet'
+    path.parent.mkdir()
+    sample()[0].to_parquet(path)
+    manifest={'files':{'600000.SH_5m':{'file':str(path),'rows':48,
+                'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}}}
+    path.write_bytes(path.read_bytes()+b'changed')
+    with pytest.raises(RuntimeError,match='hash mismatch'):
+        load_raw(tmp_path,'600000.SH','5m',manifest)
+
+
+def test_source_manifest_cannot_reference_a_file_outside_root(tmp_path):
+    root=tmp_path/'artifact';root.mkdir()
+    path=tmp_path/'external.parquet'
+    manifest={'files':{'600000.SH_5m':{'file':str(path),'rows':48,'sha256':'unused'}}}
+    with pytest.raises(RuntimeError,match='outside frozen artifact root'):
+        load_raw(root,'600000.SH','5m',manifest)

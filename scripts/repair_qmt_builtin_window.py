@@ -207,11 +207,27 @@ def main():
     args = parser.parse_args()
     root = args.root
     manifest = json.loads((root / args.manifest).read_text(encoding='utf-8'))
+    manifest_digest = sha(root / args.manifest)
     scope = json.loads((root / 'scope_audit.json').read_text(encoding='utf-8'))
     if manifest['scope_sha256'] != sha(root / 'scope_audit.json') or not manifest['complete']:
         raise RuntimeError('Source manifest incomplete or scope changed')
     if manifest['source'] != 'qmt_builtin_contextinfo' or manifest['dividend_type'] != 'none' or manifest['fill_data']:
         raise RuntimeError('Unexpected source or price contract')
+    # An independently downloaded, immutable minute export may supersede the
+    # initial cache. Its completeness describes export closure, not coverage.
+    overlay_path = root / 'native_minute_refreshed_manifest.json'
+    overlay_digest = None
+    if overlay_path.exists():
+        overlay_bytes = overlay_path.read_bytes()
+        overlay = json.loads(overlay_bytes.decode('utf-8'))
+        if overlay.get('complete'):
+            if (overlay['scope_sha256'] != manifest['scope_sha256']
+                    or overlay['source'] != 'qmt_builtin_contextinfo'
+                    or overlay['dividend_type'] != 'none' or overlay['fill_data']
+                    or any(not key.endswith('_5m') for key in overlay['files'])):
+                raise RuntimeError('Minute overlay source/scope contract mismatch')
+            manifest['files'].update({key:value for key,value in overlay['files'].items() if key in manifest['files']})
+            overlay_digest = hashlib.sha256(overlay_bytes).hexdigest()
     metadata = {r[0]: r for r in scope['stock_metadata']}
     metadata_path = root / 'native_scope_metadata.json'
     metadata_bytes = metadata_path.read_bytes()
@@ -228,9 +244,10 @@ def main():
         raise ValueError('Batch size must be between 1 and 128')
     out = root / ('apply_' if args.apply else 'audit_') / datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
     out.mkdir(parents=True)
-    summary = {'source_manifest': str(root / args.manifest), 'manifest_sha256': sha(root / args.manifest),
+    summary = {'source_manifest': str(root / args.manifest), 'manifest_sha256': manifest_digest,
                'script_sha256': sha(Path(__file__)), 'apply_requested': args.apply,
                'metadata_file': str(metadata_path), 'metadata_sha256': hashlib.sha256(metadata_bytes).hexdigest(),
+               'minute_overlay': str(overlay_path) if overlay_digest else None, 'minute_overlay_sha256': overlay_digest,
                'codes': len(codes), 'complete': False, 'tables': {}, 'issues': {}, 'batches': []}
     ch = ch_client()
     issues = Counter()
