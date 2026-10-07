@@ -160,6 +160,10 @@ def fetch_existing(ch, table, codes, daily=False):
 def repair_table(ch, table, candidates, codes, output, label, apply, daily=False):
     columns = DAILY_COLUMNS if daily else MINUTE_COLUMNS
     existing = fetch_existing(ch, table, codes, daily)
+    candidate_keys = {(row[0], row[1] if daily else int(row[1].timestamp())) for row in candidates}
+    if len(candidate_keys) != len(candidates):
+        raise RuntimeError('Duplicate native target keys: ' + table)
+    canonical_only = sorted(set(existing) - candidate_keys)
     missing, corrected, unchanged = [], [], 0
     for row in candidates:
         key = (row[0], row[1] if daily else int(row[1].timestamp()))
@@ -178,7 +182,16 @@ def repair_table(ch, table, candidates, codes, output, label, apply, daily=False
             unchanged += 1
     additions = missing + [item[2] for item in corrected]
     report = {'table': table, 'missing': len(missing), 'corrections': len(corrected),
-              'unchanged': unchanged, 'applied': False, 'readback_verified': False}
+              'unchanged': unchanged, 'canonical_only': len(canonical_only),
+              'native_target_rows': len(candidates), 'formal_rows': len(existing),
+              'applied': False, 'readback_verified': False}
+    if canonical_only:
+        # Preserve both directions of the reconciliation. These keys may be
+        # outside lifecycle, suspended, or blocked by source validation; their
+        # presence never authorizes removal or fabricated source coverage.
+        extra = output / f'{label}_{table}_canonical_only.parquet'
+        pd.DataFrame(canonical_only, columns=['code', 'trade_date' if daily else 'key_epoch']).to_parquet(extra)
+        report.update(canonical_only_file=str(extra), canonical_only_sha256=sha(extra))
     if not apply or not additions:
         return report
     if shutil.disk_usage(output).free < 2_000_000_000:
@@ -333,7 +346,7 @@ def main():
                 result = repair_table(ch, table, rows, batch, out, f'{offset:05d}', args.apply, period == '1d')
                 results.append(result)
                 totals = summary['tables'].setdefault(table, Counter())
-                for name in ('missing', 'corrections', 'unchanged'):
+                for name in ('missing', 'corrections', 'unchanged', 'canonical_only', 'native_target_rows', 'formal_rows'):
                     totals[name] += result[name]
             summary['batches'].append({'offset': offset, 'codes': batch, 'results': results})
             summary['issues'] = dict(issues)

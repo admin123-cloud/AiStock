@@ -9,6 +9,7 @@ from scripts.repair_qmt_builtin_window import (
     FIELDS, SLOTS, aggregate, epoch, same, validate_day, validate_daily,
     load_raw,
     verified_absence,
+    repair_table,
 )
 from scripts.qmtmini_daily_backfill_validate import reconcile_verified_pending_listing_metadata
 
@@ -107,3 +108,22 @@ def test_retirement_trading_day_is_not_excluded_by_earlier_suspension():
                 'status':'suspended','evidence_url':'https://www.szse.cn/notice'}]}
     assert verified_absence(metadata,'301139.SZ','20260929') is not None
     assert verified_absence(metadata,'301139.SZ','20260930') is None
+
+
+def test_reconciliation_reports_canonical_only_keys_without_removing_them(tmp_path, monkeypatch):
+    existing_key=('600000.SH',date(2026,9,29))
+    monkeypatch.setattr('scripts.repair_qmt_builtin_window.fetch_existing',
+                        lambda *a,**k: {existing_key: ()})
+    client=SimpleNamespace(insert=lambda *a,**k: pytest.fail('No writes expected'))
+    result=repair_table(client,'kline_daily',[],['600000.SH'],tmp_path,'probe',True,daily=True)
+    assert result['canonical_only'] == 1 and result['native_target_rows'] == 0
+    assert not result['applied']
+    evidence=pd.read_parquet(result['canonical_only_file'])
+    assert list(evidence.itertuples(index=False,name=None)) == [existing_key]
+
+
+def test_duplicate_source_target_keys_stop_before_insert(tmp_path, monkeypatch):
+    monkeypatch.setattr('scripts.repair_qmt_builtin_window.fetch_existing',lambda *a,**k: {})
+    row=('600000.SH',date(2026,9,30),10.,11.,9.,10.5,100.,100000.,0.,0.,0.,0.,datetime.now(),1)
+    with pytest.raises(RuntimeError,match='Duplicate native target'):
+        repair_table(None,'kline_daily',[row,row],['600000.SH'],tmp_path,'probe',True,daily=True)
