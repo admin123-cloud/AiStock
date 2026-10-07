@@ -230,6 +230,23 @@ def test_expired_and_trading_requests_never_execute(native):
         model._dispatch(context, "passorder", {})
 
 
+def test_native_pump_serves_oldest_request_even_when_uuid_sorts_last(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setattr(model, "BRIDGE_ROOT", str(tmp_path))
+    context = Context()
+    model.init(context)
+    oldest, newer = "f" * 32, "0" * 32
+    for request_id, timestamp in [(oldest, time.time() - 5), (newer, time.time())]:
+        path = tmp_path / "requests" / (request_id + ".json")
+        _write_json(path, {"protocol": 1, "id": request_id, "session": model._state["session"],
+            "operation": "get_full_tick", "arguments": {"codes": ["600000.SH"]},
+            "deadline_epoch": time.time() + 30})
+        os.utime(path, (timestamp, timestamp))
+    model.aistock_market_pump(context)
+    assert (tmp_path / "responses" / (oldest + ".json")).exists()
+    assert (tmp_path / "requests" / (newer + ".json")).exists()
+
+
 def test_unavailable_and_stale_model_are_rejected(tmp_path):
     api = QmtBuiltinMarketApi(tmp_path, timeout=0.1)
     with pytest.raises(QmtBuiltinError, match="not running"):

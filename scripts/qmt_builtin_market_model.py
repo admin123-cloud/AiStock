@@ -236,12 +236,20 @@ def aistock_market_pump(C):
     try:
         _flush_streams(C)
         _heartbeat(C)
-        pending = sorted(name for name in os.listdir(_path("requests"))
-                         if re.fullmatch(r"[0-9a-f]{32}\.json", name))
+        pending = []
+        for name in os.listdir(_path("requests")):
+            if not re.fullmatch(r"[0-9a-f]{32}\.json", name):
+                continue
+            try:
+                pending.append((os.stat(_path("requests", name)).st_mtime_ns, name))
+            except FileNotFoundError:
+                # A caller can cancel an unclaimed request while we scan.
+                continue
+        pending.sort()
         # One request per timer invocation; serialized on QMT's model thread.
         if not pending:
             return
-        name = pending[0]
+        name = pending[0][1]
         request_path = _path("requests", name)
         claimed = _path("processing", name)
         try:
