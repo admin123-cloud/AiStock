@@ -41,7 +41,8 @@ def _normalize_code(value: Any) -> str:
 
 
 def _full_tick(codes: list[str]) -> dict[str, Any]:
-    from xtquant import xtdata  # type: ignore
+    from data_fetcher.sources.qmt_market_transport import load_market_api
+    xtdata = load_market_api()
 
     xtdata.enable_hello = False
     # QMT Mini versions differ: connect() may return 0, None, or an empty
@@ -72,7 +73,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/health":
-            self._write(HTTPStatus.OK, {"ok": True, "mode": "read_only_qmt_bridge", "qmt_port": QMT_PORT})
+            try:
+                from data_fetcher.sources.qmt_market_transport import load_market_api, market_transport
+                transport = market_transport()
+                connection = load_market_api().connect(QMT_HOST, QMT_PORT)
+                self._write(HTTPStatus.OK, {"ok": True, "mode": "read_only_qmt_bridge", "transport": transport,
+                                           "qmt_port": QMT_PORT if transport == "xtquant" else None,
+                                           "market_connection": connection, "account_verified": False})
+            except Exception as exc:
+                self._write(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "message": f"{type(exc).__name__}: {exc}"})
             return
         if parsed.path == "/account-snapshot":
             try:
@@ -90,7 +99,10 @@ class Handler(BaseHTTPRequestHandler):
             self._write(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "codes is required"})
             return
         try:
-            self._write(HTTPStatus.OK, {"ok": True, "ticks": _full_tick(codes), "qmt_port": QMT_PORT})
+            from data_fetcher.sources.qmt_market_transport import market_transport
+            transport = market_transport()
+            self._write(HTTPStatus.OK, {"ok": True, "ticks": _full_tick(codes), "transport": transport,
+                                       "qmt_port": QMT_PORT if transport == "xtquant" else None})
         except Exception as exc:
             self._write(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "message": f"{type(exc).__name__}: {exc}"})
 

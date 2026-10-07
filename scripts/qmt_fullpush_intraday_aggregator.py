@@ -234,6 +234,7 @@ class BarState:
 class FullPushAggregator:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        self.market_transport = "xtquant"
         self.allowed_codes: set[str] = set()
         self.lock = Lock()
         self.latest_ticks: dict[str, dict[str, Any]] = {}
@@ -276,7 +277,12 @@ class FullPushAggregator:
                 self.received_codes.add(code)
                 if not update_bars:
                     continue
-                cum_volume = tick_number(tick, "pvolume", "volume")
+                if self.market_transport == "builtin":
+                    if "volume" not in tick:
+                        raise ValueError("Native tick volume in lots is missing")
+                    cum_volume = tick_number(tick, "volume")
+                else:
+                    cum_volume = tick_number(tick, "pvolume", "volume")
                 if "pvolume" not in tick and "volume" in tick:
                     self.volume_field = "volume"
                 cum_amount = tick_number(tick, "amount")
@@ -352,8 +358,15 @@ class FullPushAggregator:
             if last_price <= 0 or open_price <= 0 or high_price <= 0 or low_price <= 0:
                 continue
             prev_close = tick_number(tick, "lastClose", "preClose", default=0.0)
-            # QMT tick pvolume/volume is in shares; kline_daily uses lots.
-            volume = tick_number(tick, "pvolume", "volume") / 100.0
+            # Native volume is lots; pvolume varies by exchange (including BJ).
+            if self.market_transport == "builtin":
+                if "volume" not in tick:
+                    raise ValueError("Native tick volume in lots is missing")
+                volume = tick_number(tick, "volume")
+            elif "pvolume" in tick:
+                volume = tick_number(tick, "pvolume") / 100.0
+            else:
+                volume = tick_number(tick, "volume") / 100.0
             amount = tick_number(tick, "amount")
             change_amount = last_price - prev_close if prev_close > 0 else 0.0
             change_pct = change_amount / prev_close * 100 if prev_close > 0 else 0.0
@@ -645,7 +658,8 @@ def main() -> int:
 
     os.environ.setdefault("AISTOCK_QMT_QUOTE_HOST", "127.0.0.1")
     os.environ.setdefault("AISTOCK_QMT_QUOTE_PORT", "58610")
-    from xtquant import xtdata  # type: ignore
+    from data_fetcher.sources.qmt_market_transport import load_market_api
+    xtdata = load_market_api()
 
     host = os.getenv("AISTOCK_QMT_QUOTE_HOST", "127.0.0.1")
     port = int(os.getenv("AISTOCK_QMT_QUOTE_PORT", "58610"))
@@ -689,6 +703,7 @@ def main() -> int:
             cache_seed["error"] = f"{type(exc).__name__}: {exc}"
             log(f"QMT 5m history cache seed failed: {cache_seed['error']}")
     aggregator = FullPushAggregator(args)
+    aggregator.market_transport = getattr(xtdata, "transport", "xtquant")
     aggregator.allowed_codes = set(codes)
     stopped = {"value": False}
 
@@ -698,7 +713,8 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_stop)
     signal.signal(signal.SIGTERM, _handle_stop)
 
-    seq = xtdata.subscribe_whole_quote(markets, aggregator.on_data)
+    subscription_codes = codes if getattr(xtdata, "transport", "xtquant") == "builtin" else markets
+    seq = xtdata.subscribe_whole_quote(subscription_codes, aggregator.on_data)
     log(f"subscribed full-push markets={markets} seq={seq} codes={len(codes)} dry_run={args.dry_run}")
     started = time.monotonic()
     last_flush = started
@@ -737,6 +753,8 @@ def main() -> int:
             log(f"initial full_tick count={count} received_codes={len(aggregator.received_codes)} flush={initial_summary}")
         _maybe_start_full_tick_poll()
         while not stopped["value"]:
+            if getattr(xtdata, "transport", "xtquant") == "builtin":
+                xtdata.check_stream_health()
             now = time.monotonic()
             if now - last_flush >= max(1, args.flush_interval_sec):
                 summary = flush_once(aggregator)

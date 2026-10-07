@@ -14283,20 +14283,24 @@ def _read_qmt_ticks(codes: list[str], source: dict[str, Any]) -> dict[str, Any]:
             body = response.json()
             if not isinstance(body, dict) or not body.get("ok") or not isinstance(body.get("ticks"), dict):
                 raise RuntimeError(str((body or {}).get("message") or "invalid bridge response"))
-            source["provider"] = "QMT xtdata host bridge"
+            source["provider"] = ("QMT 大客户端内置行情桥接" if body.get("transport") == "builtin"
+                                  else "QMT xtdata host bridge")
+            source["transport"] = body.get("transport", "xtquant")
             source["bridge_url"] = bridge_url
             return body["ticks"]
         except Exception as exc:
             source["bridge_error"] = f"{type(exc).__name__}: {exc}"
             raise RuntimeError(f"QMT Tick host bridge unavailable: {source['bridge_error']}") from exc
     try:
-        from xtquant import xtdata  # type: ignore
+        from data_fetcher.sources.qmt_market_transport import load_market_api
+        xtdata = load_market_api()
 
         host = source["host"]
         port = source["port"]
         xtdata.enable_hello = False
         xtdata.connect(host, port)
-        source["provider"] = "QMT xtdata local runtime"
+        source["provider"] = ("QMT 大客户端内置行情桥接" if getattr(xtdata, "transport", "xtquant") == "builtin"
+                              else "QMT xtdata local runtime")
         return xtdata.get_full_tick(codes) or {}
     except Exception as exc:
         raise RuntimeError(f"QMT Tick local runtime unavailable: {type(exc).__name__}: {exc}") from exc

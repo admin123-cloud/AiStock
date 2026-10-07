@@ -27,9 +27,9 @@ class QmtMiniCapabilityError(QmtMiniError):
         self.function_name = function_name
         self.original_error = original_error
         super().__init__(
-            "QMT Mini service does not expose required xtdata handler "
+            "QMT market service does not expose required handler "
             f"{function_name}: {original_error}. Check broker/QMT edition, "
-            "xtquant terminal compatibility, or enable the required QMT/xtdata permission."
+            "the selected market transport compatibility, or the required QMT market permission."
         )
 
 
@@ -55,9 +55,10 @@ def _call_xtdata(function_name: str, callback):
 
 def _load_xtdata():
     try:
-        from xtquant import xtdata  # type: ignore
+        from .qmt_market_transport import load_market_api
+        xtdata = load_market_api()
     except ImportError as exc:
-        raise QmtMiniError("xtquant is not installed. Run: python -m pip install xtquant") from exc
+        raise QmtMiniError(f"Selected QMT market transport could not be loaded: {exc}") from exc
     return xtdata
 
 
@@ -111,11 +112,14 @@ class QmtMiniMarketClient:
 
     def connect(self) -> dict[str, Any]:
         xtdata = _load_xtdata()
-        xtdata.connect(self.config.quote_host, self.config.quote_port)
+        connection = xtdata.connect(self.config.quote_host, self.config.quote_port)
         self._xtdata = xtdata
         self._connected = True
+        if getattr(xtdata, "transport", "xtquant") == "builtin":
+            return connection
         return {
             "ok": True,
+            "transport": getattr(xtdata, "transport", "xtquant"),
             "quote_host": self.config.quote_host,
             "quote_port": self.config.quote_port,
             "userdata_dir": str(self.config.userdata_dir),

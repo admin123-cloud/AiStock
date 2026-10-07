@@ -133,16 +133,20 @@ def normalize_qmt_daily_units(
     frame: pd.DataFrame,
     *,
     instrument_type: str = "stock",
+    transport: str | None = None,
 ) -> pd.DataFrame:
     """Normalize raw QMT/xtquant daily fields to AiStock's storage contract.
 
-    QMT stock daily bars already use lots/yuan.  Only index volume needs the
-    legacy shares-to-lots conversion; amount is already yuan for both.
+    Native ContextInfo stock/index bars use lots/yuan. Legacy xtquant index
+    bars use shares. Keep transport metadata through every reshape.
     """
     normalized_type = str(instrument_type or "stock").strip().lower()
+    selected_transport = transport or frame.attrs.get("qmt_market_transport", "xtquant")
+    if selected_transport not in {"builtin", "xtquant"}:
+        raise ValueError(f"unsupported QMT market transport: {selected_transport!r}")
     volume_unit = (
         "shares"
-        if normalized_type == "index"
+        if normalized_type == "index" and selected_transport == "xtquant"
         else "lots"
     )
     return normalize_daily_units(
@@ -156,10 +160,11 @@ def normalize_qmt_intraday_units(
     frame: pd.DataFrame,
     *,
     instrument_type: str = "stock",
+    transport: str | None = None,
 ) -> pd.DataFrame:
     """Normalize QMT DAT/tick-derived bars to lots/yuan."""
 
-    return normalize_qmt_daily_units(frame, instrument_type=instrument_type)
+    return normalize_qmt_daily_units(frame, instrument_type=instrument_type, transport=transport)
 
 
 def normalize_tdxquant_daily_units(

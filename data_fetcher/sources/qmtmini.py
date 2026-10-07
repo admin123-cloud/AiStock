@@ -314,7 +314,7 @@ class QmtMiniDataSource(BaseDataSource):
                         "change": last - pre_close if pre_close else 0.0,
                         "change_pct": ((last - pre_close) / pre_close * 100) if pre_close else 0.0,
                         "time": datetime.now().isoformat(),
-                        "source": "qmt_xtquant",
+                        "source": "qmt_builtin_contextinfo" if getattr(self.client._xtdata, "transport", "xtquant") == "builtin" else "qmt_xtquant",
                     }
                 )
             self.mark_success()
@@ -390,6 +390,7 @@ class QmtMiniDataSource(BaseDataSource):
             result = pd.DataFrame(rows)
             if qmt_period in {"15m", "30m", "60m"} and not result.empty:
                 result = _aggregate_5m_history(result, qmt_period)
+            result.attrs.update(close_df.attrs)
             self.mark_success()
             return result
         except Exception as exc:

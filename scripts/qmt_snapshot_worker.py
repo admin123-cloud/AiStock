@@ -3,6 +3,11 @@ import argparse
 import json
 from pathlib import Path
 import os
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def main():
@@ -11,7 +16,8 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
     request=json.loads(args.request.read_text(encoding='utf-8'))
-    from xtquant import xtdata
+    from data_fetcher.sources.qmt_market_transport import load_market_api
+    xtdata = load_market_api()
     xtdata.enable_hello=False
     xtdata.connect(os.getenv('AISTOCK_QMT_QUOTE_HOST','127.0.0.1'),int(os.getenv('AISTOCK_QMT_QUOTE_PORT','58610')))
     ticks={}

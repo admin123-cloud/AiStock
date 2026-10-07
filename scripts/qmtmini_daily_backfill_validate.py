@@ -778,14 +778,14 @@ def rows_from_qmt(
             counts[code] = 0
             continue
 
-        # QMT stock daily bars already use lots/yuan.  Index volume is returned
-        # as shares and keeps the historical shares-to-lots conversion.
+        # Reshaping field frames must preserve the provider's index units.
         instrument_type = (
             "index"
             if str(code).upper() in index_codes or str(source_code).upper() in index_codes
             else "stock"
         )
-        one = normalize_qmt_daily_units(one, instrument_type=instrument_type)
+        one = normalize_qmt_daily_units(one, instrument_type=instrument_type,
+                                        transport=close_df.attrs.get("qmt_market_transport", "xtquant"))
 
         prev_close = one["close"].shift(1)
         change_amount = (one["close"] - prev_close).fillna(0.0)
