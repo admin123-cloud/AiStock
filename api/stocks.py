@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from types import SimpleNamespace
 import io
 import json
+import math
 import re
 import threading
 import os
@@ -98,6 +99,19 @@ def _minute_datetime_to_business_time(value: Any) -> datetime:
 def _clickhouse_code_filter_params(code: str) -> tuple[str, str]:
     short_code = (code or "")[:6]
     return code, short_code
+
+
+def _kline_json_number(value: Any, *, fractional: bool = True) -> Optional[float]:
+    """Keep unavailable legacy values null while preserving finite bar values."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number if fractional else int(number)
 
 
 def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
@@ -3673,12 +3687,12 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                         else:
                             date_text = str(date_value)
                         data.append({
-                            "open": float(row.open) if row.open is not None else 0,
-                            "high": float(row.high) if row.high is not None else 0,
-                            "low": float(row.low) if row.low is not None else 0,
-                            "close": float(row.close) if row.close is not None else 0,
-                            "volume": (float(row.volume) if period == "1d" else int(row.volume)) if row.volume is not None else 0,
-                            "amount": float(row.amount) if row.amount is not None else 0,
+                            "open": _kline_json_number(row.open),
+                            "high": _kline_json_number(row.high),
+                            "low": _kline_json_number(row.low),
+                            "close": _kline_json_number(row.close),
+                            "volume": _kline_json_number(row.volume, fractional=period == "1d"),
+                            "amount": _kline_json_number(row.amount),
                             "date": date_text,
                         })
 
@@ -3719,12 +3733,12 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
         data = []
         for kline in klines:
             kline_data = {
-                'open': float(kline.open) if kline.open else 0,
-                'high': float(kline.high) if kline.high else 0,
-                'low': float(kline.low) if kline.low else 0,
-                'close': float(kline.close) if kline.close else 0,
-                'volume': (float(kline.volume) if period == "1d" else int(kline.volume)) if kline.volume else 0,
-                'amount': float(kline.amount) if kline.amount else 0
+                'open': _kline_json_number(kline.open),
+                'high': _kline_json_number(kline.high),
+                'low': _kline_json_number(kline.low),
+                'close': _kline_json_number(kline.close),
+                'volume': _kline_json_number(kline.volume, fractional=period == "1d"),
+                'amount': _kline_json_number(kline.amount)
             }
             
             # 添加日期字段
