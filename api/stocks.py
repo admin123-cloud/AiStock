@@ -3677,7 +3677,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                             "high": float(row.high) if row.high is not None else 0,
                             "low": float(row.low) if row.low is not None else 0,
                             "close": float(row.close) if row.close is not None else 0,
-                            "volume": int(row.volume) if row.volume is not None else 0,
+                            "volume": (float(row.volume) if period == "1d" else int(row.volume)) if row.volume is not None else 0,
                             "amount": float(row.amount) if row.amount is not None else 0,
                             "date": date_text,
                         })
@@ -3723,7 +3723,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                 'high': float(kline.high) if kline.high else 0,
                 'low': float(kline.low) if kline.low else 0,
                 'close': float(kline.close) if kline.close else 0,
-                'volume': int(kline.volume) if kline.volume else 0,
+                'volume': (float(kline.volume) if period == "1d" else int(kline.volume)) if kline.volume else 0,
                 'amount': float(kline.amount) if kline.amount else 0
             }
             
