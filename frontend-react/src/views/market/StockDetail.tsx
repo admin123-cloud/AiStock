@@ -693,7 +693,7 @@ export default function StockDetail() {
                         >
                           {formatPercent(item.change_pct)}
                         </td>
-                        <td className="px-3 py-3 text-sm tabular-nums">{formatPercent(item.turnover_rate)}</td>
+                        <td className="px-3 py-3 text-sm tabular-nums text-zinc-600 dark:text-zinc-300">{formatPercent(item.turnover_rate)}</td>
                       </tr>
                     )
                   })}
