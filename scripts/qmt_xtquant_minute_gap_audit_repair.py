@@ -26,6 +26,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from scripts.qmtmini_daily_backfill_validate import ch_client, quote_sql
 from utils.paths import report_path
 from utils.qmt_universe import qmt_universe_filter_sql
+from utils.market_status import load_status_index, partition_status_keys, find_status_trade_conflicts
 
 
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
@@ -146,24 +147,18 @@ def load_universe(client: Any, universe: str, codes: list[str] | None = None) ->
     return df
 
 
-def expected_codes_for_date(client: Any, universe: pd.DataFrame, trade_date: str) -> list[str]:
+def expected_codes_for_date(client: Any, universe: pd.DataFrame, trade_date: str, *, return_status=False):
     day = pd.Timestamp(trade_date).normalize()
     list_dates = pd.to_datetime(universe["list_date"], errors="coerce").dt.normalize()
     rows = universe[list_dates.isna() | (list_dates <= day)]
     listed_codes = {str(code) for code in rows["code"].tolist()}
-    daily_rows = client.query(
-        f"""
-        SELECT DISTINCT code
-        FROM kline_daily
-        WHERE trade_date = toDate({quote_sql(trade_date)})
-          -- A zero-volume placeholder is emitted for securities that are not
-          -- yet listed (and for all-day suspensions).  It must not create a
-          -- minute-bar repair obligation for that date.
-          AND (volume > 0 OR amount > 0)
-        """
-    ).result_rows
-    daily_codes = {str(row[0]) for row in daily_rows if row and row[0]}
-    return sorted(listed_codes & daily_codes)
+    index = load_status_index(client, trade_date, trade_date, listed_codes)
+    keys = {(code, trade_date) for code in listed_codes}
+    decisions = partition_status_keys(keys, index, find_status_trade_conflicts(client, keys, index))
+    # A missing daily row or a zero-quantity quote is not proof of suspension.
+    # Unregistered dates remain in the expected universe, including conflicts.
+    codes = sorted(code for code in listed_codes if (code, trade_date) not in decisions['exempt'])
+    return (codes, decisions) if return_status else codes
 
 
 def audit_date_period(
@@ -176,10 +171,13 @@ def audit_date_period(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     table, expected_bars = PERIOD_TABLES[period]
     next_day = (pd.Timestamp(trade_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    codes = expected_codes_for_date(client, universe, trade_date)
+    raw_start = (pd.Timestamp(trade_date) - pd.Timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+    raw_end = (pd.Timestamp(next_day) - pd.Timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+    codes, status_decisions = expected_codes_for_date(client, universe, trade_date, return_status=True)
     meta = universe.set_index("code").to_dict("index")
     issues: list[dict[str, Any]] = []
     total_rows = 0
+    total_unique_rows = 0
     complete_codes = 0
     started = time.perf_counter()
 
@@ -189,14 +187,17 @@ def audit_date_period(
             f"""
             SELECT
                 assumeNotNull(code) AS code,
-                count() AS bars,
+                count() AS raw_bars,
+                uniqExact(datetime) AS bars,
                 countIf(NOT ({regular_time_sql(period)})) AS invalid_session_bars,
-                min(assumeNotNull(datetime)) AS min_dt,
-                max(assumeNotNull(datetime)) AS max_dt
+                uniqExactIf(tuple(toHour(toTimeZone(datetime, 'Asia/Shanghai')), toMinute(toTimeZone(datetime, 'Asia/Shanghai'))), ({regular_time_sql(period)})) AS regular_unique_slots,
+                min(toString(toTimeZone(assumeNotNull(datetime), 'Asia/Shanghai'))) AS min_dt,
+                max(toString(toTimeZone(assumeNotNull(datetime), 'Asia/Shanghai'))) AS max_dt
             FROM {table}
             WHERE code IN ({code_sql})
-              AND datetime >= toDateTime({quote_sql(trade_date + " 00:00:00")})
-              AND datetime < toDateTime({quote_sql(next_day + " 00:00:00")})
+              AND toDate(toTimeZone(datetime, 'Asia/Shanghai')) = toDate({quote_sql(trade_date)})
+              AND datetime >= toDateTime({quote_sql(raw_start)}, 'UTC')
+              AND datetime < toDateTime({quote_sql(raw_end)}, 'UTC')
             GROUP BY code
             """
         )
@@ -204,15 +205,28 @@ def audit_date_period(
         for code in code_chunk:
             row = actual.get(code)
             bars = int(row.bars or 0) if row is not None else 0
+            raw_bars = int(row.raw_bars or 0) if row is not None else 0
             invalid_session_bars = int(row.invalid_session_bars or 0) if row is not None else 0
-            total_rows += bars
+            regular_unique_slots = int(row.regular_unique_slots or 0) if row is not None else 0
+            total_rows += raw_bars
+            total_unique_rows += bars
             min_dt = str(row.min_dt) if row is not None and row.min_dt is not None else ""
             max_dt = str(row.max_dt) if row is not None and row.max_dt is not None else ""
             reason = ""
-            if bars == 0:
+            if (code, trade_date) in status_decisions['conflict']:
+                reason = "market_status_conflict"
+            elif bars == 0:
                 reason = "missing"
+            elif raw_bars > bars and bars < expected_bars:
+                reason = "duplicate_and_incomplete"
+            elif raw_bars > bars:
+                reason = "duplicate"
             elif bars < expected_bars:
                 reason = "incomplete"
+            elif bars > expected_bars:
+                reason = "unexpected_slot_count"
+            elif regular_unique_slots != expected_bars:
+                reason = "invalid_slot_set"
             elif min_dt and min_dt < trade_date + " 09:00:00":
                 reason = "bad_early_time"
             elif max_dt and max_dt < trade_date + " 15:00:00":
@@ -229,10 +243,13 @@ def audit_date_period(
                         "name": info.get("name"),
                         "stock_type": info.get("stock_type"),
                         "bars": bars,
+                        "raw_bars": raw_bars,
+                        "regular_unique_slots": regular_unique_slots,
                         "invalid_session_bars": invalid_session_bars,
                         "min_dt": min_dt,
                         "max_dt": max_dt,
                         "reason": reason,
+                        "requires_notice_review": (code, trade_date) in status_decisions['lookup'],
                     }
                 )
             else:
@@ -248,13 +265,19 @@ def audit_date_period(
         "table": table,
         "expected_bars_per_day": expected_bars,
         "expected_codes": len(codes),
+        "market_status_exempt_codes": len(status_decisions['exempt']),
+        "market_status_conflict_codes": len(status_decisions['conflict']),
+        "market_status_lookup_codes": sorted({item['code'] for item in issues
+                                               if item['requires_notice_review']}),
         "complete_codes": complete_codes,
         "issue_codes": len(issues),
         "reason_counts": reason_counts,
         "expected_rows": expected_rows,
         "actual_rows": total_rows,
-        "missing_rows": max(expected_rows - total_rows, 0),
-        "row_coverage_pct": round(total_rows / max(1, expected_rows) * 100.0, 4),
+        "actual_unique_slots": total_unique_rows,
+        "duplicate_rows": max(total_rows - total_unique_rows, 0),
+        "missing_rows": max(expected_rows - total_unique_rows, 0),
+        "row_coverage_pct": round(total_unique_rows / max(1, expected_rows) * 100.0, 4),
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
     return summary, issues
@@ -303,7 +326,8 @@ def build_repair_cmd(args: argparse.Namespace, trade_date: str, codes: list[str]
 
 
 def run_repair(args: argparse.Namespace, run_dir: Path, trade_date: str, issues: list[dict[str, Any]]) -> dict[str, Any]:
-    codes = sorted({str(item["code"]) for item in issues if item.get("code")})
+    codes = sorted({str(item["code"]) for item in issues if item.get("code")
+                    and item.get('reason') != 'market_status_conflict'})
     if args.repair_code_offset > 0:
         codes = codes[args.repair_code_offset :]
     if args.max_repair_codes > 0:

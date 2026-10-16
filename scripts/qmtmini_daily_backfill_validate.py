@@ -23,6 +23,7 @@ from utils.kline_units import normalize_qmt_daily_units
 from utils.qmt_daily_prices import daily_price_metrics
 from utils.paths import report_path
 from utils.qmt_universe import qmt_universe_filter_sql
+from utils.market_status import load_status_index, partition_status_keys, find_status_trade_conflicts
 
 
 DEFAULT_STAGE_TABLE = "kline_daily_qmtmini_lots_v1_stage"
@@ -659,18 +660,11 @@ def coverage_summary(client, args: argparse.Namespace, table: str, candidate_lim
     }
     expected, contract_counts = expected_daily_coverage_keys(codes, trade_dates, metadata)
     ensure_market_status_table(client)
-    market_status_rows = client.query(
-        f"""
-        SELECT code, start_date, end_date, status, evidence_url, reason
-        FROM {MARKET_STATUS_TABLE} FINAL
-        WHERE code IN ({code_sql})
-          AND start_date <= toDate({quote_sql(args.end_date)})
-          AND end_date >= toDate({quote_sql(args.start_date)})
-          AND status IN ('suspended', 'delisted', 'not_trading')
-          AND review_state = 'verified'
-        """
-    ).result_rows
-    market_status_excluded = known_market_status_keys(expected, market_status_rows)
+    status_index = load_status_index(client, args.start_date, args.end_date, codes)
+    status_plan = partition_status_keys(expected, status_index,
+        find_status_trade_conflicts(client, expected, status_index))
+    market_status_rows = [r for rows in status_index.by_code.values() for r in rows]
+    market_status_excluded = status_plan['exempt']
     effective_expected = expected - market_status_excluded
     actual_rows = client.query(
         f"""
@@ -713,6 +707,9 @@ def coverage_summary(client, args: argparse.Namespace, table: str, candidate_lim
         "source_absent_code_dates": len((effective_expected - actual) & source_absent),
         "market_status_excluded_code_dates": len(market_status_excluded),
         "market_status_events": len(market_status_rows),
+        "market_status_conflict_code_dates": len(status_plan['conflict']),
+        "market_status_conflicts": [{"code": c, "trade_date": str(d), "requires_notice_review": True}
+                                    for c, d in sorted(status_plan['conflict'])],
         "repair_backlog_code_dates": plan["repair_backlog_code_dates"],
         "qmt_retry_code_dates": plan["qmt_retry_code_dates"],
         "tdx_fallback_code_dates": plan["tdx_fallback_code_dates"],
