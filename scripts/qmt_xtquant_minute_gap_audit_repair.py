@@ -38,7 +38,7 @@ PERIOD_TABLES = {
 }
 
 
-def regular_time_sql(period: str, column: str = "datetime") -> str:
+def regular_time_sql(period: str, column: str = "toTimeZone(datetime, 'Asia/Shanghai')") -> str:
     step = {"5m": 5, "15m": 15, "30m": 30, "60m": 60}[period]
     values: list[str] = []
     for start, end in ((9 * 60 + 30, 11 * 60 + 30), (13 * 60, 15 * 60)):
@@ -46,7 +46,7 @@ def regular_time_sql(period: str, column: str = "datetime") -> str:
         while current <= end:
             values.append(f"({current // 60},{current % 60})")
             current += step
-    return f"(toHour({column}), toMinute({column})) IN ({','.join(values)})"
+    return f"((toHour({column}), toMinute({column})) IN ({','.join(values)}) AND toSecond({column})=0)"
 
 
 def log(message: str) -> None:
@@ -193,7 +193,7 @@ def audit_date_period(
                 uniqExactIf(tuple(toHour(toTimeZone(datetime, 'Asia/Shanghai')), toMinute(toTimeZone(datetime, 'Asia/Shanghai'))), ({regular_time_sql(period)})) AS regular_unique_slots,
                 min(toString(toTimeZone(assumeNotNull(datetime), 'Asia/Shanghai'))) AS min_dt,
                 max(toString(toTimeZone(assumeNotNull(datetime), 'Asia/Shanghai'))) AS max_dt
-            FROM {table}
+            FROM {table} FINAL
             WHERE code IN ({code_sql})
               AND toDate(toTimeZone(datetime, 'Asia/Shanghai')) = toDate({quote_sql(trade_date)})
               AND datetime >= toDateTime({quote_sql(raw_start)}, 'UTC')
