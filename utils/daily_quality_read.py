@@ -51,5 +51,9 @@ def quality_read_sql(sql):
 class QualityReadClient:
     def __init__(self, client):self._client=client
     def query(self, sql, *args, **kwargs):return self._client.query(quality_read_sql(sql), *args, **kwargs)
-    def query_df(self, sql, *args, **kwargs):return self._client.query_df(quality_read_sql(sql), *args, **kwargs)
+    def query_df(self, sql, *args, **kwargs):
+        from utils.minute_volume import PRECISE_MIN5_VIEW, normalize_min5_frame
+        query = quality_read_sql(sql)
+        frame = self._client.query_df(query, *args, **kwargs)
+        return normalize_min5_frame(frame) if PRECISE_MIN5_VIEW in query else frame
     def __getattr__(self, name):return getattr(self._client,name)

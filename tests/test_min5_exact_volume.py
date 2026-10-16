@@ -2,7 +2,7 @@ from decimal import Decimal
 import unittest
 from unittest.mock import patch
 import pandas as pd
-from utils.minute_volume import split_volume, prepare_min5_volumes, precise_minute_read_sql, quantity_json
+from utils.minute_volume import split_volume, prepare_min5_volumes, precise_minute_read_sql, quantity_json, normalize_min5_frame
 from utils.daily_quality_read import quality_read_sql
 
 
@@ -45,6 +45,14 @@ class ExactMin5VolumeTests(unittest.TestCase):
     def test_json_legacy_integer_does_not_pass_through_float(self):
         self.assertEqual(quantity_json(Decimal(2**63-1)),2**63-1)
 
+    def test_utc_storage_is_filtered_in_business_time_without_changing_source(self):
+        from utils.market_warehouse import clean_minute_bars_df
+        source=pd.DataFrame({'datetime':pd.to_datetime(['2012-01-12 01:35','2012-01-12 17:35']), 'volume':[0.5,1]})
+        result=clean_minute_bars_df(normalize_min5_frame(source),'5m')
+        self.assertEqual(len(result),1)
+        self.assertEqual(result.datetime.iloc[0].hour,9)
+        self.assertEqual(source.datetime.iloc[0].hour,1)
+
     def test_api_5m_keeps_fraction_and_integer(self):
         from api import stocks
         from types import SimpleNamespace
@@ -54,8 +62,10 @@ class ExactMin5VolumeTests(unittest.TestCase):
                 stack.enter_context(patch.object(stocks.DatabaseSessionManager,'get_session'))
                 stack.enter_context(patch.object(stocks,'_get_stock_by_code',return_value=SimpleNamespace(name='指数')))
                 stack.enter_context(patch.object(stocks,'clickhouse_available',return_value=True))
-                frame=pd.DataFrame([dict(date_value=pd.Timestamp('2012-01-12 09:35'),code='000016.SH',open=1.,high=1.,low=1.,close=1.,volume=value,amount=2.)])
+                frame=normalize_min5_frame(pd.DataFrame([dict(date_value=pd.Timestamp('2012-01-12 01:35'),code='000016.SH',open=1.,high=1.,low=1.,close=1.,volume=value,amount=2.)]))
                 stack.enter_context(patch.object(stocks,'clickhouse_query_df',return_value=frame))
-                self.assertEqual(stocks.get_stock_kline('000016.SH','5m')['data'][0]['volume'],value)
+                item=stocks.get_stock_kline('000016.SH','5m')['data'][0]
+                self.assertEqual(item['volume'],value)
+                self.assertIn('09:35:00+08:00',item['date'])
 
 if __name__=='__main__':unittest.main()

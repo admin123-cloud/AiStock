@@ -3662,7 +3662,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
             try:
                 table_name, clickhouse_date_field = CLICKHOUSE_KLINE_TABLES[period]
                 fetch_limit = int(limit)
-                if period in {"15m", "30m", "60m"}:
+                if period in {"5m", "15m", "30m", "60m"}:
                     fetch_limit = max(int(limit), 1) * 4
                 quality_columns = ', amplitude, change_pct, change_amount, turnover_rate, quality_state, quality_snapshot_stale' if period == '1d' else ''
                 df = clickhouse_query_df(
@@ -3679,7 +3679,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
 
                 data = []
                 if df is not None and not df.empty:
-                    if period in {"15m", "30m", "60m"}:
+                    if period in {"5m", "15m", "30m", "60m"}:
                         df = clean_minute_bars_df(df, period, datetime_col="date_value", code_col="code")
                         if len(df) > int(limit):
                             df = df.tail(int(limit)).reset_index(drop=True)
@@ -3689,7 +3689,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                         if isinstance(date_value, datetime):
                             date_text = (
                                 _minute_datetime_to_business_time(date_value).isoformat()
-                                if period in {"1m", "5m", "15m", "30m", "60m"}
+                                if period in {"1m", "15m", "30m", "60m"}
                                 else date_value.isoformat()
                             )
                         else:

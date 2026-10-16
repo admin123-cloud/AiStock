@@ -135,7 +135,10 @@ def clickhouse_query_df(sql: str, params: Optional[list] = None) -> pd.DataFrame
     from utils.daily_quality_read import quality_read_sql
     client = clickhouse_client()
     adapted_sql, adapted_params = _adapt_clickhouse_query(sql, params)
-    return client.query_df(quality_read_sql(adapted_sql), parameters=adapted_params)
+    query = quality_read_sql(adapted_sql)
+    frame = client.query_df(query, parameters=adapted_params)
+    from utils.minute_volume import PRECISE_MIN5_VIEW, normalize_min5_frame
+    return normalize_min5_frame(frame) if PRECISE_MIN5_VIEW in query else frame
 
 
 def clickhouse_scalar(sql: str, params: Optional[list] = None):

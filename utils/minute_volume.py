@@ -6,6 +6,16 @@ PRECISE_MIN5_VIEW = 'stock.kline_minute_5_precise'
 VOLUME_SCALE = 45
 
 
+def normalize_min5_frame(frame):
+    """Present UTC storage in business time; never shift persisted records."""
+    import pandas as pd
+    result = frame.copy()
+    for column in ('datetime', 'date_value'):
+        if column in result:
+            result[column] = pd.to_datetime(result[column], errors='coerce', utc=True).dt.tz_convert('Asia/Shanghai')
+    return result
+
+
 def split_volume(value):
     """Return legacy integer/exact decimal without rounding a source number."""
     if value is None:
