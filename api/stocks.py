@@ -69,6 +69,7 @@ def _legacy_selector_removed():
 
 CLICKHOUSE_KLINE_TABLES = {
     "1d": ("kline_daily", "trade_date"),
+    "5m": ("kline_minute_5", "datetime"),
     "15m": ("kline_minute_15", "datetime"),
     "30m": ("kline_minute_30", "datetime"),
     "60m": ("kline_minute_60", "datetime"),
@@ -105,6 +106,9 @@ def _kline_json_number(value: Any, *, fractional: bool = True) -> Optional[float
     """Keep unavailable legacy values null while preserving finite bar values."""
     if value is None:
         return None
+    from decimal import Decimal
+    if isinstance(value, (int, Decimal)) and (not isinstance(value, Decimal) or value.is_finite()) and value == int(value):
+        return int(value)
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -3613,6 +3617,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
         _period_alias = {
             "daily": "1d", "weekly": "1w", "monthly": "1mon",
             "quarterly": "1q", "yearly": "1y",
+            "5min": "5m",
         }
         period = _period_alias.get(period, period)
 
@@ -3628,6 +3633,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
             '1mon': KlineMonthly,
             '1q': KlineQuarterly,
             '1m': KlineMinute1,
+            '5m': KlineMinute5,
             '15m': KlineMinute15,
             '30m': KlineMinute30,
             '60m': KlineMinute60
@@ -3645,6 +3651,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
             '1q': 'year',
             '1y': 'year',
             '1m': 'datetime',
+            '5m': 'datetime',
             '15m': 'datetime',
             '30m': 'datetime',
             '60m': 'datetime'
@@ -3692,7 +3699,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                             "high": _kline_json_number(row.high),
                             "low": _kline_json_number(row.low),
                             "close": _kline_json_number(row.close),
-                            "volume": _kline_json_number(row.volume, fractional=period == "1d"),
+                            "volume": _kline_json_number(row.volume, fractional=period in {"1d", "5m"}),
                             "amount": _kline_json_number(row.amount),
                             "date": date_text,
                         })
@@ -3721,8 +3728,8 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                     "intraday_daily": intraday_daily,
                 }
             except Exception as exc:
-                if period == '1d':
-                    raise HTTPException(status_code=503, detail='日线质量读取暂不可用，请稍后重试') from exc
+                if period in {'1d', '5m'}:
+                    raise HTTPException(status_code=503, detail='行情精确读取暂不可用，请稍后重试') from exc
                 logger.warning(f"ClickHouse kline query fallback to SQLAlchemy engine: {exc}")
         
         # 查询K线数据
@@ -3747,7 +3754,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                 'high': _kline_json_number(kline.high),
                 'low': _kline_json_number(kline.low),
                 'close': _kline_json_number(kline.close),
-                'volume': _kline_json_number(kline.volume, fractional=period == "1d"),
+                'volume': _kline_json_number((getattr(kline, 'volume_exact', None) if period == '5m' and getattr(kline, 'volume_exact', None) is not None else kline.volume), fractional=period in {"1d", "5m"}),
                 'amount': _kline_json_number(kline.amount)
             }
             

@@ -15,6 +15,8 @@ _RESERVED = {'where','join','left','right','inner','outer','full','cross','group
 
 
 def quality_read_sql(sql):
+    from utils.minute_volume import precise_minute_read_sql
+    sql = precise_minute_read_sql(sql)
     tokens = _TOKEN.findall(sql)
     significant = [i for i,t in enumerate(tokens) if t.strip() and not t.startswith(('--','/*'))]
     if not significant or tokens[significant[0]].lower() not in {'select','with'}:

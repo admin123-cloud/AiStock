@@ -225,7 +225,8 @@ class KlineMinute5(Base):
     high = Column(DECIMAL(10, 3), nullable=False, comment='最高价')
     low = Column(DECIMAL(10, 3), nullable=False, comment='最低价')
     close = Column(DECIMAL(10, 3), nullable=False, comment='收盘价')
-    volume = Column(BigInteger, nullable=False, default=0, comment='成交量(手)')
+    volume = Column(BigInteger, nullable=True, comment='原整数成交量(手)，小数见volume_exact')
+    volume_exact = Column(DECIMAL(76, 45), nullable=True, comment='无损小数成交量，优先于原Int64列')
     amount = Column(DECIMAL(20, 2), nullable=False, default=0, comment='成交额(元)')
     created_at = Column(DateTime, default=get_current_time, comment='创建时间')
     

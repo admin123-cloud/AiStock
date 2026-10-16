@@ -286,6 +286,10 @@ def insert_kline_dataframe(period: str, df: pd.DataFrame, on_conflict: str = "ig
     if df.empty:
         return 0
 
+    if table == 'kline_minute_5':
+        from utils.minute_volume import prepare_min5_volumes
+        df = prepare_min5_volumes(df)
+
     client = clickhouse_client()
 
     if on_conflict == "upsert":
