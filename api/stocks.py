@@ -196,7 +196,7 @@ def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
         # ReplacingMergeTree row is append-only and never mutates formal daily data.
         if clickhouse_table_exists(INTRADAY_DAILY_TABLE):
             try:
-                from utils.market_warehouse import clickhouse_client
+                from utils.market_warehouse import quality_clickhouse_client as clickhouse_client
 
                 clickhouse_client().insert(
                     INTRADAY_DAILY_TABLE,
@@ -2329,8 +2329,8 @@ class StockDataSyncer:
                         "High": pd.DataFrame({target_code: pd.to_numeric(work["high"], errors="coerce").values}, index=index),
                         "Low": pd.DataFrame({target_code: pd.to_numeric(work["low"], errors="coerce").values}, index=index),
                         "Close": pd.DataFrame({target_code: pd.to_numeric(work["close"], errors="coerce").values}, index=index),
-                        "Volume": pd.DataFrame({target_code: pd.to_numeric(work["volume"], errors="coerce").fillna(0).values}, index=index),
-                        "Amount": pd.DataFrame({target_code: pd.to_numeric(work["amount"], errors="coerce").fillna(0).values}, index=index),
+                        "Volume": pd.DataFrame({target_code: pd.to_numeric(work["volume"], errors="coerce").values}, index=index),
+                        "Amount": pd.DataFrame({target_code: pd.to_numeric(work["amount"], errors="coerce").values}, index=index),
                     }
 
                 def get_stock_history(self, stock_code, start_date, end_date, period):
@@ -2849,9 +2849,9 @@ def get_stocks_with_limit(
                 if latest_kline:
                     row["latest_kline"] = {
                         "trade_date": latest_kline.trade_date.isoformat() if latest_kline.trade_date else None,
-                        "close": float(latest_kline.close) if latest_kline.close is not None else None,
-                        "change_pct": float(latest_kline.change_pct) if latest_kline.change_pct is not None else None,
-                        "amount": float(latest_kline.amount) if latest_kline.amount is not None else None,
+                        "close": _kline_json_number(latest_kline.close),
+                        "change_pct": _kline_json_number(latest_kline.change_pct),
+                        "amount": _kline_json_number(latest_kline.amount),
                         "is_provisional": bool(getattr(latest_kline, "is_provisional", False)),
                         "as_of": (
                             getattr(latest_kline, "as_of", None).isoformat(sep=" ", timespec="seconds")
@@ -2946,9 +2946,9 @@ def get_stocks_with_limit(
             if latest_kline:
                 row["latest_kline"] = {
                     "trade_date": latest_kline.trade_date.isoformat() if latest_kline.trade_date else None,
-                    "close": float(latest_kline.close) if latest_kline.close is not None else None,
-                    "change_pct": float(latest_kline.change_pct) if latest_kline.change_pct is not None else None,
-                    "amount": float(latest_kline.amount) if latest_kline.amount is not None else None,
+                    "close": _kline_json_number(latest_kline.close),
+                    "change_pct": _kline_json_number(latest_kline.change_pct),
+                    "amount": _kline_json_number(latest_kline.amount),
                     "is_provisional": bool(getattr(latest_kline, "is_provisional", False)),
                     "as_of": (
                         getattr(latest_kline, "as_of", None).isoformat(sep=" ", timespec="seconds")
@@ -3657,10 +3657,11 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                 fetch_limit = int(limit)
                 if period in {"15m", "30m", "60m"}:
                     fetch_limit = max(int(limit), 1) * 4
+                quality_columns = ', amplitude, change_pct, change_amount, turnover_rate, quality_state, quality_snapshot_stale' if period == '1d' else ''
                 df = clickhouse_query_df(
                     f"""
                     SELECT {clickhouse_date_field} AS date_value,
-                           code, open, high, low, close, volume, amount
+                           code, open, high, low, close, volume, amount {quality_columns}
                     FROM {table_name} FINAL
                     WHERE code = ?
                     ORDER BY {clickhouse_date_field} DESC
@@ -3695,6 +3696,12 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                             "amount": _kline_json_number(row.amount),
                             "date": date_text,
                         })
+                        if period == '1d':
+                            fields = ['amplitude', 'change_pct', 'change_amount', 'turnover_rate']
+                            data[-1].update({field: _kline_json_number(getattr(row, field)) for field in fields})
+                            data[-1]['quality_state'] = row.quality_state
+                            data[-1]['quality_snapshot_stale'] = bool(row.quality_snapshot_stale)
+                            data[-1]['unknown_fields'] = [field for field in ['open','high','low','close','volume','amount',*fields] if data[-1].get(field) is None]
 
                 intraday_daily = _build_intraday_daily_bar(code) if period == "1d" else None
                 if intraday_daily:
@@ -3710,9 +3717,12 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                     "data": data,
                     "total": len(data),
                     "source": "clickhouse+intraday_daily" if intraday_daily else "clickhouse",
+                    "quality_source": "stock.kline_daily_quality_read_20261016_v1" if period == '1d' else None,
                     "intraday_daily": intraday_daily,
                 }
             except Exception as exc:
+                if period == '1d':
+                    raise HTTPException(status_code=503, detail='日线质量读取暂不可用，请稍后重试') from exc
                 logger.warning(f"ClickHouse kline query fallback to SQLAlchemy engine: {exc}")
         
         # 查询K线数据

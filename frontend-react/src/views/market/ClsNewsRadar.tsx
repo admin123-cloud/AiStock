@@ -575,7 +575,7 @@ export default function ClsNewsRadar() {
                         <td className={`${tdClass} text-right tabular-nums`}>{ratioText(row.amount_ratio5)}</td>
                         <td className={`${tdClass} text-right tabular-nums`}>{ratioText(row.amount_ratio20)}</td>
                         <td className={`${tdClass} text-right font-semibold`}>
-                          <ChangeValue value={Number(row.change_pct)} />
+                          <ChangeValue value={row.change_pct} />
                         </td>
                         <td className={`${tdClass} text-right tabular-nums`}>{amountText(row.amount)}</td>
                         <td className={`${tdClass} text-right tabular-nums`}>{priceText(row.snapshot_price)}</td>

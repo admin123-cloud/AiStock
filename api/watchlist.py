@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 
 from utils.logger import get_logger
 from utils.market_warehouse import (
-    clickhouse_client,
+    quality_clickhouse_client as clickhouse_client,
     clickhouse_table_exists,
     clickhouse_query_df,
 )

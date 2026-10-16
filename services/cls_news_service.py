@@ -1,4 +1,5 @@
 from __future__ import annotations
+from utils.daily_quality_read import finite_number
 
 import json
 import math
@@ -12,7 +13,7 @@ import pandas as pd
 
 from data_fetcher.sources.cls_telegraph import ClsTelegraphClient
 from utils.logger import get_logger
-from utils.market_warehouse import clickhouse_client, clickhouse_query_df, clickhouse_table_exists
+from utils.market_warehouse import quality_clickhouse_client as clickhouse_client, clickhouse_query_df, clickhouse_table_exists
 from utils.paths import cache_path, report_path
 
 
@@ -1075,10 +1076,10 @@ def _stock_snapshot_map(codes: List[str]) -> Dict[str, Dict[str, Any]]:
                 result.setdefault(code, {}).update(
                     {
                         "trade_date": str(row.trade_date)[:10],
-                        "close": _safe_float(row.close),
-                        "change_pct": _safe_float(row.change_pct),
-                        "amount": _safe_float(row.amount),
-                        "turnover_rate": _safe_float(row.turnover_rate),
+                        "close": finite_number(row.close),
+                        "change_pct": finite_number(row.change_pct),
+                        "amount": finite_number(row.amount),
+                        "turnover_rate": finite_number(row.turnover_rate),
                     }
                 )
     except Exception as exc:
@@ -1176,6 +1177,9 @@ def _stock_capital_context_map(codes: List[str]) -> Dict[str, Dict[str, Any]]:
         if g.empty:
             continue
         latest = g.iloc[0]
+        if any(pd.isna(latest.get(field)) for field in ['amount','change_pct','turnover_rate']):
+            result[str(code)] = {'capital_proxy_score': None, 'capital_tag': '未知', 'quality_usable': False}
+            continue
         prev5 = g.iloc[1:6]
         prev20 = g.iloc[1:21]
         latest_amount = _safe_float(latest.get("amount"))
@@ -1311,6 +1315,8 @@ def query_cls_event_candidates(event_id: int, limit: int = 30, peer_limit: int =
             change_pct = info.get("change_pct")
         amount = _safe_float(info.get("snapshot_amount") or info.get("amount"))
         capital = capital_context.get(code, {})
+        if capital.get('quality_usable') is False:
+            continue
         capital_score = _safe_float(capital.get("capital_proxy_score"))
         relation_bonus = 25.0 if relation == "direct" else 10.0
         change_bonus = max(0.0, min(18.0, _safe_float(change_pct) * 2.2))

@@ -296,7 +296,7 @@ export default function Stocks() {
                   </TableCell>
                   <TableCell className="text-right font-semibold">
                     {stock.latest_kline ? (
-                      <ChangeValue value={Number(stock.latest_kline.change_pct)} />
+                      <ChangeValue value={stock.latest_kline.change_pct} />
                     ) : (
                       '-'
                     )}

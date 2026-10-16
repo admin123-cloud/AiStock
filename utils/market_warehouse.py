@@ -84,6 +84,11 @@ def clickhouse_client():
         return client
 
 
+def quality_clickhouse_client():
+    from utils.daily_quality_read import QualityReadClient
+    return QualityReadClient(clickhouse_client())
+
+
 def _adapt_clickhouse_query(sql: str, params: Optional[Any]):
     """
     Adapt legacy qmark-style SQL (`?`) + positional params to ClickHouse
@@ -127,15 +132,17 @@ def _adapt_clickhouse_query(sql: str, params: Optional[Any]):
 
 
 def clickhouse_query_df(sql: str, params: Optional[list] = None) -> pd.DataFrame:
+    from utils.daily_quality_read import quality_read_sql
     client = clickhouse_client()
     adapted_sql, adapted_params = _adapt_clickhouse_query(sql, params)
-    return client.query_df(adapted_sql, parameters=adapted_params)
+    return client.query_df(quality_read_sql(adapted_sql), parameters=adapted_params)
 
 
 def clickhouse_scalar(sql: str, params: Optional[list] = None):
+    from utils.daily_quality_read import quality_read_sql
     client = clickhouse_client()
     adapted_sql, adapted_params = _adapt_clickhouse_query(sql, params)
-    result = client.query(adapted_sql, parameters=adapted_params)
+    result = client.query(quality_read_sql(adapted_sql), parameters=adapted_params)
     if not result.result_rows:
         return None
     return result.result_rows[0][0]

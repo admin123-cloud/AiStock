@@ -25,12 +25,12 @@ export interface KLineDataItem {
   time?: string | number
   chartTime?: number
   unix_time?: number
-  open: number | string
-  high: number | string
-  low: number | string
-  close: number | string
-  volume?: number | string
-  amount?: number | string
+  open: number | string | null
+  high: number | string | null
+  low: number | string | null
+  close: number | string | null
+  volume?: number | string | null
+  amount?: number | string | null
   is_provisional?: boolean
   as_of?: string
   snapshot_at?: string
@@ -77,6 +77,10 @@ interface NormalizedBar {
   close: number
   volume: number
   amount: number
+  changePct: number
+  amplitude: number
+  turnover: number
+  dailyMetrics: boolean
   isProvisional: boolean
   asOf: string
   color: string
@@ -155,14 +159,16 @@ function formatLabel(value: unknown, interval: string): string {
 }
 
 function formatPrice(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '未知'
   const num = Number(value)
-  if (!Number.isFinite(num)) return '-'
+  if (!Number.isFinite(num)) return '未知'
   return num.toFixed(2)
 }
 
 function formatLargeNumber(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '未知'
   const num = Number(value)
-  if (!Number.isFinite(num)) return '-'
+  if (!Number.isFinite(num)) return '未知'
   if (Math.abs(num) >= 100000000) return `${(num / 100000000).toFixed(2)}亿`
   if (Math.abs(num) >= 10000) return `${(num / 10000).toFixed(2)}万`
   return num.toFixed(2)
@@ -304,6 +310,7 @@ function buildTradeMarkers(groups: MarkerGroup[]): SeriesMarker<Time>[] {
 function buildBars(data: KLineDataItem[], interval: string): NormalizedBar[] {
   const normalized = (Array.isArray(data) ? data : [])
     .map((item): NormalizedBar | null => {
+      if ([item.open,item.high,item.low,item.close].some(value => value == null || value === '')) return null
       const label = (item.date || item.datetime || item.time) as string | number | undefined
       const explicitTime = Number(item.chartTime ?? item.unix_time)
       const time =
@@ -314,8 +321,8 @@ function buildBars(data: KLineDataItem[], interval: string): NormalizedBar[] {
       const high = Number(item.high)
       const low = Number(item.low)
       const close = Number(item.close)
-      const volume = Number(item.volume || 0)
-      const amount = Number(item.amount || 0)
+      const volume = item.volume == null ? NaN : Number(item.volume)
+      const amount = item.amount == null ? NaN : Number(item.amount)
 
       if (!time || ![open, high, low, close].every(Number.isFinite)) {
         return null
@@ -329,6 +336,10 @@ function buildBars(data: KLineDataItem[], interval: string): NormalizedBar[] {
         close,
         volume,
         amount,
+        changePct: item.change_pct == null ? NaN : Number(item.change_pct),
+        amplitude: item.amplitude == null ? NaN : Number(item.amplitude),
+        turnover: item.turnover_rate == null ? NaN : Number(item.turnover_rate),
+        dailyMetrics: Object.prototype.hasOwnProperty.call(item, 'quality_state'),
         isProvisional: Boolean(item.is_provisional),
         asOf: (item.as_of as string) || (item.snapshot_at as string) || '',
         color: close >= open ? '#ff4d4f' : '#22c55e',
@@ -354,14 +365,11 @@ interface MovingAveragePoint {
 
 function createMovingAverage(data: NormalizedBar[], period: number, valueKey: 'close' | 'volume' | 'amount' = 'close'): MovingAveragePoint[] {
   const result: MovingAveragePoint[] = []
-  let sum = 0
-
   data.forEach((item, index) => {
-    sum += Number(item[valueKey] || 0)
-    if (index >= period) {
-      sum -= Number(data[index - period][valueKey] || 0)
-    }
     if (index >= period - 1) {
+      const values = data.slice(index-period+1,index+1).map(bar => bar[valueKey])
+      if (!values.every(Number.isFinite)) return
+      const sum = values.reduce((a,b) => a+b,0)
       result.push({
         time: item.time,
         value: Number((sum / period).toFixed(2)),
@@ -442,11 +450,11 @@ export default function LocalKLineChart({
   const legendBar = useMemo(() => {
     if (!activeBar) return null
     const change = activeBar.close - activeBar.open
-    const changePct = activeBar.open ? (change / activeBar.open) * 100 : 0
+    const changePct = activeBar.dailyMetrics ? activeBar.changePct : activeBar.open ? (change / activeBar.open) * 100 : NaN
     return {
       ...activeBar,
-      changeClass: change > 0 ? 'rise' : change < 0 ? 'fall' : 'flat',
-      changeText: `${change >= 0 ? '+' : ''}${formatPrice(change)} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%)`,
+      changeClass: changePct > 0 ? 'rise' : changePct < 0 ? 'fall' : 'flat',
+      changeText: Number.isFinite(changePct) ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%` : '未知',
     }
   }, [activeBar])
 
@@ -455,8 +463,8 @@ export default function LocalKLineChart({
     const previous = bars.length > 1 ? bars[bars.length - 2] : null
     const prevClose = previous?.close ?? latestBar.open
     const diff = latestBar.close - prevClose
-    const diffPct = prevClose ? (diff / prevClose) * 100 : 0
-    const amplitudeBase = latestBar.low !== 0 ? ((latestBar.high - latestBar.low) / latestBar.low) * 100 : 0
+    const diffPct = latestBar.dailyMetrics ? latestBar.changePct : prevClose ? (diff / prevClose) * 100 : NaN
+    const amplitudeBase = latestBar.dailyMetrics ? latestBar.amplitude : latestBar.low !== 0 ? ((latestBar.high - latestBar.low) / latestBar.low) * 100 : NaN
 
     return [
       {
@@ -466,10 +474,11 @@ export default function LocalKLineChart({
       },
       {
         label: '较前收',
-        value: `${diff >= 0 ? '+' : ''}${formatPrice(diff)} / ${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(2)}%`,
+        value: Number.isFinite(diffPct) ? `${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(2)}%` : '未知',
         tone: diff > 0 ? 'rise' : diff < 0 ? 'fall' : 'flat',
       },
-      { label: '振幅', value: `${amplitudeBase.toFixed(2)}%`, tone: 'neutral' as const },
+      { label: '振幅', value: Number.isFinite(amplitudeBase) ? `${amplitudeBase.toFixed(2)}%` : '未知', tone: 'neutral' as const },
+      ...(latestBar.dailyMetrics ? [{label:'换手率',value:Number.isFinite(latestBar.turnover) ? `${latestBar.turnover.toFixed(2)}%` : '未知',tone:'neutral' as const}] : []),
       { label: '成交量', value: formatLargeNumber(latestBar.volume), tone: 'neutral' as const },
       { label: '成交额', value: formatLargeNumber(latestBar.amount), tone: 'neutral' as const },
     ]
@@ -751,7 +760,7 @@ export default function LocalKLineChart({
     volumeSeries.setData(
       nextBars.map((item) => ({
         time: item.time as UTCTimestamp | BusinessDay,
-        value: item[histogramKey],
+        ...(Number.isFinite(item[histogramKey]) ? {value:item[histogramKey]} : {}),
         color: item.color,
       })),
     )

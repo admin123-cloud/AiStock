@@ -2876,7 +2876,7 @@ def _build_aistock_data_source_email_lines(workflow: dict[str, Any], runtime: di
     except Exception:
         lines.append("- 主数据源：qmt_xtquant")
     try:
-        from utils.market_warehouse import clickhouse_available, clickhouse_client, clickhouse_table_exists
+        from utils.market_warehouse import clickhouse_available, quality_clickhouse_client as clickhouse_client, clickhouse_table_exists
 
         if not clickhouse_available():
             lines.append("- ClickHouse：不可用")

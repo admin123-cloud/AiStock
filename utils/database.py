@@ -56,6 +56,11 @@ class DatabaseManager:
             poolclass=QueuePool,
         )
 
+        @event.listens_for(self._engine, 'before_cursor_execute', retval=True)
+        def quality_daily_reads(connection, cursor, statement, parameters, context, executemany):
+            from utils.daily_quality_read import quality_read_sql
+            return quality_read_sql(statement), parameters
+
         self._session_factory = sessionmaker(bind=self._engine, autocommit=False, autoflush=False)
 
     def _build_clickhouse_url(self, db_config: dict) -> str:

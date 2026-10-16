@@ -72,7 +72,7 @@ const TONE_CLASS: Record<'rise' | 'fall' | 'flat', string> = {
 }
 
 function formatAmount(amount?: number | string | null): string {
-  if (amount === null || amount === undefined) return 'N/A'
+  if (amount === null || amount === undefined) return '未知'
   if (typeof amount === 'string') return amount
   if (amount >= 100000000) return (amount / 100000000).toFixed(2) + '亿'
   if (amount >= 10000) return (amount / 10000).toFixed(2) + '万'
@@ -80,7 +80,7 @@ function formatAmount(amount?: number | string | null): string {
 }
 
 function formatNumber(num?: number | string | null): string {
-  if (num === null || num === undefined) return '-'
+  if (num === null || num === undefined) return '未知'
   if (typeof num === 'string') return num
   if (num >= 100000000) return (num / 100000000).toFixed(2) + '亿'
   if (num >= 10000) return (num / 10000).toFixed(2) + '万'
@@ -299,31 +299,31 @@ export default function IndexDetail() {
                   <TableHeader>成交量</TableHeader>
                   <TableHeader>成交额</TableHeader>
                   <TableHeader>涨跌幅</TableHeader>
+                  <TableHeader>换手率</TableHeader>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {[...bars].slice(-20).reverse().map((item, i) => {
-                  const closePct = Number(item.change_pct ?? 0)
-                  const closeUp = closePct > 0 || (Number(item.open) && Number(item.close) && Number(item.close) - Number(item.open) > 0)
-                  const closeDown = closePct < 0 || (Number(item.open) && Number(item.close) && Number(item.close) - Number(item.open) < 0)
+                  const closePct = item.change_pct == null ? NaN : Number(item.change_pct)
+                  const closeUp = closePct > 0
+                  const closeDown = closePct < 0
                   const closeTone = closeUp ? 'rise' : closeDown ? 'fall' : 'flat'
-                  let pctText = '-'
+                  let pctText = '未知'
                   const pct = item.change_pct
-                  if (pct !== undefined && pct !== null && pct !== 0) {
+                  if (pct !== undefined && pct !== null) {
                     pctText = `${Number(pct).toFixed(2)}%`
-                  } else if (item.open && item.close) {
-                    pctText = `${(((Number(item.close) - Number(item.open)) / Number(item.open)) * 100).toFixed(2)}%`
                   }
                   return (
                     <TableRow key={i}>
                       <TableCell className="tabular-nums">{formatTradeDate(item.date ?? item.datetime)}</TableCell>
-                      <TableCell className="tabular-nums">{item.open}</TableCell>
-                      <TableCell className="tabular-nums">{item.high}</TableCell>
-                      <TableCell className="tabular-nums">{item.low}</TableCell>
-                      <TableCell className={`tabular-nums ${TONE_CLASS[closeTone]}`}>{item.close}</TableCell>
+                      <TableCell className="tabular-nums">{item.open ?? '未知'}</TableCell>
+                      <TableCell className="tabular-nums">{item.high ?? '未知'}</TableCell>
+                      <TableCell className="tabular-nums">{item.low ?? '未知'}</TableCell>
+                      <TableCell className={`tabular-nums ${TONE_CLASS[closeTone]}`}>{item.close ?? '未知'}</TableCell>
                       <TableCell className="tabular-nums">{formatNumber(item.volume)}</TableCell>
                       <TableCell className="tabular-nums">{formatNumber(item.amount)}</TableCell>
                       <TableCell className={`tabular-nums ${TONE_CLASS[closeTone]}`}>{pctText}</TableCell>
+                      <TableCell className="tabular-nums">{item.turnover_rate == null ? '未知' : `${Number(item.turnover_rate).toFixed(2)}%`}</TableCell>
                     </TableRow>
                   )
                 })}

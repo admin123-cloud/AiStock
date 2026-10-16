@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from utils.market_warehouse import (
     clickhouse_available,
-    clickhouse_client,
+    quality_clickhouse_client as clickhouse_client,
     clickhouse_query_df,
     clickhouse_scalar,
     clickhouse_table_exists,
@@ -128,7 +128,7 @@ def refresh_daily_history(days: int = 30, *, force: bool = False) -> int:
             ORDER BY k.trade_date DESC LIMIT {days}
         ), base AS (
             SELECT k.trade_date, s.market, k.amount,
-                COALESCE(k.change_pct, (k.close - k.open) / NULLIF(k.open, 0) * 100) AS pct
+                k.change_pct AS pct
             FROM kline_daily k JOIN stocks s ON s.code = k.code
             WHERE s.type = 'stock' AND k.open > 0 AND k.trade_date IN dates
         )

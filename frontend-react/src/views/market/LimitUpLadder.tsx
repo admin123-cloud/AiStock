@@ -141,7 +141,7 @@ export default function LimitUpLadder() {
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                        <ChangeValue value={Number(stock.change_pct)} className="font-bold" />
+                        <ChangeValue value={stock.change_pct} className="font-bold" />
                         <span className="tabular-nums">连板 {stock.streak}</span>
                         <span className="tabular-nums">换手 {formatPct(stock.turnover_rate)}</span>
                       </div>

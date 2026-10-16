@@ -105,16 +105,17 @@ export function ChangeValue({
   suffix = '%',
   className,
 }: {
-  value: number | null | undefined
+  value: number | string | null | undefined
   digits?: number
   suffix?: string
   className?: string
 }) {
-  if (value == null || Number.isNaN(value)) {
-    return <span className={clsx('tabular-nums text-zinc-400 dark:text-zinc-500', className)}>--</span>
+  if (value == null || value === '' || !Number.isFinite(Number(value))) {
+    return <span className={clsx('tabular-nums text-zinc-400 dark:text-zinc-500', className)}>未知</span>
   }
-  const up = value > 0
-  const flat = value === 0
+  const numericValue = Number(value)
+  const up = numericValue > 0
+  const flat = numericValue === 0
   return (
     <span
       className={clsx(
@@ -128,7 +129,7 @@ export function ChangeValue({
       )}
     >
       {flat ? '—' : up ? '↑' : '↓'}
-      {Math.abs(value).toFixed(digits)}
+      {Math.abs(numericValue).toFixed(digits)}
       {suffix}
     </span>
   )

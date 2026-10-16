@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from utils.ch_gateway import ch_gateway
+from utils.daily_quality_read import finite_number
 
 CORE_INDEX_CODES = {"999999.SH", "399001.SZ"}
 DEFAULT_INDEX_JUMP_THRESHOLD = 20.0
@@ -74,7 +75,7 @@ class MarketRepository:
             for row in k_df.itertuples(index=False):
                 k_map[(row.code, str(row.trade_date)[:10])] = {
                     "trade_date": row.trade_date,
-                    "close": float(row.close or 0),
+                    "close": finite_number(row.close),
                     "volume": row.volume,
                     "amount": row.amount,
                 }
@@ -93,20 +94,20 @@ class MarketRepository:
                     blocked_codes.append({"code": c, "reason": "missing_latest_kline"})
                 continue
             prev = k_map.get((c, previous_key))
-            latest_close = float(latest.get("close") or 0)
-            change = 0.0
-            change_pct = 0.0
-            if prev and float(prev.get("close") or 0) > 0:
-                prev_close = float(prev["close"])
+            latest_close = finite_number(latest.get('close'))
+            change = None
+            change_pct = None
+            prev_close = finite_number(prev.get('close')) if prev else None
+            if latest_close is not None and prev_close is not None and prev_close > 0:
                 change = latest_close - prev_close
                 change_pct = change / prev_close * 100
 
             threshold = CORE_INDEX_JUMP_THRESHOLD if c in CORE_INDEX_CODES else DEFAULT_INDEX_JUMP_THRESHOLD
-            is_abnormal = latest_close <= 0 or (prev is not None and abs(change_pct) > threshold)
+            is_abnormal = latest_close is None or latest_close <= 0 or (change_pct is not None and abs(change_pct) > threshold)
             reason = "ok"
-            if latest_close <= 0:
+            if latest_close is None or latest_close <= 0:
                 reason = "invalid_close"
-            elif prev is not None and abs(change_pct) > threshold:
+            elif change_pct is not None and abs(change_pct) > threshold:
                 reason = f"change_pct_exceeds_{threshold}%"
 
             if c in CORE_INDEX_CODES:
@@ -160,7 +161,7 @@ class MarketRepository:
             WITH base AS (
                 SELECT
                     k.amount,
-                    COALESCE(k.change_pct, (k.close - k.open) / NULLIF(k.open, 0) * 100) AS pct
+                    k.change_pct AS pct
                 FROM kline_daily k
                 JOIN stocks s ON s.code = k.code
                 WHERE s.type = 'stock'

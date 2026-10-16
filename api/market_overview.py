@@ -22,6 +22,7 @@ from services.market_sentiment_cache import load_homepage_sentiment
 from services.margin_sentiment import load_margin_sentiment
 from utils.database import db
 from utils.logger import get_logger
+from utils.daily_quality_read import finite_number
 from utils.market_warehouse import (
     clickhouse_available,
     clickhouse_table_exists,
@@ -227,14 +228,8 @@ def _is_limit_up_day(stock: Stock, row: Any) -> bool:
     if row is None:
         return False
 
-    change_pct = _to_float(getattr(row, "change_pct", None), default=0.0)
-    if getattr(row, "change_pct", None) is None:
-        open_price = _to_float(getattr(row, "open", None), default=0.0)
-        close_price = _to_float(getattr(row, "close", None), default=0.0)
-        if open_price > 0:
-            change_pct = (close_price - open_price) / open_price * 100
-
-    return change_pct >= _limit_up_threshold(stock)
+    change_pct = finite_number(getattr(row, 'change_pct', None))
+    return change_pct is not None and change_pct >= _limit_up_threshold(stock)
 
 
 def _format_phase_reason(reasons: List[str]) -> str:
@@ -1230,13 +1225,13 @@ def _legacy_get_market_sentiment():
             return {"error": "数据库中没有K线数据"}
 
         sentiment_query = session.query(
-            func.count(case((or_(KlineDaily.change_pct > 0, and_(KlineDaily.change_pct.is_(None), KlineDaily.close > KlineDaily.open)), 1), else_=None)).label("up_count"),
-            func.count(case((or_(KlineDaily.change_pct < 0, and_(KlineDaily.change_pct.is_(None), KlineDaily.close < KlineDaily.open)), 1), else_=None)).label("down_count"),
-            func.count(case((or_(KlineDaily.change_pct == 0, and_(KlineDaily.change_pct.is_(None), KlineDaily.close == KlineDaily.open)), 1), else_=None)).label("unchanged_count"),
-            func.count(case((or_(KlineDaily.change_pct >= 5, and_(KlineDaily.change_pct.is_(None), (KlineDaily.close - KlineDaily.open) / KlineDaily.open * 100 >= 5)), 1), else_=None)).label("up_5_count"),
-            func.count(case((or_(KlineDaily.change_pct <= -5, and_(KlineDaily.change_pct.is_(None), (KlineDaily.close - KlineDaily.open) / KlineDaily.open * 100 <= -5)), 1), else_=None)).label("down_5_count"),
-            func.count(case((or_(KlineDaily.change_pct >= 9.9, and_(KlineDaily.change_pct.is_(None), (KlineDaily.close - KlineDaily.open) / KlineDaily.open * 100 >= 9.9)), 1), else_=None)).label("limit_up_count"),
-            func.count(case((or_(KlineDaily.change_pct <= -9.9, and_(KlineDaily.change_pct.is_(None), (KlineDaily.close - KlineDaily.open) / KlineDaily.open * 100 <= -9.9)), 1), else_=None)).label("limit_down_count"),
+            func.count(case((KlineDaily.change_pct > 0, 1), else_=None)).label("up_count"),
+            func.count(case((KlineDaily.change_pct < 0, 1), else_=None)).label("down_count"),
+            func.count(case((KlineDaily.change_pct == 0, 1), else_=None)).label("unchanged_count"),
+            func.count(case((KlineDaily.change_pct >= 5, 1), else_=None)).label("up_5_count"),
+            func.count(case((KlineDaily.change_pct <= -5, 1), else_=None)).label("down_5_count"),
+            func.count(case((KlineDaily.change_pct >= 9.9, 1), else_=None)).label("limit_up_count"),
+            func.count(case((KlineDaily.change_pct <= -9.9, 1), else_=None)).label("limit_down_count"),
             func.sum(KlineDaily.amount).label("total_amount"),
         ).filter(
             KlineDaily.trade_date == latest_date,
@@ -1367,7 +1362,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             SELECT
                 s.market,
                 k.amount,
-                COALESCE(k.change_pct, (k.close - k.open) / NULLIF(k.open, 0) * 100) AS pct
+                k.change_pct AS pct
             FROM {kline_table} k
             JOIN {stocks_table} s ON s.code = k.code
             WHERE s.type = 'stock'
@@ -1461,7 +1456,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
                     k.trade_date,
                     k.amount AS amount,
                     s.market AS market,
-                    COALESCE(k.change_pct, (k.close - k.open) / NULLIF(k.open, 0) * 100) AS pct
+                    k.change_pct AS pct
                 FROM {kline_table} AS k FINAL
                 JOIN {stocks_table} s ON s.code = k.code
                 WHERE s.type = 'stock'
@@ -2197,12 +2192,7 @@ def get_limit_up_ladder(
 
             ladder_total += 1
             bucket = min(streak, max_streak)
-            change_pct = _to_float(latest_row.change_pct, default=0.0)
-            if latest_row.change_pct is None:
-                open_price = _to_float(latest_row.open, default=0.0)
-                close_price = _to_float(latest_row.close, default=0.0)
-                if open_price > 0:
-                    change_pct = (close_price - open_price) / open_price * 100
+            change_pct = finite_number(latest_row.change_pct)
 
             buckets[bucket].append(
                 {
@@ -2211,9 +2201,9 @@ def get_limit_up_ladder(
                     "market": stock.market,
                     "streak": int(streak),
                     "close": round(_to_float(latest_row.close), 3),
-                    "change_pct": round(change_pct, 2),
+                    "change_pct": round(change_pct, 2) if change_pct is not None else None,
                     "amount": round(_to_float(latest_row.amount), 2),
-                    "turnover_rate": round(_to_float(latest_row.turnover_rate), 2),
+                    "turnover_rate": finite_number(latest_row.turnover_rate),
                 }
             )
 

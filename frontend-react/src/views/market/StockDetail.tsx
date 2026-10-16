@@ -70,23 +70,24 @@ function defaultLimitFor(period: string): number {
 }
 
 function toFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
   const num = Number(value)
   return Number.isFinite(num) ? num : null
 }
 
 function formatPrice(value: unknown): string {
   const num = toFiniteNumber(value)
-  return num === null ? '-' : num.toFixed(2)
+  return num === null ? '未知' : num.toFixed(2)
 }
 
 function formatPercent(value: unknown): string {
   const num = toFiniteNumber(value)
-  return num === null ? '-' : `${num.toFixed(2)}%`
+  return num === null ? '未知' : `${num.toFixed(2)}%`
 }
 
 function formatNumber(value: unknown): string {
   const num = toFiniteNumber(value)
-  if (num === null) return '-'
+  if (num === null) return '未知'
   if (Math.abs(num) >= 100000000) return `${(num / 100000000).toFixed(2)}亿`
   if (Math.abs(num) >= 10000) return `${(num / 10000).toFixed(2)}万`
   return num.toFixed(2)
@@ -639,7 +640,7 @@ export default function StockDetail() {
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-zinc-50 dark:bg-zinc-800/60">
-                    {['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额', '涨跌幅'].map((header) => (
+                    {['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额', '涨跌幅', '换手率'].map((header) => (
                       <th
                         key={header}
                         className="px-3 py-3 text-left text-sm font-semibold text-zinc-800 dark:text-zinc-100"
@@ -651,18 +652,12 @@ export default function StockDetail() {
                 </thead>
                 <tbody>
                   {recentBars.map((item, index) => {
-                    const changePct = Number(item.change_pct)
-                    const openNum = toFiniteNumber(item.open)
-                    const closeNum = toFiniteNumber(item.close)
-                    const inferredPct =
-                      openNum && closeNum ? ((closeNum - openNum) / openNum) * 100 : null
-                    const closeClass = changePct > 0 ? UP_CLASS : changePct < 0 ? DOWN_CLASS : ''
+                    const changePct = toFiniteNumber(item.change_pct)
+                    const closeClass = changePct !== null && changePct > 0 ? UP_CLASS : changePct !== null && changePct < 0 ? DOWN_CLASS : ''
                     const pctUp =
-                      (Number.isFinite(changePct) && changePct > 0) ||
-                      (inferredPct !== null && inferredPct > 0)
+                      changePct !== null && changePct > 0
                     const pctDown =
-                      (Number.isFinite(changePct) && changePct < 0) ||
-                      (inferredPct !== null && inferredPct < 0)
+                      changePct !== null && changePct < 0
                     return (
                       <tr
                         key={`${item.date || item.datetime}-${index}`}
@@ -696,14 +691,9 @@ export default function StockDetail() {
                             pctUp ? UP_CLASS : pctDown ? DOWN_CLASS : 'text-zinc-600 dark:text-zinc-300'
                           }`}
                         >
-                          {item.change_pct !== undefined && item.change_pct !== null && changePct !== 0 ? (
-                            formatPercent(item.change_pct)
-                          ) : openNum && closeNum ? (
-                            `${inferredPct!.toFixed(2)}%`
-                          ) : (
-                            '-'
-                          )}
+                          {formatPercent(item.change_pct)}
                         </td>
+                        <td className="px-3 py-3 text-sm tabular-nums">{formatPercent(item.turnover_rate)}</td>
                       </tr>
                     )
                   })}

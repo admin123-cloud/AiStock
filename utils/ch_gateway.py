@@ -7,6 +7,7 @@ import pandas as pd
 
 from utils.logger import get_logger
 from utils.market_warehouse import clickhouse_client
+from utils.daily_quality_read import quality_read_sql
 
 logger = get_logger("ch_gateway")
 
@@ -18,7 +19,7 @@ class ClickHouseGateway:
         started = time.perf_counter()
         client = clickhouse_client()
         try:
-            df = client.query_df(sql, parameters=list(params or []))
+            df = client.query_df(quality_read_sql(sql), parameters=list(params or []))
             rows = 0 if df is None else len(df)
             logger.debug(f"query_df ok: rows={rows}")
             return df
@@ -33,7 +34,7 @@ class ClickHouseGateway:
         started = time.perf_counter()
         client = clickhouse_client()
         try:
-            result = client.query(sql, parameters=list(params or []))
+            result = client.query(quality_read_sql(sql), parameters=list(params or []))
             if not result.result_rows:
                 logger.debug("query_scalar ok: rows=0")
                 return None
