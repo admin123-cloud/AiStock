@@ -6,6 +6,7 @@ status key, changes a price table, or extends an interval into another date.
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import date, datetime, timezone, timedelta
 import hashlib
 import json
@@ -84,11 +85,70 @@ def plan_insert(rows, existing):
         old = by_key.get(key)
         if old is None:
             pending.append(row)
-        elif is_exempt(old) and all(old.get(k) == v for k, v in row.items()):
+        elif all(old.get(k) == v for k, v in row.items()):
             skipped.append(key)
         else:
             raise ValueError("existing key differs; review explicitly, never overwrite: " + str(key))
     return pending, skipped
+
+
+def prepare_reviewed(items, *, today=None):
+    """Import archived reviewed facts, preserving provider and conflict identity."""
+    today = today or datetime.now(timezone(timedelta(hours=8))).date()
+    hashes, csv_cache, prepared = {}, {}, {}
+    for row in items:
+        code = code_value(row['code'])
+        day = date.fromisoformat(row['start_date'])
+        if row['end_date'] != str(day) or day > today or not row['reason'].strip():
+            raise ValueError('reviewed history must have an exact past date and reason')
+        verified = row['status'] == 'suspended' and row['review_state'] == 'verified'
+        held = row['status'] == 'suspended_candidate' and row['review_state'] == 'conflict'
+        if not (verified or held) or not row['evidence_url']:
+            raise ValueError('unsupported reviewed history state')
+        proof = json.loads(row['evidence_json'])
+        expected_check = 'passed' if verified else 'conflict'
+        if proof.get('registry_scope') != 'exact_date_only' or proof.get('current_daily_5m_conflict_check') != expected_check:
+            raise ValueError('current daily/5m conflict check is required')
+        refs = proof.get('bindings', [])
+        if not refs:
+            raise ValueError('reviewed source bindings required')
+        for ref in refs:
+            path = ref['path']
+            if path not in hashes:
+                hashes[path] = sha256(path)
+            if hashes[path] != ref['sha256']:
+                raise ValueError('archived evidence SHA mismatch: ' + path)
+        record = proof['reviewed_record']
+        if record['code'] != code or record.get('date', record.get('trade_date')) != str(day):
+            raise ValueError('reviewed source identity mismatch')
+        kind = proof['evidence_kind']
+        if kind == 'archived_explicit_trade_status':
+            if (record.get('external_status') != 'confirmed_suspended_no_trade'
+                    or record.get('tradestatus') != '0'
+                    or float(record['volume_shares']) != 0 or float(record['amount_yuan']) != 0
+                    or record.get('any_minute_positive') != 'False'
+                    or record.get('period_checks') != 'zero_minute_aggregate_on_confirmed_suspension'):
+                raise ValueError('missing rows/zero quotes alone never prove suspension')
+            csv_path = refs[0]['path']
+            if csv_path not in csv_cache:
+                with Path(csv_path).open(encoding='utf-8-sig', newline='') as handle:
+                    csv_cache[csv_path] = list(csv.DictReader(handle))
+            if csv_cache[csv_path][int(proof['csv_line']) - 2] != record:
+                raise ValueError('archived exact source row differs')
+        elif kind == 'reviewed_full_day_notice_or_calendar':
+            if record.get('status') != 'closed_company_full_day_suspension' or not record.get('evidence'):
+                raise ValueError('reviewed full-session notice required')
+            bound = {(r['path'], r['sha256']) for r in refs}
+            if any((e['path'], e['sha256']) not in bound or e.get('state') != 'received'
+                   for e in record['evidence']):
+                raise ValueError('notice original must be bound and received')
+        else:
+            raise ValueError('unreviewed evidence kind')
+        key = tuple(row[k] for k in KEY)
+        if key in prepared and prepared[key] != row:
+            raise ValueError('conflicting reviewed input key')
+        prepared[key] = row
+    return list(prepared.values())
 
 
 class Warehouse:
@@ -131,16 +191,24 @@ def main():
     load.add_argument("--input", required=True, type=Path)
     load.add_argument("--receipt", required=True, type=Path)
     load.add_argument("--apply", action="store_true")
+    history = sub.add_parser('import-reviewed')
+    history.add_argument('--input', required=True, type=Path)
+    history.add_argument('--receipt', required=True, type=Path)
+    history.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     db = Warehouse(args.endpoint)
     if args.operation == "lookup":
         rows = db.query(f"SELECT * FROM {TABLE} FINAL WHERE code='{args.code}' AND start_date<=toDate('{args.date}') AND end_date>=toDate('{args.date}') ORDER BY observed_at DESC")
-        print(json.dumps(dict(code=args.code, date=str(args.date), exempt=any(map(is_exempt, rows)), rows=rows), ensure_ascii=False, indent=2))
+        conflict = any(r['review_state'] == 'conflict' for r in rows)
+        print(json.dumps(dict(code=args.code, date=str(args.date), exempt=any(map(is_exempt, rows)) and not conflict,
+                              conflict=conflict, requires_notice_review=conflict or not any(map(is_exempt, rows)),
+                              rows=rows), ensure_ascii=False, indent=2))
         return
     if args.receipt.exists() or args.receipt.with_suffix(".before.json").exists():
         raise ValueError("use a new receipt path; preserve previous write outcome")
     input_hash = sha256(args.input)
-    rows = prepare_exact(json.loads(args.input.read_text(encoding="utf-8-sig")))
+    prepare = prepare_reviewed if args.operation == 'import-reviewed' else prepare_exact
+    rows = prepare(json.loads(args.input.read_text(encoding="utf-8-sig")))
     existing = db.query(f"SELECT * FROM {TABLE} FINAL ORDER BY code,start_date,end_date,status")
     pending, skipped = plan_insert(rows, existing)
     receipt = dict(input=str(args.input), input_sha256=input_hash, table=TABLE,

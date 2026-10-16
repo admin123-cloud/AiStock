@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 from utils.market_warehouse import clickhouse_client
+from utils.market_status import load_status_index
 
 FIELDS=['code','datetime','open','high','low','close','volume','amount']
 
@@ -20,7 +21,7 @@ def main():
  p=argparse.ArgumentParser(); p.add_argument('--staged',type=Path,required=True); p.add_argument('--output',type=Path,required=True); p.add_argument('--tdx-root',type=Path,default=Path(r'D:\TDX\vipdoc')); p.add_argument('--yes',action='store_true'); a=p.parse_args()
  x=json.loads(a.staged.read_text(encoding='utf-8')); c=clickhouse_client()
  stocks={r[0]:r[1:] for r in c.query('SELECT code, market, type, listing_status, list_date, delist_date, quit FROM stocks FINAL').result_rows}
- statuses=c.query("SELECT code,start_date,end_date,status FROM kline_daily_market_status_audit FINAL WHERE review_state = 'verified' AND status IN ('suspended','delisted','not_trading')").result_rows
+ status_index=load_status_index(c)
  items=[]; pending=[]
  for raw in x.get('staged_rows',[]):
   code,dt,*vals=raw; dt=datetime.fromisoformat(str(dt).replace('Z','+00:00')); dt_naive=dt.replace(tzinfo=None); stock=stocks.get(code); reason=None
@@ -32,7 +33,7 @@ def main():
    elif listed and str(listed)>dt.date().isoformat(): reason='not_listed'
    elif delisted and str(delisted)<dt.date().isoformat(): reason='delisted'
    elif quit_flag: reason='quit'
-   elif any(sc==code and str(st)<=dt.date().isoformat()<=str(en) for sc,st,en,_ in statuses): reason='status_suspended'
+   elif status_index.decide(code,dt.date())!='unregistered': reason='status_conflict_requires_notice'
   tdx_path=a.tdx_root/code.split('.')[1].lower()/'fzline'/(code.split('.')[1].lower()+code.split('.')[0]+'.lc5')
   evidence={'tdx_path':str(tdx_path),'tdx_sha256':sha256(tdx_path) if tdx_path.exists() else None,'new_values':dict(zip(FIELDS[2:],vals[:6]))}
   item={'code':code,'datetime':dt.isoformat(),'old_value':None,'new_value':evidence['new_values'],'evidence':evidence,'authority':'local TDX lc5 fallback after QMT incomplete'}

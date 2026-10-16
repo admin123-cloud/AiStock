@@ -1,12 +1,13 @@
 """Prepare a QMT repair manifest from the frozen 5m daily-count evidence."""
 from __future__ import annotations
-import argparse, gzip, json, math, sys
+import argparse, gzip, json, sys
 from collections import Counter
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from utils.market_warehouse import clickhouse_client
+from utils.market_status import load_status_index, partition_status_keys, find_status_trade_conflicts
 
 
 def main() -> int:
@@ -19,18 +20,16 @@ def main() -> int:
     stocks = {r[0]: r[1:] for r in client.query(
         'SELECT code, market, type, listing_status, list_date, delist_date, quit FROM stocks FINAL'
     ).result_rows}
-    anomaly_dates = []
+    anomaly_keys = set()
     for entry in baseline['months']:
         with gzip.open(Path(entry['daily_file']), 'rt', encoding='utf-8') as handle:
-            anomaly_dates.extend(line.split('\t', 1)[0] for line in handle if int(line.rstrip('\n').split('\t')[2]) != 48)
-    dates_sql = ','.join("'" + d.replace("'", "''") + "'" for d in sorted(set(anomaly_dates))) or "'1900-01-01'"
-    daily = {(r[0], str(r[1])): r[2:] for r in client.query(
-        f'SELECT code, trade_date, volume, amount, open, high, low, close FROM kline_daily FINAL WHERE trade_date IN ({dates_sql})'
-    ).result_rows}
-    statuses = client.query(
-        "SELECT code, start_date, end_date, status FROM kline_daily_market_status_audit FINAL "
-        "WHERE review_state = 'verified' AND status IN ('suspended', 'delisted', 'not_trading')"
-    ).result_rows
+            for line in handle:
+                day, code, count = line.rstrip('\n').split('\t')
+                if int(count) != 48:
+                    anomaly_keys.add((code, day))
+    status_index = load_status_index(client)
+    status_plan = partition_status_keys(anomaly_keys, status_index,
+        find_status_trade_conflicts(client, anomaly_keys, status_index))
     gaps, categories = [], Counter()
     for entry in baseline['months']:
         path = Path(entry['daily_file'])
@@ -52,21 +51,17 @@ def main() -> int:
                     elif delisted and str(delisted) < trade_day: reason = 'delisted'
                     elif quit_flag: reason = 'quit'
                 if reason is None:
-                    for status_code, start, end, status in statuses:
-                        if status_code == code and str(start) <= trade_day <= str(end):
-                            reason = f'status:{status}'
-                            break
-                daily_row = daily.get((code, trade_day))
-                if reason is None and daily_row:
-                    volume, amount = daily_row[:2]
-                    no_trade = lambda value: value is None or (isinstance(value, float) and (math.isnan(value) or not math.isfinite(value))) or float(value) <= 0
-                    if no_trade(volume) and no_trade(amount):
-                        reason = 'daily_no_trade_evidence'
+                    if (code, trade_day) in status_plan['exempt']:
+                        reason = 'status:verified_business_absence'
+                    elif (code, trade_day) in status_plan['conflict']:
+                        categories['status_conflict_requires_notice'] += 1
+                        continue
                 if reason is not None:
                     categories[reason] += 1
                     continue
                 gaps.append({'code': code, 'trade_date': trade_day,
-                             'missing_count': max(0, 48 - count), 'observed_count': count})
+                             'missing_count': max(0, 48 - count), 'observed_count': count,
+                             'requires_notice_review': (code, trade_day) in status_plan['lookup']})
                 categories['qmt_repair_candidate'] += 1
     payload = {
         'generated_from': str(args.baseline),
@@ -75,6 +70,8 @@ def main() -> int:
         'scope': 'partial_bucket_only; unresolved active stock code-days only',
         'gaps': gaps,
         'categories': dict(categories),
+        'status_conflicts': [{'code': c, 'trade_date': d, 'requires_notice_review': True}
+                             for c, d in sorted(status_plan['conflict'])],
         'code_days': len(gaps),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

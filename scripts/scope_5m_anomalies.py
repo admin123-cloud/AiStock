@@ -13,8 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from utils.market_warehouse import clickhouse_client
 from utils.paths import runtime_path
+from utils.market_status import load_status_index, partition_status_keys, find_status_trade_conflicts
 
-BLOCKED = {"daily_no_trade_evidence", "quit", "stock_missing"}
+BLOCKED = {"daily_no_trade_evidence", "quit", "stock_missing", "unregistered_source_gap",
+           "status_conflict_requires_notice", "manual_status_not_registered"}
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -40,10 +42,16 @@ def main() -> int:
     stocks = {r[0]: r[1:] for r in client.query(
         "SELECT code, market, type, listing_status, list_date, delist_date, quit FROM stocks FINAL"
     ).result_rows}
-    statuses = client.query(
-        "SELECT code, start_date, end_date, status FROM kline_daily_market_status_audit FINAL "
-        "WHERE review_state = 'verified' AND status IN ('suspended', 'delisted', 'not_trading')"
-    ).result_rows
+    status_index = load_status_index(client)
+    anomaly_keys = set()
+    for entry in baseline['months']:
+        with gzip.open(Path(entry['daily_file']), 'rt', encoding='utf-8') as handle:
+            for line in handle:
+                day, code, count = line.rstrip('\n').split('\t')
+                if int(count) != 48:
+                    anomaly_keys.add((code, day))
+    status_plan = partition_status_keys(anomaly_keys, status_index,
+        find_status_trade_conflicts(client, anomaly_keys, status_index))
     rows = []
     for entry in baseline["months"]:
         detail = Path(entry["daily_file"])
@@ -73,23 +81,28 @@ def main() -> int:
                 status_evidence = []
                 override = overrides.get((code, trade_date))
                 if override:
-                    category = override.get('classification', category)
-                for status_code, start, end, status in statuses:
-                    if status_code == code and str(start) <= trade_date <= str(end):
-                        status_evidence.append({"start": str(start), "end": str(end), "status": str(status)})
+                    classification = override.get('classification', category)
+                    category = ('manual_status_not_registered' if classification in {'no_trade', 'confirm_suspension'}
+                                else classification)
+                status_evidence = status_index.matches(code, trade_date)
                 # QMT is authoritative for instrument type. ETFs are not
                 # stocks and must never become manual stock-gap reviews.
                 if category == "non_stock:etf":
                     continue
-                if category is None and status_evidence: category = f"status:{status_evidence[0]['status']}"
-                if category is None: category = "daily_no_trade_evidence"
+                if (code, trade_date) in status_plan['conflict']:
+                    category = 'status_conflict_requires_notice'
+                elif (code, trade_date) in status_plan['exempt'] and category in {None, 'manual_status_not_registered'}:
+                    category = 'status:verified_business_absence'
+                if category is None: category = "unregistered_source_gap"
                 blocked = category in BLOCKED
                 rows.append({"code": code, "date": trade_date, "count": count, "category": category,
                     "missing_count": max(0, 48-count), "evidence": {
                         "baseline_path": str(baseline_path), "baseline_sha256": sha256(baseline_path),
                         "daily_detail_path": str(detail), "daily_detail_sha256": detail_hash,
                         "stocks_snapshot": stock_evidence, "status_audit": status_evidence,
+                        "manual_observation": override,
                     }, "authority": "QMT frozen 5m baseline + ClickHouse stocks/status read-only snapshot",
+                    "requires_notice_review": (code, trade_date) in status_plan['lookup'],
                     "validity": "blocked_evidence" if blocked else "scoped_observation"})
     payload = {"status": "blocked_evidence" if any(r["validity"] == "blocked_evidence" for r in rows) else "scoped",
         "run_id": args.run_id, "baseline_fingerprint": baseline.get("fingerprint"),
