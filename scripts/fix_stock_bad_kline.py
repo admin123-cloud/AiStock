@@ -47,6 +47,12 @@ def get_bad_stocks():
 
 def fix_stock(tdx, client, stock, extra_days=5):
     """修复单个股票：用TDXQuant拉取+DELETE+INSERT"""
+    from utils.daily_write_guard import block_unreviewed_daily_write
+
+    block_unreviewed_daily_write(
+        operation="bad-stock repair",
+        source="scripts.fix_stock_bad_kline.fix_stock",
+    )
     code = stock["code"]
     name = stock["name"]
     from_dt = stock["from_dt"]

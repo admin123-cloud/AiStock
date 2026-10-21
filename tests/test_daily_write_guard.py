@@ -104,3 +104,33 @@ def test_tqcenter_stage_is_blocked_before_client_creation(monkeypatch):
 
     with pytest.raises(DailyWriteBlockedError, match="stage-to-formal"):
         module.apply_stage(args)
+
+
+def test_bad_stock_repair_is_blocked_before_source_fetch(monkeypatch):
+    monkeypatch.setenv("AISTOCK_ALLOW_LEGACY_TDX", "1")
+    import scripts.fix_stock_bad_kline as module
+
+    tdx = SimpleNamespace(get_stock_history=lambda **_: pytest.fail("must block before source fetch"))
+    with pytest.raises(DailyWriteBlockedError, match="bad-stock repair"):
+        module.fix_stock(tdx, object(), {"code": "000001.SZ", "name": "x", "from_dt": "2026-01-01", "to_dt": "2026-01-02"})
+
+
+def test_index_volume_repair_is_blocked_before_delete(monkeypatch):
+    monkeypatch.setenv("AISTOCK_ALLOW_LEGACY_TDX", "1")
+    import scripts.fix_index_kline_volume as module
+
+    frame = pd.DataFrame([{"trade_date": "2026-10-20", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1, "amount": 1}])
+    with pytest.raises(DailyWriteBlockedError, match="index-volume repair"):
+        module.delete_and_insert(object(), "000001.SH", frame)
+
+
+def test_daily_metrics_apply_is_blocked_after_read_only_recalculation(monkeypatch):
+    import scripts.repair_kline_daily_metrics as module
+
+    row = {column: 0 for column in module.COLUMNS}
+    row.update({"code": "000001.SH", "trade_date": "2026-10-20", "close": 1.0, "open": 1.0, "high": 1.0, "low": 1.0})
+    monkeypatch.setattr(module, "clickhouse_scalar", lambda *args, **kwargs: "2026-10-19")
+    monkeypatch.setattr(module, "clickhouse_query_df", lambda *args, **kwargs: pd.DataFrame([row]))
+
+    with pytest.raises(DailyWriteBlockedError, match="daily metrics repair"):
+        module.repair_metrics("2026-10-20", "2026-10-20", dry_run=False)

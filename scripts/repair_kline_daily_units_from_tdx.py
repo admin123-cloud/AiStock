@@ -219,6 +219,12 @@ def repair_from_tdx(start_date: str, end_date: str, tdx_root: Path, apply: bool 
     if not apply or not repair_rows:
         return summary
 
+    from utils.daily_write_guard import block_unreviewed_daily_write
+
+    block_unreviewed_daily_write(
+        operation="TDX unit repair",
+        source="scripts.repair_kline_daily_units_from_tdx.repair_from_tdx",
+    )
     client = clickhouse_client()
     _ensure_stage(client)
     batch_size = 50000

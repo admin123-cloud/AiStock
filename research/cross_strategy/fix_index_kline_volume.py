@@ -123,6 +123,13 @@ def delete_and_insert(client, code: str, df: pd.DataFrame):
     if df is None or df.empty:
         return 0
 
+    from utils.daily_write_guard import block_unreviewed_daily_write
+
+    block_unreviewed_daily_write(
+        operation="index-volume repair",
+        source="research.cross_strategy.fix_index_kline_volume.delete_and_insert",
+    )
+
     # 获取所有要写入的日期列表
     dates = []
     for _, row in df.iterrows():

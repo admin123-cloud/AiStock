@@ -123,6 +123,12 @@ def repair_metrics(
             "qmt_amount_unit_rows": 0,
         }
 
+    from utils.daily_write_guard import block_unreviewed_daily_write
+
+    block_unreviewed_daily_write(
+        operation="daily metrics repair",
+        source="scripts.repair_kline_daily_metrics.repair_metrics",
+    )
     client = clickhouse_client()
     client.command(
         f"""
