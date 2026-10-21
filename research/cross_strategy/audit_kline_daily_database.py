@@ -395,6 +395,12 @@ def _ensure_stage(client) -> None:
 def _apply_repairs(client, repair_rows: list[tuple[Any, ...]], batch_size: int) -> int:
     if not repair_rows:
         return 0
+    from utils.daily_write_guard import block_unreviewed_daily_write
+
+    block_unreviewed_daily_write(
+        operation="unit repair",
+        source="research.cross_strategy.audit_kline_daily_database._apply_repairs",
+    )
     _ensure_stage(client)
     size = max(1, int(batch_size))
     for offset in range(0, len(repair_rows), size):

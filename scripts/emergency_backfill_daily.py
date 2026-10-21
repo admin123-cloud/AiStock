@@ -98,6 +98,12 @@ def fetch_and_save_daily_data(codes: List[str], target_date: str):
 
 def save_daily_to_db(code: str, df: pd.DataFrame):
     """保存日线数据到数据库"""
+    from utils.daily_write_guard import block_unreviewed_daily_write
+
+    block_unreviewed_daily_write(
+        operation="emergency backfill",
+        source="scripts.emergency_backfill_daily.save_daily_to_db",
+    )
     from models.stock_models import KlineDaily
     from sqlalchemy import insert
     

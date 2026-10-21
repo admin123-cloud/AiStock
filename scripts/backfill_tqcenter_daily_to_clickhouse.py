@@ -330,6 +330,12 @@ def validate_stage(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
+    from utils.daily_write_guard import block_unreviewed_daily_write
+
+    block_unreviewed_daily_write(
+        operation="stage-to-formal replace",
+        source="scripts.backfill_tqcenter_daily_to_clickhouse.apply_stage",
+    )
     client = ch_client()
     codes = load_codes(client, args.codes, args.limit)
     total_inserted = 0

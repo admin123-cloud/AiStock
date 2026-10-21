@@ -74,3 +74,33 @@ def test_qmt_stage_is_blocked_before_client_creation(monkeypatch):
 
     with pytest.raises(DailyWriteBlockedError, match="stage-to-formal"):
         module.apply_stage(args)
+
+
+def test_unit_repair_is_blocked_before_stage_ddl(monkeypatch):
+    import scripts.audit_kline_daily_database as module
+
+    monkeypatch.setattr(module, "_ensure_stage", lambda *_: pytest.fail("must block before stage DDL"))
+    rows = [(None,) * len(module.TARGET_COLUMNS)]
+
+    with pytest.raises(DailyWriteBlockedError, match="unit repair"):
+        module._apply_repairs(object(), rows, batch_size=1)
+
+
+def test_emergency_backfill_is_blocked_before_session(monkeypatch):
+    monkeypatch.setenv("AISTOCK_ALLOW_LEGACY_TDX", "1")
+    import scripts.emergency_backfill_daily as module
+
+    monkeypatch.setattr(module, "db", object())
+
+    with pytest.raises(DailyWriteBlockedError, match="emergency backfill"):
+        module.save_daily_to_db("000001.SZ", pd.DataFrame())
+
+
+def test_tqcenter_stage_is_blocked_before_client_creation(monkeypatch):
+    import scripts.backfill_tqcenter_daily_to_clickhouse as module
+
+    monkeypatch.setattr(module, "ch_client", lambda: pytest.fail("must block before client"))
+    args = SimpleNamespace(codes="000001.SZ", limit=1, start_date="2026-10-20", delete_chunk_size=1)
+
+    with pytest.raises(DailyWriteBlockedError, match="stage-to-formal"):
+        module.apply_stage(args)
