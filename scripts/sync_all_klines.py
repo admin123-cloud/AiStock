@@ -1247,6 +1247,12 @@ class KlineSyncer:
                     logger.warning(f"{code} {period} dropped invalid ClickHouse datetime rows: {dropped_rows}")
 
             if table_name == 'kline_daily':
+                from utils.daily_write_guard import block_unreviewed_daily_write
+
+                block_unreviewed_daily_write(
+                    operation="insert",
+                    source="scripts.sync_all_klines.sync_klines",
+                )
                 from utils.kline_store import filter_trading_day_rows
 
                 before_rows = len(df)

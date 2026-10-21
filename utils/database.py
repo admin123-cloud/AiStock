@@ -150,7 +150,9 @@ class DatabaseManager:
             try:
                 with self._engine.connect() as connection:
                     connection.execute(text("SELECT 1"))
-                self.create_tables()
+                    from utils.clickhouse_schema import verify_startup_schema_contract
+
+                    verify_startup_schema_contract(connection)
                 return
             except Exception as exc:
                 last_exc = exc

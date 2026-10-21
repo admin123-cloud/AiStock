@@ -3974,6 +3974,12 @@ def update_today_data_task(periods=None, force: bool = False):
             def _quote(value: Any) -> str:
                 return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
+            from utils.daily_write_guard import block_unreviewed_daily_write
+
+            block_unreviewed_daily_write(
+                operation="index daily batch replace",
+                source="api.system_config.update_today_data_task",
+            )
             client = clickhouse_client()
             code_sql = ", ".join(_quote(row["code"]) for row in rows)
             client.command(

@@ -26,6 +26,7 @@ from models.stock_models import (
     TechnicalIndicator,
 )
 from utils.database import get_db
+from utils.daily_write_guard import block_unreviewed_daily_write, DailyWriteBlockedError
 from utils.logger import get_logger
 
 logger = get_logger("DataStorageService")
@@ -47,6 +48,12 @@ class DataStorageService:
         if not klines:
             return 0
 
+        if period == "daily":
+            block_unreviewed_daily_write(
+                operation="insert",
+                source="services.data_storage.DataStorageService.batch_insert_klines",
+            )
+
         try:
             with next(get_db()) as session:
                 if period == "daily":
@@ -59,6 +66,8 @@ class DataStorageService:
                     return self._batch_insert_minute_klines(session, klines)
                 logger.warning(f"Unsupported period: {period}")
                 return 0
+        except DailyWriteBlockedError:
+            raise
         except Exception as exc:
             logger.error(f"batch insert kline failed: {exc}")
             return 0
@@ -67,6 +76,11 @@ class DataStorageService:
         """Batch insert daily candles."""
         if not klines:
             return 0
+
+        block_unreviewed_daily_write(
+            operation="insert",
+            source="services.data_storage.DataStorageService",
+        )
 
         df = pd.DataFrame(klines)
         if df.empty:

@@ -4,6 +4,10 @@ ClickHouse bootstrap DDL for tables that are managed outside SQLAlchemy create_a
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+from typing import Any, Iterable, Mapping
+
 from sqlalchemy import Engine, text
 
 
@@ -353,6 +357,188 @@ STRATEGY_TABLE_DDL = [
     ORDER BY (run_id, id)
     """,
 ]
+
+
+class ClickHouseSchemaContractError(RuntimeError):
+    """Raised when the live ClickHouse schema cannot satisfy the app contract."""
+
+
+@dataclass(frozen=True)
+class ClickHouseTableContract:
+    name: str
+    engine_prefix: str
+    partition_key: str
+    sorting_key: str
+    required_columns: frozenset[str]
+
+
+_CREATE_TABLE_RE = re.compile(
+    r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+STARTUP_TABLE_CONTRACTS = (
+    ClickHouseTableContract(
+        name="stocks",
+        engine_prefix="ReplacingMergeTree",
+        partition_key="",
+        sorting_key="code",
+        required_columns=frozenset(
+            {
+                "code",
+                "name",
+                "market",
+                "type",
+                "list_date",
+                "delist_date",
+                "created_at",
+                "updated_at",
+            }
+        ),
+    ),
+    ClickHouseTableContract(
+        name="kline_daily",
+        engine_prefix="ReplacingMergeTree",
+        partition_key="toYYYYMM(trade_date)",
+        sorting_key="(code,trade_date)",
+        required_columns=frozenset(
+            {
+                "code",
+                "trade_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "amount",
+                "created_at",
+            }
+        ),
+    ),
+)
+
+
+def _normalize_contract_text(value: Any) -> str:
+    return re.sub(r"[\s`()]+", "", str(value or "")).lower()
+
+
+def _result_rows(result: Any) -> list[Mapping[str, Any] | tuple[Any, ...]]:
+    """Read SQLAlchemy and lightweight fake results without changing query shape."""
+    mappings = getattr(result, "mappings", None)
+    if callable(mappings):
+        return list(mappings().all())
+    fetchall = getattr(result, "fetchall", None)
+    if callable(fetchall):
+        return list(fetchall())
+    rows = getattr(result, "result_rows", None)
+    return list(rows or [])
+
+
+def _row_value(row: Mapping[str, Any] | tuple[Any, ...], key: str, index: int) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return row[index] if len(row) > index else None
+
+
+def startup_bootstrap_table_names(
+    market_ddl: Iterable[str] = MARKET_TABLE_DDL,
+    strategy_ddl: Iterable[str] = STRATEGY_TABLE_DDL,
+) -> tuple[str, ...]:
+    """Return the table names that an explicit bootstrap owns."""
+    names = {
+        name.lower()
+        for ddl in [*market_ddl, *strategy_ddl]
+        for name in _CREATE_TABLE_RE.findall(ddl)
+    }
+    return tuple(sorted(names))
+
+
+def verify_startup_schema_contract(
+    connection: Any,
+    *,
+    contracts: Iterable[ClickHouseTableContract] = STARTUP_TABLE_CONTRACTS,
+) -> None:
+    """Verify the minimum live schema without issuing any DDL.
+
+    Startup must fail closed when a managed table is missing or when a critical
+    table has a different engine, partition, sorting key, or required column.
+    Explicit migration/bootstrap commands remain the only DDL entry point.
+    """
+    expected_tables = set(startup_bootstrap_table_names())
+    table_rows = _result_rows(
+        connection.execute(
+            text(
+                "SELECT name FROM system.tables "
+                "WHERE database = currentDatabase()"
+            )
+        )
+    )
+    actual_tables = {
+        str(_row_value(row, "name", 0) or "").lower() for row in table_rows
+    }
+    problems: list[str] = []
+    missing_tables = sorted(expected_tables - actual_tables)
+    if missing_tables:
+        problems.append("missing tables: " + ", ".join(missing_tables))
+
+    for contract in contracts:
+        if contract.name.lower() not in actual_tables:
+            continue
+        table_result = connection.execute(
+            text(
+                "SELECT engine, partition_key, sorting_key "
+                "FROM system.tables "
+                "WHERE database = currentDatabase() AND name = :table_name"
+            ),
+            {"table_name": contract.name},
+        )
+        table_rows = _result_rows(table_result)
+        if not table_rows:
+            problems.append(f"{contract.name}: metadata row missing")
+            continue
+        table_row = table_rows[0]
+        engine = str(_row_value(table_row, "engine", 0) or "")
+        partition_key = _normalize_contract_text(_row_value(table_row, "partition_key", 1))
+        sorting_key = _normalize_contract_text(_row_value(table_row, "sorting_key", 2))
+        if not engine.lower().startswith(contract.engine_prefix.lower()):
+            problems.append(
+                f"{contract.name}: engine {engine!r} does not start with "
+                f"{contract.engine_prefix!r}"
+            )
+        if partition_key != _normalize_contract_text(contract.partition_key):
+            problems.append(
+                f"{contract.name}: partition_key {partition_key!r} != "
+                f"{_normalize_contract_text(contract.partition_key)!r}"
+            )
+        if sorting_key != _normalize_contract_text(contract.sorting_key):
+            problems.append(
+                f"{contract.name}: sorting_key {sorting_key!r} != "
+                f"{_normalize_contract_text(contract.sorting_key)!r}"
+            )
+
+        column_result = connection.execute(
+            text(
+                "SELECT name FROM system.columns "
+                "WHERE database = currentDatabase() AND table = :table_name"
+            ),
+            {"table_name": contract.name},
+        )
+        column_rows = _result_rows(column_result)
+        actual_columns = {
+            str(_row_value(row, "name", 0) or "") for row in column_rows
+        }
+        missing_columns = sorted(contract.required_columns - actual_columns)
+        if missing_columns:
+            problems.append(
+                f"{contract.name}: missing columns: {', '.join(missing_columns)}"
+            )
+
+    if problems:
+        raise ClickHouseSchemaContractError(
+            "ClickHouse startup schema contract failed; no DDL was issued: "
+            + "; ".join(problems)
+        )
 
 
 def ensure_clickhouse_tables(engine: Engine) -> None:

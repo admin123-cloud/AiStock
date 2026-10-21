@@ -24,6 +24,7 @@ from utils.qmt_daily_prices import daily_price_metrics
 from utils.paths import report_path
 from utils.qmt_universe import qmt_universe_filter_sql
 from utils.market_status import load_status_index, partition_status_keys, find_status_trade_conflicts
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 
 DEFAULT_STAGE_TABLE = "kline_daily_qmtmini_lots_v1_stage"
@@ -1066,6 +1067,10 @@ def stage_lifecycle_predicate(stage_alias: str = 's', master_alias: str = 'maste
 
 
 def apply_stage(args: argparse.Namespace) -> dict[str, Any]:
+    block_unreviewed_daily_write(
+        operation="stage-to-formal replace",
+        source="scripts.qmtmini_daily_backfill_validate.apply_stage",
+    )
     client = ch_client()
     # Existing staged rows retain NULL and the historical fallback calculation.
     client.command(f'ALTER TABLE {args.stage_table} ADD COLUMN IF NOT EXISTS reference_close Nullable(Float64)')

@@ -282,6 +282,13 @@ def insert_kline_dataframe(period: str, df: pd.DataFrame, on_conflict: str = "ig
         return 0
 
     table = _get_table_name(period)
+    if table == "kline_daily":
+        from utils.daily_write_guard import block_unreviewed_daily_write
+
+        block_unreviewed_daily_write(
+            operation="insert",
+            source="utils.kline_store.insert_kline_dataframe",
+        )
     df = filter_trading_day_rows(period, df)
     if df.empty:
         return 0
@@ -327,6 +334,13 @@ def delete_kline(
     end_date: Optional[date] = None,
 ) -> int:
     table = _get_table_name(period)
+    if table == "kline_daily":
+        from utils.daily_write_guard import block_unreviewed_daily_write
+
+        block_unreviewed_daily_write(
+            operation="delete",
+            source="utils.kline_store.delete_kline",
+        )
     time_col = _get_time_column(period)
     where = ["code = ?"]
     params: list[Any] = [code]
