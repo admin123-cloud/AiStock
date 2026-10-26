@@ -4,8 +4,8 @@ services:
     container_name: aistock-clickhouse
     restart: unless-stopped
     cpus: "1.5"
-    mem_limit: 4g
-    memswap_limit: 4g
+    mem_limit: 12g
+    memswap_limit: 12g
     ports:
       - "127.0.0.1:8123:8123"
       - "127.0.0.1:9000:9000"
