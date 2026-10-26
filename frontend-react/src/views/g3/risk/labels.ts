@@ -1,4 +1,4 @@
-// 静态标签 / 配色 / 自动文案辅助（迁移自 Gen3StateAlphaRisk.vue script 区纯函数）
+// 静态标签 / 配色 / 自动文案辅助（迁移自 Gen3StateAlphaRisk 页面纯函数）
 export type Row = Record<string, any>
 export type Tone = 'success' | 'danger' | 'warning' | 'info' | 'primary'
 

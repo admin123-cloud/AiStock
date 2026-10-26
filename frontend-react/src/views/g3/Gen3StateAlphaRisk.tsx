@@ -1,4 +1,4 @@
-// G3 风控合同页（迁移自 frontend/src/views/g3/Gen3StateAlphaRisk.vue）
+// G3 风控合同页（React 风控合同页）
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useToast } from '@/components/toast'
 import {

@@ -1,7 +1,7 @@
-# frontend-react 迁移约定（Vue → React + Catalyst）
+# frontend-react 约定（React + Catalyst）
 
-本目录是 AiStock 前端的 React 19 + TypeScript + Vite + Tailwind v4 + Catalyst 重构。
-旧实现位于 `../frontend/`（Vue3 + Element Plus），以旧实现为功能对齐基准，逐页迁移。
+本目录是 AiStock 当前唯一前端实现：React 19 + TypeScript + Vite + Tailwind v4 + Catalyst。
+旧 Vue3 + Element Plus 实现已退出运行入口并已删除；React 是唯一受支持的前端实现。
 
 ## 技术栈与目录
 
@@ -44,7 +44,7 @@
 
 ## 页面迁移规则
 
-1. 先读旧 `frontend/src/views/.../*.vue`，保持：路由参数、API 调用、轮询间隔、刷新逻辑、交互（筛选/排序/分页/跳转）完全一致
+1. 需要核对历史行为时读取迁移门禁记录和 `research/catalog.json` 的历史索引，保持：路由参数、API 调用、轮询间隔、刷新逻辑、交互（筛选/排序/分页/跳转）一致
 2. 状态：`useState/useEffect/useMemo`；轮询必须 `return () => clearInterval(...)` 清理
 3. 跳转用 `useNavigate()`；链接用 `<Link to>`（react-router-dom）
 4. 路由参数用 `useParams()`；查询串用 `useSearchParams()`
@@ -56,3 +56,9 @@
 
 - 前端必须能在后端未就绪时打开（错误被 toast 吞掉但页面不崩）——知识库 LEARNINGS 2026-09-09
 - dev 端口 3100（避免与旧前端 3000 冲突）；`/api` 代理到 8000
+
+## 迁移状态（2026-10-23）
+
+- React 已覆盖原 Vue 的 28 条路由，并补齐 `/kline-check` 的自动循环、单条/批量修复、修复结果导出、历史筛选分页和详情明细。
+- `docker-compose.dev.yml`、`docker-compose.app.yml`、`docker-compose.release.yml` 和 `restart_services.bat` 均以 React 为入口。
+- Vue 活动代码与专用归档已删除；历史 worktree/研究备份不属于当前前端入口。

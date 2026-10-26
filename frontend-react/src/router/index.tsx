@@ -40,6 +40,12 @@ export const routes: AppRoute[] = [
     () => import('@/views/operations/DataHealth')
   ),
   page(
+    '/kline-check',
+    'KlineCheck',
+    { title: 'K线完整性检查', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1.2, navLabel: 'K线完整性', icon: '✓' },
+    () => import('@/views/operations/KlineCheck')
+  ),
+  page(
     '/gen3/state-alpha/mainwave-evidence',
     'MainwaveEvidence',
     { title: '主升行业证据', group: 'gen3', hiddenInNav: true },

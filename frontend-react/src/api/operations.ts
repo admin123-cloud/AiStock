@@ -250,7 +250,7 @@ const reasons: Record<string, string> = {
 export const reasonText = (value?: string | null): string =>
   (value && reasons[value] ? `${value}（${reasons[value]}）` : value) || '未提供原因'
 
-/** 主升每日跟踪（旧 frontend/src/utils/operations.js getMainwaveDaily） */
+/** 主升每日跟踪（旧前端 operations 工具 getMainwaveDaily） */
 export const getMainwaveDaily = (): Promise<Record<string, unknown>> =>
   request.get('/operations/mainwave-daily') as unknown as Promise<Record<string, unknown>>
 
@@ -328,7 +328,7 @@ export interface DataReviewQueueQuery {
   review_status?: 'all' | 'reviewed' | 'unreviewed'
 }
 
-/** 数据审核队列（旧 frontend/src/utils/operations.js getDataReviewQueue） */
+/** 数据审核队列（旧前端 operations 工具 getDataReviewQueue） */
 export const getDataReviewQueue = (query: DataReviewQueueQuery = {}): Promise<DataReviewQueue> => {
   const params = new URLSearchParams()
   if (query.limit != null) params.set('limit', String(query.limit))

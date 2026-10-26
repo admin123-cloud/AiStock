@@ -8,10 +8,12 @@ __pycache__/
 .coverage
 
 # Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/*.log
+frontend-react/node_modules/
+frontend-react/.npm-cache/
+frontend-react/dist/
+frontend-react/.vite/
+frontend-react/*.log
+frontend-react/tsconfig.tsbuildinfo
 
 # Local environment and secrets
 .env
@@ -44,3 +46,6 @@ Thumbs.db
 
 # Runtime/vendor bundles should not be tracked in core.
 /Libs/
+
+# Local graphify analysis cache (generated, not source).
+graphify-out/

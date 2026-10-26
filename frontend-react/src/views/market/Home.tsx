@@ -7,7 +7,7 @@ import { Button } from '@/components/catalyst/button'
 import { Card, ChangeValue, EmptyState, PageHeader, SectionTitle } from '@/components/ui'
 
 /* ------------------------------------------------------------------ */
-/* 常量与元数据（与旧版 Home.vue 保持一致）                              */
+/* 常量与元数据（保持历史页面行为一致）                              */
 /* ------------------------------------------------------------------ */
 
 const MAIN_INDICES = ['000001.SH', '399001.SZ', '399006.SZ', '000680.SH']

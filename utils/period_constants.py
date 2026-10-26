@@ -176,7 +176,7 @@ def get_period_tdx_value(period: str) -> str:
     return PERIOD_TO_TDX.get(standard, "daily")
 
 
-# 前端使用的选项列表（用于Vue组件）
+# 前端使用的选项列表
 FRONTEND_PERIOD_OPTIONS: List[Dict[str, str]] = [
     {"value": "1m", "label": "1分钟"},
     {"value": "5m", "label": "5分钟"},

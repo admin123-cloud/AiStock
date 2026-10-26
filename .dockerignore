@@ -8,10 +8,12 @@ __pycache__
 .ruff_cache
 .coverage
 
-frontend/node_modules
-frontend/dist
-frontend/.vite
-frontend/*.log
+frontend-react/node_modules
+frontend-react/.npm-cache
+frontend-react/dist
+frontend-react/.vite
+frontend-react/*.log
+frontend-react/tsconfig.tsbuildinfo
 
 data
 runtime

@@ -6,10 +6,10 @@ REM ==================================
 
 set "ROOT_DIR=%~dp0"
 if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
-set "FRONTEND_DIR=%ROOT_DIR%\frontend"
+set "FRONTEND_DIR=%ROOT_DIR%\frontend-react"
 set "LOG_DIR=%ROOT_DIR%\runtime\logs"
 set "BACKEND_PORT=8000"
-set "FRONTEND_PORT=3000"
+set "FRONTEND_PORT=3100"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>nul
 
 echo ================================
