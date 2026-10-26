@@ -1,0 +1,3525 @@
+{
+  "schema": "aistock-script-layers-v1",
+  "generated_at": "2026-10-23T03:53:17.800949+00:00",
+  "scope": "remaining scripts after duplicate consolidation; nested scripts/research entries included; no additional path moves performed by this manifest",
+  "counts": {
+    "research_g3": 87,
+    "research_cross_strategy": 119,
+    "runtime_maintenance": 188,
+    "research_g2": 45
+  },
+  "rows": [
+    {
+      "path": "scripts/analyze_g3_native_source_bridge_recall_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/analyze_g3_profitable_signal_recall_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/analyze_wdz_entropy.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/apply_pre2010_envelope_a_closeout_20260923.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/apply_tdx_5m_gated.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/assess_wstock_archive.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/attach_detail_audit_manifest.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_derived_files_against_formal.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_derived_storage_parts.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_drawdown_throttle_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_liquidity_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_lot_rounding_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_rebalance_policy_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_rotation_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_trend_parameter_grid_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_v4_behavior_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_v4_subwindows_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_etf_v5_promotion_gates.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_g3_mainwave_market_state_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_g3_realtime_readiness_review_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_harry_2006_against_purchase_5m_gaps_20260922.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_kline_daily_units.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_local_ocean_5m_dryrun.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_minute_30m_diffs.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_missing_daily_free_sources_20260922.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_ocean_5m_detail_candidate.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_ocean_daily_candidate_local.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_ocean_detail_against_formal.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_ocean_formal_conflicts_units.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_ocean_segment_local.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_panic_tplus1_price_attribution.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_amount_only_subset.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_amount_only_subset_2003_2005.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_amount_only_subset_2006_2009.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_candidate_structure_dryrun.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_derived_candidate_dryrun.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_formal_diff_dryrun.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_gate_blockers_20260923.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_pre2010_minute_price_outliers_20260923.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_purchased_5m_against_daily.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_purchased_5m_against_daily_snapshot.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_purchased_5m_gap_triage.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_purchased_raw_1m_recovery.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_purchased_review_against_1m.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_purchased_review_against_external_daily.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_qmt_market_dependencies.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_scoped_anomalies_t16.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_score120_exit_payoff_contracts_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_score120_hybrid_exit_contracts_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_score120_mainwave_risk_contract_variants_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_score120_minute_exit_contracts_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_score120_mom60_gate_revalidation_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_sector_membership_history_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_strategy_stability_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_wstock_15m_queue_20260921.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/audit_wstock_backup.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/auto_repair_pre2010_harry_a1_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backfill_tqcenter_daily_to_clickhouse.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_breakout_1030_execution_proxy_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_engine.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_etf_trend_voltarget_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_g2_g3_market_style_router_v1.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_g3_five_strategies_from_scratch_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_g3_five_strategies_native_bridge_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_g3_recalled_mainwave_contract_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_index_trend_voltarget_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_mainline_pro_etf_vs_index.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_panic_stock_reversal_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_score120_sector_diffusion_30m_overlay_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_score120_sector_diffusion_gate_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_sector_first_pullback_panic_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_sector_fixed_membership_forward_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_sector_index_mainwave_proxy_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_sector_pit_sw2014_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_sector_pullback_leader_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_sector_pullback_reclaim_fixed_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_v5_raw.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_v6_regime_daily.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_wave_style_template_strategy_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/backtest_wave_winner_similarity_scheduler_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_external_watchdog_bundle.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_g3_live_launch_packet_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_mainline_sector_watchlist.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_pre2010_15m_production_candidate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_pre2010_repair_candidate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_pre2010_unified_quality_ledger_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_pre2010_wstock_price_repair_candidates_20260923.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_pre2010_year_closure_manifests.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_purchased_native_30m_candidate_20260921.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_scope_baseline_readonly.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/build_tdx_minute_periods.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/check_encoding_guard.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/check_global_memory_encoding.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/check_index_daily_derivable.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/check_release_readiness.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/check_text_health.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/clean_pre2010_30m_b_candidate_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/close_versioned_daily_dryrun.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/collect_intraday_snapshots.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/collect_pytdx_bj_minute_time.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/collect_pytdx_bj_minutes.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/confirm_pre2010_30m_b_against_native_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/confirm_wdz_encryption.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/consume_verified_ocean_5m.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/cost_profiles.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/cron_jobs.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/crosscheck_5m_tdx_gaps.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/daily_kline_coverage_maintenance.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/derive_index_daily_from_5m_stage.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/derive_ocean_candidate_daily.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/derive_ocean_candidate_periods.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/determine_wdz_format.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/download_ocean_history.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/e2e_verify_wstock_repairs.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/export_scoped_anomalies_tsv.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/external_runtime_watchdog.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/fetch_akshare_daily_qfq_to_clickhouse.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/fetch_ftshare_sw_membership_history_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/fill_pre2010_index_5m_gaps.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/filter_zero_trade_gaps.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/finalize_a_v2_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_alpha191_contribution_audit.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_alpha191_light_constraint_matrix.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_alpha191_portfolio_overlay_matrix.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_alpha191_state_attribution.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_analyze_trade_preferences.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_backtest_open_v1_intraday_risk.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_backtest_open_v1_portfolio.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_backtest_position_staging.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_backtest_risk_cool_dynamic_circuit.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_batch_alpha191_factor_tests.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_build_open_state_research.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_build_risk_cool_shadow_ledger.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_build_v2_complete_strategy.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_build_v4_event_dataset.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_candidate_outcome_supervision.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_compare_prev_low_exit_fills.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_filter_signals_by_intraday_normal.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_preference_filters.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_realtime_candidate_recall_study.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_rebuild_latest_official_pipeline.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_refresh_v4_event_dataset.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_box_breakout_buy_points.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_breakout_1000_quality_veto_matrix.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_breakout_2026ytd_diagnosis.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_breakout_intraday_combo.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_breakout_sector_filter_matrix.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_breakout_sector_filter_robustness.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_breakout_sector_integration.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_breakout_wait_1030_fair_price.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_volume5_sector_layer.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_research_volume5_sector_sort_bonus.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_runtime_dates.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_sweep_open_v1_market_gate.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_sweep_open_v1_semantic_exits.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_sweep_pullback_factor_filters.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_sweep_pullback_profit_extension.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_sweep_pullback_risk_layers.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_test_30m_fractal_restart.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_timing_regime_research.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_update_live_shadow.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen2_validate_v2_trend_continuation.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_audit_guarded_execution_stress_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_audit_panic_30m_failure_visibility.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_audit_panic_failure_env.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_audit_panic_systemic_pause.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_audit_strong_volume5_confirm_d3_30m_replay_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_audit_v4_strong_offense_freshness_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_panic_30m_failure_exit.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_panic_final_candidate_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_panic_policy.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_range_weak_30m_exit_mtm_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_range_weak_shadow_mtm_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_strong_volume5_30m_repair_exit_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_strong_volume5_confirm_d3_execution_stress_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_strong_volume5_confirm_fail_exit_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_strong_volume5_exit_proxy_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_strong_volume5_risk_layer_execution_stress_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_strong_volume5_risk_layer_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_strong_volume5_slot_resim_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_backtest_weak_rebound_g2v4_d1d2_legcash_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_build_dynamic_router_combo_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_build_dynamic_router_guarded_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_build_four_path_candidates.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_build_guarded_live_safe_payload_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_build_live_payload_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_build_range_filtered_live_safe_payload_v2.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_build_v4_strong_offense_current_source_payload_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_dynamic_router_g2exec_upper_bound_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_dynamic_router_strong_absorb_g2_v1.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_dynamic_router_strong_weight_probe_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_full_candidate_2slot_backtest_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_gate_layer_policy_audit_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_guarded_shadow_only_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_hard_gate_daily_closure_audit_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_institutional_mainwave_current_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_live_safe_schema_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_mainwave_breakout_current_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_market_mode_router_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_market_state_router_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_package_route_execution_mandate_v3.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_package_v4_research_candidate_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_pre_2024_10_deeper_mode_exploration_v2.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_pre_2024_10_state_alpha_closure_v5.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_pre_2024_10_state_alpha_tail_risk_v8.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_pretrade_smoke_test_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_promotion_self_test_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_range_filtered_shadow_only_v2.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_rebuild_combo_with_range_filter_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_rebuild_range_box_source_map_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_research_panic_v2.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_shadow_live_daily_update_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_shadow_live_entry_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_state_router_shadow_daily_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_stress_strong_quality_filter_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_stress_v4_strong_second_093_execution_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_30m_volume_acceptance_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_box_first_panic_distill_second_accept_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_box_stress_d1d2_weak_exit_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_box_stress_icepoint_climax_overlay_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_box_stress_second_accept_d3_exit_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_box_structural_entry_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_execution_margin_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_filtered_structural_veto_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_range_reversal_gate_d1d2_exit_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_strong_quality_filter_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_v4_add_g2_bigbull_struct_gate_v1.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_v4_bigbull_struct_d1_weak_reduce_combo_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_v4_strong_entry_warning_d1d2_30m_weak_confirm_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_test_v4_strong_position_scale_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_update_panic_shadow.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_v4_strong_offense_shadow_only_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_validate_intraday_confirm.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/gen3_validate_mainline_icepoint_pullback_v1.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_behavior_theme_candidate_source_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_behavior_theme_clusters_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_emotion_cycle.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_etf_v4_paper_order_sheet.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_mainline_candidate_overlay.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_mainline_intraday_diffusion_factor.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_mainline_theme_observation_pool_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_mainline_theme_strategy_overlay_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_pre2010_review_samples.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/generate_sector_kline.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/govern_kline_history.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/import_ftshare_sw_current_snapshot_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/import_purchased_5m_annual_gap_stage.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/import_purchased_5m_stage.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/import_purchased_daily_snapshots_to_clickhouse.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/import_qmt_datadir_intraday_to_clickhouse.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/inspect_pre2010_derived_sample.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/inspect_wdz_structure.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/kline_patrol.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/kline_patrol_daemon.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/learn_profitable_wave_stock_styles_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/list_5m_missing_times.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/live_trading.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/maintain_market_status.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/manage_app_rollback.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/manage_clickhouse_backup.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_ocean_5m_candidate_by_year.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_pre2010_5m_clickhouse_candidate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_pre2010_a_grade_candidates_20260921.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_pre2010_daily_from_5m_review.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_pre2010_daily_source_snapshot.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_pre2010_index_daily_from_stage.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_purchased_1m_daily_candidates.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_purchased_5m_formal_candidate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_purchased_5m_snapshot_review_queue.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_purchased_daily_history.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_purchased_history_review_queue.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_user_policy_frequency_review_queue.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/materialize_wstock_15m_candidate_20260921.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/merge_pre2010_amount_only.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/minute_table_migration_v2.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/normalize_text_encoding.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/ocean_formal_key_diff_dryrun.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/paper_etf_trend_voltarget_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/paper_panic_stock_reversal_v3.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/paper_sector_mainwave_leader_v2.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/plan_dify_launcher.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/plan_ingestion_owner_migration.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/plan_task_consolidation.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/prepare_5m_gap_manifest.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/prepare_hf_sw2014_membership_history_v1.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/preserve_old_derived_keys.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/probe_mainline_sector_stock_chain.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_all_pre2010_30m_b_confirmed_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_baostock_2010_missing_daily_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_30m_b_confirmed_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_30m_strict_a_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_60m_clear_better_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_a_grade_candidates_20260921.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_a_only_v2_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_daily_purchase_volume_diff_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_formal5m_a_candidates_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_harry_2006_5m_missing_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_legacy_fallback_highvol_v2.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_reaggregate_a_candidates_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_pre2010_v2_reaggregate_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_purchased_5m_2000_2010_user_policy.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_purchased_5m_formal_candidate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_purchased_5m_pre2010.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_purchased_5m_user_approved_amount.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_verified_purchased_5m_missing.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/promote_wstock_15m_candidate_20260921.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/publish_operations.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/publish_qmt_empty_review_items.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/publish_qmt_sector_universe.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/publish_runtime_health.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmt_builtin_market_model.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmt_fullpush_intraday_aggregator.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmt_snapshot_worker.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmt_tick_bridge.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmt_xtquant_data_source_task.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmt_xtquant_minute_backfill_validate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmt_xtquant_minute_gap_audit_repair.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/qmtmini_daily_backfill_validate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/readback_verify_wstock_stage.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/reaudit_pre2010_purchase_daily_envelope_20260923.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/rebuild_derived_history.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/rebuild_sector_mainwave_leader_v2.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/rebuild_shenwan_sector_kline_daily.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/reclassify_pre2010_policy.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/recompute_pre2010_harry_a1_corrected_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/reconcile_local_ocean_daily.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/reconcile_ocean_2000_compat_readonly.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_5m_gap_list.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_frequency_review_queue_after_wstock_20260921.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_30m_queue_after_all_b_confirmed_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_30m_queue_after_b_confirmed_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_30m_queue_after_strict_a_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_final_queue_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_queue_after_60m_a2_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_review_queue_after_a_grade_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_review_queue_after_b_reaggregate_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/refresh_pre2010_review_queue_after_formal5m_reaggregate_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_5m_manifest.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_bj_historical_volume.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_daily_coverage_from_sina.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_index_daily.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_kline_daily_metrics.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_kline_daily_units_from_tdx.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_pre2010_2006_purchase_gaps_from_harry_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_pre2010_60m_three_harry_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_pre2010_b_reaggregate_from_5m_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_purchased_15m_from_harry_5m_20260921.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_purchased_daily_zero_ohlc.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_qmt_builtin_window.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/repair_sector_daily.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/report_pre2010_bc_review_plan_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/research_main_wave_sector_score.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/resolve_pre2010_no_trade_daily_audit_20260922.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/resolve_purchased_daily_2010_missing_ohlc.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/restore_g2_331_backtest_outputs.py",
+      "layer": "research_g2",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g2",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/retry_pre2010_formal_diff_subprefix.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_g3_holding_t_daily_review.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_g3_holding_t_paper_monitor.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_holding_t_service.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_ingestion_backlog.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_minute_candidates_v2.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_ocean_local_daily_sequence.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_ocean_local_stage_sequence.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_operations_monitor.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_preserve_old_derived_keys.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_reference_maintenance.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_sector_relative_history_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_weekly_data_audit.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/run_wstock_years.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/scan_current_wave_style_candidates_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/scan_sector_mainwave_leader_current_v2.py",
+      "layer": "research_g3",
+      "classification_basis": "name_prefix_or_strategy_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/g3",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/scope_5m_anomalies.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/select_pre2010_30m_b_clear_better_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/select_pre2010_30m_strict_a_20260922.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/settle_etf_v5_forward_paper.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/snapshot_ocean_stock_whitelist.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/snapshot_sector_membership_daily_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/stage_purchased_daily_snapshots_to_parquet.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/stage_purchased_native_30_60_pre2010.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/stage_tdx_5m_gaps.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/stage_verified_ocean_5m.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/stage_wdz_native_15m_pre2010.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/summarize_etf_basket_voltarget_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/summarize_ocean_existing_evidence.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/summarize_pre2010_quality_gate.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/sync_all_klines.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/sync_qmtmini_broker_snapshot.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/sync_sectors_and_mapping.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/sync_trade_calendar.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/tdxquant_bridge.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/tushare_history_backfill.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/update_data.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_main_wave_sector_score_history.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_main_wave_sector_start_v2.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_mainline_window_stock_acceptance.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_quarterly_mainline_stock_acceptance_cached_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_quarterly_mainline_stock_acceptance_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_tdx_911_continuity.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_true_sector_index_intraday_diffusion_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_true_sector_index_quarterly_stock_acceptance_v1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_wstock_against_daily.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/validate_wstock_quality.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "research_name_marker",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/verify_clickhouse_backup.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/verify_g3_delivery.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "test_or_runtime_reference",
+      "referenced_by_active_tests": true,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/verify_qmt_builtin_market.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/verify_wstock_vs_purchased.py",
+      "layer": "runtime_maintenance",
+      "classification_basis": "default_pending_review",
+      "referenced_by_active_tests": false,
+      "planned_root": "scripts",
+      "status": "registered_only"
+    },
+    {
+      "path": "scripts/research/apply_wstock_5m_gated.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/build_rotation_expectations.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/build_wstock_manifest.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/bulk_mark_reviewed_20260918.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/check_yearly_5m_pack.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/count_yearly_real_bars.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/dll_exports.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/dump_menu.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/grepapp_wdz.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/ledger_wstock_restored.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/ledger_wstock_tail.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/parse_buy.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/parse_users.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/parse_wsd.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/probe_formal.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/probe_formal2.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/probe_index.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/scan_wszwdz_strings.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/stage_wstock_5m_gaps.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/stage_wstock_lc5_gaps.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/stage_wstock_tail.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/tdx_lc5_probe.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/verify_tail_48.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/verify_wstock_restore.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wdz_convert_step1.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wdz_gui_login_probe.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wdz_gui_probe.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wdz_scan_count.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wdz_select_file.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/winutil.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wstock_consolidate_yearly.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wstock_quality_gate.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    },
+    {
+      "path": "scripts/research/wstock_rotation_day.py",
+      "layer": "research_cross_strategy",
+      "classification_basis": "already_under_scripts/research",
+      "referenced_by_active_tests": false,
+      "planned_root": "research/cross_strategy",
+      "status": "already_layered"
+    }
+  ]
+}

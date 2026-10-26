@@ -202,11 +202,6 @@
       "sha256": "223fa68ce72dc3c501dd96c7a07da05bf7e7cb430e1c420371505725cc778b02"
     },
     {
-      "old": "scripts/backtest_breakout_1030_exit_horizon_v1.py",
-      "new": "research/cross_strategy/backtest_breakout_1030_exit_horizon_v1.py",
-      "sha256": "3dc6821ca98fcf6caa892906da0a35f78dfc1d351392b433efba21c0cdd50a92"
-    },
-    {
       "old": "scripts/backtest_breakout_initiation_hypothesis_v1.py",
       "new": "research/cross_strategy/backtest_breakout_initiation_hypothesis_v1.py",
       "sha256": "e0d072e42edd813dcae228ea0350519e8ddf7d9db25678267f89116afb62d740"
@@ -1407,11 +1402,6 @@
       "sha256": "497840c9dddbfbb2bf2bca3962b2fe2a68f5f09470d86e1bb4f5852f0c225423"
     },
     {
-      "old": "scripts/export_qmt_datadir_minutes_to_warehouse.py",
-      "new": "research/cross_strategy/export_qmt_datadir_minutes_to_warehouse.py",
-      "sha256": "abf6644e3e08995d7aeb4d4bf60e6a7ba002fe21606fb810c38fc19241fa5041"
-    },
-    {
       "old": "scripts/fetch_sector_change_pct.py",
       "new": "research/cross_strategy/fetch_sector_change_pct.py",
       "sha256": "8534f34ceed37ca0109de3aa41829fa1015ad0ed6cfa143133bddd2be15c77cd"
@@ -1692,11 +1682,6 @@
       "sha256": "e6e24710753c7da04b74c98fa463e174cfc4188aa6bf2965fb25d163469c25f8"
     },
     {
-      "old": "scripts/import_qmt_datadir_warehouse_to_clickhouse.py",
-      "new": "research/cross_strategy/import_qmt_datadir_warehouse_to_clickhouse.py",
-      "sha256": "b94ff2c7a5f215918e3d24b1a63e36a3cd0009f7e5a284e93346682dcc3621e1"
-    },
-    {
       "old": "scripts/init_db.py",
       "new": "research/cross_strategy/init_db.py",
       "sha256": "558ebc5163954cc50a1f39d9f226debe04aa01cc61f7bd90ceb8cd081dc2b97c"
@@ -1907,37 +1892,37 @@
     "utils/g3_minute_visibility.py": "strategies/g3/minute_visibility.py"
   },
   "frontend_moves": {
-    "frontend/src/views/pages/ClsNewsRadar.vue": "frontend/src/views/market/ClsNewsRadar.vue",
-    "frontend/src/views/pages/DataHealth.vue": "frontend/src/views/operations/DataHealth.vue",
-    "frontend/src/views/pages/DataStats.vue": "frontend/src/views/operations/DataStats.vue",
-    "frontend/src/views/pages/Gen2Backtest.vue": "frontend/src/views/g2/Gen2Backtest.vue",
-    "frontend/src/views/pages/Gen2FactorLab.vue": "frontend/src/views/g2/Gen2FactorLab.vue",
-    "frontend/src/views/pages/Gen2Live.vue": "frontend/src/views/g2/Gen2Live.vue",
-    "frontend/src/views/pages/Gen2MainlineHotspots.vue": "frontend/src/views/g2/Gen2MainlineHotspots.vue",
-    "frontend/src/views/pages/Gen2SelectionPool.vue": "frontend/src/views/g2/Gen2SelectionPool.vue",
-    "frontend/src/views/pages/Gen2StrategyLab.vue": "frontend/src/views/g2/Gen2StrategyLab.vue",
-    "frontend/src/views/pages/Gen2Timing.vue": "frontend/src/views/g2/Gen2Timing.vue",
-    "frontend/src/views/pages/Gen3HoldingTReview.vue": "frontend/src/views/g3/Gen3HoldingTReview.vue",
-    "frontend/src/views/pages/Gen3StateAlpha.vue": "frontend/src/views/g3/Gen3StateAlpha.vue",
-    "frontend/src/views/pages/Gen3StateAlphaCandidates.vue": "frontend/src/views/g3/Gen3StateAlphaCandidates.vue",
-    "frontend/src/views/pages/Gen3StateAlphaHoldingTicks.vue": "frontend/src/views/g3/Gen3StateAlphaHoldingTicks.vue",
-    "frontend/src/views/pages/Gen3StateAlphaMainwave.vue": "frontend/src/views/g3/Gen3StateAlphaMainwave.vue",
-    "frontend/src/views/pages/Gen3StateAlphaReplacement.vue": "frontend/src/views/g3/Gen3StateAlphaReplacement.vue",
-    "frontend/src/views/pages/Gen3StateAlphaRisk.vue": "frontend/src/views/g3/Gen3StateAlphaRisk.vue",
-    "frontend/src/views/pages/Gen3StateAlphaRoutes.vue": "frontend/src/views/g3/Gen3StateAlphaRoutes.vue",
-    "frontend/src/views/pages/Gen3StateAlphaTrades.vue": "frontend/src/views/g3/Gen3StateAlphaTrades.vue",
-    "frontend/src/views/pages/Home.vue": "frontend/src/views/market/Home.vue",
-    "frontend/src/views/pages/IndexDetail.vue": "frontend/src/views/market/IndexDetail.vue",
-    "frontend/src/views/pages/KlineCheck.vue": "frontend/src/views/operations/KlineCheck.vue",
-    "frontend/src/views/pages/LimitUpLadder.vue": "frontend/src/views/market/LimitUpLadder.vue",
-    "frontend/src/views/pages/MainwaveDaily.vue": "frontend/src/views/g3/MainwaveDaily.vue",
-    "frontend/src/views/pages/NotFound.vue": "frontend/src/views/shared/NotFound.vue",
-    "frontend/src/views/pages/SectorDetail.vue": "frontend/src/views/market/SectorDetail.vue",
-    "frontend/src/views/pages/Sectors.vue": "frontend/src/views/market/Sectors.vue",
-    "frontend/src/views/pages/StockDetail.vue": "frontend/src/views/market/StockDetail.vue",
-    "frontend/src/views/pages/Stocks.vue": "frontend/src/views/market/Stocks.vue",
-    "frontend/src/views/pages/SystemConfig.vue": "frontend/src/views/operations/SystemConfig.vue",
-    "frontend/src/views/pages/TaskCenter.vue": "frontend/src/views/operations/TaskCenter.vue"
+    "frontend/src/views/pages/ClsNewsRadar.vue": "frontend-react/src/views/market/ClsNewsRadar.tsx",
+    "frontend/src/views/pages/DataHealth.vue": "frontend-react/src/views/operations/DataHealth.tsx",
+    "frontend/src/views/pages/DataStats.vue": "frontend-react/src/views/operations/DataStats.tsx",
+    "frontend/src/views/pages/Gen2Backtest.vue": "frontend-react/src/views/g2/Gen2Backtest.tsx",
+    "frontend/src/views/pages/Gen2FactorLab.vue": "frontend-react/src/views/g2/Gen2FactorLab.tsx",
+    "frontend/src/views/pages/Gen2Live.vue": "frontend-react/src/views/g2/Gen2Live.tsx",
+    "frontend/src/views/pages/Gen2MainlineHotspots.vue": "frontend-react/src/views/g2/Gen2MainlineHotspots.tsx",
+    "frontend/src/views/pages/Gen2SelectionPool.vue": "frontend-react/src/views/g2/Gen2SelectionPool.tsx",
+    "frontend/src/views/pages/Gen2StrategyLab.vue": "frontend-react/src/views/g2/Gen2StrategyLab.tsx",
+    "frontend/src/views/pages/Gen2Timing.vue": "frontend-react/src/views/g2/Gen2Timing.tsx",
+    "frontend/src/views/pages/Gen3HoldingTReview.vue": "frontend-react/src/views/g3/Gen3HoldingTReview.tsx",
+    "frontend/src/views/pages/Gen3StateAlpha.vue": "frontend-react/src/views/g3/Gen3StateAlpha.tsx",
+    "frontend/src/views/pages/Gen3StateAlphaCandidates.vue": "frontend-react/src/views/g3/Gen3StateAlphaCandidates.tsx",
+    "frontend/src/views/pages/Gen3StateAlphaHoldingTicks.vue": "frontend-react/src/views/g3/Gen3StateAlphaHoldingTicks.tsx",
+    "frontend/src/views/pages/Gen3StateAlphaMainwave.vue": "frontend-react/src/views/g3/Gen3StateAlphaMainwave.tsx",
+    "frontend/src/views/pages/Gen3StateAlphaReplacement.vue": "frontend-react/src/views/g3/Gen3StateAlphaReplacement.tsx",
+    "frontend/src/views/pages/Gen3StateAlphaRisk.vue": "frontend-react/src/views/g3/Gen3StateAlphaRisk.tsx",
+    "frontend/src/views/pages/Gen3StateAlphaRoutes.vue": "frontend-react/src/views/g3/Gen3StateAlphaRoutes.tsx",
+    "frontend/src/views/pages/Gen3StateAlphaTrades.vue": "frontend-react/src/views/g3/Gen3StateAlphaTrades.tsx",
+    "frontend/src/views/pages/Home.vue": "frontend-react/src/views/market/Home.tsx",
+    "frontend/src/views/pages/IndexDetail.vue": "frontend-react/src/views/market/IndexDetail.tsx",
+    "frontend/src/views/pages/KlineCheck.vue": "frontend-react/src/views/operations/KlineCheck.tsx",
+    "frontend/src/views/pages/LimitUpLadder.vue": "frontend-react/src/views/market/LimitUpLadder.tsx",
+    "frontend/src/views/pages/MainwaveDaily.vue": "frontend-react/src/views/g3/MainwaveDaily.tsx",
+    "frontend/src/views/pages/NotFound.vue": "frontend-react/src/views/shared/NotFound.tsx",
+    "frontend/src/views/pages/SectorDetail.vue": "frontend-react/src/views/market/SectorDetail.tsx",
+    "frontend/src/views/pages/Sectors.vue": "frontend-react/src/views/market/Sectors.tsx",
+    "frontend/src/views/pages/StockDetail.vue": "frontend-react/src/views/market/StockDetail.tsx",
+    "frontend/src/views/pages/Stocks.vue": "frontend-react/src/views/market/Stocks.tsx",
+    "frontend/src/views/pages/SystemConfig.vue": "frontend-react/src/views/operations/SystemConfig.tsx",
+    "frontend/src/views/pages/TaskCenter.vue": "frontend-react/src/views/operations/TaskCenter.tsx"
   },
   "shared_functions": [
     {
