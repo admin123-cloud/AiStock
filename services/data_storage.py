@@ -26,7 +26,12 @@ from models.stock_models import (
     TechnicalIndicator,
 )
 from utils.database import get_db
-from utils.daily_write_guard import block_unreviewed_daily_write, DailyWriteBlockedError
+from utils.daily_write_guard import (
+    DailyWriteBlockedError,
+    block_unreviewed_daily_write,
+    ensure_daily_write_scope_for_dataframe,
+    validate_daily_dataframe,
+)
 from utils.logger import get_logger
 
 logger = get_logger("DataStorageService")
@@ -35,7 +40,7 @@ logger = get_logger("DataStorageService")
 class DataStorageService:
     """Data storage service."""
 
-    def batch_insert_klines(self, klines: List[Dict], period: str = "daily") -> int:
+    def batch_insert_klines(self, klines: List[Dict], period: str = "daily", *, daily_scope=None) -> int:
         """Batch insert kline data.
 
         Args:
@@ -49,15 +54,25 @@ class DataStorageService:
             return 0
 
         if period == "daily":
-            block_unreviewed_daily_write(
-                operation="insert",
+            daily_frame = pd.DataFrame(klines)
+            if "trade_date" not in daily_frame.columns and "date" in daily_frame.columns:
+                daily_frame["trade_date"] = daily_frame["date"]
+            daily_scope = ensure_daily_write_scope_for_dataframe(
+                daily_frame,
                 source="services.data_storage.DataStorageService.batch_insert_klines",
+                scope=daily_scope,
             )
+            daily_frame = validate_daily_dataframe(
+                daily_frame,
+                scope=daily_scope,
+                operation="insert",
+            )
+            klines = daily_frame.to_dict("records")
 
         try:
             with next(get_db()) as session:
                 if period == "daily":
-                    return self._batch_insert_daily_klines(session, klines)
+                    return self._batch_insert_daily_klines(session, klines, daily_scope=daily_scope)
                 if period == "weekly":
                     return self._batch_insert_weekly_klines(session, klines)
                 if period == "monthly":
@@ -72,26 +87,30 @@ class DataStorageService:
             logger.error(f"batch insert kline failed: {exc}")
             return 0
 
-    def _batch_insert_daily_klines(self, session: Session, klines: List[Dict]) -> int:
+    def _batch_insert_daily_klines(self, session: Session, klines: List[Dict], *, daily_scope=None) -> int:
         """Batch insert daily candles."""
         if not klines:
             return 0
 
-        block_unreviewed_daily_write(
-            operation="insert",
-            source="services.data_storage.DataStorageService",
-        )
-
         df = pd.DataFrame(klines)
         if df.empty:
             return 0
+
+        if daily_scope is None:
+            block_unreviewed_daily_write(
+                operation="insert",
+                source="services.data_storage.DataStorageService._batch_insert_daily_klines",
+            )
+        if "trade_date" not in df.columns and "date" in df.columns:
+            df["trade_date"] = df["date"]
+        df = validate_daily_dataframe(df, scope=daily_scope, operation="insert")
 
         insert_data = []
         for _, row in df.iterrows():
             insert_data.append(
                 {
                     "code": row.get("code"),
-                    "trade_date": row.get("date"),
+                    "trade_date": row.get("trade_date", row.get("date")),
                     "open": row.get("open"),
                     "high": row.get("high"),
                     "low": row.get("low"),

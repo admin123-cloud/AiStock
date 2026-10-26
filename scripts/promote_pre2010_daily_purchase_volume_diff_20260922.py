@@ -1,7 +1,12 @@
 """Promote tiny 2010 daily volume differences using the purchased snapshot."""
 from pathlib import Path
+import sys
 import json
 import clickhouse_connect
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 BASE='purchased_history_review_20260922_refit_a_b_confirmed_20260922_v3_no_trade_resolved'
 NEW='purchased_history_review_20260922_refit_a_b_confirmed_20260922_v4_daily_purchase_volume'
@@ -27,6 +32,7 @@ INNER JOIN (SELECT code,trade_date,argMax(volume_lots,ingested_at) volume_lots,a
 WHERE (d.code,d.trade_date) IN ({COND})''')
 rows=int(c.query(f'SELECT count() FROM {candidate}').result_rows[0][0])
 if rows != len(KEYS): raise RuntimeError(f'candidate rows {rows} != expected {len(KEYS)}')
+block_unreviewed_daily_write(operation="DELETE+INSERT", source=__file__)
 c.command(f"ALTER TABLE stock.kline_daily DELETE WHERE (code,trade_date) IN ({COND})")
 c.command(f'''INSERT INTO stock.kline_daily
 SELECT code,trade_date,open,high,low,close,volume,amount,amplitude,change_pct,change_amount,turnover_rate,now(),id

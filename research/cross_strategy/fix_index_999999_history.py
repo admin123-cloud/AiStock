@@ -15,6 +15,7 @@ from utils.database import db
 from utils.market_warehouse import market_source
 from utils.kline_store import filter_trading_day_tuples
 from utils.kline_units import normalize_akshare_daily_units
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 TARGET_CODE = "999999.SH"
 
@@ -99,6 +100,8 @@ def main():
     if missing.empty:
         logger.info("没有需要补充的数据，退出。")
         return
+
+    block_unreviewed_daily_write(operation="INSERT", source=__file__)
 
     # 4. 计算衍生字段
     df = compute_kline_fields(missing)

@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_client, clickhouse_query_df  # noqa: E402
+from utils.daily_write_guard import block_unreviewed_daily_write  # noqa: E402
 from utils.paths import report_path  # noqa: E402
 
 
@@ -240,6 +241,7 @@ def build_updates(
 def apply_updates(updates: list[dict[str, Any]]) -> None:
     if not updates:
         return
+    block_unreviewed_daily_write(operation="UPDATE", source=__file__)
     client = clickhouse_client()
     for item in updates:
         client.command(
@@ -254,6 +256,7 @@ def apply_updates(updates: list[dict[str, Any]]) -> None:
 def apply_updates_batched(updates: list[dict[str, Any]], batch_size: int) -> None:
     if not updates:
         return
+    block_unreviewed_daily_write(operation="UPDATE", source=__file__)
     size = max(1, int(batch_size or 1))
     client = clickhouse_client()
     for start in range(0, len(updates), size):

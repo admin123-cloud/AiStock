@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.market_warehouse import clickhouse_client  # noqa: E402
+from utils.daily_write_guard import block_unreviewed_daily_write  # noqa: E402
 from utils.kline_store import filter_trading_day_tuples  # noqa: E402
 from utils.paths import report_path  # noqa: E402
 
@@ -243,6 +244,9 @@ def _flush(client, rows: list[tuple], dry_run: bool) -> int:
         print(f"{TABLE} write blocked by trade_calendar guard: dropped={before_rows}", flush=True)
         return 0
     if not dry_run:
+        # Local TDX is only an evidence source.  Until an accepted date-universe
+        # exact-key permit is attached, formal kline_daily writes remain blocked.
+        block_unreviewed_daily_write(operation="INSERT", source=__file__)
         client.insert(TABLE, rows, column_names=COLUMNS)
     return len(rows)
 

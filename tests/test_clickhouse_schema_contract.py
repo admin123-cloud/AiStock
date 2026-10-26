@@ -41,6 +41,12 @@ class _Connection:
                 if self.incompatible:
                     partition = ""
                 return _Result([("ReplacingMergeTree(created_at)", partition, "code, trade_date")])
+            if table == "daily_date_universe_registry":
+                return _Result([("ReplacingMergeTree(published_at)", "", "code, dataset_id")])
+            if table == "daily_date_universe_member":
+                return _Result([("MergeTree", "toYYYYMM(trade_date)", "dataset_id, code, trade_date")])
+            if table == "daily_coverage_audit":
+                return _Result([("ReplacingMergeTree(observed_at)", "toYYYYMM(trade_date)", "code, trade_date, audit_id")])
         if "SELECT name FROM system.columns" in sql:
             table = (parameters or {}).get("table_name")
             contract = next(item for item in STARTUP_TABLE_CONTRACTS if item.name == table)

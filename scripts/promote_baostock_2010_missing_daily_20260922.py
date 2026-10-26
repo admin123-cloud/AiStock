@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 RUN = "purchased_history_review_20260922_formal5m_reaggregate_a_auto_b_c_manual"
 CANDIDATE = "stock.baostock_2010_missing_daily_candidate_20260922"
@@ -141,6 +142,7 @@ def main() -> int:
             c.insert(CANDIDATE, good[i:i+2000], column_names=cols.split(","))
     promoted = 0
     if args.promote and good:
+        block_unreviewed_daily_write(operation="INSERT+DELETE", source=__file__)
         # Keys were empty in formal after the lifecycle cleanup; keep a defensive anti-join.
         c.command(f"""
         INSERT INTO stock.kline_daily

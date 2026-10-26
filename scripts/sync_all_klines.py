@@ -31,6 +31,11 @@ from utils.kline_units import (
 )
 from utils.database import db
 from utils.market_warehouse import clickhouse_available, clickhouse_table_exists, clickhouse_query_df
+from utils.daily_write_guard import (
+    ensure_daily_write_scope_for_dataframe,
+    make_daily_write_scope,
+    validate_daily_dataframe,
+)
 
 logger = get_logger("SyncAllKlines")
 
@@ -1247,12 +1252,16 @@ class KlineSyncer:
                     logger.warning(f"{code} {period} dropped invalid ClickHouse datetime rows: {dropped_rows}")
 
             if table_name == 'kline_daily':
-                from utils.daily_write_guard import block_unreviewed_daily_write
-
-                block_unreviewed_daily_write(
-                    operation="insert",
+                daily_scope = make_daily_write_scope(
                     source="scripts.sync_all_klines.sync_klines",
+                    current_stock_codes={code} if self._get_security_type(code).lower() == "stock" else set(),
                 )
+                daily_scope = ensure_daily_write_scope_for_dataframe(
+                    df,
+                    source="scripts.sync_all_klines.sync_klines",
+                    scope=daily_scope,
+                )
+                df = validate_daily_dataframe(df, scope=daily_scope, operation="insert")
                 from utils.kline_store import filter_trading_day_rows
 
                 before_rows = len(df)
@@ -1322,6 +1331,20 @@ class KlineSyncer:
 
             # For ClickHouse 1d writes, keep all writes on the active SQLAlchemy path.
             # Keep all writes on the active SQLAlchemy engine path.
+
+            if table_name == "kline_daily":
+                daily_scope = make_daily_write_scope(
+                    source="scripts.sync_all_klines._save_kline_to_db",
+                    current_stock_codes={canonical_code}
+                    if self._get_security_type(canonical_code).lower() == "stock"
+                    else set(),
+                )
+                daily_scope = ensure_daily_write_scope_for_dataframe(
+                    df,
+                    source="scripts.sync_all_klines._save_kline_to_db",
+                    scope=daily_scope,
+                )
+                df = validate_daily_dataframe(df, scope=daily_scope, operation="insert")
 
             if not df.empty:
                 batch_size = 50

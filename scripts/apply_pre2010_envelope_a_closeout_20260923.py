@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.daily_write_guard import block_unreviewed_daily_write
 from utils.minute_daily_quality_gate import EXPECTED_UNITS, evaluate_code_day
 from utils.paths import runtime_path
 
@@ -653,6 +654,7 @@ def _target_old_minute_rows(period: str, rows: list[tuple[Any, ...]], safe_no_tr
 
 
 def _apply_formal(client, data: dict[str, Any]) -> dict[str, Any]:
+    block_unreviewed_daily_write(operation="DELETE+INSERT", source=__file__)
     plan = data["plan"]
     if not plan["apply_allowed"]:
         raise RuntimeError(f"table-name collision prevents apply: {plan['table_name_collisions']}")

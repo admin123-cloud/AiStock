@@ -2757,6 +2757,12 @@ def _compact_recent_daily_kline_duplicates(days: int = 14) -> Dict[str, Any]:
         result["unique_keys"] = int(before[1] or 0)
         result["duplicate_rows"] = max(0, result["raw_rows"] - result["unique_keys"])
         if result["duplicate_rows"]:
+            from utils.daily_write_guard import block_unreviewed_daily_write
+
+            block_unreviewed_daily_write(
+                operation="OPTIMIZE",
+                source="api.system_config._compact_recent_daily_kline_duplicates",
+            )
             client.command("OPTIMIZE TABLE kline_daily FINAL")
             after = client.query(audit_sql).result_rows[0]
             result["raw_rows_after"] = int(after[0] or 0)
@@ -3974,13 +3980,29 @@ def update_today_data_task(periods=None, force: bool = False):
             def _quote(value: Any) -> str:
                 return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
-            from utils.daily_write_guard import block_unreviewed_daily_write
-
-            block_unreviewed_daily_write(
-                operation="index daily batch replace",
-                source="api.system_config.update_today_data_task",
+            from utils.daily_write_guard import (
+                ensure_daily_write_scope_for_dataframe,
+                make_daily_write_scope,
+                validate_daily_dataframe,
             )
             client = clickhouse_client()
+
+            daily_scope = make_daily_write_scope(
+                source="api.system_config.update_today_data_task",
+                current_stock_codes=set(),
+            )
+            daily_scope = ensure_daily_write_scope_for_dataframe(
+                pd.DataFrame(rows),
+                source="api.system_config.update_today_data_task",
+                scope=daily_scope,
+                client=client,
+            )
+            rows_frame = validate_daily_dataframe(
+                pd.DataFrame(rows),
+                scope=daily_scope,
+                operation="index daily batch replace",
+            )
+            rows = rows_frame.to_dict("records")
             code_sql = ", ".join(_quote(row["code"]) for row in rows)
             client.command(
                 f"""

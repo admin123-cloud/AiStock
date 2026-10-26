@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 
 DEFAULT_RUN_ID = "purchased_history_review_20260918_5m_source_closeout_v4"
@@ -119,6 +120,8 @@ def main() -> int:
     )
     if not args.write:
         return 0
+
+    block_unreviewed_daily_write(operation="INSERT", source=__file__)
 
     created_at = datetime.now(BUSINESS_TZ).replace(tzinfo=None)
     rows = []

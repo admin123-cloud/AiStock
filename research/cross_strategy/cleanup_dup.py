@@ -11,6 +11,7 @@ from utils.database import db
 from sqlalchemy import text
 
 conn = db.engine.connect()
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 # 找出所有volume=0且存在重复的记录
 result = conn.execute(text("""
@@ -27,6 +28,7 @@ print(f"发现 {len(duplicates)} 组无效重复数据")
 if duplicates:
     print("\n正在清理...")
     deleted_count = 0
+    block_unreviewed_daily_write(operation="DELETE", source=__file__)
     for code, trade_date, cnt in duplicates:
         # 删除volume=0或volume=NULL的重复记录，保留一条
         conn.execute(text(f"""

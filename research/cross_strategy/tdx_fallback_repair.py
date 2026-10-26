@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_client, clickhouse_query_df
+from utils.daily_write_guard import block_unreviewed_daily_write
 from utils.kline_store import filter_trading_day_tuples
 from utils.kline_units import normalize_tdxquant_daily_units
 from utils.paths import report_path, runtime_path
@@ -587,6 +588,10 @@ def fetch_daily_from_tdx(args: argparse.Namespace) -> dict:
         ]
         missing_rows = filter_trading_day_tuples("1d", missing_rows, daily_columns)
         if missing_rows:
+            # TDX fallback evidence cannot become formal daily data without an
+            # accepted registry/member exact-key permit.  Keep this path
+            # fail-closed until the publisher/readback flow is wired in.
+            block_unreviewed_daily_write(operation="INSERT", source=__file__)
             clickhouse_client().insert(
                 "kline_daily",
                 missing_rows,

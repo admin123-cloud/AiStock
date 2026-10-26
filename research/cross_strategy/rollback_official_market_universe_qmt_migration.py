@@ -20,6 +20,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from scripts.qmtmini_daily_backfill_validate import quote_sql
+from utils.daily_write_guard import block_unreviewed_daily_write
 from utils.paths import report_path, runtime_path
 
 
@@ -300,6 +301,12 @@ def main() -> int:
         report.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=json_default), encoding="utf-8")
         log(f"rollback refused: {result['error']} report={report}")
         return 2
+
+    if execute and (not args.tables or "kline_daily" in {item.strip() for item in args.tables.split(",")}):
+        # Restoring the formal daily table is a destructive mutation.  It must
+        # remain blocked until the accepted registry/member exact-key permit is
+        # available to the rollback operation.
+        block_unreviewed_daily_write(operation="ROLLBACK", source=__file__)
 
     client = ch_client()
     try:

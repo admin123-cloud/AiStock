@@ -58,6 +58,61 @@ MARKET_TABLE_DDL = [
     ORDER BY (code, trade_date)
     """,
     """
+    CREATE TABLE IF NOT EXISTS daily_date_universe_registry
+    (
+        dataset_id String,
+        code String,
+        security_type LowCardinality(String),
+        identity_status String,
+        source_kind String,
+        source_ref String,
+        source_sha256 String,
+        coverage_start Nullable(Date),
+        coverage_end Nullable(Date),
+        completeness_state LowCardinality(String),
+        date_set_sha256 String,
+        member_count UInt64,
+        published_at DateTime('Asia/Shanghai'),
+        is_active UInt8 DEFAULT 1
+    )
+    ENGINE = ReplacingMergeTree(published_at)
+    ORDER BY (code, dataset_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS daily_date_universe_member
+    (
+        dataset_id String,
+        code String,
+        trade_date Date,
+        member_ordinal UInt32,
+        date_set_sha256 String,
+        published_at DateTime('Asia/Shanghai')
+    )
+    ENGINE = MergeTree
+    PARTITION BY toYYYYMM(trade_date)
+    ORDER BY (dataset_id, code, trade_date)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS daily_coverage_audit
+    (
+        audit_id String,
+        code String,
+        trade_date Date,
+        coverage_start Date,
+        coverage_end Date,
+        date_universe_id String,
+        date_set_sha256 String,
+        audit_state LowCardinality(String),
+        status_audit_ref String,
+        minute_reference_required UInt8,
+        evidence_json String,
+        observed_at DateTime('Asia/Shanghai')
+    )
+    ENGINE = ReplacingMergeTree(observed_at)
+    PARTITION BY toYYYYMM(trade_date)
+    ORDER BY (code, trade_date, audit_id)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS kline_daily_intraday
     (
         code String,
@@ -413,6 +468,68 @@ STARTUP_TABLE_CONTRACTS = (
                 "volume",
                 "amount",
                 "created_at",
+            }
+        ),
+    ),
+    ClickHouseTableContract(
+        name="daily_date_universe_registry",
+        engine_prefix="ReplacingMergeTree",
+        partition_key="",
+        sorting_key="(code,dataset_id)",
+        required_columns=frozenset(
+            {
+                "dataset_id",
+                "code",
+                "security_type",
+                "identity_status",
+                "source_kind",
+                "source_ref",
+                "source_sha256",
+                "coverage_start",
+                "coverage_end",
+                "completeness_state",
+                "date_set_sha256",
+                "member_count",
+                "published_at",
+                "is_active",
+            }
+        ),
+    ),
+    ClickHouseTableContract(
+        name="daily_date_universe_member",
+        engine_prefix="MergeTree",
+        partition_key="toYYYYMM(trade_date)",
+        sorting_key="(dataset_id,code,trade_date)",
+        required_columns=frozenset(
+            {
+                "dataset_id",
+                "code",
+                "trade_date",
+                "member_ordinal",
+                "date_set_sha256",
+                "published_at",
+            }
+        ),
+    ),
+    ClickHouseTableContract(
+        name="daily_coverage_audit",
+        engine_prefix="ReplacingMergeTree",
+        partition_key="toYYYYMM(trade_date)",
+        sorting_key="(code,trade_date,audit_id)",
+        required_columns=frozenset(
+            {
+                "audit_id",
+                "code",
+                "trade_date",
+                "coverage_start",
+                "coverage_end",
+                "date_universe_id",
+                "date_set_sha256",
+                "audit_state",
+                "status_audit_ref",
+                "minute_reference_required",
+                "evidence_json",
+                "observed_at",
             }
         ),
     ),

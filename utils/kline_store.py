@@ -265,30 +265,55 @@ def check_kline_exists(code: str, period: str, trade_date: date) -> bool:
     return int(value or 0) > 0
 
 
-def insert_kline(code: str, period: str, data: dict[str, Any]) -> bool:
+def insert_kline(code: str, period: str, data: dict[str, Any], *, daily_scope=None) -> bool:
     payload = dict(data)
     payload.setdefault("code", code)
-    return insert_kline_batch(period, [payload]) == 1
+    return insert_kline_batch(period, [payload], daily_scope=daily_scope) == 1
 
 
-def insert_kline_batch(period: str, data: list[dict[str, Any]], on_conflict: str = "ignore") -> int:
+def insert_kline_batch(
+    period: str,
+    data: list[dict[str, Any]],
+    on_conflict: str = "ignore",
+    *,
+    daily_scope=None,
+) -> int:
     if not data:
         return 0
-    return insert_kline_dataframe(period, pd.DataFrame(data), on_conflict=on_conflict)
+    return insert_kline_dataframe(
+        period, pd.DataFrame(data), on_conflict=on_conflict, daily_scope=daily_scope
+    )
 
 
-def insert_kline_dataframe(period: str, df: pd.DataFrame, on_conflict: str = "ignore") -> int:
+def insert_kline_dataframe(
+    period: str,
+    df: pd.DataFrame,
+    on_conflict: str = "ignore",
+    *,
+    daily_scope=None,
+) -> int:
     if df.empty:
         return 0
 
     table = _get_table_name(period)
+    client = None
     if table == "kline_daily":
-        from utils.daily_write_guard import block_unreviewed_daily_write
-
-        block_unreviewed_daily_write(
-            operation="insert",
-            source="utils.kline_store.insert_kline_dataframe",
+        from utils.daily_write_guard import (
+            ensure_daily_write_scope_for_dataframe,
+            validate_daily_dataframe,
         )
+
+        if daily_scope is None or daily_scope.exact_key_permit is None:
+            client = clickhouse_client()
+        daily_scope = ensure_daily_write_scope_for_dataframe(
+            df,
+            source="utils.kline_store.insert_kline_dataframe",
+            scope=daily_scope,
+            client=client,
+        )
+        df = validate_daily_dataframe(df, scope=daily_scope, operation="insert")
+        if df.empty:
+            return 0
     df = filter_trading_day_rows(period, df)
     if df.empty:
         return 0
@@ -297,7 +322,8 @@ def insert_kline_dataframe(period: str, df: pd.DataFrame, on_conflict: str = "ig
         from utils.minute_volume import prepare_min5_volumes
         df = prepare_min5_volumes(df)
 
-    client = clickhouse_client()
+    if client is None:
+        client = clickhouse_client()
 
     if on_conflict == "upsert":
         time_col = _get_time_column(period)
@@ -332,14 +358,34 @@ def delete_kline(
     period: str,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    *,
+    daily_scope=None,
 ) -> int:
     table = _get_table_name(period)
+    client = None
     if table == "kline_daily":
-        from utils.daily_write_guard import block_unreviewed_daily_write
+        from utils.daily_write_guard import (
+            DailyWriteBlockedError,
+            load_daily_write_scope_for_keys,
+            validate_daily_keys,
+        )
 
-        block_unreviewed_daily_write(
-            operation="delete",
+        if start_date is None or end_date is None or start_date != end_date:
+            raise DailyWriteBlockedError(
+                "blocked formal kline_daily delete: exact-key permit requires one explicit trade_date"
+            )
+        if daily_scope is None or daily_scope.exact_key_permit is None:
+            client = clickhouse_client()
+        daily_scope = load_daily_write_scope_for_keys(
+            [(code, start_date)],
             source="utils.kline_store.delete_kline",
+            scope=daily_scope,
+            client=client,
+        )
+        validate_daily_keys(
+            [(code, start_date)],
+            scope=daily_scope,
+            operation="delete",
         )
     time_col = _get_time_column(period)
     where = ["code = ?"]
@@ -353,7 +399,9 @@ def delete_kline(
 
     before = int(clickhouse_scalar(f"SELECT count() FROM {table} WHERE {' AND '.join(where)}", params) or 0)
     sql, named = _delete_sql(table, where, params)
-    clickhouse_client().command(sql, parameters=named)
+    if client is None:
+        client = clickhouse_client()
+    client.command(sql, parameters=named)
     return before
 
 

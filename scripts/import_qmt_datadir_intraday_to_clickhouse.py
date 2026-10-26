@@ -24,6 +24,11 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from scripts.qmtmini_daily_backfill_validate import ch_client, quote_sql
+from utils.daily_write_guard import (
+    ensure_daily_write_scope_for_dataframe,
+    load_current_stock_scope,
+    validate_daily_dataframe,
+)
 from utils.kline_units import normalize_qmt_intraday_units
 from utils.paths import report_path
 
@@ -346,6 +351,15 @@ def apply_minutes(client, stage_table: str, periods: list[str], start_date: str,
 def apply_daily(client, daily: pd.DataFrame, trade_date: str, delete_chunk_size: int) -> dict[str, Any]:
     if daily.empty:
         return {"rows": 0, "codes": 0}
+    source = f"{__file__}:apply_daily"
+    daily_scope = load_current_stock_scope(source=source, client=client)
+    daily_scope = ensure_daily_write_scope_for_dataframe(
+        daily,
+        source=source,
+        scope=daily_scope,
+        client=client,
+    )
+    daily = validate_daily_dataframe(daily, scope=daily_scope, operation="DELETE+INSERT")
     codes = sorted(daily["code"].astype(str).unique())
     for chunk in [codes[idx : idx + delete_chunk_size] for idx in range(0, len(codes), delete_chunk_size)]:
         code_sql = ",".join(quote_sql(code) for code in chunk)

@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 DAILY_TABLE = "stock.kline_daily"
@@ -114,6 +115,8 @@ def main() -> int:
         )
         if not args.write or candidate.empty:
             continue
+
+        block_unreviewed_daily_write(operation="INSERT", source=__file__)
 
         candidate = candidate.sort_values(["code", "trade_date"])
         created_at = datetime.now(BUSINESS_TZ)

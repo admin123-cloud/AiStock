@@ -26,6 +26,7 @@ from data_fetcher.sources.qmtmini_client import QmtMiniMarketClient
 from scripts.qmtmini_daily_backfill_validate import quote_sql
 from scripts.sync_sectors_and_mapping import _classify_qmt_sector, _is_qmt_universe_sector
 from utils.paths import report_path, runtime_path
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
@@ -448,6 +449,8 @@ def reset_price_range(client: Any, args: argparse.Namespace, *, execute: bool) -
                 or 0
             )
             if execute:
+                if table == "kline_daily":
+                    block_unreviewed_daily_write(operation="DELETE", source=__file__)
                 client.command(
                     f"""
                     ALTER TABLE {table}

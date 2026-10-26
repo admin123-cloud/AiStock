@@ -24,6 +24,7 @@ from loguru import logger
 from clickhouse_connect import get_client
 from utils.kline_store import filter_trading_day_tuples
 from utils.kline_units import normalize_akshare_daily_units
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 
 def get_ch_client():
@@ -183,6 +184,8 @@ def fix_index(client, index: dict, dry_run: bool = False) -> tuple[int, int]:
     if dry_run:
         logger.info(f"  [DRY-RUN] 将写入 {len(df)} 条到 {code}")
         return len(df), existing_count + len(df)
+
+    block_unreviewed_daily_write(operation="INSERT", source=__file__)
 
     table_name = "kline_daily"
     batch_size = 1000

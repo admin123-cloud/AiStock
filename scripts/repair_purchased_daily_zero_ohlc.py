@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.daily_write_guard import block_unreviewed_daily_write
 from utils.paths import runtime_path
 
 
@@ -293,6 +294,8 @@ def main() -> int:
     if not candidates:
         print("nothing_to_write")
         return 0
+
+    block_unreviewed_daily_write(operation="DELETE+INSERT", source=__file__)
 
     _ensure_tables(client)
     existing_candidate = int(client.query(

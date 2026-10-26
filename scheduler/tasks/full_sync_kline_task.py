@@ -73,12 +73,18 @@ class FullSyncKlineTask:
             # Load the active stock universe from the application database.
             from utils.database import db
             from models.stock_models import Stock
+            from utils.daily_write_guard import CORE_DAILY_INDEX_CODES
 
             session = next(db.get_session())
             stocks = session.query(Stock.code, Stock.type).filter(
                 Stock.type.in_("stock", "index"),
                 or_(Stock.status == 'active', Stock.status.is_(None))
             ).all()
+            stocks = [
+                item for item in stocks
+                if str(item.type or "").lower() != "index"
+                or str(item.code or "").upper() in CORE_DAILY_INDEX_CODES
+            ]
             stock_codes = [stock.code for stock in stocks]
             stock_types = {
                 str(stock.code).upper(): str(stock.type or "stock").lower()
@@ -255,13 +261,7 @@ class FullSyncKlineTask:
 
     def _save_kline_data(self, code: str, period: str, klines, instrument_type: str = "stock"):
         """Save K-line data to database."""
-
-
-
-
-
-
-
+        session = None
         try:
             from utils.database import db
 
@@ -270,6 +270,37 @@ class FullSyncKlineTask:
                     klines,
                     instrument_type=instrument_type,
                 )
+                from utils.daily_write_guard import (
+                    DailyWriteBlockedError,
+                    ensure_daily_write_scope_for_dataframe,
+                    make_daily_write_scope,
+                    validate_daily_dataframe,
+                )
+                from utils.market_warehouse import clickhouse_client
+
+                daily_scope = make_daily_write_scope(
+                    source="scheduler.tasks.full_sync_kline_task._save_kline_data",
+                    current_stock_codes={code}
+                    if str(instrument_type).lower() == "stock"
+                    else set(),
+                )
+                daily_frame = klines.copy()
+                if "trade_date" not in daily_frame.columns:
+                    if "datetime" not in daily_frame.columns:
+                        raise DailyWriteBlockedError(
+                            "blocked formal kline_daily scheduler insert: datetime/trade_date is required"
+                        )
+                    daily_frame["trade_date"] = pd.to_datetime(
+                        daily_frame["datetime"], errors="coerce"
+                    ).dt.date
+                daily_frame["code"] = code
+                daily_scope = ensure_daily_write_scope_for_dataframe(
+                    daily_frame,
+                    source="scheduler.tasks.full_sync_kline_task._save_kline_data",
+                    scope=daily_scope,
+                    client=clickhouse_client(),
+                )
+                validate_daily_dataframe(daily_frame, scope=daily_scope, operation="insert")
 
             session = next(db.get_session())
 
@@ -408,7 +439,8 @@ class FullSyncKlineTask:
                         for record in existing_records:
                             existing_data[record.year] = record
 
-            # 閹靛綊鍣洪幓鎺戝弳閹存牗娲块弬鐗堟殶閹?            batch_size = 1000
+            # Commit batches periodically to keep the ORM session bounded.
+            batch_size = 1000
             batch = []
             update_count = 0
             insert_count = 0
@@ -431,7 +463,7 @@ class FullSyncKlineTask:
                         except Exception as e:
                             logger.error(f"failed to convert datetime for {code} {period}: {e}")
                             continue
-                    elif not isinstance(datetime_value, (pd.Timestamp, datetime.datetime)):
+                    elif not isinstance(datetime_value, (pd.Timestamp, datetime)):
                         logger.error(f"invalid datetime type for {code} {period}: {type(datetime_value)}")
                         continue
                     
@@ -502,7 +534,6 @@ class FullSyncKlineTask:
                         # Populate week_end_date only once the current week has completed.
                         if period == "1w":
                             if existing.week_end_date is None:
-                                from datetime import datetime, timedelta
                                 today = datetime.now().date()
                                 weekly_date = datetime_value.date()
                                 days_until_friday = (4 - weekly_date.weekday()) % 7
@@ -551,7 +582,6 @@ class FullSyncKlineTask:
                                 weekly_date = datetime_value.date()
                                 if weekly_date is not None and not pd.isna(weekly_date):
                                     # Calculate the Friday that closes the weekly bar.
-                                    from datetime import datetime, timedelta
                                     today = datetime.now().date()
                                     # 计算札五的日?
                                     days_until_friday = (4 - weekly_date.weekday()) % 7
@@ -666,6 +696,7 @@ class FullSyncKlineTask:
 
         except Exception as e:
             logger.error(f"Failed to persist synchronized K-line data: {e}")
-            session.rollback()
-            session.close()
+            if session is not None:
+                session.rollback()
+                session.close()
             raise

@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.daily_write_guard import block_unreviewed_daily_write
 
 STAGE = "stock.purchased_history_daily_snapshot_stage"
 MINUTE = "stock.kline_minute_5"
@@ -60,6 +61,7 @@ def main() -> int:
 
     # Write only missing formal daily keys. Derived rows have zero auxiliary fields;
     # OHLC/volume/amount are fully sourced from 48 purchased 5m bars.
+    block_unreviewed_daily_write(operation="INSERT", source=__file__)
     c.command(f"""
         INSERT INTO stock.kline_daily
         (code,trade_date,open,high,low,close,volume,amount,amplitude,change_pct,change_amount,turnover_rate,created_at,id)

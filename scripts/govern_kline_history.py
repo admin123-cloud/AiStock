@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.market_warehouse import clickhouse_client, clickhouse_table_exists  # noqa: E402
+from utils.daily_write_guard import block_unreviewed_daily_write  # noqa: E402
 
 
 PERIODS: Dict[str, Dict[str, Any]] = {
@@ -363,11 +364,15 @@ def _check_derived_consistency(
 
 def _optimize_final(client: Any, table: str) -> str:
     table = _safe_table(table)
+    if table == "kline_daily":
+        block_unreviewed_daily_write(operation="OPTIMIZE", source=__file__)
     return str(client.command(f"OPTIMIZE TABLE {table} FINAL"))
 
 
 def _delete_range(client: Any, table: str, col: str, start_date: date, end_date: date) -> None:
     table = _safe_table(table)
+    if table == "kline_daily":
+        block_unreviewed_daily_write(operation="DELETE", source=__file__)
     expr = f"toDate({col})"
     client.command(
         f"""
@@ -398,6 +403,8 @@ def _repair_bad_ohlc(client: Any, period: str, start_date: date, end_date: date)
     before = int(_query_one(client, f"SELECT count() FROM {table} WHERE {bad_where}")[0] or 0)
     if before <= 0:
         return 0
+    if period == "1d":
+        block_unreviewed_daily_write(operation="UPDATE", source=__file__)
     client.command(
         f"""
         ALTER TABLE {table}

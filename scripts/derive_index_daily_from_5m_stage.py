@@ -45,6 +45,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from utils.market_warehouse import clickhouse_client
+from utils.daily_write_guard import block_unreviewed_daily_write
 from utils.paths import report_path
 
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
@@ -264,6 +265,8 @@ def main() -> int:
 
     written = 0
     if args.write:
+        if derivable:
+            block_unreviewed_daily_write(operation="INSERT", source=__file__)
         columns = [
             "code", "trade_date", "open", "high", "low", "close", "volume", "amount",
             "amplitude", "change_pct", "change_amount", "turnover_rate", "created_at", "id",
