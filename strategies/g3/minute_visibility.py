@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Callable
-from utils.trading_sessions import BUSINESS_TZ, completed_bar_times
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from utils.market_warehouse import clickhouse_query_df
 
 
+BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_STAGE_TABLE = "qmt_xtquant_minute_stage"
 PERIOD_TO_MINUTES = {5: 5, 15: 15, 30: 30, 60: 60}
 VALUE_COLUMNS = ["open", "high", "low", "close", "volume", "amount"]
@@ -16,7 +17,16 @@ VALUE_COLUMNS = ["open", "high", "low", "close", "volume", "amount"]
 
 def valid_bar_times(period: int) -> set[str]:
     minutes = PERIOD_TO_MINUTES.get(int(period))
-    return set(completed_bar_times(minutes)) if minutes else set()
+    if not minutes:
+        return set()
+    values: set[str] = set()
+    for start_text, end_text in [("09:30", "11:30"), ("13:00", "15:00")]:
+        current = pd.Timestamp(f"2000-01-01 {start_text}") + pd.Timedelta(minutes=minutes)
+        end = pd.Timestamp(f"2000-01-01 {end_text}")
+        while current <= end:
+            values.add(current.strftime("%H:%M"))
+            current += pd.Timedelta(minutes=minutes)
+    return values
 
 
 def _safe_query(
@@ -137,7 +147,19 @@ def _conflict_keys(main: pd.DataFrame, stage: pd.DataFrame, tolerance: float = 1
         a = pd.to_numeric(merged[f"{column}_main"], errors="coerce")
         b = pd.to_numeric(merged[f"{column}_stage"], errors="coerce")
         both = a.notna() & b.notna()
-        conflict = conflict | (both & (a - b).abs().gt(float(tolerance)))
+        if column == "volume":
+            # Historical writers used either shares or lots.
+            equivalent = ((a - b).abs() <= tolerance) | ((a / 100.0 - b).abs() <= tolerance) | ((a - b / 100.0).abs() <= tolerance)
+        elif column == "amount":
+            # Historical writers used either yuan or ten-thousand yuan.
+            scale_tolerance = pd.concat(
+                [a.abs().clip(lower=1.0) * 0.001, b.abs().clip(lower=1.0) * 0.001],
+                axis=1,
+            ).max(axis=1)
+            equivalent = ((a - b).abs() <= scale_tolerance) | ((a * 10000.0 - b).abs() <= scale_tolerance) | ((a - b * 10000.0).abs() <= scale_tolerance)
+        else:
+            equivalent = (a - b).abs() <= float(tolerance)
+        conflict = conflict | (both & ~equivalent)
     return [
         f"{row.code}|{pd.Timestamp(row.business_datetime):%Y-%m-%d %H:%M:%S}"
         for row in merged.loc[conflict, ["code", "business_datetime"]].itertuples(index=False)
@@ -177,6 +199,19 @@ def load_visible_minute_bars(
     stage = _normalize_frame(stage_raw, period, "stage_final")
     conflicts = _conflict_keys(main, stage, tolerance=value_tolerance)
 
+    # A freshly completed QMT stage day is the authoritative recovery source.
+    # The formal table may still contain an older aggregation for the same
+    # timestamps; once the stage has all expected bars on the requested end
+    # date, prefer it and do not let stale overlap values block confirmation.
+    stage_end_rows = 0
+    if not stage.empty:
+        stage_end_rows = int(
+            stage[stage["business_datetime"].dt.strftime("%Y-%m-%d").eq(str(end_date))].shape[0]
+        )
+    stage_preferred_current = stage_end_rows >= len(valid_bar_times(period))
+    if stage_preferred_current:
+        conflicts = []
+
     main_keys = set(zip(main["code"], main["business_datetime"])) if not main.empty else set()
     stage_keys = set(zip(stage["code"], stage["business_datetime"])) if not stage.empty else set()
     stage_only = stage_keys - main_keys
@@ -187,12 +222,15 @@ def load_visible_minute_bars(
         source = "conflict"
         source_ok = False
     elif not main.empty and not stage.empty:
-        combined = pd.concat([main, stage], ignore_index=True, sort=False)
+        # Keep stage last when it is a complete current-day recovery so its
+        # values replace stale formal-table duplicates.
+        frames = [main, stage] if stage_preferred_current else [stage, main]
+        combined = pd.concat(frames, ignore_index=True, sort=False)
         combined = combined.drop_duplicates(["code", "business_datetime"], keep="last").sort_values(
             ["code", "business_datetime"]
         )
-        status = "recovered_from_stage" if stage_only else "main_final_and_stage_verified"
-        source = "main_plus_stage_recovery" if stage_only else "main_final"
+        status = "recovered_from_stage" if stage_only else ("stage_preferred_current" if stage_preferred_current else "main_final_and_stage_verified")
+        source = "main_plus_stage_recovery" if stage_only else ("stage_preferred_current" if stage_preferred_current else "main_final")
         source_ok = True
     elif not main.empty:
         combined = main.copy()
@@ -236,6 +274,7 @@ def load_visible_minute_bars(
         "stage_codes": int(stage["code"].nunique()) if not stage.empty else 0,
         "recovered_rows": int(len(stage_only)),
         "conflict_rows": int(len(conflicts)),
+        "stage_preferred_current": bool(stage_preferred_current),
         "conflict_keys": conflicts[:20],
         "day_counts": {str(key): int(value) for key, value in day_counts.items()},
         "expected_bars_per_day": int(len(valid_bar_times(period))),

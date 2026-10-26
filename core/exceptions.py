@@ -1,12 +1,16 @@
 """
-异常定义模块
+自定义异常模块
 
-定义系统中所有自定义异常类，便于错误处理和调试
+定义项目中使用的自定义异常类
 """
 
 
+# ========================================
+# 基础异常类
+# ========================================
+
 class AiStockException(Exception):
-    """AiStock 基础异常类"""
+    """AiStock基础异常类"""
     
     def __init__(self, message: str, details: dict = None):
         """
@@ -26,15 +30,28 @@ class AiStockException(Exception):
         return self.message
 
 
+# ========================================
+# 配置相关异常
+# ========================================
+
 class ConfigException(AiStockException):
     """配置相关异常"""
     pass
 
 
+class ConfigError(AiStockException):
+    """配置错误"""
+    pass
+
+
+# ========================================
+# 数据源相关异常
+# ========================================
+
 class DataSourceException(AiStockException):
-    """数据源相关异常"""
+    """数据源相关异常（兼容旧代码）"""
     
-    def __init__(self, source_name: str, message: str, details: dict = None):
+    def __init__(self, source_name: str = None, message: str = None, details: dict = None):
         """
         初始化数据源异常
         
@@ -44,18 +61,141 @@ class DataSourceException(AiStockException):
             details: 异常详细信息
         """
         self.source_name = source_name
-        super().__init__(message, details)
+        # 兼容两种调用方式
+        if message is None and source_name is not None:
+            message = source_name
+            self.source_name = None
+        super().__init__(message or "数据源异常", details)
     
     def __str__(self):
-        if self.details:
-            return f"[{self.source_name}] {self.message} | Details: {self.details}"
-        return f"[{self.source_name}] {self.message}"
+        if self.source_name:
+            return f"[{self.source_name}] {super().__str__()}"
+        return super().__str__()
+
+
+class DataSourceError(AiStockException):
+    """数据源异常"""
+    pass
+
+
+class DataFetchError(DataSourceError):
+    """数据获取异常"""
+    pass
+
+
+class DataParseError(DataSourceError):
+    """数据解析异常"""
+    pass
+
+
+class DataValidationError(DataSourceError):
+    """数据验证异常"""
+    pass
+
+
+# ========================================
+# 数据库相关异常
+# ========================================
+
+class DatabaseException(AiStockException):
+    """数据库相关异常（兼容旧代码）"""
+    pass
+
+
+class DatabaseError(AiStockException):
+    """数据库异常"""
+    pass
+
+
+class ConnectionError(DatabaseError):
+    """连接异常"""
+    pass
+
+
+class QueryError(DatabaseError):
+    """查询异常"""
+    pass
+
+
+class TransactionError(DatabaseError):
+    """事务异常"""
+    pass
+
+
+# ========================================
+# 模型相关异常
+# ========================================
+
+class ModelException(AiStockException):
+    """模型相关异常（兼容旧代码）"""
+    pass
+
+
+class ModelError(AiStockException):
+    """模型异常"""
+    pass
+
+
+class ModelTrainingError(ModelError):
+    """模型训练异常"""
+    pass
+
+
+class ModelPredictionError(ModelError):
+    """模型预测异常"""
+    pass
+
+
+# ========================================
+# 股票相关异常
+# ========================================
+
+class StockNotFoundError(AiStockException):
+    """股票不存在异常"""
+    pass
+
+
+class InvalidStockCodeError(AiStockException):
+    """无效股票代码异常"""
+    pass
+
+
+# ========================================
+# 策略相关异常
+# ========================================
+
+class StrategyError(AiStockException):
+    """策略异常"""
+    pass
+
+
+class BacktestError(AiStockException):
+    """回测异常"""
+    pass
+
+
+# ========================================
+# 执行相关异常
+# ========================================
+
+class ExecutionError(AiStockException):
+    """执行异常"""
+    pass
+
+
+class OrderError(ExecutionError):
+    """订单异常"""
+    pass
+
+
+class RiskControlError(ExecutionError):
+    """风控异常"""
+    pass
 
 
 class DataSourceNotAvailableException(DataSourceException):
     """数据源不可用异常"""
     pass
-
 
 class DataNotFoundException(AiStockException):
     """数据未找到异常"""
@@ -76,16 +216,9 @@ class DataNotFoundException(AiStockException):
             details
         )
 
-
-class DatabaseException(AiStockException):
-    """数据库相关异常"""
-    pass
-
-
 class ValidationException(AiStockException):
     """数据验证异常"""
     pass
-
 
 class RateLimitException(AiStockException):
     """速率限制异常"""

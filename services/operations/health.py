@@ -179,6 +179,22 @@ def build_snapshot(
     }
 
 
+def build_live_snapshot(*, now: datetime | None = None) -> dict[str, Any]:
+    """Evaluate the current artifact contracts without using the last publish file.
+
+    This remains read-only: it inspects the same upstream artifacts as the
+    scheduled publisher, but gives API consumers a current answer on demand.
+    """
+    from scripts.publish_runtime_health import default_rules
+    from scheduler.trading_calendar import TradingCalendar
+
+    checked_at = now or _now()
+    return build_snapshot(
+        default_rules(),
+        now=checked_at,
+        non_trading_day=not TradingCalendar.is_trading_day(checked_at),
+    )
+
 def write_snapshot(snapshot: dict[str, Any], path: Path) -> Path:
     """Atomically publish a snapshot so readers never see partial JSON."""
 
