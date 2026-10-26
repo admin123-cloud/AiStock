@@ -1,9 +1,0 @@
-{
-  "state": "applied",
-  "written": 2880,
-  "skipped_existing": 0,
-  "readback_fail": [],
-  "source": "wstock_wdz_csv_sample",
-  "code_days": 60,
-  "applied_at": "2026-09-19T14:29:42.051052"
-}
