@@ -531,7 +531,7 @@ def _day_bars_query(client: Any, codes: Sequence[str], ch_win: Sequence[str]) ->
         SELECT substring(toString(toDateTime(datetime, 'Asia/Shanghai')), 1, 16) AS dt,
                code, open, high, low, close, volume, amount
         FROM {TARGET_TABLE}
-        WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
+        WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')
           AND code IN ({mb._sql_str(chunk)})
         ORDER BY datetime""")
         out.extend(rows)
@@ -541,7 +541,7 @@ def _day_bars_query(client: Any, codes: Sequence[str], ch_win: Sequence[str]) ->
 def _codes_with_bars(client: Any, ch_win: Sequence[str]) -> List[str]:
     rows = mb._ro(client, f"""
     SELECT DISTINCT code FROM {TARGET_TABLE}
-    WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')""")
+    WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')""")
     return sorted(str(r["code"]) for r in rows)
 
 
@@ -642,11 +642,11 @@ def _readback_aggregate_auto(client: Any, keys: List[Tuple[str, str]],
     for i in range(0, len(codes), 200):
         chunk = codes[i:i + 200]
         rows = mb._ro(client, f"""
-SELECT toString(toDate(datetime + 28800)) AS d, code, count() AS n,
+SELECT toString(toDate(datetime)) AS d, code, count() AS n,
        sum(volume) AS v, sum(amount) AS a,
        countIf(amount IS NOT NULL) AS amt_nonnull
 FROM {TARGET_TABLE}{suffix}
-WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
+WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')
   AND code IN ({mb._sql_str(chunk)}) GROUP BY d, code""")
         for r in rows:
             # B 行全 NULL 时 CH sum(amount) 返回 NULL（R22 生产实测），按 0 聚合；

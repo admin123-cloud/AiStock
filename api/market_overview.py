@@ -2387,9 +2387,9 @@ def _emotion_intraday_aggregates(range_start: str, latest_date: str, window_star
       R20b 模式）与 (code, 日) argMax(close, tuple(datetime, created_at))
       取末根两层合成，单次扫描；
     · datetime 范围谓词（toDate 谓词在 toYYYYMM 分区实测不裁剪）；
-    · kline_minute_5 存储钟=UTC（R23 实证），北京交易日时段落在同日 UTC
-      01:35~07:00，toDate(datetime) 与 trade_date 同日对齐；
-    · toHour>=6（北京 14:00 后）预过滤为纯优化：与全量逐日零差异
+    · R27b：kline_minute_5 datetime 已标注 Asia/Shanghai（北京钟），北京
+      交易日时段即同日 09:35~15:00，toDate(datetime) 与 trade_date 同日对齐；
+    · toHour>=13（北京 13:00 后）预过滤为纯优化：与全量逐日零差异
       （covered/rate diff 全 0，probe5 2026-11-09），扫描量 48→13 根/日，
       30 日窗口 2.74s→0.95s。
     """
@@ -2413,7 +2413,7 @@ def _emotion_intraday_aggregates(range_start: str, latest_date: str, window_star
                 argMax(close, tuple(datetime, created_at)) AS last_close
             FROM kline_minute_5
             WHERE datetime >= ? AND datetime < ? + INTERVAL 1 DAY
-              AND toHour(datetime) >= 6
+              AND toHour(datetime) >= 13
             GROUP BY code, trade_date
         ),
         prev_close AS (
@@ -2471,7 +2471,7 @@ def _compute_emotion_trend(days: int = 30, granularity: str = "daily"):
                     ANY LEFT JOIN stocks s ON s.code = k.code
                     WHERE k.datetime >= now() - INTERVAL {query_days} DAY
                       AND s.type = 'stock'
-                      AND toHour(k.datetime) IN (10, 11, 13, 14, 15)
+                      AND toHour(k.datetime) BETWEEN 9 AND 15
                     GROUP BY hour_time
                     HAVING total_rows >= 100
                     ORDER BY hour_time DESC

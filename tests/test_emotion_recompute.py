@@ -129,7 +129,7 @@ CALIBER_TOKENS = [
     "pct < -3",
     "argMax(close, tuple(datetime, created_at))",
     "datetime >= ? AND datetime < ? + INTERVAL 1 DAY",
-    "toHour(datetime) >= 6",
+    "toHour(datetime) >= 13",
     "lagInFrame(toNullable(trade_date), 1, NULL)",
 ]
 

@@ -79,22 +79,21 @@ INTRADAY_DAILY_TABLE = "kline_daily_intraday"
 BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 
 
-def _minute_datetime_to_business_time(value: Any) -> datetime:
-    """Return a legacy minute-bar timestamp as an Asia/Shanghai wall time.
+def _minute_beijing_wall_datetime(value: Any) -> datetime:
+    """Return a minute-bar timestamp as a naive Asia/Shanghai wall time.
 
-    The current full-push writer persisted QMT's China-market wall clock as a
-    naive UTC value.  Consequently all minute bars are eight hours ahead in
-    ClickHouse (for example, 17:35 instead of the 09:35 opening bar).  Keep
-    the correction at the API boundary until the archived minute tables can be
-    repaired, so every intraday UI consumer receives the actual trading time.
+    R27b（2026-11-10）：八张分钟表 datetime 已标注 ``Nullable(DateTime('Asia/
+    Shanghai'))``，clickhouse-connect 读回 aware 北京墙钟，值本身就是交易时间。
+    旧版 ``_minute_datetime_to_business_time`` 的 −8h 补丁（QMT 世代 +8h 存储
+    假设）随 R27a 归真一并删除；这里只做 aware→naive 北京墙的规整，保持 API
+    输出格式（naive isoformat）不变。
     """
     timestamp = pd.Timestamp(value)
     if pd.isna(timestamp):
         raise ValueError("minute timestamp is empty")
-    # ClickHouse client may attach Asia/Shanghai to the column on read, but
-    # that does not repair the persisted clock value itself.  The stored value
-    # is still consistently eight hours ahead of the actual market session.
-    return timestamp.to_pydatetime().replace(tzinfo=None) - timedelta(hours=8)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert(BUSINESS_TZ).tz_localize(None)
+    return timestamp.to_pydatetime()
 
 
 def _clickhouse_code_filter_params(code: str) -> tuple[str, str]:
@@ -174,7 +173,7 @@ def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
         change_amount = close - previous_close if previous_close > 0 else None
         change_pct = change_amount / previous_close * 100 if previous_close > 0 else None
         amplitude = (high - low) / previous_close * 100 if previous_close > 0 else None
-        as_of_dt = _minute_datetime_to_business_time(as_of)
+        as_of_dt = _minute_beijing_wall_datetime(as_of)
         snapshot_at = now
         payload = {
             "open": float(row.get("open") or close),
@@ -289,7 +288,7 @@ def _overlay_fresh_intraday_list_kline(
             close = float(bar.close or 0)
             if close <= 0 or bar.latest_as_of is None:
                 continue
-            as_of = _minute_datetime_to_business_time(bar.latest_as_of)
+            as_of = _minute_beijing_wall_datetime(bar.latest_as_of)
             # Do not use a stalled minute feed as a live quote.  The normal
             # five-minute publisher may be a little late, hence a 20-minute
             # tolerance before the daily close remains the honest fallback.
@@ -3773,11 +3772,9 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                     for row in df.itertuples(index=False):
                         date_value = getattr(row, "date_value")
                         if isinstance(date_value, datetime):
-                            date_text = (
-                                _minute_datetime_to_business_time(date_value).isoformat()
-                                if period in {"1m", "15m", "30m", "60m"}
-                                else date_value.isoformat()
-                            )
+                            # R27b：分钟表已北京钟，四个周期统一规整输出
+                            # （原 1m/15m/30m/60m −8h 特判与 5m 不对称已删）。
+                            date_text = _minute_beijing_wall_datetime(date_value).isoformat()
                         else:
                             date_text = str(date_value)
                         data.append({

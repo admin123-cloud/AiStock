@@ -125,15 +125,17 @@ def epoch_to_utc(ts: int) -> datetime:
 
 
 def day_window(day: str) -> Tuple[str, str]:
-    """单个北京日 → 精确 UTC 半开窗口 [d 00:00, d+1 00:00) 北京 = [d-1 16:00, d 16:00) UTC。
+    """单个北京日 → 精确半开窗口 [d 00:00, d+1 00:00) 北京钟（R27b：库内
+    datetime 已标注 Asia/Shanghai，SQL 侧以 ``toDateTime(?, 'Asia/Shanghai')``
+    解析，与旧 UTC 形式 ``[d-1 16:00, d 16:00)`` 同瞬间）。
 
-    注意不能复用 R16 ``ch_window(d, d)``：其上界公式 ``end+1 日 16:00 UTC``
+    注意不能复用 R16 ``ch_window(d, d)``：其上界公式 ``end+2 日 00:00 北京``
     实际覆盖到北京 ``end+2 日 00:00``（多出一整个北京日）——多日窗口反连接
     无害，但单日取数会取到次日数据（本任务 2026-11-09 实测 96/48 根后修正）。
     """
     d = date.fromisoformat(day)
-    lo = datetime.combine(d - timedelta(days=1), time(16, 0))
-    hi = datetime.combine(d, time(16, 0))
+    lo = datetime.combine(d, time(0, 0))
+    hi = datetime.combine(d + timedelta(days=1), time(0, 0))
     return lo.strftime("%Y-%m-%d %H:%M:%S"), hi.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -189,7 +191,7 @@ def fetch_5m_bars(client: Any, codes: Sequence[str],
         rows = _ro(client, f"""
 SELECT code, toUnixTimestamp(datetime) AS ts, open, high, low, close, volume, amount
 FROM {SOURCE_TABLE}
-WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
+WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')
   AND code IN ({_sql_str(chunk)}) ORDER BY code, ts""")
         for r in rows:
             code = str(r["code"])
@@ -296,7 +298,7 @@ def grid_calibration_probe(client: Any, codes: Sequence[str], day: str = "2026-1
             src = _ro(client, f"""
 SELECT toUnixTimestamp(datetime) AS ts, open, high, low, close, volume, amount
 FROM {SOURCE_TABLE} WHERE code = '{code}'
-AND datetime >= toDateTime('{ch[0]}') AND datetime < toDateTime('{ch[1]}') ORDER BY ts""")
+AND datetime >= toDateTime('{ch[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch[1]}', 'Asia/Shanghai') ORDER BY ts""")
             if not src:
                 continue  # 该码在存量段无 5m 数据（如次新股）：跳过，不算失败
             if len(src) != 48:
@@ -310,7 +312,7 @@ AND datetime >= toDateTime('{ch[0]}') AND datetime < toDateTime('{ch[1]}') ORDER
             got_rows = _ro(client, f"""
 SELECT toUnixTimestamp(datetime) AS ts, open, high, low, close, volume, amount
 FROM {table} WHERE code = '{code}'
-AND datetime >= toDateTime('{ch[0]}') AND datetime < toDateTime('{ch[1]}') ORDER BY ts""")
+AND datetime >= toDateTime('{ch[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch[1]}', 'Asia/Shanghai') ORDER BY ts""")
             got = {int(r["ts"]): r for r in got_rows}
             total_rows += len(got)
             if set(got) != set(want):
@@ -346,8 +348,8 @@ def _existing_keys_nonempty(client: Any, table: str, keys: List[Tuple[str, str]]
     for i in range(0, len(codes), 200):
         chunk = codes[i:i + 200]
         rows = _ro(client, f"""
-SELECT DISTINCT code, toString(toDate(datetime + 28800)) AS d FROM {table}
-WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
+SELECT DISTINCT code, toString(toDate(datetime)) AS d FROM {table}
+WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')
   AND code IN ({_sql_str(chunk)})""")
         for r in rows:
             found.add((str(r["d"]), str(r["code"])))
@@ -362,11 +364,11 @@ def _readback_aggregate(client: Any, table: str, keys: List[Tuple[str, str]],
     for i in range(0, len(codes), 200):
         chunk = codes[i:i + 200]
         rows = _ro(client, f"""
-SELECT toString(toDate(datetime + 28800)) AS d, code, count() AS n,
+SELECT toString(toDate(datetime)) AS d, code, count() AS n,
        uniqExact(id) AS uid, sum(volume) AS v,
        if(countIf(amount IS NULL) > 0, NULL, sum(amount)) AS a
 FROM {table}{suffix}
-WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
+WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')
   AND code IN ({_sql_str(chunk)}) GROUP BY d, code""")
         for r in rows:
             out[(str(r["d"]), str(r["code"]))] = (int(r["n"]), int(r["uid"]),
@@ -392,7 +394,7 @@ def _id_reproduction_check(client: Any, candidates: Dict[str, List[Tuple]],
         for code, day in sample_keys:
             got_rows = _ro(client, f"""
 SELECT code, toUnixTimestamp(datetime) AS ts, id FROM {table} WHERE code = '{code}'
-AND datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')""")
+AND datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')""")
             for r in got_rows:
                 checked += 1
                 want = blake2b_row_id(ID_BATCH, period, str(r["code"]), int(r["ts"]))
@@ -424,7 +426,7 @@ def _sample_field_check(client: Any, candidates: Dict[str, List[Tuple]],
             src = _ro(client, f"""
 SELECT toUnixTimestamp(datetime) AS ts, open, high, low, close, volume, amount
 FROM {SOURCE_TABLE} WHERE code = '{code}'
-AND datetime >= toDateTime('{day_ch[0]}') AND datetime < toDateTime('{day_ch[1]}') ORDER BY ts""")
+AND datetime >= toDateTime('{day_ch[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{day_ch[1]}', 'Asia/Shanghai') ORDER BY ts""")
             if len(src) != 48:
                 problems.append(f"{code} {day} 5m 源槽数 {len(src)} != 48")
                 continue
@@ -436,8 +438,8 @@ AND datetime >= toDateTime('{day_ch[0]}') AND datetime < toDateTime('{day_ch[1]}
             got_rows = _ro(client, f"""
 SELECT substring(toString(toDateTime(datetime, 'Asia/Shanghai')), 1, 16) AS dt,
 open, high, low, close, volume, amount FROM {table} WHERE code = '{code}'
-AND datetime >= toDateTime('{day} 00:00:00') - INTERVAL 8 HOUR
-AND datetime < toDateTime('{day} 00:00:00') + INTERVAL 16 HOUR""")
+AND datetime >= toDateTime('{day} 00:00:00', 'Asia/Shanghai')
+AND datetime < toDateTime('{day} 00:00:00', 'Asia/Shanghai') + INTERVAL 1 DAY""")
             got = {r["dt"]: r for r in got_rows}
             if len(got) != BARS_PER_CD[period] or set(got) != set(want):
                 problems.append(f"{code} {day} 行数/栅格 {len(got)} != {BARS_PER_CD[period]}")

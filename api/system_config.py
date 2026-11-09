@@ -427,11 +427,11 @@ def _persisted_datetime_iso(value: Any) -> Optional[str]:
     parsed = _to_datetime(value)
     if not parsed:
         return None
+    # R27b：已标注 DateTime('Asia/Shanghai') 的列读回 aware 北京墙钟，
+    # 直通透出（不再 +8 二次偏移）；仅 plain 未标注审计列仍是 naive UTC
+    # 墙钟，需要 +8 还原业务时间。
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone().replace(tzinfo=None)
-    # ClickHouse DateTime values written from local naive datetimes are read
-    # back by clickhouse-connect eight hours earlier in this project setup.
-    # Restore the business-time convention expected by the UI.
+        return parsed.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None).isoformat()
     return (parsed + timedelta(hours=8)).isoformat()
 
 

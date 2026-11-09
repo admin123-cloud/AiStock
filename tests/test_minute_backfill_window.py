@@ -19,7 +19,7 @@ from utils import tdx_lc5 as lc5        # noqa: E402
 
 UTC = timezone.utc
 CN = mb.CN_TZ
-CH_1102_1105 = ("2026-11-01 16:00:00", "2026-11-06 16:00:00")
+CH_1102_1105 = ("2026-11-02 00:00:00", "2026-11-07 00:00:00")  # R27b 北京钟字面量（与旧 UTC 形式同瞬间）
 
 
 # ── 测试夹具 ───────────────────────────────────────────────────
@@ -188,8 +188,8 @@ def test_fetch_missing_keys_sql_uses_parameterized_window():
                                  ["2026-11-02", "2026-11-05"], CH_1102_1105)
     assert keys == [("2026-11-03", "600000.SH")]
     sql = client.queries[0]
-    assert "toDateTime('2026-11-01 16:00:00')" in sql
-    assert "toDateTime('2026-11-06 16:00:00')" in sql
+    assert "toDateTime('2026-11-02 00:00:00', 'Asia/Shanghai')" in sql
+    assert "toDateTime('2026-11-07 00:00:00', 'Asia/Shanghai')" in sql
     assert "'2026-11-02'" in sql and "'2026-11-05'" in sql
     assert mb.CH_WINDOW[0] not in sql and mb.CH_WINDOW[1] not in sql  # 非 1021_1030 硬编码
 

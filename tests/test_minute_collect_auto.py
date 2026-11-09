@@ -27,7 +27,7 @@ from utils import tdx_lc5 as lc5  # noqa: E402
 UTC = timezone.utc
 CN = mb.CN_TZ
 DAY = "2026-11-09"
-CH_WIN = ("2026-11-08 16:00:00", "2026-11-10 16:00:00")
+CH_WIN = ("2026-11-09 00:00:00", "2026-11-11 00:00:00")  # R27b 北京钟字面量（ch_window(11-09,11-09)）
 
 
 def bar_dt(hm: str, day: str = DAY) -> datetime:

@@ -66,6 +66,8 @@ class ExactMin5VolumeTests(unittest.TestCase):
                 stack.enter_context(patch.object(stocks,'clickhouse_query_df',return_value=frame))
                 item=stocks.get_stock_kline('000016.SH','5m')['data'][0]
                 self.assertEqual(item['volume'],value)
-                self.assertIn('09:35:00+08:00',item['date'])
+                # R27b：四周期统一 naive 北京墙输出（原 5m 直出 +08:00 后缀的不对称已删）
+                self.assertIn('2012-01-12T09:35:00',item['date'])
+                self.assertNotIn('+08:00',item['date'])
 
 if __name__=='__main__':unittest.main()

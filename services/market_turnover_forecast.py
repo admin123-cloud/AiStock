@@ -162,10 +162,14 @@ def get_intraday_turnover_forecast(
         # Calendar availability must not make the homepage endpoint fail.
         pass
     if current_snapshot:
-        # QMT minute timestamps in ClickHouse are stored as a naive value
-        # shifted by +8h.  Convert them back to the Asia/Shanghai trading
-        # clock before matching historical same-time progress.
-        as_of = pd.Timestamp(current_snapshot.get("as_of")).to_pydatetime() - timedelta(hours=8)
+        # R27b：kline_minute_5 datetime 已标注 Asia/Shanghai，as_of 读回即
+        # 北京墙钟（aware），规整为 naive 北京墙后再做同刻进度匹配。
+        as_of_dt = pd.Timestamp(current_snapshot.get("as_of")).to_pydatetime()
+        as_of = (
+            as_of_dt.astimezone(SH_TZ).replace(tzinfo=None)
+            if as_of_dt.tzinfo is not None
+            else as_of_dt
+        )
         current_amounts = {
             "total": float(current_snapshot.get("total_turnover") or 0.0),
             "sh": float(current_snapshot.get("sh_amount") or 0.0),
@@ -193,8 +197,7 @@ def get_intraday_turnover_forecast(
                     WHERE k.datetime >= ? AND k.datetime < ? + INTERVAL 1 DAY
                       AND s.type = 'stock'
                       AND k.amount > 0
-                      AND ((toHour(k.datetime - INTERVAL 8 HOUR) BETWEEN 9 AND 14)
-                        OR (toHour(k.datetime - INTERVAL 8 HOUR) = 15 AND toMinute(k.datetime - INTERVAL 8 HOUR) = 0))
+                      AND toHour(k.datetime) BETWEEN 9 AND 15
                     GROUP BY k.code, k.datetime
                 ), latest AS (SELECT max(bar_time) AS as_of FROM current_rows)
                 SELECT
@@ -217,7 +220,12 @@ def get_intraday_turnover_forecast(
             return finish(_empty("当前交易日尚无全市场5分钟行情"))
 
         current = current_df.iloc[0]
-        as_of = pd.Timestamp(current["as_of"]).to_pydatetime() - timedelta(hours=8)
+        as_of_raw = pd.Timestamp(current["as_of"]).to_pydatetime()
+        as_of = (
+            as_of_raw.astimezone(SH_TZ).replace(tzinfo=None)
+            if as_of_raw.tzinfo is not None
+            else as_of_raw
+        )
         current_amounts = _market_amounts(current)
         code_count = int(current.get("code_count") or 0)
 
@@ -238,7 +246,7 @@ def get_intraday_turnover_forecast(
                     toDate(b.bar_time) AS trade_date,
                     countDistinct(b.code) AS code_count,
                     sum(b.amount) AS day_total,
-                    sumIf(b.amount, formatDateTime(b.bar_time - INTERVAL 8 HOUR, '%%H:%%i:%%s') <= ?) AS cumulative_at_time
+                    sumIf(b.amount, formatDateTime(b.bar_time, '%%H:%%i:%%s') <= ?) AS cumulative_at_time
                 FROM (
                     SELECT
                         k.code AS code,
@@ -249,8 +257,7 @@ def get_intraday_turnover_forecast(
                     WHERE s.type = 'stock'
                       AND k.datetime >= ? AND k.datetime < ?
                       AND k.amount > 0
-                      AND ((toHour(k.datetime - INTERVAL 8 HOUR) BETWEEN 9 AND 14)
-                        OR (toHour(k.datetime - INTERVAL 8 HOUR) = 15 AND toMinute(k.datetime - INTERVAL 8 HOUR) = 0))
+                      AND toHour(k.datetime) BETWEEN 9 AND 15
                     GROUP BY k.code, k.datetime
                 ) AS b
                 GROUP BY trade_date

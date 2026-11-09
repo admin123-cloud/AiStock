@@ -24,7 +24,7 @@ from utils import tdx_lc5 as lc5          # noqa: E402
 
 UTC = timezone.utc
 CN = mb.CN_TZ
-CH_1102_1109 = ("2026-11-01 16:00:00", "2026-11-10 16:00:00")
+CH_1102_1109 = ("2026-11-02 00:00:00", "2026-11-11 00:00:00")  # R27b 北京钟字面量（与旧 UTC 形式同瞬间）
 DAY = "2026-11-02"
 
 # ── 存量反推黄金向量（真实 DB 实测；blake2b(batch|period|code|ts) big-endian）──
@@ -84,10 +84,10 @@ class FakeClient:
         self.trading_days = list(trading_days or [DAY])
         self.calibration_day_rows = calibration_day_rows or {}
 
-    # -- 查询窗口里的两个 toDateTime 字面量 -----------------------
+    # -- 查询窗口里的两个 toDateTime 字面量（R27b 起带 'Asia/Shanghai' 参数）--
     @staticmethod
     def _win(sql):
-        return re.findall(r"toDateTime\('(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'\)", sql)[:2]
+        return re.findall(r"toDateTime\('(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'(?:, '[^']+')?\)", sql)[:2]
 
     def query(self, sql, settings=None):
         self.queries.append(sql)
@@ -115,16 +115,16 @@ class FakeClient:
                 if p == period:
                     rows.append((code, int(dt_bj.replace(tzinfo=CN).timestamp()), gid))
             return _Result(["code", "ts", "id"], rows)
-        if "2026-10-29 16:00:00" in sql or "2026-10-30 16:00:00" in sql:
+        if "2026-10-30 00:00:00" in sql or "2026-10-31 00:00:00" in sql:
             # grid_calibration_probe：10-30 存量行（或其 5m 源）
             table = re.search(r"FROM (stock\.kline_minute_\w+)", sql).group(1)
             key = table.split(".")[-1]
             if key in self.calibration_day_rows:
                 lo, hi = self._win(sql)
                 lo_ts = int(datetime.strptime(lo, "%Y-%m-%d %H:%M:%S")
-                            .replace(tzinfo=UTC).timestamp())
+                            .replace(tzinfo=CN).timestamp())
                 hi_ts = int(datetime.strptime(hi, "%Y-%m-%d %H:%M:%S")
-                            .replace(tzinfo=UTC).timestamp())
+                            .replace(tzinfo=CN).timestamp())
                 rows = [r for r in self.calibration_day_rows[key] if lo_ts <= r[1] < hi_ts]
                 return _Result(["code", "ts", "open", "high", "low", "close",
                                 "volume", "amount"], rows)
@@ -132,8 +132,8 @@ class FakeClient:
                             "volume", "amount"], [])
         if "FROM stock.kline_minute_5" in sql and "toUnixTimestamp" in sql:
             lo, hi = self._win(sql)
-            lo_ts = int(datetime.strptime(lo, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp())
-            hi_ts = int(datetime.strptime(hi, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp())
+            lo_ts = int(datetime.strptime(lo, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN).timestamp())
+            hi_ts = int(datetime.strptime(hi, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN).timestamp())
             rows = [r for r in self.src_5m if lo_ts <= r[1] < hi_ts]
             return _Result(["code", "ts", "open", "high", "low", "close",
                             "volume", "amount"], rows)
@@ -155,8 +155,8 @@ class FakeClient:
         if "toUnixTimestamp(datetime) AS ts, id" in sql:
             table = re.search(r"FROM (stock\.kline_minute_\w+)", sql).group(1).split(".")[-1]
             lo, hi = self._win(sql)
-            lo_ts = int(datetime.strptime(lo, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp())
-            hi_ts = int(datetime.strptime(hi, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp())
+            lo_ts = int(datetime.strptime(lo, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN).timestamp())
+            hi_ts = int(datetime.strptime(hi, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN).timestamp())
             rows = [(r[0], int(r[1].timestamp()), r[9])
                     for r in self.stored.get(table, []) if lo_ts <= r[1].timestamp() < hi_ts]
             return _Result(["code", "ts", "id"], rows)
@@ -249,16 +249,17 @@ def test_ch_window_reused_from_r16():
 
 
 def test_day_window_is_exactly_one_beijing_day():
-    # 精确单北京日：[d-1 16:00, d 16:00) UTC。回归锚：R16 ch_window(d,d) 上界
-    # 是 end+1 日 16:00 UTC = 北京 end+2 日 00:00，多覆盖一整个北京日——
-    # 单日取数误用会拿到 96/48 根（2026-11-09 formal-write 实测回滚后修正）。
-    assert ma.day_window("2026-11-03") == ("2026-11-02 16:00:00", "2026-11-03 16:00:00")
+    # 精确单北京日：[d 00:00, d+1 00:00) 北京钟（R27b 与旧 UTC 形式同瞬间）。
+    # 回归锚：R16 ch_window(d,d) 上界是 end+2 日 00:00 北京（多覆盖一整个
+    # 北京日）——单日取数误用会拿到 96/48 根（2026-11-09 formal-write 实测
+    # 回滚后修正）。
+    assert ma.day_window("2026-11-03") == ("2026-11-03 00:00:00", "2026-11-04 00:00:00")
     lo, hi = ma.day_window("2026-11-03")
-    lo_ts = int(datetime.strptime(lo, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp())
-    hi_ts = int(datetime.strptime(hi, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp())
+    lo_ts = int(datetime.strptime(lo, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN).timestamp())
+    hi_ts = int(datetime.strptime(hi, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN).timestamp())
     assert hi_ts - lo_ts == 86400  # 恰 24h
     assert ma.ch_window(datetime(2026, 11, 3).date(), datetime(2026, 11, 3).date())[1] \
-        == "2026-11-04 16:00:00"  # ch_window 单日上界确实多一日（防再误用的显式锚）
+        == "2026-11-05 00:00:00"  # ch_window 单日上界确实多一日（防再误用的显式锚）
 
 
 # ── 合成行聚合 + 栅格对齐 ─────────────────────────────────────

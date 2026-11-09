@@ -88,14 +88,16 @@ def _parse_iso_date(text: str, label: str) -> date:
 
 
 def ch_window(start: date, end: date) -> Tuple[str, str]:
-    """窗口（北京墙面日，含端点）→ 库内 UTC datetime 反连接窗口（半开）。
+    """窗口（北京墙面日，含端点）→ 库内 datetime 窗口（半开，北京钟字面量）。
 
-    库内 datetime = 北京时间 - 8h：北京 start 00:00 = UTC (start-1) 16:00；
-    端点含 end → 上界取北京 (end+1) 00:00 = UTC end 16:00（不含）。
-    与 1021_1030.CH_WINDOW 同一公式（测试断言 parity）。
+    R27b：库内 datetime 已标注 Asia/Shanghai，窗口边界直接用北京墙 00:00；
+    SQL 侧统一以 ``toDateTime(?, 'Asia/Shanghai')`` 解析。上界仍刻意取
+    ``end+2 日 00:00``（与旧 UTC 形式同瞬间：``end+1 日 16:00 UTC``），
+    多覆盖一个北京日对反连接无害。与 1021_1030.CH_WINDOW 同一公式
+    （测试断言 parity）。
     """
-    lo = datetime.combine(start - timedelta(days=1), time(16, 0))
-    hi = datetime.combine(end + timedelta(days=1), time(16, 0))
+    lo = datetime.combine(start, time(0, 0))
+    hi = datetime.combine(end + timedelta(days=2), time(0, 0))
     return lo.strftime("%Y-%m-%d %H:%M:%S"), hi.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -139,8 +141,8 @@ WITH u AS (SELECT trade_date AS td, code FROM stock.kline_daily
       WHERE trade_date IN ({_sql_str(days)})
         AND NOT (match(code,'^(000|880)[0-9]{{3}}\\\\.SH$') OR match(code,'^399[0-9]{{3}}\\\\.SZ$')
                  OR match(code,'^899[0-9]{{3}}\\\\.BJ$'))),
-m AS (SELECT DISTINCT toDate(datetime + 28800) AS td, code FROM {table}
-      WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}'))
+m AS (SELECT DISTINCT toDate(datetime) AS td, code FROM {table}
+      WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai'))
 SELECT u.td AS td, u.code AS code FROM u LEFT ANTI JOIN m ON u.code=m.code AND u.td=m.td
 ORDER BY u.code, u.td""")
     return [(str(r["td"]), str(r["code"])) for r in rows]
@@ -253,8 +255,8 @@ def _existing_keys_nonempty(client: Any, keys: List[Tuple[str, str]],
     for i in range(0, len(codes), 200):
         chunk = codes[i:i + 200]
         rows = _ro(client, f"""
-SELECT DISTINCT code, toString(toDate(datetime + 28800)) AS d FROM {TARGET_TABLE}
-WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
+SELECT DISTINCT code, toString(toDate(datetime)) AS d FROM {TARGET_TABLE}
+WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')
   AND code IN ({_sql_str(chunk)})""")
         for r in rows:
             found.add((str(r["d"]), str(r["code"])))
@@ -269,9 +271,9 @@ def _readback_aggregate(client: Any, keys: List[Tuple[str, str]], ch_win: Sequen
     for i in range(0, len(codes), 200):
         chunk = codes[i:i + 200]
         rows = _ro(client, f"""
-SELECT toString(toDate(datetime + 28800)) AS d, code, count() AS n,
+SELECT toString(toDate(datetime)) AS d, code, count() AS n,
        sum(volume) AS v, sum(amount) AS a FROM {TARGET_TABLE}{suffix}
-WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
+WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai')
   AND code IN ({_sql_str(chunk)}) GROUP BY d, code""")
         for r in rows:
             out[(str(r["d"]), str(r["code"]))] = (int(r["n"]), float(r["v"]), float(r["a"]))
@@ -292,8 +294,8 @@ def _sample_field_check(client: Any, rows: List[Tuple], rng: random.Random,
         SELECT substring(toString(toDateTime(datetime, 'Asia/Shanghai')), 1, 16) AS dt,
         open, high, low, close, volume, amount
         FROM {TARGET_TABLE} WHERE code = '{code}'
-        AND datetime >= toDateTime('{day} 00:00:00') - INTERVAL 8 HOUR
-        AND datetime < toDateTime('{day} 00:00:00') + INTERVAL 16 HOUR""")
+        AND datetime >= toDateTime('{day} 00:00:00', 'Asia/Shanghai')
+        AND datetime < toDateTime('{day} 00:00:00', 'Asia/Shanghai') + INTERVAL 1 DAY""")
         got = {r["dt"]: r for r in got_rows}
         if len(got) != len(want):
             problems.append(f"{code} {day} 行数 {len(got)} != {len(want)}")

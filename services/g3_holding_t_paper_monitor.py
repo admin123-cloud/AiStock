@@ -293,11 +293,8 @@ def _warehouse_minute_metrics(codes: list[str]) -> dict[str, dict[str, Any]]:
             continue
         latest_naive = latest.to_pydatetime().replace(tzinfo=None)
         age = (now - latest_naive).total_seconds()
-        # The current intraday writer persists an +08:00 timestamp that is
-        # eight hours ahead of the host clock. Correct only that narrow,
-        # observed shape; a genuinely future/stale value remains unsafe.
-        if -9 * 3600 <= age <= -7 * 3600:
-            age += 8 * 3600
+        # R27b：kline_minute_5 datetime 已标注 Asia/Shanghai，latest 读回即
+        # 北京墙钟，age 直接可信；旧 −9..−7h 区间 +8h 启发式修补删除。
         vwap = sum(amounts) / sum(volumes) if sum(volumes) > 0 else None
         result[str(code)] = {
             "vwap_5m": vwap,

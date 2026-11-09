@@ -283,10 +283,8 @@ def refresh_intraday_snapshot(*, finalize_if_closed: bool = False) -> bool:
     if now.time() >= dt_time(15, 5) and (finalize_if_closed or raw_as_of is not None):
         try:
             business_as_of = raw_as_of.to_pydatetime().replace(tzinfo=None) if raw_as_of is not None else now.replace(tzinfo=None)
-            # Legacy minute bars have an eight-hour persisted-clock offset;
-            # producer-side daily facts use an Asia/Shanghai snapshot time.
-            if not using_intraday_fact:
-                business_as_of -= timedelta(hours=8)
+            # R27b：kline_minute_5 datetime 已标注 Asia/Shanghai，raw_as_of
+            # 读回即北京墙钟；旧 −8h 补丁（QMT 世代假设）删除。
             final_minute_bar = finalize_if_closed or business_as_of.time().hour >= 15
         except Exception:
             final_minute_bar = False

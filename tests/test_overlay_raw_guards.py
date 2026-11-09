@@ -24,7 +24,7 @@
 """
 import ast
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,10 +34,10 @@ import pytest
 import api.stocks as stk
 import services.market_turnover_forecast as mtf
 
-# 2026-11-09 是周一；盘中时钟取 10:00（落在 9:30-15:35 会话窗内），
-# 存储侧 QMT 分钟时间戳按 +8h 偏移惯例存wall clock（业务 10:00 → 存储 18:00）。
+# 2026-11-09 是周一；盘中时钟取 10:00（落在 9:30-15:35 会话窗内）。
+# R27b：分钟表 datetime 已标注 Asia/Shanghai，存储值即北京业务时间。
 CLOCK = datetime(2026, 11, 9, 10, 0, 0)
-STORED_AS_OF = datetime(2026, 11, 9, 18, 0, 0)  # 业务 10:00 的存储值
+STORED_AS_OF = datetime(2026, 11, 9, 10, 0, 0)  # R27b：datetime 已北京钟，存储值即业务时间
 
 
 def _function_node(module, name):
@@ -104,8 +104,8 @@ def test_overlay_runtime_sql_shape_and_provisional_entry(monkeypatch):
         captured.append((sql, params, raw))
         return pd.DataFrame([
             {"code": "600000.SH", "close": 12.5, "amount": 1.2e8, "latest_as_of": STORED_AS_OF},
-            # 业务时间停在昨天：过期 feed 不得当作实时报价
-            {"code": "000001.SZ", "close": 9.9, "amount": 2.2e8, "latest_as_of": datetime(2026, 11, 8, 18, 0)},
+            # 业务时间停在昨天：过期 feed 不得当作实时报价（R27b 北京墙钟）
+            {"code": "000001.SZ", "close": 9.9, "amount": 2.2e8, "latest_as_of": datetime(2026, 11, 8, 10, 0)},
         ])
 
     monkeypatch.setattr(stk, "datetime", _TradingClock)
@@ -262,7 +262,8 @@ def test_turnover_forecast_runtime_sql_shapes(monkeypatch):
         captured.append((sql, params, raw))
         if len(captured) == 1:
             return pd.DataFrame([{
-                "as_of": datetime(2026, 11, 9, 19, 25),  # 业务 11:25 的存储值
+                # R27b：datetime 列已标注 Asia/Shanghai，驱动读回 aware 北京墙
+                "as_of": datetime(2026, 11, 9, 11, 25, tzinfo=timezone(timedelta(hours=8))),
                 "code_count": 5100,
                 "total_amount": 6.0e11,
                 "sh_amount": 3.0e11,
@@ -294,7 +295,7 @@ def test_turnover_forecast_runtime_sql_shapes(monkeypatch):
         "argMax(k.amount, k.created_at)",
         "GROUP BY k.code, k.datetime",
         "k.datetime >= ? AND k.datetime < ? + INTERVAL 1 DAY",
-        "toHour(k.datetime - INTERVAL 8 HOUR)",
+        "toHour(k.datetime) BETWEEN 9 AND 15",
     ):
         assert token in current_sql, f"current_rows 查询丢失 token: {token}"
     assert "toDate(k.datetime)" not in current_sql
