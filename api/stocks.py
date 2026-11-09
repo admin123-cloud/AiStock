@@ -247,17 +247,23 @@ def _overlay_fresh_intraday_list_kline(
 
     try:
         placeholders = ",".join(["?"] * len(codes))
-        # R14（2026-11-09）：绕过 kline_minute_5_precise 视图直查基表。内层按
-        # (code, datetime) 用 argMax(col, created_at) 等价 FINAL 取每根 bar 的
-        # 最新版本，日期/代码谓词随基表 WHERE 下推；外层再按 code 聚合，与原
-        # FINAL + argMax(close, datetime) 语义一致。
+        # R23（2026-11-09，任务书 20261109_samefamily_fixes_r23）：修复 R14 版两处
+        # 同族缺陷（R20b 执行者真库实测留档 COORDINATION_R20B_SENTIMENT_RAW）：
+        # 1) 外层 `max(as_of) AS as_of` 自引用别名被 CH 24.8 代入同层
+        #    argMax(close, as_of) → ILLEGAL_AGGREGATION，此前被 except 吞成无堆栈
+        #    warning，个股列表盘中覆盖层自 R14 起一直静默失效；外层别名改为
+        #    latest_as_of（镜像 market_overview.py R20b 已验证形状）。
+        # 2) toDate(datetime)=? 谓词在 toYYYYMM(datetime) 分区上不裁剪（实测
+        #    894M 行/4.2GiB 全表扫），改 datetime 范围谓词裁剪到月分区。
+        # 内层仍按 (code, datetime) argMax(col, created_at) 等价 FINAL 去重，
+        # raw=True 直查基表、绕过视图网关重写。
         intraday_df = clickhouse_query_df(
             f"""
             SELECT
                 code,
                 argMax(close, as_of) AS close,
                 sum(amount) AS amount,
-                max(as_of) AS as_of
+                max(as_of) AS latest_as_of
             FROM (
                 SELECT
                     code,
@@ -266,12 +272,12 @@ def _overlay_fresh_intraday_list_kline(
                     argMax(amount, created_at) AS amount
                 FROM kline_minute_5
                 WHERE code IN ({placeholders})
-                  AND toDate(datetime) = ?
+                  AND datetime >= ? AND datetime < ? + INTERVAL 1 DAY
                 GROUP BY code, datetime
             )
             GROUP BY code
             """,
-            [*codes, now.date()],
+            [*codes, now.date(), now.date()],
             raw=True,
         )
         if intraday_df is None or intraday_df.empty:
@@ -281,9 +287,9 @@ def _overlay_fresh_intraday_list_kline(
         now_wall_time = now.replace(tzinfo=None)
         for bar in intraday_df.itertuples(index=False):
             close = float(bar.close or 0)
-            if close <= 0 or bar.as_of is None:
+            if close <= 0 or bar.latest_as_of is None:
                 continue
-            as_of = _minute_datetime_to_business_time(bar.as_of)
+            as_of = _minute_datetime_to_business_time(bar.latest_as_of)
             # Do not use a stalled minute feed as a live quote.  The normal
             # five-minute publisher may be a little late, hence a 20-minute
             # tolerance before the daily close remains the honest fallback.
@@ -303,7 +309,15 @@ def _overlay_fresh_intraday_list_kline(
             )
         return result
     except Exception as exc:
-        logger.warning(f"ClickHouse stock list intraday overlay failed: {exc}")
+        # R23 fail-closed：异常必须以 ERROR 级带堆栈留痕（R14 版仅无堆栈
+        # warning，导致 ILLEGAL_AGGREGATION 静默失效一个交易日未被发现）。
+        # 覆盖层不可用态 = 原样返回基表日频数据（无 is_provisional 标记），
+        # 绝不把昨收伪装成实时报价。
+        logger.error(
+            "ClickHouse stock list intraday overlay failed "
+            f"(overlay unavailable, falling back to after-close daily bars): {exc}",
+            exc_info=True,
+        )
         return latest_kline_map
 
 

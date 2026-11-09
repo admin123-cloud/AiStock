@@ -175,20 +175,30 @@ def get_intraday_turnover_forecast(
         code_count = int(current_snapshot.get("covered_count") or 0)
     else:
         try:
+            # R23（2026-11-09，任务书 20261109_samefamily_fixes_r23）：raw 基表
+            # 直查 + 内层 (code, datetime) 级 argMax(col, created_at) 等价去重
+            # （镜像 R20b/R14 三件套）。原版经视图网关重写为无界视图（真库实测
+            # 冷启 55GiB/126~223s），toDate 谓词对 toYYYYMM 分区亦不裁剪；改
+            # datetime 范围谓词后只在当日分区内去重一次。
             current_df = clickhouse_query_df(
                 """
                 WITH current_rows AS (
-                    SELECT k.code, k.datetime, k.amount, s.market
-                    FROM kline_minute_5 AS k FINAL
+                    SELECT
+                        k.code AS code,
+                        k.datetime AS bar_time,
+                        argMax(k.amount, k.created_at) AS amount,
+                        any(s.market) AS market
+                    FROM kline_minute_5 AS k
                     INNER JOIN stocks AS s ON s.code = k.code
-                    WHERE toDate(k.datetime) = ?
+                    WHERE k.datetime >= ? AND k.datetime < ? + INTERVAL 1 DAY
                       AND s.type = 'stock'
                       AND k.amount > 0
                       AND ((toHour(k.datetime - INTERVAL 8 HOUR) BETWEEN 9 AND 14)
                         OR (toHour(k.datetime - INTERVAL 8 HOUR) = 15 AND toMinute(k.datetime - INTERVAL 8 HOUR) = 0))
-                ), latest AS (SELECT max(datetime) AS as_of FROM current_rows)
+                    GROUP BY k.code, k.datetime
+                ), latest AS (SELECT max(bar_time) AS as_of FROM current_rows)
                 SELECT
-                    max(r.datetime) AS as_of,
+                    max(r.bar_time) AS as_of,
                     countDistinct(r.code) AS code_count,
                     sum(r.amount) AS total_amount,
                     sumIf(r.amount, r.market = 'SH') AS sh_amount,
@@ -196,9 +206,10 @@ def get_intraday_turnover_forecast(
                     sumIf(r.amount, r.market = 'BJ') AS bj_amount
                 FROM current_rows AS r
                 CROSS JOIN latest
-                WHERE r.datetime <= latest.as_of
+                WHERE r.bar_time <= latest.as_of
                 """,
-                [today],
+                [today, today],
+                raw=True,
             )
         except Exception:
             return finish(_empty("盘中5分钟行情查询失败"))
@@ -215,22 +226,33 @@ def get_intraday_turnover_forecast(
         return finish(_empty("当前交易日成交额为空", as_of=as_of.strftime("%Y-%m-%d %H:%M:%S")))
 
     try:
+        # R23：同上 raw 基表直查。原版 60 日 history 经视图网关冷启 27.5GiB；
+        # 内层先按 (code, datetime) argMax(col, created_at) 去重、datetime
+        # 范围谓词裁剪到月分区；外层 toDate 仅作用于去重结果做日分组，
+        # 不再作为基表谓词。交易日下界在 Python 侧预计算。
+        start_date = today - timedelta(days=HISTORY_DAYS)
         history_df = clickhouse_query_df(
             """
             WITH daily AS (
                 SELECT
-                    toDate(k.datetime) AS trade_date,
-                    countDistinct(k.code) AS code_count,
-                    sum(k.amount) AS day_total,
-                    sumIf(k.amount, formatDateTime(k.datetime - INTERVAL 8 HOUR, '%%H:%%i:%%s') <= ?) AS cumulative_at_time
-                FROM kline_minute_5 AS k
-                INNER JOIN stocks AS s ON s.code = k.code
-                WHERE s.type = 'stock'
-                  AND toDate(k.datetime) < ?
-                  AND toDate(k.datetime) >= subtractDays(?, ?)
-                  AND k.amount > 0
-                  AND ((toHour(k.datetime - INTERVAL 8 HOUR) BETWEEN 9 AND 14)
-                    OR (toHour(k.datetime - INTERVAL 8 HOUR) = 15 AND toMinute(k.datetime - INTERVAL 8 HOUR) = 0))
+                    toDate(b.bar_time) AS trade_date,
+                    countDistinct(b.code) AS code_count,
+                    sum(b.amount) AS day_total,
+                    sumIf(b.amount, formatDateTime(b.bar_time - INTERVAL 8 HOUR, '%%H:%%i:%%s') <= ?) AS cumulative_at_time
+                FROM (
+                    SELECT
+                        k.code AS code,
+                        k.datetime AS bar_time,
+                        argMax(k.amount, k.created_at) AS amount
+                    FROM kline_minute_5 AS k
+                    INNER JOIN stocks AS s ON s.code = k.code
+                    WHERE s.type = 'stock'
+                      AND k.datetime >= ? AND k.datetime < ?
+                      AND k.amount > 0
+                      AND ((toHour(k.datetime - INTERVAL 8 HOUR) BETWEEN 9 AND 14)
+                        OR (toHour(k.datetime - INTERVAL 8 HOUR) = 15 AND toMinute(k.datetime - INTERVAL 8 HOUR) = 0))
+                    GROUP BY k.code, k.datetime
+                ) AS b
                 GROUP BY trade_date
             )
             SELECT trade_date, code_count, day_total, cumulative_at_time,
@@ -239,7 +261,8 @@ def get_intraday_turnover_forecast(
             WHERE day_total > 0 AND cumulative_at_time > 0
             ORDER BY trade_date DESC
             """,
-            [time_text, today, today, HISTORY_DAYS],
+            [time_text, start_date, today],
+            raw=True,
         )
     except Exception as exc:
         return finish(_empty(f"历史成交进度查询失败：{exc}", as_of=as_of.strftime("%Y-%m-%d %H:%M:%S")))
