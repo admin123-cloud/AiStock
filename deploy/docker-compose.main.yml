@@ -1,0 +1,78 @@
+# AiStock 唯一部署栈（Owner 2026-11-09 裁决：只运行 main 分支；自动化为项目内机制）
+# 版本由 deploy-main.sh 注入（AISTOCK_MAIN_VERSION = main HEAD 完整 SHA）。
+# 服务：preview=只读 Web 栈（3000/8077）；pipeline-runner=盘后数据管道调度器（项目内自动化）。
+name: aistock-observation
+
+networks:
+  default:
+    name: aistock-core_default
+    external: true
+
+services:
+  preview:
+    image: aistock-core-backend:${AISTOCK_MAIN_VERSION:?必须经 deploy-main.sh 部署，禁止手填版本}
+    container_name: aistock-observation-backend
+    restart: unless-stopped
+    cpus: "1.5"
+    mem_limit: 3g
+    ports:
+      - "127.0.0.1:8077:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/check', timeout=5).read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    environment: &backend_env
+      TZ: Asia/Shanghai
+      AISTOCK_CLICKHOUSE_HOST: host.docker.internal
+      AISTOCK_CLICKHOUSE_PORT: "8123"
+      AISTOCK_CLICKHOUSE_DATABASE: stock
+      AISTOCK_CLICKHOUSE_USER: default
+      AISTOCK_CLICKHOUSE_PASSWORD: ""
+      AISTOCK_DATA_ROOT: /aistock/data
+      AISTOCK_REPORTS_ROOT: /aistock/reports
+      AISTOCK_ARTIFACTS_ROOT: /aistock/artifacts
+      AISTOCK_LOGS_ROOT: /aistock/logs
+      AISTOCK_TDX_GATEWAY_URL: http://host.docker.internal:8765
+      AISTOCK_QMT_TICK_BRIDGE_URL: http://host.docker.internal:8766/full-tick
+      AISTOCK_QMT_ACCOUNT_BRIDGE_URL: http://host.docker.internal:8766/account-snapshot
+    volumes:
+      - F:/AiStock/app/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
+      - F:/Aistock/data/data/local_observation_preview/data:/aistock/data
+      - observation_logs:/aistock/logs
+      - observation_reports:/aistock/reports
+      - observation_artifacts:/aistock/artifacts
+    command: ["python", "-m", "uvicorn", "api.operations_preview:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  preview-frontend:
+    image: aistock-core-frontend:${AISTOCK_MAIN_VERSION:?必须经 deploy-main.sh 部署}
+    container_name: aistock-observation-frontend
+    restart: unless-stopped
+    cpus: "1.0"
+    mem_limit: 1g
+    depends_on:
+      - preview
+    ports:
+      - "127.0.0.1:3000:80"
+    volumes:
+      - F:/Aistock/deploy/nginx.preview.conf:/etc/nginx/conf.d/default.conf:ro
+
+  pipeline-runner:
+    image: aistock-core-backend:${AISTOCK_MAIN_VERSION:?必须经 deploy-main.sh 部署}
+    container_name: aistock-pipeline-runner
+    restart: unless-stopped
+    cpus: "1.5"
+    mem_limit: 3g
+    environment:
+      <<: *backend_env
+    volumes:
+      - F:/AiStock/app/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
+      # 管道写入方：挂真实数据根（可写）——报告/journal 落 runtime/postclose_auto 等
+      - F:/Aistock/data/data:/aistock/data
+    command: ["python", "scripts/pipeline_scheduler.py"]
+
+volumes:
+  observation_logs:
+  observation_reports:
+  observation_artifacts:
