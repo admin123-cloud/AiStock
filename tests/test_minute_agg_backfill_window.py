@@ -7,6 +7,7 @@ id 黄金向量来自 2026-11-09 只读探针（存量 10-21~10-30 段、created
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -144,7 +145,10 @@ class FakeClient:
             for r in self.stored.get(table.split(".")[-1], []):
                 day = r[1].astimezone(CN).strftime("%Y-%m-%d")
                 n, uid, v, a, ids = agg.get((day, r[0]), (0, 0, 0.0, 0.0, set()))
-                agg[(day, r[0])] = (n + 1, uid + 1, v + r[6], a + r[7], ids | {r[9]})
+                amount = r[7]
+                # R22b：镜像真实表 Nullable 语义——任一行 NULL → 组聚合额 NULL（绝不部分求和）
+                new_a = None if (a is None or amount is None) else a + amount
+                agg[(day, r[0])] = (n + 1, uid + 1, v + r[6], new_a, ids | {r[9]})
             return _Result(["d", "code", "n", "uid", "v", "a"],
                            [(d, c, n, uid, v, a) for (d, c), (n, uid, v, a, _)
                             in sorted(agg.items())])
@@ -541,3 +545,122 @@ def test_main_dry_run_fails_closed_when_5m_source_missing_for_key(tmp_path, monk
     assert report["plan"]["15m"]["rows"] == 0
     assert report["skipped_no_5m"] == 1
     assert client.inserts == []
+
+
+# ── R22b：amount NULL 口径（成分任一 NULL → 该聚合行 NULL，绝不部分求和）──
+
+def _null_amount_rows(rows, null_indices):
+    """把合成源行指定序号的 amount 置 NULL（模拟 R21/R22 B 源 amount=NULL 行）。"""
+    nulls = set(null_indices)
+    return [r[:-1] + (None,) if i in nulls else r for i, r in enumerate(rows)]
+
+
+def _ref_agg(period, minutes):
+    """参考实现：对不带 NULL 的合成源聚合（OHLC/量/非 NULL 额的基准）。"""
+    return lc5.aggregate_5m(_src_to_bars(_synth_src_rows())[("000698.SZ", DAY)],
+                            ma.AGG_MINUTES[period])
+
+
+def test_amount_matches_null_aware_unit():
+    f = ma._amount_matches
+    assert f(None, None, 1e-6) is True          # 双 NULL 一致
+    assert f(math.nan, None, 1e-6) is True      # NaN 哨兵视同 NULL
+    assert f(None, 1.0, 1e-6) is False          # 单边 NULL 不一致
+    assert f(1.0, None, 1e-6) is False
+    assert f(100.0, 100.0, 1e-6) is True
+    assert f(100.0, 150.0, 1e-6) is False
+
+
+def test_fetch_5m_bars_tolerates_null_amount():
+    # 崩点回归：R22 实测 L159 float(None) TypeError；NULL 行必须照常过 48 槽门禁
+    src = _null_amount_rows(_synth_src_rows(), range(48))
+    client = FakeClient(src_5m=src)
+    bars_by_key, rejects = ma.fetch_5m_bars(client, ["000698.SZ"], CH_1102_1109)
+    assert rejects == []
+    assert set(bars_by_key) == {("000698.SZ", DAY)}
+    assert len(bars_by_key[("000698.SZ", DAY)]) == 48
+
+
+@pytest.mark.parametrize("period", ma.TARGET_PERIODS)
+def test_build_agg_rows_all_null_amount_rows_are_null(period):
+    # 全 NULL：16/8/4 根全部 amount=None；OHLC/量与参考完全一致（不受额影响）
+    src = _null_amount_rows(_synth_src_rows(), range(48))
+    bars_by_key, _ = ma.fetch_5m_bars(FakeClient(src_5m=src), ["000698.SZ"], CH_1102_1109)
+    created = datetime(2026, 11, 9, tzinfo=UTC)
+    out = ma.build_agg_rows(bars_by_key, created)[period]
+    ref = _ref_agg(period, ma.AGG_MINUTES[period])
+    assert len(out) == len(ref) == ma.BARS_PER_CD[period]
+    for got, want in zip(out, ref):
+        assert got[7] is None
+        assert got[2:7] == (want.open, want.high, want.low, want.close, want.volume)
+
+
+def test_build_agg_rows_mixed_null_propagates_per_bucket():
+    # 混合：仅 09:35/09:40 两根 NULL → 仅含它们的桶额=None，其余桶照常求和；
+    # 绝不出现部分求和（09:45 桶若只加 09:45 一根会得 30.0）
+    src = _null_amount_rows(_synth_src_rows(), {0, 1})
+    bars_by_key, _ = ma.fetch_5m_bars(FakeClient(src_5m=src), ["000698.SZ"], CH_1102_1109)
+    created = datetime(2026, 11, 9, tzinfo=UTC)
+    built = ma.build_agg_rows(bars_by_key, created)
+
+    a15 = {r[1].astimezone(CN).strftime("%H:%M"): r[7] for r in built["15m"]}
+    assert a15["09:45"] is None
+    assert a15["10:00"] == pytest.approx(150.0)      # 40+50+60
+    assert 30.0 not in a15.values()                  # 部分求和禁令
+    a30 = {r[1].astimezone(CN).strftime("%H:%M"): r[7] for r in built["30m"]}
+    assert a30["10:00"] is None and a30["10:30"] == pytest.approx(570.0)
+    a60 = {r[1].astimezone(CN).strftime("%H:%M"): r[7] for r in built["60m"]}
+    assert a60["10:30"] is None and a60["11:30"] == pytest.approx(2220.0)
+
+    ref = _ref_agg("15m", 15)
+    for got, want in zip(built["15m"], ref):
+        assert got[2:7] == (want.open, want.high, want.low, want.close, want.volume)
+    assert built["15m"][0][6] == 600                 # 量照算：100+200+300
+
+
+def test_readback_aggregate_null_aware_sql_and_values():
+    created = datetime(2026, 11, 9, tzinfo=UTC)
+    rows = [("000698.SZ", ma.epoch_to_utc(ma.naive_bj_to_epoch(datetime(2026, 11, 2, 9, 45))),
+             1.0, 2.0, 0.5, 1.5, 100, None, created, 7),
+            ("000698.SZ", ma.epoch_to_utc(ma.naive_bj_to_epoch(datetime(2026, 11, 2, 10, 0))),
+             1.0, 2.0, 0.5, 1.5, 100, 3.0, created, 8)]
+    client = FakeClient()
+    client.stored["kline_minute_15"] = rows
+    out = ma._readback_aggregate(client, "stock.kline_minute_15",
+                                 [(DAY, "000698.SZ")], CH_1102_1109)
+    assert out[(DAY, "000698.SZ")] == (2, 2, 200.0, None)   # 任一行 NULL → 组聚合额 None
+    sql = client.queries[-1]
+    assert "countIf(amount IS NULL)" in sql                  # SQL 必须 NULL 感知
+    assert "sum(amount) AS a" not in sql                     # 禁止裸 sum 部分求和
+
+
+def test_formal_write_all_null_amount_end_to_end():
+    # B 源 48 根全 NULL（R22 两键实况）：写入、读回、id 复现、抽样复算全链不崩
+    src = _null_amount_rows(_synth_src_rows(), range(48))
+    bars_by_key, _ = ma.fetch_5m_bars(FakeClient(src_5m=src), ["000698.SZ"], CH_1102_1109)
+    candidates = ma.build_agg_rows(bars_by_key, datetime(2026, 11, 9, tzinfo=UTC))
+    client = FakeClient(src_5m=src)
+    events = []
+    report = ma.formal_write(lambda: client, candidates, CH_1102_1109,
+                             lambda e: events.append(e))
+    assert report["status"] == "ok"
+    for table, rows in client.inserts:
+        assert rows and all(r[7] is None for r in rows)
+    ev = [e.get("event") for e in events]
+    assert "readback_ok" in ev and "rollback_start" not in ev
+    assert client.lock_tables == set()
+
+
+def test_formal_write_mixed_null_amount_no_partial_sum():
+    src = _null_amount_rows(_synth_src_rows(), {0, 1})
+    bars_by_key, _ = ma.fetch_5m_bars(FakeClient(src_5m=src), ["000698.SZ"], CH_1102_1109)
+    candidates = ma.build_agg_rows(bars_by_key, datetime(2026, 11, 9, tzinfo=UTC))
+    client = FakeClient(src_5m=src)
+    report = ma.formal_write(lambda: client, candidates, CH_1102_1109, lambda e: None)
+    assert report["status"] == "ok"
+    inserts = dict(client.inserts)
+    a15 = {r[1].astimezone(CN).strftime("%H:%M"): r[7]
+           for r in inserts["kline_minute_15"]}
+    assert a15["09:45"] is None            # 含 NULL 成分的桶 → NULL
+    assert a15["10:00"] == pytest.approx(150.0)
+    assert 30.0 not in a15.values()        # 部分求和禁令贯穿写-读回全链

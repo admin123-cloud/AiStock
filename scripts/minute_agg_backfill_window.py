@@ -31,11 +31,17 @@
                          逐字段对 5m 重聚合复算）→ 验证失败按精确 id 回滚。
 
 写目标白名单：仅 stock.kline_minute_15/30/60；绝不写 5m/日线。
+
+R22b（2026-11-09，PM 批准协调文件方案 A）：amount NULL 口径——5m 成分任一
+NULL → 该聚合行 amount=NULL（绝不部分求和造数；NULL 以 NaN 哨兵经
+``aggregate_5m`` 的 sum 按 IEEE 语义自然传播，出库前转回 None）；OHLC/量
+不受影响照算；读回验证与抽样复算全部 NULL 感知比对（双 NULL 一致）。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from datetime import date, datetime, time, timedelta, timezone
@@ -55,7 +61,6 @@ from utils.tdx_lc5 import LC5Record, STANDARD_5M_BAR_ENDS, aggregate_5m  # noqa:
 from minute_backfill_1021_1030 import (  # noqa: E402
     CN_TZ,
     INSERT_COLUMNS,
-    _candidate_aggregate,
     _default_client_factory,
     _journal_writer,
     _ro,
@@ -132,6 +137,42 @@ def day_window(day: str) -> Tuple[str, str]:
     return lo.strftime("%Y-%m-%d %H:%M:%S"), hi.strftime("%Y-%m-%d %H:%M:%S")
 
 
+# ── amount NULL 口径（R22b：成分任一 NULL → 聚合行 NULL，绝不部分求和）──
+
+def _agg_amount_in(value: Any) -> float:
+    """DB amount 值 → 聚合传播哨兵：NULL → NaN（IEEE sum 传播 = 任一 NULL 则 NaN）。"""
+    return float("nan") if value is None else float(value)
+
+
+def _agg_amount_out(value: Any) -> Optional[float]:
+    """聚合结果 → 出库值：NaN 哨兵转回 None（列 Nullable(Float64)，禁 0/推算）。"""
+    if value is None:
+        return None
+    value = float(value)
+    return None if math.isnan(value) else value
+
+
+def _amount_matches(got: Any, want: Any, tol: float) -> bool:
+    """NULL 感知比对：双 NULL（含 NaN 哨兵）一致；单边 NULL 不一致；数值走 rel_diff。"""
+    got_null = got is None or (isinstance(got, float) and math.isnan(got))
+    want_null = want is None or (isinstance(want, float) and math.isnan(want))
+    if got_null or want_null:
+        return got_null and want_null
+    return rel_diff(float(got), float(want)) <= tol
+
+
+def _candidate_aggregate_nullsafe(rows: List[Tuple]) -> Dict[Tuple[str, str], Tuple]:
+    """NULL 感知版 R16 ``_candidate_aggregate``：任一行 amount=None → 该键聚合额 None。"""
+    out: Dict[Tuple[str, str], Tuple] = {}
+    for r in rows:
+        day = r[1].astimezone(CN_TZ).strftime("%Y-%m-%d")
+        n, v, a = out.get((day, r[0]), (0, 0.0, 0.0))
+        amount = r[7]
+        new_a = None if (a is None or amount is None) else a + amount
+        out[(day, r[0])] = (n + 1, v + r[6], new_a)
+    return out
+
+
 # ── 5m 源读取与 48 槽门禁 ─────────────────────────────────────
 
 def fetch_5m_bars(client: Any, codes: Sequence[str],
@@ -139,7 +180,8 @@ def fetch_5m_bars(client: Any, codes: Sequence[str],
     """窗口内读 5m 正式表 → 按 (code, 北京日) 分组；每股票日必须恰 48 槽。
 
     任一 (code, day) 不是完整 48 槽标准网格 → fail-closed 记入 rejects
-    （不造 bar、不聚合残日）。
+    （不造 bar、不聚合残日）。amount=NULL 行合法（R21/R22 B 源口径），
+    以 NaN 哨兵承载继续聚合（R22b）。
     """
     grouped: Dict[Tuple[str, str], List[LC5Record]] = {}
     for i in range(0, len(codes), 200):
@@ -156,7 +198,7 @@ WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1
             grouped.setdefault((code, dt_bj.strftime("%Y-%m-%d")), []).append(
                 LC5Record(code, dt_bj, float(r["open"]), float(r["high"]),
                           float(r["low"]), float(r["close"]), int(r["volume"]),
-                          float(r["amount"])))
+                          _agg_amount_in(r["amount"])))
     bars_by_key: Dict[Tuple[str, str], List[LC5Record]] = {}
     rejects: List[dict] = []
     for key in sorted(grouped):
@@ -176,7 +218,8 @@ def build_agg_rows(bars_by_key: Dict[Tuple[str, str], List[LC5Record]], created_
     """从 5m bar 聚合高周期插入行（复用 ``utils.tdx_lc5.aggregate_5m`` 栅格口径）。
 
     行结构对齐 INSERT_COLUMNS：code, datetime(UTC-aware), o/h/l/c,
-    volume(int), amount(float), created_at, id。
+    volume(int), amount(Optional[float])（成分任一 NULL → None，R22b 口径）,
+    created_at, id。
     ``allowed_keys`` 为该表缺失 (day, code) 集合（only-missing-keys）。
     """
     out: Dict[str, List[Tuple]] = {p: [] for p in periods}
@@ -188,7 +231,8 @@ def build_agg_rows(bars_by_key: Dict[Tuple[str, str], List[LC5Record]], created_
             for b in aggregate_5m(bars, AGG_MINUTES[period]):
                 ts = naive_bj_to_epoch(b.datetime)
                 out[period].append((b.code, epoch_to_utc(ts), b.open, b.high, b.low,
-                                    b.close, int(b.volume), float(b.amount), created_at,
+                                    b.close, int(b.volume), _agg_amount_out(b.amount),
+                                    created_at,
                                     blake2b_row_id(ID_BATCH, period, b.code, ts)))
     return out
 
@@ -260,7 +304,7 @@ AND datetime >= toDateTime('{ch[0]}') AND datetime < toDateTime('{ch[1]}') ORDER
                 continue
             bars = [LC5Record(code, epoch_to_naive_bj(int(r["ts"])), float(r["open"]),
                               float(r["high"]), float(r["low"]), float(r["close"]),
-                              int(r["volume"]), float(r["amount"])) for r in src]
+                              int(r["volume"]), _agg_amount_in(r["amount"])) for r in src]
             want = {naive_bj_to_epoch(b.datetime): b
                     for b in aggregate_5m(bars, AGG_MINUTES[period])}
             got_rows = _ro(client, f"""
@@ -279,7 +323,9 @@ AND datetime >= toDateTime('{ch[0]}') AND datetime < toDateTime('{ch[1]}') ORDER
                 for field, wv in (("open", wb.open), ("high", wb.high), ("low", wb.low),
                                   ("close", wb.close), ("volume", wb.volume),
                                   ("amount", wb.amount)):
-                    if rel_diff(float(g[field]), float(wv)) > tol:
+                    bad = (not _amount_matches(g[field], wv, tol) if field == "amount"
+                           else rel_diff(float(g[field]), float(wv)) > tol)
+                    if bad:
                         problems.append(f"{code} {epoch_to_naive_bj(ts)} {field} "
                                         f"{g[field]} != 聚合复算 {wv}")
         out[period] = {"day": day, "codes": list(codes), "rows": total_rows,
@@ -317,13 +363,15 @@ def _readback_aggregate(client: Any, table: str, keys: List[Tuple[str, str]],
         chunk = codes[i:i + 200]
         rows = _ro(client, f"""
 SELECT toString(toDate(datetime + 28800)) AS d, code, count() AS n,
-       uniqExact(id) AS uid, sum(volume) AS v, sum(amount) AS a
+       uniqExact(id) AS uid, sum(volume) AS v,
+       if(countIf(amount IS NULL) > 0, NULL, sum(amount)) AS a
 FROM {table}{suffix}
 WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
   AND code IN ({_sql_str(chunk)}) GROUP BY d, code""")
         for r in rows:
             out[(str(r["d"]), str(r["code"]))] = (int(r["n"]), int(r["uid"]),
-                                                  float(r["v"]), float(r["a"]))
+                                                  float(r["v"]),
+                                                  _agg_amount_out(r["a"]))
     return out
 
 
@@ -382,7 +430,7 @@ AND datetime >= toDateTime('{day_ch[0]}') AND datetime < toDateTime('{day_ch[1]}
                 continue
             bars = [LC5Record(code, epoch_to_naive_bj(int(r["ts"])), float(r["open"]),
                               float(r["high"]), float(r["low"]), float(r["close"]),
-                              int(r["volume"]), float(r["amount"])) for r in src]
+                              int(r["volume"]), _agg_amount_in(r["amount"])) for r in src]
             want = {b.datetime.strftime("%Y-%m-%d %H:%M"): b
                     for b in aggregate_5m(bars, AGG_MINUTES[period])}
             got_rows = _ro(client, f"""
@@ -399,7 +447,9 @@ AND datetime < toDateTime('{day} 00:00:00') + INTERVAL 16 HOUR""")
                 for field, wv in (("open", wb.open), ("high", wb.high), ("low", wb.low),
                                   ("close", wb.close), ("volume", wb.volume),
                                   ("amount", wb.amount)):
-                    if rel_diff(float(g[field]), float(wv)) > tol:
+                    bad = (not _amount_matches(g[field], wv, tol) if field == "amount"
+                           else rel_diff(float(g[field]), float(wv)) > tol)
+                    if bad:
                         problems.append(f"{code} {hm} {field} {g[field]} != 复算 {wv}")
         out[period] = {"sampled": len(sample_keys), "problems": problems[:8],
                        "problem_count": len(problems)}
@@ -441,7 +491,7 @@ def formal_write(client_factory: Callable[[], Any], candidates: Dict[str, List[T
         for period in TARGET_PERIODS:
             table = TABLE_BY_PERIOD[period]
             rows = candidates[period]
-            want = _candidate_aggregate(rows)
+            want = _candidate_aggregate_nullsafe(rows)
             got = _readback_aggregate(client, table, sorted(want), ch_win)
             problems: List[str] = []
             for key, expect in want.items():
@@ -454,7 +504,8 @@ def formal_write(client_factory: Callable[[], Any], candidates: Dict[str, List[T
                     problems.append(f"{key} 聚合不一致 expect={expect} got={actual} "
                                     f"(应恰 {BARS_PER_CD[period]} 根且 id 无重复)")
                     continue
-                if rel_diff(actual[2], expect[1]) > 1e-6 or rel_diff(actual[3], expect[2]) > 1e-6:
+                if rel_diff(actual[2], expect[1]) > 1e-6 \
+                        or not _amount_matches(actual[3], expect[2], 1e-6):
                     problems.append(f"{key} 量额不一致 expect={expect} got={actual}")
             got_final = _readback_aggregate(client, table, sorted(want), ch_win, final=True)
             if len(got_final) != len(got):
