@@ -48,4 +48,4 @@ Thumbs.db
 /Libs/
 
 # Local graphify analysis cache (generated, not source).
-graphify-out/
+.graphify-out/
