@@ -504,12 +504,17 @@ def classify_outcome(*, missing: int, fetched_ok: int, rejects,
     """退出码契约：全失败=3 源不可达；部分失败/拒绝率>5%=4 降级；其余 0。
 
     rejects 接受 int（计数）或带 len 的集合。
+    特例：缺失键全部被日线仲裁拒绝且零抓取错误 = 该源已尽力终态（拒绝已在
+    报告留档、待 TDX 客户端日），返回 0 而非 4——避免调度器每日误报降级并
+    跳过聚合段（2026-11-09 runner 实跑教训）。
     """
     n_rejects = int(rejects) if isinstance(rejects, int) else len(rejects)
     if codes and fetch_errors and len(fetch_errors) >= len(codes):
         return EXIT_SOURCE_UNREACHABLE
     if fetch_errors:
         return EXIT_DEGRADED
+    if missing > 0 and n_rejects == missing:
+        return EXIT_OK  # 缺口全为仲裁拒绝：终态，报告已留档
     if missing > 0 and codes and n_rejects / len(codes) > REJECT_ALARM_RATE:
         return EXIT_DEGRADED
     return EXIT_OK

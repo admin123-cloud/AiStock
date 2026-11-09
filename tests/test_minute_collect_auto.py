@@ -384,6 +384,13 @@ def test_collect_day_zero_bars_answer_is_no_coverage_not_unreachable():
                                "reason": "no_tencent_coverage"}]
 
 
+def test_classify_all_missing_rejected_is_terminal_ok():
+    """缺口全被日线仲裁拒绝且零抓取错误=终态0（不误报降级卡聚合）。"""
+    from scripts.minute_collect_auto import classify_outcome, EXIT_OK
+    assert classify_outcome(missing=2, fetched_ok=5568, rejects=2,
+                            fetch_errors={}, codes=["a", "b"]) == EXIT_OK
+
+
 def test_classify_outcome_exit_contract():
     # 全失败 → 3（源不可达报警）；部分失败 → 4；正常/无缺口 → 0
     assert mca.classify_outcome(missing=5, fetched_ok=0, rejects=0,
