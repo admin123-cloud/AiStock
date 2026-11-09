@@ -2222,19 +2222,25 @@ def _compute_limit_up_ladder(
         session.close()
 
 
+# R25（2026-11-09）：/market/emotion-trend 数据源改为按需重算（镜像 R20b）。
+# 窗口上限 250 日，防无界 5m 扫描（kline_minute_5 约 9 亿行，历史深至 2000 年）。
+_EMOTION_TREND_MAX_DAYS = 250
+
+
 @router.get("/emotion-trend")
 def get_emotion_trend(days: int = 30, granularity: str = "daily"):
     """获取情绪周期趋势数据。
 
-    R15（2026-11-09）：进程内 TTL 结果缓存（60 秒，monotonic 时钟，键
-    days|granularity），与 R13/R14 缓存同风格；error 载荷不缓存。
-    R15 审计结论：本端点经 market_warehouse 网关的查询表为 kline_minute_60
-    （hourly）与 emotion_cycle（daily），均不在 quality_read_sql 的
-    kline_daily / kline_minute_5 FINAL 视图重写集合内（emotion_cycle 为日度
-    小表，其显式 FINAL 是基表去重而非网关视图重写，无谓词下推阻断问题），
-    故不适用 R14 raw+argMax 改法，按 R15 任务书备选分支仅加 TTL。
+    R15（2026-11-09）：进程内 TTL 结果缓存（60 秒，monotonic 时钟）。
+    R25（2026-11-09）：daily 分支改按需重算（emotion_cycle 预计算表写入方
+    已停用，表停在 2026-10-30）。缓存键在 days|granularity 基础上追加
+    kline_daily 的 max(trade_date)（与 R20 sentiment 同语义）——数据日期
+    推进即重算；键查询失败（None）fail-closed 不吃缓存；error 载荷不缓存。
     """
-    cache_key = f"{int(days)}|{granularity}"
+    data_date = _kline_daily_latest_trade_date()
+    if data_date is None:
+        return _compute_emotion_trend(days=days, granularity=granularity)
+    cache_key = f"{int(days)}|{granularity}|{data_date}"
     now = time.monotonic()
     cached = _EMOTION_TREND_RESULT_CACHE.get(cache_key)
     if cached is not None and now < float(cached.get("expires_at") or 0.0):
@@ -2246,12 +2252,205 @@ def get_emotion_trend(days: int = 30, granularity: str = "daily"):
         "expires_at": now + _EMOTION_TREND_RESULT_CACHE_TTL_SECONDS,
         "payload": payload,
     }
+    # 同参数组合只保留当前数据日期的键，防陈旧键累积
+    prefix = f"{int(days)}|{granularity}|"
+    for stale in [k for k in _EMOTION_TREND_RESULT_CACHE if k.startswith(prefix) and k != cache_key]:
+        _EMOTION_TREND_RESULT_CACHE.pop(stale, None)
     return payload
 
 
+def _emotion_trend_window_dates(latest_date: Optional[str], days: int):
+    """R25：请求窗口与扫描范围——trade_calendar raw 直查（镜像 R20b）。
+
+    取截至最新有数据交易日的 calendar 日期 days+5 行：前 days 行为窗口，
+    最老一行为昨日分类/前收的缓冲起点（数据驱动 date_pairs 会再对齐到
+    真实前数据日，缓冲只为覆盖偶发数据缺口）。
+    """
+    bounded = max(1, min(int(days), _EMOTION_TREND_MAX_DAYS))
+    calendar_df = clickhouse_query_df(
+        f"""
+        SELECT trade_date
+        FROM trade_calendar
+        WHERE is_trading = 1 AND market = 'SH' AND trade_date <= ?
+        ORDER BY trade_date DESC
+        LIMIT {bounded + 5}
+        """,
+        [latest_date],
+        raw=True,
+    )
+    if calendar_df is None or calendar_df.empty:
+        return [], None
+    dates_desc = [_date_text(v) for v in calendar_df["trade_date"].tolist()]
+    window = list(reversed(dates_desc[:bounded]))
+    range_start = dates_desc[-1]
+    return window, range_start
+
+
+def _emotion_core_aggregates(range_start: str, latest_date: str):
+    """R25：日线类比率——口径提取自写入方 scripts/generate_emotion_cycle.py
+    EmotionCycleGenerator._stock_kline_rows / calculate_up_rate / calculate_ratio：
+
+    universe = kline_daily FINAL JOIN stocks WHERE s.type='stock'（注意：写入方
+    无 open>0 过滤，与 sentiment 链不同）；close_up_rate = pct>0 占比；
+    sh/sz/cyb = code 前缀 6% / 0%|3% / 3%；strong = pct>3；weak = pct<-3；
+    total_stocks = 全部行（change_pct NULL 计入分母、不计入分子）。
+    """
+    return clickhouse_query_df(
+        """
+        WITH base AS (
+            SELECT k.trade_date AS trade_date, k.code AS code, k.change_pct AS pct
+            FROM kline_daily AS k FINAL
+            INNER JOIN stocks AS s ON s.code = k.code
+            WHERE s.type = 'stock' AND k.trade_date >= ? AND k.trade_date <= ?
+        )
+        SELECT
+            trade_date,
+            count() AS total_stocks,
+            sum(pct > 0) * 100 / count() AS close_up_rate,
+            sumIf(pct > 0, code LIKE '6%%') * 100 / nullIf(countIf(code LIKE '6%%'), 0) AS sh_up_rate,
+            sumIf(pct > 0, (code LIKE '0%%' OR code LIKE '3%%')) * 100 / nullIf(countIf(code LIKE '0%%' OR code LIKE '3%%'), 0) AS sz_up_rate,
+            sumIf(pct > 0, code LIKE '3%%') * 100 / nullIf(countIf(code LIKE '3%%'), 0) AS cyb_up_rate,
+            sum(pct > 3) * 100 / count() AS strong_up_rate,
+            sum(pct < -3) * 100 / count() AS weak_up_rate
+        FROM base
+        GROUP BY trade_date
+        ORDER BY trade_date
+        """,
+        [range_start, latest_date],
+        raw=True,
+    )
+
+
+def _emotion_yesterday_aggregates(range_start: str, latest_date: str):
+    """R25：昨日妖股/强势/弱势——口径提取自写入方 get_yesterday_stocks_by_
+    category + calculate_category_up_rate：
+
+    前数据日（lagInFrame 前一个有数据日，镜像写入方 max(trade_date)<T 的
+    数据驱动语义，非日历日）pct>9.5（妖股）/ >5（强势）/ <-5（弱势）的
+    代码在当日 pct>0 占比；分母=前日分类代码中当日有行的（停牌剔除，
+    INNER JOIN 语义）；无候选=0.0（写入方同）。
+    classified 先收敛到 |pct|>5 小集合（>9.5 与 >5 同侧、<-5 另一侧，
+    不改变任何桶口径），实测 30 日窗口 0.88s→0.2s 且逐位等价（probe6）。
+    """
+    return clickhouse_query_df(
+        """
+        WITH stock_dates AS (
+            SELECT DISTINCT k.trade_date AS trade_date
+            FROM kline_daily AS k FINAL
+            INNER JOIN stocks AS s ON s.code = k.code
+            WHERE s.type = 'stock' AND k.trade_date >= ? AND k.trade_date <= ?
+        ),
+        date_pairs AS (
+            SELECT trade_date,
+                lagInFrame(toNullable(trade_date), 1, NULL) OVER (
+                    ORDER BY trade_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                ) AS prev_date
+            FROM stock_dates
+        ),
+        classified AS (
+            SELECT k.trade_date AS prev_date, k.code AS code, k.change_pct AS pct
+            FROM kline_daily AS k FINAL
+            INNER JOIN stocks AS s ON s.code = k.code
+            WHERE s.type = 'stock'
+              AND k.trade_date >= ? AND k.trade_date <= ?
+              AND (k.change_pct > 5 OR k.change_pct < -5)
+        ),
+        today AS (
+            SELECT k.trade_date AS trade_date, k.code AS code, k.change_pct AS pct
+            FROM kline_daily AS k FINAL
+            INNER JOIN stocks AS s ON s.code = k.code
+            WHERE s.type = 'stock' AND k.trade_date >= ? AND k.trade_date <= ?
+        )
+        SELECT
+            dp.trade_date AS trade_date,
+            if(countIf(y.pct > 9.5) > 0, sumIf(t.pct > 0, y.pct > 9.5) * 100 / countIf(y.pct > 9.5), 0) AS yesterday_monster_up_rate,
+            if(countIf(y.pct > 5) > 0, sumIf(t.pct > 0, y.pct > 5) * 100 / countIf(y.pct > 5), 0) AS yesterday_strong_up_rate,
+            if(countIf(y.pct < -5) > 0, sumIf(t.pct > 0, y.pct < -5) * 100 / countIf(y.pct < -5), 0) AS yesterday_weak_up_rate
+        FROM date_pairs AS dp
+        INNER JOIN classified AS y ON y.prev_date = dp.prev_date
+        INNER JOIN today AS t ON t.code = y.code AND t.trade_date = dp.trade_date
+        GROUP BY dp.trade_date
+        ORDER BY dp.trade_date
+        """,
+        [range_start, latest_date] * 4,
+        raw=True,
+    )
+
+
+def _emotion_intraday_aggregates(range_start: str, latest_date: str, window_start: str):
+    """R25：intraday_up_rate 真口径——表存值是写入方占位（generate_emotion_
+    cycle.py L301-302 "盘中上涨率：暂时用收盘上涨率代替"），R25 改为
+    kline_minute_5 当日末根 close > 前数据日收盘（kline_daily argMax(close,
+    created_at) 去重）：
+
+    · 基表 raw 直查；(code, datetime) argMax(col, created_at) 去重（R14/
+      R20b 模式）与 (code, 日) argMax(close, tuple(datetime, created_at))
+      取末根两层合成，单次扫描；
+    · datetime 范围谓词（toDate 谓词在 toYYYYMM 分区实测不裁剪）；
+    · kline_minute_5 存储钟=UTC（R23 实证），北京交易日时段落在同日 UTC
+      01:35~07:00，toDate(datetime) 与 trade_date 同日对齐；
+    · toHour>=6（北京 14:00 后）预过滤为纯优化：与全量逐日零差异
+      （covered/rate diff 全 0，probe5 2026-11-09），扫描量 48→13 根/日，
+      30 日窗口 2.74s→0.95s。
+    """
+    return clickhouse_query_df(
+        """
+        WITH stock_dates AS (
+            SELECT DISTINCT k.trade_date AS trade_date
+            FROM kline_daily AS k FINAL
+            INNER JOIN stocks AS s ON s.code = k.code
+            WHERE s.type = 'stock' AND k.trade_date >= ? AND k.trade_date <= ?
+        ),
+        date_pairs AS (
+            SELECT trade_date,
+                lagInFrame(toNullable(trade_date), 1, NULL) OVER (
+                    ORDER BY trade_date ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                ) AS prev_date
+            FROM stock_dates
+        ),
+        last_bar AS (
+            SELECT code, toDate(datetime) AS trade_date,
+                argMax(close, tuple(datetime, created_at)) AS last_close
+            FROM kline_minute_5
+            WHERE datetime >= ? AND datetime < ? + INTERVAL 1 DAY
+              AND toHour(datetime) >= 6
+            GROUP BY code, trade_date
+        ),
+        prev_close AS (
+            SELECT k.code AS code, dp.trade_date AS trade_date,
+                argMax(k.close, k.created_at) AS close
+            FROM kline_daily AS k FINAL
+            INNER JOIN date_pairs AS dp ON dp.prev_date = k.trade_date
+            WHERE k.trade_date >= ? AND k.trade_date <= ?
+            GROUP BY k.code, dp.trade_date
+        )
+        SELECT
+            lb.trade_date AS trade_date,
+            count() AS covered_stocks,
+            sum(lb.last_close > pc.close) * 100 / count() AS intraday_up_rate
+        FROM last_bar AS lb
+        INNER JOIN prev_close AS pc ON pc.code = lb.code AND pc.trade_date = lb.trade_date
+        INNER JOIN stocks AS s ON s.code = lb.code
+        WHERE s.type = 'stock' AND lb.last_close > 0 AND pc.close > 0
+        GROUP BY lb.trade_date
+        ORDER BY lb.trade_date
+        """,
+        [range_start, latest_date, window_start, latest_date, range_start, latest_date],
+        raw=True,
+    )
+
+
 def _compute_emotion_trend(days: int = 30, granularity: str = "daily"):
-    """获取情绪周期趋势数据（原始计算路径，R15 起由带 TTL 缓存的 get_emotion_trend 包装）。"""
-    session = next(db.get_session())
+    """获取情绪周期趋势数据（原始计算路径）。
+
+    R25（2026-11-09）：daily 分支改按需重算（镜像 R20b sentiment 模式）——
+    emotion_cycle 预计算表写入方（api/system_config.py 情绪周期计算/修复
+    任务）已停用，表停在 2026-10-30。现对请求窗口逐日从 kline_daily FINAL
+    + stocks 算日线类比率、kline_minute_5 末根算 intraday，全部 market_
+    warehouse raw=True 基表直查 + 日期范围谓词；口径提取自写入方
+    scripts/generate_emotion_cycle.py（对拍报告见任务书 R25）。ORM/表回退
+    路径删除；granularity=hourly 分支行为保持（仅查询 raw 化）。
+    """
     try:
         if granularity == "hourly":
             if clickhouse_available() and _has_clickhouse_table("kline_minute_60"):
@@ -2277,7 +2476,8 @@ def _compute_emotion_trend(days: int = 30, granularity: str = "daily"):
                     HAVING total_rows >= 100
                     ORDER BY hour_time DESC
                     LIMIT 240
-                    """
+                    """,
+                    raw=True,
                 )
                 if trend_df is not None and not trend_df.empty:
                     trend_df = trend_df.iloc[::-1]
@@ -2303,99 +2503,89 @@ def _compute_emotion_trend(days: int = 30, granularity: str = "daily"):
                     }
             return _empty_emotion_trend("数据库中没有可用的60分钟K线情绪数据")
 
-        if clickhouse_available():
-            emotion_table = _resolve_table_name("emotion_cycle", ["emotion_cycle", "emotion_cycles"])
-            if _has_clickhouse_table(emotion_table):
-                trend_df = clickhouse_query_df(
-                    f"""
-                    SELECT
-                        date, close_up_rate, intraday_up_rate, sh_up_rate, sz_up_rate, cyb_up_rate,
-                        yesterday_monster_up_rate, yesterday_strong_up_rate, yesterday_weak_up_rate,
-                        strong_up_rate, weak_up_rate, limit_up_follow_rate
-                    FROM {emotion_table} FINAL
-                    WHERE total_stocks >= {MIN_EMOTION_CYCLE_STOCKS}
-                    ORDER BY date DESC
-                    LIMIT ?
-                    """,
-                    [int(days)],
-                )
-                if trend_df is not None and not trend_df.empty:
-                    trend_df = trend_df.iloc[::-1]
-                    return _append_intraday_emotion_snapshot({
-                        "dates": [_date_text(v) for v in trend_df["date"].tolist()],
-                        "close_up_rate": [float(v) for v in trend_df["close_up_rate"].fillna(0).tolist()],
-                        "intraday_up_rate": [float(v) for v in trend_df["intraday_up_rate"].fillna(0).tolist()],
-                        "sh_up_rate": [float(v) for v in trend_df["sh_up_rate"].fillna(0).tolist()],
-                        "sz_up_rate": [float(v) for v in trend_df["sz_up_rate"].fillna(0).tolist()],
-                        "cyb_up_rate": [float(v) for v in trend_df["cyb_up_rate"].fillna(0).tolist()],
-                        "yesterday_monster_up_rate": [float(v) for v in trend_df["yesterday_monster_up_rate"].fillna(0).tolist()],
-                        "yesterday_strong_up_rate": [float(v) for v in trend_df["yesterday_strong_up_rate"].fillna(0).tolist()],
-                        "yesterday_weak_up_rate": [float(v) for v in trend_df["yesterday_weak_up_rate"].fillna(0).tolist()],
-                        "strong_up_rate": [float(v) for v in trend_df["strong_up_rate"].fillna(0).tolist()],
-                        "weak_up_rate": [float(v) for v in trend_df["weak_up_rate"].fillna(0).tolist()],
-                        "limit_up_follow_rate": [float(v) for v in trend_df["limit_up_follow_rate"].fillna(0).tolist()],
-                        "total": int(len(trend_df)),
-                        "source": "clickhouse",
-                    })
-        emotion_cycles = (
-            session.query(EmotionCycle)
-            .filter(EmotionCycle.total_stocks >= MIN_EMOTION_CYCLE_STOCKS)
-            .order_by(desc(EmotionCycle.date))
-            .limit(days)
-            .all()
-        )
-        if not emotion_cycles:
-            return {
-                "error": "数据库中没有情绪周期数据",
-                "dates": [],
-                "close_up_rate": [],
-                "intraday_up_rate": [],
-                "sh_up_rate": [],
-                "sz_up_rate": [],
-                "cyb_up_rate": [],
-                "yesterday_monster_up_rate": [],
-                "yesterday_strong_up_rate": [],
-                "yesterday_weak_up_rate": [],
-                "strong_up_rate": [],
-                "weak_up_rate": [],
-                "limit_up_follow_rate": [],
+        if not clickhouse_available():
+            return _empty_emotion_trend("数据库中没有情绪周期数据")
+        for table in ("kline_daily", "stocks", "trade_calendar"):
+            if not _has_clickhouse_table(_resolve_table_name(table)):
+                return _empty_emotion_trend("数据库中没有情绪周期数据")
+        latest_date = _kline_daily_latest_trade_date()
+        if not latest_date:
+            return _empty_emotion_trend("数据库中没有情绪周期数据")
+        window_dates, range_start = _emotion_trend_window_dates(latest_date, days)
+        if not window_dates or not range_start:
+            return _empty_emotion_trend("数据库中没有情绪周期数据")
+
+        core_df = _emotion_core_aggregates(range_start, latest_date)
+        if core_df is None or core_df.empty:
+            return _empty_emotion_trend("数据库中没有情绪周期数据")
+        core_map = {
+            _date_text(v): row
+            for v, row in zip(core_df["trade_date"].tolist(), core_df.to_dict("records"))
+        }
+        yday_df = _emotion_yesterday_aggregates(range_start, latest_date)
+        yday_map: Dict[str, Dict[str, Any]] = {}
+        if yday_df is not None and not yday_df.empty:
+            yday_map = {
+                _date_text(v): row
+                for v, row in zip(yday_df["trade_date"].tolist(), yday_df.to_dict("records"))
+            }
+        intra_df = _emotion_intraday_aggregates(range_start, latest_date, window_dates[0])
+        intra_map: Dict[str, float] = {}
+        if intra_df is not None and not intra_df.empty:
+            intra_map = {
+                _date_text(v): float(row.get("intraday_up_rate") or 0.0)
+                for v, row in zip(intra_df["trade_date"].tolist(), intra_df.to_dict("records"))
             }
 
-        emotion_cycles = list(reversed(emotion_cycles))
-        return {
-            "dates": [item.date.isoformat() for item in emotion_cycles if item.date],
-            "close_up_rate": [float(item.close_up_rate) for item in emotion_cycles if item.close_up_rate is not None],
-            "intraday_up_rate": [float(item.intraday_up_rate) for item in emotion_cycles if item.intraday_up_rate is not None],
-            "sh_up_rate": [float(item.sh_up_rate) for item in emotion_cycles if item.sh_up_rate is not None],
-            "sz_up_rate": [float(item.sz_up_rate) for item in emotion_cycles if item.sz_up_rate is not None],
-            "cyb_up_rate": [float(item.cyb_up_rate) for item in emotion_cycles if item.cyb_up_rate is not None],
-            "yesterday_monster_up_rate": [float(item.yesterday_monster_up_rate) for item in emotion_cycles if item.yesterday_monster_up_rate is not None],
-            "yesterday_strong_up_rate": [float(item.yesterday_strong_up_rate) for item in emotion_cycles if item.yesterday_strong_up_rate is not None],
-            "yesterday_weak_up_rate": [float(item.yesterday_weak_up_rate) for item in emotion_cycles if item.yesterday_weak_up_rate is not None],
-            "strong_up_rate": [float(item.strong_up_rate) for item in emotion_cycles if item.strong_up_rate is not None],
-            "weak_up_rate": [float(item.weak_up_rate) for item in emotion_cycles if item.weak_up_rate is not None],
-            "limit_up_follow_rate": [float(item.limit_up_follow_rate) for item in emotion_cycles if item.limit_up_follow_rate is not None],
-            "total": len(emotion_cycles),
+        min_stocks = int(MIN_EMOTION_CYCLE_STOCKS)
+        dates = [
+            d for d in window_dates
+            if d in core_map and int(core_map[d].get("total_stocks") or 0) >= min_stocks
+        ]
+        if not dates:
+            return _empty_emotion_trend("数据库中没有情绪周期数据")
+
+        def _num(value, default=0.0):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return default
+            return default if value != value else round(value, 2)
+
+        def _core(d: str, field: str) -> float:
+            return _num(core_map[d].get(field))
+
+        payload = {
+            "dates": dates,
+            "close_up_rate": [_core(d, "close_up_rate") for d in dates],
+            # 5m 无覆盖日回退收盘口径（保持写入方 intraday=close 占位语义）
+            "intraday_up_rate": [
+                _num(intra_map[d]) if d in intra_map else _core(d, "close_up_rate")
+                for d in dates
+            ],
+            "sh_up_rate": [_core(d, "sh_up_rate") for d in dates],
+            "sz_up_rate": [_core(d, "sz_up_rate") for d in dates],
+            "cyb_up_rate": [_core(d, "cyb_up_rate") for d in dates],
+            "yesterday_monster_up_rate": [
+                _num(yday_map.get(d, {}).get("yesterday_monster_up_rate")) for d in dates
+            ],
+            "yesterday_strong_up_rate": [
+                _num(yday_map.get(d, {}).get("yesterday_strong_up_rate")) for d in dates
+            ],
+            "yesterday_weak_up_rate": [
+                _num(yday_map.get(d, {}).get("yesterday_weak_up_rate")) for d in dates
+            ],
+            "strong_up_rate": [_core(d, "strong_up_rate") for d in dates],
+            "weak_up_rate": [_core(d, "weak_up_rate") for d in dates],
+            # 涨停溢价率：写入方常量占位 0.0（generate_emotion_cycle.py L341-342）
+            "limit_up_follow_rate": [0.0 for _ in dates],
+            "total": len(dates),
+            "source": "clickhouse",
         }
+        return payload
     except Exception as exc:
         logger.error(f"获取情绪周期趋势失败: {exc}")
-        return {
-            "error": str(exc),
-            "dates": [],
-            "close_up_rate": [],
-            "intraday_up_rate": [],
-            "sh_up_rate": [],
-            "sz_up_rate": [],
-            "cyb_up_rate": [],
-            "yesterday_monster_up_rate": [],
-            "yesterday_strong_up_rate": [],
-            "yesterday_weak_up_rate": [],
-            "strong_up_rate": [],
-            "weak_up_rate": [],
-            "limit_up_follow_rate": [],
-        }
-    finally:
-        session.close()
+        return _empty_emotion_trend(str(exc))
 
 
 @router.post("/calculate-emotion-cycle")
