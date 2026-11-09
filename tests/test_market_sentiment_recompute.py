@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 """R20（2026-11-09）首页情绪快照按需重算的单元测试（先于实现编写，TDD）。
 
+R20b（2026-11-09 回归修复）：全链 market_warehouse raw=True 基表直查。
+R20 事故：情绪链查询经 ORM 实体/非 raw 通道被映射到无界 FINAL 视图子查询
+（kline_daily_quality_read_* / kline_minute_5_precise），日期/代码谓词无法
+下推，单条 90~173 秒，并发拖垮 SQLAlchemy 连接池。R20b 守卫：
+  - 结构守卫（AST）：情绪链函数不引用 quality_read/precise/ORM session，
+    且链上每个 clickhouse_query_df/clickhouse_scalar 调用显式 raw=True；
+  - 运行时守卫：fake 数据层断言收到的每条 SQL raw=True 且不含视图 token。
+
 口径提取（不重写）：快照产物字段 ← services/market_sentiment_cache.refresh_daily_history
 的 kline_daily 聚合 SQL（api/system_config.py refresh_market_sentiment_snapshot_task
 调用的本体）：
@@ -18,10 +26,14 @@
   2) R20 缓存分档：盘中 TTL=300s 到期重算、盘后绑定 kline_daily max(trade_date)
      命中缓存、数据日期推进触发重算、分支切换优先级、error 载荷不缓存；
   3) 快照表读取路径停用：源码不再引用 load_homepage_sentiment；
-  4) 载荷字段结构与快照时代完全一致（含 intraday_status / latest_is_provisional）。
+  4) 载荷字段结构与快照时代完全一致（含 intraday_status / latest_is_provisional）；
+  5) R20b 结构守卫：无 FINAL 视图引用、无 ORM session、全部 raw=True；
+  6) 盘中件 SQL 镜像 R14 argMax(created_at) 去重改法、datetime 范围谓词（toDate
+     在 toYYYYMM 分区上实测不裁剪）、基表直查。
 
 真实库上的口径对账由部署后独立 SQL 复算完成（任务书第 3 条），不在本文件范围。
 """
+import ast
 from datetime import date, datetime, time as dt_time
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,6 +119,16 @@ CALIBER_TOKENS = [
     "pct <= -7",
 ]
 
+# R20b 结构守卫覆盖的情绪重算链函数（AST 级检查对象）
+SENTIMENT_CHAIN_FUNCTIONS = [
+    "_load_qmt_intraday_market_sentiment",
+    "_load_market_sentiment_from_clickhouse",
+    "_compute_market_sentiment",
+    "_kline_daily_latest_trade_date",
+    "_is_sentiment_intraday_session",
+    "get_market_sentiment",
+]
+
 
 def _aggregate(rows):
     """按提取口径把合成行聚合成 summary 行（仅喂给 fake 查询层）。"""
@@ -143,25 +165,6 @@ def _aggregate(rows):
     }
 
 
-class _FakeQuery:
-    def filter(self, *a, **k):
-        return self
-
-    def order_by(self, *a, **k):
-        return self
-
-    def first(self):
-        return None
-
-
-class _FakeSession:
-    def query(self, *a, **k):
-        return _FakeQuery()
-
-    def close(self):
-        pass
-
-
 class _FakeClock:
     """替身 time 模块：仅提供 monotonic()。"""
 
@@ -173,30 +176,47 @@ class _FakeClock:
 
 
 class _FakeClickhouse:
-    """按 SQL 形状路由的 fake 数据访问层，记录全部 (sql, params, raw)。"""
+    """按 SQL 形状路由的 fake 数据访问层，记录全部 (sql, params, raw)。
+
+    R20b 运行时守卫：情绪链发出的每条查询必须 raw=True（基表直查、绕过
+    FINAL 视图重写），且 SQL 文本不得携带任何视图 token。
+    """
 
     def __init__(self, latest_date):
         self.latest_date = latest_date
         self.calls = []
 
+    def _record(self, kind, sql, params, raw):
+        assert raw is True, f"情绪链查询必须 raw=True 基表直查: {sql[:120]}"
+        assert "quality" not in sql and "precise" not in sql, (
+            f"情绪链 SQL 不得引用 FINAL 视图: {sql[:120]}"
+        )
+        self.calls.append((kind, sql, params, raw))
+
     def available(self):
         return True
 
     def scalar(self, sql, params=None, *, raw=False):
-        self.calls.append(("scalar", sql, params, raw))
-        if "MAX(k.trade_date)" in sql:
-            # clickhouse_connect 对 Date 列返回 datetime.date（非 str）
-            return date.fromisoformat(self.latest_date)
+        self._record("scalar", sql, params, raw)
         raise AssertionError(f"unexpected scalar sql: {sql[:120]}")
 
     def query_df(self, sql, params=None, *, raw=False):
-        self.calls.append(("df", sql, params, raw))
+        self._record("df", sql, params, raw)
+        if "FROM trade_calendar" in sql:
+            # 30 日窗口日期改 trade_calendar 直查（倒序，实现内再反转）
+            assert params == [D2], f"日历窗口必须截至最新有数据交易日: {params}"
+            return pd.DataFrame({"trade_date": [D2, D1]})
+        if "FROM emotion_cycle" in sql:
+            return pd.DataFrame({
+                "date": [], "close_up_rate": [],
+                "strong_up_rate": [], "limit_up_follow_rate": [],
+            })
         if "GROUP BY trade_date" in sql:
             rows = []
-            for date in (D1, D2):
-                agg = _aggregate(ROWS_BY_DATE[date])
+            for trade_date in (D1, D2):
+                agg = _aggregate(ROWS_BY_DATE[trade_date])
                 rows.append({
-                    "trade_date": date,
+                    "trade_date": trade_date,
                     "total_amount": agg["total_amount"],
                     "sh_amount": agg["sh_amount"],
                     "sz_amount": agg["sz_amount"],
@@ -209,8 +229,6 @@ class _FakeClickhouse:
                     "down_5_count": agg["down_5_count"],
                 })
             return pd.DataFrame(rows)
-        if "SELECT DISTINCT k.trade_date" in sql:
-            return pd.DataFrame({"trade_date": [D2, D1]})
         if "SELECT s.market, SUM(k.amount)" in sql:
             agg = _aggregate(D2_ROWS)
             return pd.DataFrame({
@@ -240,15 +258,24 @@ def fake_environment(monkeypatch):
     monkeypatch.setattr(mo, "_resolve_table_name", lambda base, candidates=None: base)
     monkeypatch.setattr(mo, "clickhouse_query_df", fake.query_df)
     monkeypatch.setattr(mo, "clickhouse_scalar", fake.scalar)
+    monkeypatch.setattr(mo, "_kline_daily_latest_trade_date", lambda: D2)
     monkeypatch.setattr(mo, "_load_qmt_intraday_market_sentiment", lambda: None)
+
+    def _no_heavy_forecast(**kwargs):
+        raise AssertionError("盘后/overlay 未命中分支不得同步执行预测重查询（R20b）")
+
+    monkeypatch.setattr(mo, "get_intraday_turnover_forecast", _no_heavy_forecast)
     monkeypatch.setattr(
-        mo, "get_intraday_turnover_forecast",
-        lambda **kw: {"available": False, "reason": "unit-test"},
+        mo, "get_cached_intraday_turnover_forecast",
+        lambda: {"available": False, "reason": "unit-test"},
     )
-    monkeypatch.setattr(mo, "db", SimpleNamespace(get_session=lambda: iter([_FakeSession()])))
+
+    def _no_session():
+        raise AssertionError("情绪重算链不得使用 SQLAlchemy session（R20b）")
+
+    monkeypatch.setattr(mo, "db", SimpleNamespace(get_session=_no_session))
     # 端点缓存层默认走"盘后 + 日期绑定"分支，避免真实时钟/日历干扰口径测试
     monkeypatch.setattr(mo, "_is_sentiment_intraday_session", lambda now: False)
-    monkeypatch.setattr(mo, "_kline_daily_latest_trade_date", lambda: D2)
     return fake
 
 
@@ -517,3 +544,135 @@ def test_latest_trade_date_key_uses_raw_lightweight_query(monkeypatch):
 def test_latest_trade_date_key_returns_none_when_clickhouse_down(monkeypatch):
     monkeypatch.setattr(mo, "clickhouse_available", lambda: False)
     assert mo._kline_daily_latest_trade_date() is None
+
+
+# ── 5) R20b 结构守卫：无 FINAL 视图、无 ORM session、全部 raw=True ─────────
+
+def _iter_chain_function_nodes():
+    """AST 级迭代情绪链函数节点（剥离 docstring，只看可执行代码）。"""
+    source = Path(mo.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    by_name = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for name in SENTIMENT_CHAIN_FUNCTIONS:
+        assert name in by_name, f"market_overview.py 中找不到函数: {name}"
+        node = by_name[name]
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            node.body = body[1:]  # 剥离 docstring
+        yield name, node
+
+
+def test_structure_guard_sentiment_chain_avoids_views_and_orm_session():
+    """R20b：情绪重算链不得引用 FINAL 视图（quality_read/precise）与 ORM session。"""
+    for name, node in _iter_chain_function_nodes():
+        code = ast.unparse(node)
+        for token in ("quality_read", "precise"):
+            assert token not in code, f"{name} 引用了 FINAL 视图 token: {token}"
+        # ORM session 禁令按标识符级检查（字符串字面量/日志文案不算引用）
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id == "session":
+                raise AssertionError(f"{name} 绑定了 ORM session 变量（R20b 禁令）")
+            if isinstance(sub, ast.arg) and sub.arg == "session":
+                raise AssertionError(f"{name} 声明了 session 参数（R20b 禁令）")
+            if isinstance(sub, ast.Attribute) and sub.attr == "get_session":
+                raise AssertionError(f"{name} 调用了 get_session（R20b 禁令）")
+
+
+def test_structure_guard_every_warehouse_call_in_chain_is_raw():
+    """R20b：情绪链上每个 clickhouse_query_df/clickhouse_scalar 调用必须 raw=True。"""
+    source = Path(mo.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    names = set(SENTIMENT_CHAIN_FUNCTIONS)
+    checked = 0
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            for sub in ast.walk(node):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, (ast.Attribute, ast.Name))
+                    and getattr(sub.func, "attr", getattr(sub.func, "id", None))
+                    in ("clickhouse_query_df", "clickhouse_scalar")
+                ):
+                    raws = [kw.value for kw in sub.keywords if kw.arg == "raw"]
+                    assert (
+                        raws
+                        and isinstance(raws[0], ast.Constant)
+                        and raws[0].value is True
+                    ), f"{node.name} 中 {sub.func.attr}(...) 必须显式 raw=True"
+                    checked += 1
+    assert checked >= 6, f"结构守卫应覆盖情绪链全部查询调用，实际覆盖 {checked} 处"
+
+
+# ── 6) R20b 盘中件：镜像 R14 argMax(created_at) 去重改法 ───────────────────
+
+def test_intraday_piece_mirrors_r14_argmax_raw_basetable(monkeypatch):
+    """盘中件 SQL 必须：raw=True、基表 kline_minute_5 + datetime 范围谓词
+    （toDate 谓词在 toYYYYMM 分区上实测不裁剪，禁用）、(code, datetime) 级
+    argMax(col, created_at) 去重、previous_close 直查 kline_daily 基表
+    argMax 去重；不得出现任何视图 token。"""
+    mo._QMT_INTRADAY_SENTIMENT_CACHE.clear()
+    calls = []
+    prev_day = date(2026, 11, 6)
+
+    def _scalar(sql, params=None, *, raw=False):
+        calls.append(("scalar", sql, params, raw))
+        assert raw is True, f"盘中件 scalar 必须 raw=True: {sql[:80]}"
+        if "count() FROM stocks" in sql:
+            return 6000
+        if "FROM trade_calendar" in sql and "trade_date < ?" in sql:
+            return prev_day
+        raise AssertionError(f"unexpected scalar sql: {sql[:120]}")
+
+    def _df(sql, params=None, *, raw=False):
+        calls.append(("df", sql, params, raw))
+        assert raw is True, f"盘中件聚合必须 raw=True: {sql[:80]}"
+        assert "minute_bars" in sql, "盘中件必须走合并去重扫描 CTE"
+        return pd.DataFrame([{
+            "covered_count": 5800,
+            "as_of": datetime(2026, 11, 9, 14, 55),
+            "up_count": 3000, "down_count": 2400, "unchanged_count": 400,
+            "up_5_count": 100, "down_5_count": 90,
+            "limit_up_count": 30, "limit_down_count": 10,
+            "avg_change_percent": 0.25,
+            "total_amount": 1.5e12, "sh_amount": 7.0e11, "sz_amount": 7.0e11,
+            "bj_amount": 1.0e10,
+            "bucket_up_7": 5, "bucket_up_5_7": 10, "bucket_up_3_5": 20,
+            "bucket_up_0_3": 40, "bucket_zero": 9, "bucket_down_0_3": 30,
+            "bucket_down_3_5": 25, "bucket_down_5_7": 15, "bucket_down_7": 8,
+        }])
+
+    monkeypatch.setattr(mo, "clickhouse_available", lambda: True)
+    monkeypatch.setattr(mo, "_has_clickhouse_table", lambda name: True)
+    monkeypatch.setattr(mo, "clickhouse_scalar", _scalar)
+    monkeypatch.setattr(mo, "clickhouse_query_df", _df)
+
+    payload = mo._load_qmt_intraday_market_sentiment()
+    assert payload is not None and payload["covered_count"] == 5800
+    assert payload["source"] == "qmt:kline_minute_5"
+
+    df_calls = [c for c in calls if c[0] == "df"]
+    assert df_calls, "盘中件必须发出聚合查询"
+    sql = df_calls[0][1]
+    for token in (
+        "argMax(close, created_at)",
+        "argMax(amount, created_at)",
+        "FROM kline_minute_5",
+        "datetime >= ? AND datetime < ? + INTERVAL 1 DAY",
+        "GROUP BY code, datetime",
+    ):
+        assert token in sql, f"盘中件 SQL 丢失 R14 镜像 token: {token}"
+    # previous_close 直查 kline_daily 基表并以 created_at 去重
+    assert "argMax(close, created_at)" in sql
+    assert "FROM kline_daily" in sql
+    assert "quality" not in sql and "precise" not in sql
+    today = datetime.now(SH_TZ).date()
+    assert df_calls[0][2] == [today, today, prev_day]

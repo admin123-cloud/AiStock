@@ -17,7 +17,10 @@ from fastapi import APIRouter
 from sqlalchemy import and_, case, desc, func, or_, text
 
 from models.stock_models import EmotionCycle, KlineDaily, Stock
-from services.market_turnover_forecast import get_intraday_turnover_forecast
+from services.market_turnover_forecast import (
+    get_cached_intraday_turnover_forecast,
+    get_intraday_turnover_forecast,
+)
 from services.margin_sentiment import load_margin_sentiment
 from utils.database import db
 from utils.logger import get_logger
@@ -461,30 +464,47 @@ def _load_qmt_intraday_market_sentiment() -> Optional[Dict[str, Any]]:
 
     try:
         expected_count = int(
-            clickhouse_scalar("SELECT count() FROM stocks WHERE type = 'stock'") or 0
+            clickhouse_scalar("SELECT count() FROM stocks WHERE type = 'stock'", raw=True) or 0
         )
         previous_date = clickhouse_scalar(
-            "SELECT max(trade_date) FROM kline_daily WHERE trade_date < ?",
+            "SELECT max(trade_date) FROM trade_calendar"
+            " WHERE is_trading = 1 AND market = 'SH' AND trade_date < ?",
             [trade_date],
+            raw=True,
         )
         if expected_count <= 0 or not previous_date:
             return finish(None, 60)
+        # R20b：镜像 R14 `_overlay_fresh_intraday_list_kline` 的 argMax(created_at)
+        # 等价 FINAL 去重改法，raw=True 基表直查 kline_minute_5；谓词不用
+        # toDate(datetime)=?（实测在 toYYYYMM(datetime) 分区上完全不裁剪，
+        # 894M 行/4.2GiB 全表扫描），改 datetime 范围谓词（分区裁剪到月分区）。
+        # latest 与 turnover 合并为单次去重扫描（同一 (code, datetime) 内层
+        # argMax 出 close/amount，外层一次 GROUP BY code 得三值），比 R14 的
+        # 两路各扫一次减半读量；外层别名避开 as_of（CH 别名代入会触发
+        # ILLEGAL_AGGREGATION，R14 原版形状在该引擎版本上即因此抛错）。
+        # previous_close 直查 kline_daily 基表并以 argMax(close, created_at) 去重。
         summary_df = clickhouse_query_df(
             """
-            WITH minute_latest AS (
-                SELECT code, argMax(close, datetime) AS close, max(datetime) AS as_of
-                FROM kline_minute_5
-                WHERE toDate(datetime) = ?
-                GROUP BY code
-            ),
-            minute_turnover AS (
-                SELECT code, sum(amount) AS amount
-                FROM kline_minute_5
-                WHERE toDate(datetime) = ?
+            WITH minute_bars AS (
+                SELECT
+                    code,
+                    argMax(close, as_of) AS close,
+                    max(as_of) AS latest_as_of,
+                    sum(amount) AS amount
+                FROM (
+                    SELECT
+                        code,
+                        datetime AS as_of,
+                        argMax(close, created_at) AS close,
+                        argMax(amount, created_at) AS amount
+                    FROM kline_minute_5
+                    WHERE datetime >= ? AND datetime < ? + INTERVAL 1 DAY
+                    GROUP BY code, datetime
+                )
                 GROUP BY code
             ),
             previous_close AS (
-                SELECT code, argMax(close, trade_date) AS close
+                SELECT code, argMax(close, created_at) AS close
                 FROM kline_daily
                 WHERE trade_date = ?
                 GROUP BY code
@@ -493,16 +513,15 @@ def _load_qmt_intraday_market_sentiment() -> Optional[Dict[str, Any]]:
                 SELECT
                     s.code AS code,
                     s.market AS market,
-                    m.close AS close,
+                    b.close AS close,
                     p.close AS previous_close,
-                    m.as_of AS as_of,
-                    t.amount AS amount,
-                    (m.close - p.close) / nullIf(p.close, 0) * 100 AS pct
+                    b.latest_as_of AS as_of,
+                    b.amount AS amount,
+                    (b.close - p.close) / nullIf(p.close, 0) * 100 AS pct
                 FROM stocks AS s
-                INNER JOIN minute_latest AS m ON m.code = s.code
+                INNER JOIN minute_bars AS b ON b.code = s.code
                 INNER JOIN previous_close AS p ON p.code = s.code
-                LEFT JOIN minute_turnover AS t ON t.code = s.code
-                WHERE s.type = 'stock' AND m.close > 0 AND p.close > 0
+                WHERE s.type = 'stock' AND b.close > 0 AND p.close > 0
             )
             SELECT
                 count() AS covered_count,
@@ -531,6 +550,7 @@ def _load_qmt_intraday_market_sentiment() -> Optional[Dict[str, Any]]:
             FROM base
             """,
             [trade_date, trade_date, previous_date],
+            raw=True,
         )
     except Exception as exc:
         logger.warning(f"QMT intraday market sentiment query failed: {exc}")
@@ -1368,11 +1388,18 @@ def _legacy_get_market_sentiment():
         session.close()
 
 
-def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
+def _load_market_sentiment_from_clickhouse() -> Optional[Dict[str, Any]]:
     """R20（2026-11-09）：直接从 kline_daily 按需计算，不再读预计算快照。
 
     旧路径优先读 market_sentiment_snapshot 预计算快照（由已停用的调度器刷新，
     首页 date 停在 2026-10-30）；R20 起停读快照，始终走下方 kline_daily 聚合。
+    R20b（2026-11-09 回归修复）：全链改 market_warehouse raw=True 基表直查——
+    R20 事故中本函数的 JOIN-MAX 日期解析与 ORM 回退被映射到无界 FINAL 视图
+    子查询，日期/代码谓词无法下推，单条 90~173 秒拖垮连接池。R20b 改法：
+    数据日期 = kline_daily 纯 max(trade_date)（raw、分区级秒回）；30 日窗口
+    日期改 trade_calendar 直查（raw、小表）；汇总/分市场额/30 日聚合直查基表，
+    trade_date = ? / IN (...) 谓词随分区裁剪下推，行级去重用 FINAL 修饰符
+    （等价原视图语义）；情绪周期改 raw 两行查询；全程不经 SQLAlchemy session。
     口径提取自快照任务本体 services.market_sentiment_cache.refresh_daily_history
     （api/system_config.py refresh_market_sentiment_snapshot_task 调用）：
     universe = kline_daily JOIN stocks WHERE s.type='stock' AND k.open>0；
@@ -1385,22 +1412,13 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
     kline_table = _resolve_table_name("kline_daily")
     if not _has_clickhouse_table(stocks_table) or not _has_clickhouse_table(kline_table):
         return None
-    latest_date = clickhouse_scalar(
-        """
-        SELECT MAX(k.trade_date)
-        FROM {kline_table} k
-        JOIN {stocks_table} s ON s.code = k.code
-        JOIN trade_calendar c
-          ON c.trade_date = k.trade_date
-         AND c.market = 'SH'
-         AND c.is_trading = 1
-        WHERE s.type = 'stock'
-        """.format(kline_table=kline_table, stocks_table=stocks_table)
-    )
-    if not latest_date:
+    if not _has_clickhouse_table("trade_calendar"):
         return None
+    latest_date_text = _kline_daily_latest_trade_date()
+    if not latest_date_text:
+        return None
+    latest_date = datetime.strptime(latest_date_text, "%Y-%m-%d").date()
 
-    latest_date_text = _date_text(latest_date)
     summary_df = clickhouse_query_df(
         """
         WITH base AS (
@@ -1408,8 +1426,8 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
                 s.market,
                 k.amount,
                 k.change_pct AS pct
-            FROM {kline_table} k
-            JOIN {stocks_table} s ON s.code = k.code
+            FROM {kline_table} AS k FINAL
+            JOIN {stocks_table} AS s ON s.code = k.code
             WHERE s.type = 'stock'
               AND k.trade_date = ?
               AND k.open > 0
@@ -1436,6 +1454,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
         FROM base
         """.format(kline_table=kline_table, stocks_table=stocks_table),
         [latest_date_text],
+        raw=True,
     )
     if summary_df is None or summary_df.empty:
         return None
@@ -1459,7 +1478,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
     turnover_df = clickhouse_query_df(
         """
         SELECT s.market, SUM(k.amount) AS amount
-        FROM {kline_table} k
+        FROM {kline_table} AS k FINAL
         JOIN {stocks_table} s ON s.code = k.code
         WHERE s.type = 'stock'
           AND s.market IN ('SH', 'SZ')
@@ -1468,6 +1487,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
         GROUP BY s.market
         """.format(kline_table=kline_table, stocks_table=stocks_table),
         [latest_date_text],
+        raw=True,
     )
     turnover_by_market = {}
     if turnover_df is not None and not turnover_df.empty:
@@ -1476,18 +1496,22 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             for item in turnover_df.itertuples(index=False)
         }
 
-    date_df = clickhouse_query_df(
+    calendar_df = clickhouse_query_df(
         """
-        SELECT DISTINCT k.trade_date
-        FROM {kline_table} k
-        JOIN {stocks_table} s ON s.code = k.code
-        WHERE s.type = 'stock' AND k.trade_date <= ?
-        ORDER BY k.trade_date DESC
+        SELECT trade_date
+        FROM trade_calendar
+        WHERE is_trading = 1 AND market = 'SH' AND trade_date <= ?
+        ORDER BY trade_date DESC
         LIMIT 30
-        """.format(kline_table=kline_table, stocks_table=stocks_table),
+        """,
         [latest_date_text],
+        raw=True,
     )
-    all_dates = [] if date_df is None or date_df.empty else [_date_text(v) for v in date_df["trade_date"].tolist()]
+    all_dates = (
+        []
+        if calendar_df is None or calendar_df.empty
+        else [_date_text(v) for v in calendar_df["trade_date"].tolist()]
+    )
     curve_dates = list(reversed(all_dates))
     trend_dates = curve_dates[-7:]
     curve_map: Dict[str, Dict[str, int]] = {}
@@ -1522,8 +1546,9 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
                 SUM(CASE WHEN pct <= -5 THEN 1 ELSE 0 END) AS down_5_count
             FROM base
             GROUP BY trade_date
-            """.format(kline_table=kline_table, stocks_table=stocks_table, placeholders=placeholders),
+            """,
             curve_dates,
+            raw=True,
         )
         if curve_df is not None and not curve_df.empty:
             for item in curve_df.itertuples(index=False):
@@ -1560,20 +1585,40 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             return [50.0 for _ in values]
         return [round((v - min_val) / (max_val - min_val) * 100, 2) for v in values]
 
-    latest_cycle = (
-        session.query(EmotionCycle)
-        .filter(EmotionCycle.date == latest_date_text)
-        .order_by(desc(EmotionCycle.date))
-        .first()
-    )
+    latest_cycle = None
     previous_cycle = None
-    if latest_cycle:
-        previous_cycle = (
-            session.query(EmotionCycle)
-            .filter(EmotionCycle.date < latest_cycle.date)
-            .order_by(desc(EmotionCycle.date))
-            .first()
-        )
+    if _has_clickhouse_table("emotion_cycle"):
+        try:
+            cycle_df = clickhouse_query_df(
+                """
+                SELECT
+                    toString(date) AS date,
+                    close_up_rate,
+                    strong_up_rate,
+                    limit_up_follow_rate
+                FROM emotion_cycle
+                ORDER BY date DESC
+                LIMIT 2
+                """,
+                raw=True,
+            )
+        except Exception as exc:
+            logger.warning(f"sentiment emotion cycle raw query failed: {exc}")
+            cycle_df = None
+        if cycle_df is not None and not cycle_df.empty:
+            cycle_rows = list(cycle_df.itertuples(index=False))
+
+            def _cycle_row(item: Any) -> Any:
+                return SimpleNamespace(
+                    date=datetime.strptime(str(item.date)[:10], "%Y-%m-%d").date(),
+                    close_up_rate=item.close_up_rate,
+                    strong_up_rate=item.strong_up_rate,
+                    limit_up_follow_rate=item.limit_up_follow_rate,
+                )
+
+            latest_cycle = _cycle_row(cycle_rows[0])
+            if len(cycle_rows) > 1:
+                previous_cycle = _cycle_row(cycle_rows[1])
 
     distribution = [
         {"label": ">=7", "count": _int_col("bucket_up_7"), "side": "up"},
@@ -1595,7 +1640,18 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
         "down_5_count": down_5_count,
     }
     intraday = _load_qmt_intraday_market_sentiment()
-    turnover_forecast = get_intraday_turnover_forecast(current_snapshot=intraday) if intraday else get_intraday_turnover_forecast()
+    # R20b：成交额预测的重查询只允许在「盘中且 overlay 命中」分支同步执行
+    # （endpoint TTL=300s 吸收，且其结果仅盘中有意义）；该服务内部走非 raw
+    # 通道（视图重写 + toDate 谓词不裁剪），query_log 实证冷启动可达
+    # 126~223 秒 / 27.5~55GiB 全表扫描。盘后/非交易时段/overlay 未命中一律
+    # 改读同日持久化缓存（get_cached，读文件零查询、重启即恢复），杜绝部署
+    # 后首个请求被拖垮。服务本体的 raw 化留待后续任务（涉及其他文件）。
+    if intraday is not None and _is_sentiment_intraday_session(
+        datetime.now(ZoneInfo("Asia/Shanghai"))
+    ):
+        turnover_forecast = get_intraday_turnover_forecast(current_snapshot=intraday)
+    else:
+        turnover_forecast = get_cached_intraday_turnover_forecast()
 
     payload = {
         "date": latest_date_text,
@@ -1750,319 +1806,19 @@ def get_margin_sentiment(days: int = 30):
 def _compute_market_sentiment():
     """获取市场涨跌统计数据（含同花顺风格涨跌分布）。
 
-    原始计算路径，R15 起由带 TTL 缓存的 get_market_sentiment 包装。
+    原始计算路径，R15 起由带 TTL 缓存的 get_market_sentiment 包装。R20b 起
+    全链 market_warehouse raw=True 基表直查（_load_market_sentiment_from_
+    clickhouse 为唯一数据源），不再走 SQLAlchemy ORM 回退——R20 事故中 ORM
+    实体映射到无界 FINAL 视图、谓词不下推，单条查询 90~173 秒拖垮连接池。
     """
-    session = next(db.get_session())
     try:
-        clickhouse_payload = _load_market_sentiment_from_clickhouse(session)
+        clickhouse_payload = _load_market_sentiment_from_clickhouse()
         if clickhouse_payload:
             return clickhouse_payload
-
-        latest_date = session.query(func.max(KlineDaily.trade_date)).filter(
-            KlineDaily.code == "999999.SH"
-        ).scalar()
-        if not latest_date:
-            latest_date = session.query(func.max(KlineDaily.trade_date)).scalar()
-        if not latest_date:
-            return {"error": "数据库中没有K线数据"}
-
-        if latest_date:
-            from scheduler.trading_calendar import TradingCalendar
-
-            if not TradingCalendar.is_trading_day(latest_date):
-                latest_date = TradingCalendar.get_previous_trading_day(latest_date).date()
-
-        effective_change_pct = case(
-            (KlineDaily.change_pct.isnot(None), KlineDaily.change_pct),
-            else_=((KlineDaily.close - KlineDaily.open) / func.nullif(KlineDaily.open, 0) * 100),
-        )
-
-        sentiment_query = session.query(
-            func.count(case((effective_change_pct > 0, 1), else_=None)).label("up_count"),
-            func.count(case((effective_change_pct < 0, 1), else_=None)).label("down_count"),
-            func.count(case((effective_change_pct == 0, 1), else_=None)).label("unchanged_count"),
-            func.count(case((effective_change_pct >= 5, 1), else_=None)).label("up_5_count"),
-            func.count(case((effective_change_pct <= -5, 1), else_=None)).label("down_5_count"),
-            func.count(case((effective_change_pct >= 9.9, 1), else_=None)).label("limit_up_count"),
-            func.count(case((effective_change_pct <= -9.9, 1), else_=None)).label("limit_down_count"),
-            func.sum(KlineDaily.amount).label("total_amount"),
-            func.count(case((effective_change_pct >= 7, 1), else_=None)).label("bucket_up_7"),
-            func.count(case((and_(effective_change_pct >= 5, effective_change_pct < 7), 1), else_=None)).label("bucket_up_5_7"),
-            func.count(case((and_(effective_change_pct >= 3, effective_change_pct < 5), 1), else_=None)).label("bucket_up_3_5"),
-            func.count(case((and_(effective_change_pct > 0, effective_change_pct < 3), 1), else_=None)).label("bucket_up_0_3"),
-            func.count(case((effective_change_pct == 0, 1), else_=None)).label("bucket_zero"),
-            func.count(case((and_(effective_change_pct < 0, effective_change_pct > -3), 1), else_=None)).label("bucket_down_0_3"),
-            func.count(case((and_(effective_change_pct <= -3, effective_change_pct > -5), 1), else_=None)).label("bucket_down_3_5"),
-            func.count(case((and_(effective_change_pct <= -5, effective_change_pct > -7), 1), else_=None)).label("bucket_down_5_7"),
-            func.count(case((effective_change_pct <= -7, 1), else_=None)).label("bucket_down_7"),
-        ).filter(
-            KlineDaily.trade_date == latest_date,
-            KlineDaily.code.in_(session.query(Stock.code).filter(Stock.type == "stock")),
-            KlineDaily.open > 0,
-        ).first()
-
-        if not sentiment_query:
-            return {"error": "无法获取涨跌统计数据"}
-
-        up_count = int(sentiment_query.up_count or 0)
-        down_count = int(sentiment_query.down_count or 0)
-        unchanged_count = int(sentiment_query.unchanged_count or 0)
-        up_5_count = int(sentiment_query.up_5_count or 0)
-        down_5_count = int(sentiment_query.down_5_count or 0)
-        limit_up_count = int(sentiment_query.limit_up_count or 0)
-        limit_down_count = int(sentiment_query.limit_down_count or 0)
-        total_amount = float(sentiment_query.total_amount or 0)
-
-        total = up_count + down_count + unchanged_count
-        sentiment_score = 50 + (up_count - down_count) / total * 50 if total > 0 else 50
-        if sentiment_score >= 80:
-            sentiment_level = "极度乐观"
-        elif sentiment_score >= 65:
-            sentiment_level = "乐观"
-        elif sentiment_score >= 55:
-            sentiment_level = "偏乐观"
-        elif sentiment_score >= 45:
-            sentiment_level = "中性"
-        elif sentiment_score >= 35:
-            sentiment_level = "偏悲观"
-        elif sentiment_score >= 20:
-            sentiment_level = "悲观"
-        else:
-            sentiment_level = "极度悲观"
-
-        turnover_by_market = dict(
-            session.query(Stock.market, func.sum(KlineDaily.amount))
-            .join(Stock, Stock.code == KlineDaily.code)
-            .filter(
-                KlineDaily.trade_date == latest_date,
-                Stock.type == "stock",
-                Stock.market.in_(["SH", "SZ"]),
-                KlineDaily.open > 0,
-            )
-            .group_by(Stock.market)
-            .all()
-        )
-
-        distribution = [
-            {"label": ">=7", "count": int(sentiment_query.bucket_up_7 or 0), "side": "up"},
-            {"label": "5~7", "count": int(sentiment_query.bucket_up_5_7 or 0), "side": "up"},
-            {"label": "3~5", "count": int(sentiment_query.bucket_up_3_5 or 0), "side": "up"},
-            {"label": "0~3", "count": int(sentiment_query.bucket_up_0_3 or 0), "side": "up"},
-            {"label": "0", "count": int(sentiment_query.bucket_zero or 0), "side": "flat"},
-            {"label": "-3~0", "count": int(sentiment_query.bucket_down_0_3 or 0), "side": "down"},
-            {"label": "-5~-3", "count": int(sentiment_query.bucket_down_3_5 or 0), "side": "down"},
-            {"label": "-7~-5", "count": int(sentiment_query.bucket_down_5_7 or 0), "side": "down"},
-            {"label": "<=-7", "count": int(sentiment_query.bucket_down_7 or 0), "side": "down"},
-        ]
-
-        trend_trade_dates_desc = session.execute(
-            text(
-                """
-                SELECT DISTINCT trade_date
-                FROM trade_calendar
-                WHERE is_trading = 1 AND market = 'SH' AND trade_date <= :latest_date
-                ORDER BY trade_date DESC
-                LIMIT 7
-                """
-            ),
-            {"latest_date": latest_date},
-        ).fetchall()
-        trend_trade_dates = list(reversed([row[0] for row in trend_trade_dates_desc]))
-        trend_rows = []
-        if trend_trade_dates:
-            trend_rows = (
-                session.query(
-                    KlineDaily.trade_date.label("trade_date"),
-                    func.count(case((effective_change_pct >= 5, 1), else_=None)).label("up_5_count"),
-                    func.count(case((effective_change_pct <= -5, 1), else_=None)).label("down_5_count"),
-                )
-                .filter(
-                    KlineDaily.trade_date.in_(trend_trade_dates),
-                    KlineDaily.code.in_(session.query(Stock.code).filter(Stock.type == "stock")),
-                    KlineDaily.open > 0,
-                )
-                .group_by(KlineDaily.trade_date)
-                .all()
-            )
-
-        trend_map = {
-            row.trade_date: {
-                "up_5_count": int(row.up_5_count or 0),
-                "down_5_count": int(row.down_5_count or 0),
-            }
-            for row in trend_rows
-        }
-        trend_dates_str = [d.strftime("%Y-%m-%d") for d in trend_trade_dates]
-        trend_up_counts = [trend_map.get(d, {}).get("up_5_count", 0) for d in trend_trade_dates]
-        trend_down_counts = [trend_map.get(d, {}).get("down_5_count", 0) for d in trend_trade_dates]
-        if trend_trade_dates and trend_trade_dates[-1] == latest_date:
-            trend_up_counts[-1] = up_5_count
-            trend_down_counts[-1] = down_5_count
-
-        curve_trade_dates_desc = session.execute(
-            text(
-                """
-                SELECT DISTINCT trade_date
-                FROM trade_calendar
-                WHERE is_trading = 1 AND market = 'SH' AND trade_date <= :latest_date
-                ORDER BY trade_date DESC
-                LIMIT 30
-                """
-            ),
-            {"latest_date": latest_date},
-        ).fetchall()
-        curve_trade_dates = list(reversed([row[0] for row in curve_trade_dates_desc]))
-        curve_dates_str = [d.strftime("%Y-%m-%d") for d in curve_trade_dates]
-
-        curve_rows = []
-        if curve_trade_dates:
-            curve_rows = (
-                session.query(
-                    KlineDaily.trade_date.label("trade_date"),
-                    func.count(case((effective_change_pct > 0, 1), else_=None)).label("up_count"),
-                    func.count(case((effective_change_pct < 0, 1), else_=None)).label("down_count"),
-                    func.count(case((effective_change_pct >= 9.9, 1), else_=None)).label("limit_up_count"),
-                    func.count(case((effective_change_pct <= -9.9, 1), else_=None)).label("limit_down_count"),
-                    func.count(case((effective_change_pct >= 5, 1), else_=None)).label("up_5_count"),
-                    func.count(case((effective_change_pct <= -5, 1), else_=None)).label("down_5_count"),
-                )
-                .filter(
-                    KlineDaily.trade_date.in_(curve_trade_dates),
-                    KlineDaily.code.in_(session.query(Stock.code).filter(Stock.type == "stock")),
-                    KlineDaily.open > 0,
-                )
-                .group_by(KlineDaily.trade_date)
-                .all()
-            )
-
-        curve_map = {
-            row.trade_date: {
-                "up_count": int(row.up_count or 0),
-                "down_count": int(row.down_count or 0),
-                "limit_up_count": int(row.limit_up_count or 0),
-                "limit_down_count": int(row.limit_down_count or 0),
-                "up_5_count": int(row.up_5_count or 0),
-                "down_5_count": int(row.down_5_count or 0),
-            }
-            for row in curve_rows
-        }
-
-        raw_series = {
-            "up_count_series": [curve_map.get(d, {}).get("up_count", 0) for d in curve_trade_dates],
-            "down_count_series": [curve_map.get(d, {}).get("down_count", 0) for d in curve_trade_dates],
-            "limit_up_count_series": [curve_map.get(d, {}).get("limit_up_count", 0) for d in curve_trade_dates],
-            "limit_down_count_series": [curve_map.get(d, {}).get("limit_down_count", 0) for d in curve_trade_dates],
-            "up_5_count_series": [curve_map.get(d, {}).get("up_5_count", 0) for d in curve_trade_dates],
-            "down_5_count_series": [curve_map.get(d, {}).get("down_5_count", 0) for d in curve_trade_dates],
-        }
-
-        if curve_trade_dates and curve_trade_dates[-1] == latest_date:
-            raw_series["up_count_series"][-1] = up_count
-            raw_series["down_count_series"][-1] = down_count
-            raw_series["limit_up_count_series"][-1] = limit_up_count
-            raw_series["limit_down_count_series"][-1] = limit_down_count
-            raw_series["up_5_count_series"][-1] = up_5_count
-            raw_series["down_5_count_series"][-1] = down_5_count
-
-        def _normalize_series(series):
-            values = [float(v or 0) for v in series]
-            if not values:
-                return []
-            min_val = min(values)
-            max_val = max(values)
-            if max_val == min_val:
-                return [50.0 for _ in values]
-            return [round((v - min_val) / (max_val - min_val) * 100, 2) for v in values]
-
-        normalized_series = {
-            key: _normalize_series(value)
-            for key, value in raw_series.items()
-        }
-
-        latest_snapshot = {
-            "up_count": up_count,
-            "down_count": down_count,
-            "limit_up_count": limit_up_count,
-            "limit_down_count": limit_down_count,
-            "up_5_count": up_5_count,
-            "down_5_count": down_5_count,
-        }
-
-        latest_cycle = (
-            session.query(EmotionCycle)
-            .filter(EmotionCycle.date == latest_date)
-            .order_by(desc(EmotionCycle.date))
-            .first()
-        )
-        if latest_cycle:
-            previous_cycle = (
-                session.query(EmotionCycle)
-                .filter(EmotionCycle.date < latest_cycle.date)
-                .order_by(desc(EmotionCycle.date))
-                .first()
-            )
-        else:
-            latest_cycle = session.query(EmotionCycle).order_by(desc(EmotionCycle.date)).first()
-            previous_cycle = (
-                session.query(EmotionCycle)
-                .filter(EmotionCycle.date < latest_cycle.date)
-                .order_by(desc(EmotionCycle.date))
-                .first()
-                if latest_cycle
-                else None
-            )
-
-        emotion_phase = _build_emotion_phase(
-            trade_date=latest_date,
-            sentiment_score=sentiment_score,
-            up_count=up_count,
-            down_count=down_count,
-            unchanged_count=unchanged_count,
-            up_5_count=up_5_count,
-            down_5_count=down_5_count,
-            limit_up_count=limit_up_count,
-            limit_down_count=limit_down_count,
-            latest_cycle=latest_cycle,
-            previous_cycle=previous_cycle,
-        )
-
-        return {
-            "date": latest_date.isoformat(),
-            "up_count": up_count,
-            "down_count": down_count,
-            "unchanged_count": unchanged_count,
-            "up_5_percent_count": up_5_count,
-            "down_5_percent_count": down_5_count,
-            "limit_up_count": limit_up_count,
-            "limit_down_count": limit_down_count,
-            "avg_change_percent": 0,
-            "total_turnover": total_amount,
-            "sh_amount": float(turnover_by_market.get("SH") or 0),
-            "sz_amount": float(turnover_by_market.get("SZ") or 0),
-            "turnover_source": "stock_aggregate",
-            "change_distribution": distribution,
-            "up_down_5_trend_7d": {
-                "trade_dates": trend_dates_str,
-                "up_5_counts": trend_up_counts,
-                "down_5_counts": trend_down_counts,
-                "latest_date": latest_date.isoformat(),
-            },
-            "emotion_curve_30d": {
-                "trade_dates": curve_dates_str,
-                "raw_series": raw_series,
-                "normalized_series": normalized_series,
-                "latest_snapshot": latest_snapshot,
-                "latest_date": latest_date.isoformat(),
-            },
-            "sentiment_score": sentiment_score,
-            "sentiment_level": sentiment_level,
-            "emotion_phase": emotion_phase,
-        }
     except Exception as exc:
         logger.error(f"获取涨跌统计失败: {exc}")
         return {"error": str(exc)}
-    finally:
-        session.close()
+    return {"error": "数据库中没有K线数据"}
 
 
 _SENTIMENT_INTRADAY_START = dt_time(9, 15)
