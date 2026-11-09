@@ -189,6 +189,29 @@ def test_overlay_fail_closed_on_aggregation_error(monkeypatch):
     assert not [r for r in recorder.records if r[0] == "warning"], "禁止降级为 warning 吞异常"
 
 
+# ── 3b) 第三处同族守卫：kline_daily 最新行查询的自引用别名 ───────────────
+
+
+def test_structure_guard_no_self_alias_in_kline_daily_latest_queries():
+    """R23 补修（真库现网日志实证）：api/stocks.py 中 kline_daily 最新行查询
+    `max(trade_date) AS trade_date` 自引用别名被代入同层
+    argMax(col, (trade_date, created_at)) → ILLEGAL_AGGREGATION（Code 184），
+    with-limit 的 latest_kline 因此自 R14 起全部为空。别名必须避开聚合实参
+    中出现的列名（latest_trade_date），模块内禁止该形状复发。"""
+    source = Path(stk.__file__).read_text(encoding="utf-8")
+    pattern = re.compile(r"max\(\s*trade_date\s*\)\s+AS\s+trade_date", re.IGNORECASE)
+    assert not pattern.search(source), (
+        "kline_daily 最新行查询复发 max(trade_date) AS trade_date 自引用别名"
+        "（代入 argMax 实参即 ILLEGAL_AGGREGATION）"
+    )
+    # 修复后形状：argMax 元组去重保留，max 别名改 latest_trade_date
+    assert source.count("max(trade_date) AS latest_trade_date") == 2, (
+        "with-limit 两个分支（CH 表 stocks / ORM stocks 回退）的 kline_daily "
+        "最新行查询都应使用 latest_trade_date 别名"
+    )
+
+
+
 # ── 4) AST 结构守卫：services/market_turnover_forecast.py 全模块 ──────────
 
 

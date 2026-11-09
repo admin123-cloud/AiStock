@@ -2863,11 +2863,15 @@ def _get_stocks_with_limit_impl(
                             # R14（2026-11-09）：绕过 kline_daily_quality_read 视图
                             # 直查基表：argMax(col, (trade_date, created_at)) 等价
                             # FINAL 后取每 code 最新交易日行，code 谓词随基表下推。
+                            # R23 补修：原 max(trade_date) 输出别名与列同名的写法
+                            # 被 CH 24.8 代入同层 argMax 元组 → ILLEGAL_AGGREGATION
+                            # （现网日志实证，with-limit 的 latest_kline 全空），别名
+                            # 改 latest_trade_date 避开聚合实参列名。
                             latest_df = clickhouse_query_df(
                                 f"""
                                 SELECT
                                     code,
-                                    max(trade_date) AS trade_date,
+                                    max(trade_date) AS latest_trade_date,
                                     argMax(close, (trade_date, created_at)) AS close,
                                     argMax(change_pct, (trade_date, created_at)) AS change_pct,
                                     argMax(amount, (trade_date, created_at)) AS amount
@@ -2896,7 +2900,7 @@ def _get_stocks_with_limit_impl(
                         if latest_df is not None and not latest_df.empty:
                             latest_kline_map = {
                                 row.code: SimpleNamespace(
-                                    trade_date=_as_date(row.trade_date),
+                                    trade_date=_as_date(row.latest_trade_date),
                                     close=row.close,
                                     change_pct=row.change_pct,
                                     amount=row.amount,
@@ -2971,11 +2975,14 @@ def _get_stocks_with_limit_impl(
                 placeholders = ",".join(["?"] * len(codes))
                 # R14（2026-11-09）：同上，基表直查 + argMax(col, (trade_date,
                 # created_at)) 等价 FINAL 后取每 code 最新交易日行。
+                # R23 补修：同上，max(trade_date) 输出别名与列同名在 CH 24.8 上
+                # 触发 ILLEGAL_AGGREGATION（Code 184），别名改 latest_trade_date
+                # 避开 argMax 元组实参列名。
                 latest_df = clickhouse_query_df(
                     f"""
                     SELECT
                         code,
-                        max(trade_date) AS trade_date,
+                        max(trade_date) AS latest_trade_date,
                         argMax(close, (trade_date, created_at)) AS close,
                         argMax(change_pct, (trade_date, created_at)) AS change_pct,
                         argMax(amount, (trade_date, created_at)) AS amount
@@ -2989,7 +2996,7 @@ def _get_stocks_with_limit_impl(
                 if latest_df is not None and not latest_df.empty:
                     latest_kline_map = {
                         row.code: SimpleNamespace(
-                            trade_date=_as_date(row.trade_date),
+                            trade_date=_as_date(row.latest_trade_date),
                             close=row.close,
                             change_pct=row.change_pct,
                             amount=row.amount,
