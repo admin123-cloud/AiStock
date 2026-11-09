@@ -15,12 +15,14 @@
 - DB 写目标仅限硬编码白名单：--stage-write 只能写 stock.kline_daily_pkg_stage_20261101；
   --formal-write 只能写 stock.kline_daily；两者互斥（同时传直接报错）。
 - 血缘字段（source_url/zip_sha256）只进报告，绝不进正式表。
-- R17（2026-11-09）：index 类中 code ∈ 冻结 11 码大盘指数集（FROZEN_INDEX_CODES）的行
+- R17（2026-11-09）：index 类中 code ∈ 冻结大盘指数集（FROZEN_INDEX_CODES）的行
   纳入写入，与个股同门禁/id/only-missing-keys/读回验证/回滚 marker；指数 volume 包内
   原始即「手」，不做 ÷100（个股才是 股÷100→手）。其余 index（含 597 清单内的行业指数）
   与 tdx_internal_index 仍排除；excluded_by_category 为适配层原始普查口径（含被重新
-  纳入的冻结码），最终去向以 row_counts.index_inclusion 为准；包内缺码（如官网包从不
-  含 000985.SH）在 missing_codes 如实报告，绝不硬造。
+  纳入的冻结码），最终去向以 row_counts.index_inclusion 为准；包内缺码在 missing_codes
+  如实报告，绝不硬造。
+- R18（2026-11-09）：FROZEN_INDEX_CODES 移除 000985.SH 中证全指（11→10 码）——官网
+  包从不含该码（R17 实证）、历史 K 线停在 10-21，Owner 裁决下线；该码回归排除类。
 - 任一门禁失败 → 退出码非 0 且不写任何表；报告（含血缘/行数/分类计数/拒绝清单）总是落盘；
   --formal-write 另有 JSONL journal（原子分段写）记录锁/反连接/插入/读回/回滚全程。
 """
@@ -59,7 +61,7 @@ __all__ = [
     "FROZEN_INDEX_CODES", "extract_frozen_index_rows", "frozen_index_rows_to_contract",
 ]
 
-PIPELINE_VERSION = "20261109.1"
+PIPELINE_VERSION = "20261109.2"
 STAGE_TABLE_WHITELIST = ("stock.kline_daily_pkg_stage_20261101",)
 STAGE_TABLE = STAGE_TABLE_WHITELIST[0]
 KLINE_DAILY_TABLE = "stock.kline_daily"          # 正式表：默认只读；--formal-write 白名单写入
@@ -488,21 +490,22 @@ def check_duplicate_keys(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-# ── R17（2026-11-09）：冻结 11 码大盘指数纳入写入（同源 TDX 官网包） ──
-# Owner 批准的冻结清单（任务书 task_briefs/20261109_daily_index_bars_r17.md），
-# 禁止扩大集合（597 清单含大量行业指数，写入会改变前端展示面）。指数 volume 包内
+# ── R17（2026-11-09）：冻结大盘指数纳入写入（同源 TDX 官网包）；R18 同日移除 000985.SH ──
+# Owner 批准的冻结清单（任务书 task_briefs/20261109_daily_index_bars_r17.md；R18=
+# 20261109_index_000985_removal_r18.md 移除 000985.SH 中证全指，11→10 码），禁止扩大
+# 集合（597 清单含大量行业指数，写入会改变前端展示面）。指数 volume 包内
 # 原始即「手」（2026-10-21/11-09 双日实测：与 kline_daily QMT 末代行、腾讯日线手数
 # 逐码一致，比例=1.0000），不做 ÷100 —— 个股路径才是 股÷100→手，量纲不同（这也是
 # tdx_official_package.normalize_to_contract 拒收指数行的原因）。包内缺码如实上报
-# （官网包从不含 000985.SH 中证全指），绝不硬造。
+# （官网包从不含 000985.SH 中证全指——R18 起该码也不在清单内），绝不硬造。
 FROZEN_INDEX_CODES = frozenset({
     "000001.SH", "399001.SZ", "399106.SZ", "000300.SH", "000016.SH",
-    "000905.SH", "000852.SH", "000985.SH", "399006.SZ", "000680.SH", "000688.SH",
+    "000905.SH", "000852.SH", "399006.SZ", "000680.SH", "000688.SH",
 })
 
 
 def extract_frozen_index_rows(raw_rows: Sequence[Mapping[str, Any]]) -> tuple[list, dict]:
-    """从 parse_zip_bytes 的全证券行里提取冻结 11 码大盘指数行（R17）。
+    """从 parse_zip_bytes 的全证券行里提取冻结大盘指数行（R17；R18 起为 10 码）。
 
     仅 category=='index' 且全码 ∈ FROZEN_INDEX_CODES 且 volume>0 的行被提取；其余
     index（含 597 清单内的行业指数）与 tdx_internal_index 仍排除（filter_stock_universe
@@ -541,14 +544,14 @@ def frozen_index_rows_to_contract(rows: Sequence[Mapping[str, Any]]) -> list[dic
     """冻结清单内指数行 → 契约行（字段与 normalize_to_contract 输出同构）。
 
     fail-closed：收到清单外指数行（行业指数/其他类别）直接抛错，写路径只接受冻结
-    11 码。volume 保持包内原始「手」（volume_divisor=1）；amount 元（2 位小数）。
+    清单（R18 起 10 码）。volume 保持包内原始「手」（volume_divisor=1）；amount 元（2 位小数）。
     """
     out_rows: list[dict[str, Any]] = []
     for row in rows:
         full_code = f'{row["code"]}.{row["market"].upper()}'
         if full_code not in FROZEN_INDEX_CODES:
             raise RuntimeError(f"frozen_index_rows_to_contract 收到冻结清单外的指数行 {full_code}，"
-                               f"写路径只接受冻结 11 码大盘指数集")
+                               f"写路径只接受冻结大盘指数集（R18 起 10 码）")
         raw_volume = row["volume"]
         if not isinstance(raw_volume, (int, float)) or isinstance(raw_volume, bool):
             raise RuntimeError(f"指数行 {full_code} 的 volume 不是数值: {raw_volume!r}")

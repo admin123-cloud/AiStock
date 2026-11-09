@@ -43,10 +43,11 @@ ROW_000300 = ("000300", "沪深300", 4150.0, 4160.0, 4188.0, 4155.0, 4180.0, 144
 ROW_399005 = ("399005", "中小100", 6500.0, 6510.0, 6550.0, 6490.0, 6530.0, 80000000, 210000000000.0)
 ROW_880001 = ("880001", "通达信板块", 100.0, 101.0, 102.0, 99.0, 100.5, 500000, 80000000.0)
 
-# 任务书 20261109_daily_index_bars_r17.md 冻结的 11 码（独立字面量，防实现侧手误）
-FROZEN_ELEVEN = frozenset({
+# 任务书 20261109_daily_index_bars_r17.md 冻结 11 码；R18（20261109_index_000985_removal）
+# 移除 000985.SH 中证全指 → 10 码（独立字面量，防实现侧手误）
+FROZEN_TEN = frozenset({
     "000001.SH", "399001.SZ", "399106.SZ", "000300.SH", "000016.SH", "000905.SH",
-    "000852.SH", "000985.SH", "399006.SZ", "000680.SH", "000688.SH",
+    "000852.SH", "399006.SZ", "000680.SH", "000688.SH",
 })
 
 SYNTHETIC_MARKETS = {
@@ -198,7 +199,7 @@ def test_offline_report_lineage_and_row_counts(tmp_path):
     assert inclusion["kept"] == 1
     assert inclusion["kept_codes"] == ["399001.SZ"]
     assert inclusion["zero_volume"] == 0
-    assert inclusion["missing_codes"] == sorted(FROZEN_ELEVEN - {"399001.SZ"})
+    assert inclusion["missing_codes"] == sorted(FROZEN_TEN - {"399001.SZ"})
     assert counts["unknown"] == []
     assert report["units"] == {"volume": "lots", "amount": "CNY"}
 
@@ -263,15 +264,36 @@ def test_fetch_failure_is_error_status_with_report(tmp_path):
     assert output.is_file()
 
 
-# ── R17（2026-11-09）：冻结 11 码大盘指数纳入写入（TDX 官网包同源） ──
-# 语义（任务书 task_briefs/20261109_daily_index_bars_r17.md）：
-# - index 类中 code ∈ 冻结 11 码 → 纳入写入，与个股同门禁/id/only-missing-keys/
+# ── R17（2026-11-09）：冻结大盘指数纳入写入（TDX 官网包同源）；R18 同日移除 000985.SH ──
+# 语义（任务书 task_briefs/20261109_daily_index_bars_r17.md；R18=20261109_index_000985_removal）：
+# - index 类中 code ∈ 冻结清单 → 纳入写入，与个股同门禁/id/only-missing-keys/
 #   读回验证/回滚 marker；其余 index（含 597 清单内行业指数）与 tdx_internal_index
 #   继续排除并计数；包内缺码如实报告，绝不硬造。
 # - 指数 volume 包内原始即「手」，不做 ÷100（个股才是 股÷100→手）。
-def test_frozen_index_codes_constant_is_exactly_the_frozen_eleven():
-    assert pipeline.FROZEN_INDEX_CODES == FROZEN_ELEVEN
-    assert len(FROZEN_ELEVEN) == 11
+# - R18：000985.SH 中证全指出清单（11→10 码），回归排除类（官网包从不含该码，
+#   历史 K 线停在 10-21，Owner 裁决下线）。
+def test_frozen_index_codes_constant_is_exactly_the_frozen_ten():
+    assert pipeline.FROZEN_INDEX_CODES == FROZEN_TEN
+    assert len(FROZEN_TEN) == 10
+    assert "000985.SH" not in pipeline.FROZEN_INDEX_CODES   # R18：中证全指出清单
+
+
+def test_r18_removed_000985_row_stays_excluded(tmp_path):
+    # R18：000985.SH 中证全指已移出冻结清单，包内出现该行也只进排除计数，不写入。
+    row_000985 = ("000985", "中证全指", 5000.0, 5010.0, 5020.0, 5000.0, 5015.0,
+                  90000000, 260000000000.0)
+    markets = {"sh": [ROW_600000, ROW_000300, row_000985], "sz": [ROW_000001], "bj": [ROW_920982]}
+    result = pipeline.run_pipeline(_base_options(
+        output=tmp_path / "r.json", fetch_package=_fetch_pkg(make_zip(TRADE_DATE_COMPACT, markets))))
+
+    assert result["exit_code"] == 0
+    codes = {r["code"] for r in result["rows"]}
+    assert "000985.SH" not in codes                        # 出清单 → 不写
+    assert "000300.SH" in codes                            # 清单内 000300 照常纳入
+    inclusion = result["report"]["row_counts"]["index_inclusion"]
+    assert inclusion["kept_codes"] == ["000300.SH"]
+    assert "000985.SH" not in inclusion["missing_codes"]   # 不在清单内，缺码报告无它
+    assert result["report"]["row_counts"]["excluded_by_category"]["index"] == 2  # 原始普查：000300（纳入仍计）+000985（维持排除）
 
 
 def test_frozen_index_rows_included_others_still_excluded(tmp_path):
@@ -321,7 +343,7 @@ def test_frozen_index_absent_codes_reported_not_fabricated(tmp_path):
     inclusion = result["report"]["row_counts"]["index_inclusion"]
     assert inclusion["kept"] == 0
     assert inclusion["kept_codes"] == []
-    assert inclusion["missing_codes"] == sorted(FROZEN_ELEVEN)   # 全部 11 码缺席（官网包实况：无 000985.SH）
+    assert inclusion["missing_codes"] == sorted(FROZEN_TEN)   # 全部 10 码缺席（官网包实况：R18 前从不含 000985.SH）
 
 
 def test_frozen_index_zero_volume_row_not_included(tmp_path):
@@ -335,7 +357,7 @@ def test_frozen_index_zero_volume_row_not_included(tmp_path):
     inclusion = result["report"]["row_counts"]["index_inclusion"]
     assert inclusion["kept"] == 0
     assert inclusion["zero_volume"] == 1                         # 防御量纲破坏：无量指数不写
-    assert inclusion["missing_codes"] == sorted(FROZEN_ELEVEN)
+    assert inclusion["missing_codes"] == sorted(FROZEN_TEN)
 
 
 def test_frozen_index_contract_fail_closed_on_non_frozen_row():
@@ -1181,7 +1203,7 @@ def test_frozen_fixture_package_golden_summary(tmp_path):
     inclusion = report["row_counts"]["index_inclusion"]
     assert inclusion["kept"] == 1
     assert inclusion["kept_codes"] == ["399001.SZ"]
-    assert inclusion["missing_codes"] == sorted(FROZEN_ELEVEN - {"399001.SZ"})
+    assert inclusion["missing_codes"] == sorted(FROZEN_TEN - {"399001.SZ"})
 
 
 # ══════════════════════════════════════════════════════════════════════
