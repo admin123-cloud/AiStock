@@ -131,21 +131,32 @@ def _adapt_clickhouse_query(sql: str, params: Optional[Any]):
     return adapted_sql, named
 
 
-def clickhouse_query_df(sql: str, params: Optional[list] = None) -> pd.DataFrame:
-    from utils.daily_quality_read import quality_read_sql
+def clickhouse_query_df(sql: str, params: Optional[list] = None, *, raw: bool = False) -> pd.DataFrame:
+    # R14（2026-11-09）：raw=True 直查基表。quality_read_sql 会把 FROM/JOIN
+    # kline_daily / kline_minute_5 重写为无界 FINAL 视图子查询，阻断日期/代码
+    # 谓词下推；调用方已按 argMax(col, created_at) 等价实现 FINAL 版本语义，
+    # 经 raw 路径绕过重写（也跳过仅服务于分钟视图的 normalize_min5_frame）。
     client = clickhouse_client()
     adapted_sql, adapted_params = _adapt_clickhouse_query(sql, params)
-    query = quality_read_sql(adapted_sql)
+    query = adapted_sql
+    if not raw:
+        from utils.daily_quality_read import quality_read_sql
+        query = quality_read_sql(adapted_sql)
     frame = client.query_df(query, parameters=adapted_params)
+    if raw:
+        return frame
     from utils.minute_volume import PRECISE_MIN5_VIEW, normalize_min5_frame
     return normalize_min5_frame(frame) if PRECISE_MIN5_VIEW in query else frame
 
 
-def clickhouse_scalar(sql: str, params: Optional[list] = None):
-    from utils.daily_quality_read import quality_read_sql
+def clickhouse_scalar(sql: str, params: Optional[list] = None, *, raw: bool = False):
+    # R14（2026-11-09）：raw=True 同上，直查基表、绕过 quality_read_sql 重写。
     client = clickhouse_client()
     adapted_sql, adapted_params = _adapt_clickhouse_query(sql, params)
-    result = client.query(quality_read_sql(adapted_sql), parameters=adapted_params)
+    if not raw:
+        from utils.daily_quality_read import quality_read_sql
+        adapted_sql = quality_read_sql(adapted_sql)
+    result = client.query(adapted_sql, parameters=adapted_params)
     if not result.result_rows:
         return None
     return result.result_rows[0][0]

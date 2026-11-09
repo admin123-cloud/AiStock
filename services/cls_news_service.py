@@ -4,6 +4,7 @@ from utils.daily_quality_read import finite_number
 import json
 import math
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -872,7 +873,27 @@ def query_cls_signals(limit: int = 50, min_score: float = 0.0, signal_class: str
     return _records_json_safe(df)
 
 
+# R14（2026-11-09）：radar-summary 结果的进程内 TTL 缓存（60 秒，monotonic
+# 时钟，键含 limit/top_events/peer_limit），与 R13 /market/indices 缓存同风格。
+_CLS_RADAR_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
+_CLS_RADAR_SUMMARY_CACHE_TTL_SECONDS = 60.0
+
+
 def query_cls_radar_summary(limit: int = 50, top_events: int = 10, peer_limit: int = 12) -> Dict[str, Any]:
+    cache_key = f"{int(limit)}|{int(top_events)}|{int(peer_limit)}"
+    now = time.monotonic()
+    cached = _CLS_RADAR_SUMMARY_CACHE.get(cache_key)
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+    payload = _compute_cls_radar_summary(limit=limit, top_events=top_events, peer_limit=peer_limit)
+    _CLS_RADAR_SUMMARY_CACHE[cache_key] = {
+        "expires_at": now + _CLS_RADAR_SUMMARY_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return payload
+
+
+def _compute_cls_radar_summary(limit: int = 50, top_events: int = 10, peer_limit: int = 12) -> Dict[str, Any]:
     signals = query_cls_signals(limit=limit, min_score=0.0)
     class_counts: Dict[str, int] = {}
     theme_counts: Dict[str, int] = {}
@@ -971,7 +992,9 @@ def _split_codes(text: Any) -> List[str]:
 
 def _latest_daily_date() -> str:
     try:
-        df = clickhouse_query_df("SELECT max(trade_date) AS trade_date FROM kline_daily")
+        # R14（2026-11-09）：raw=True 直查 kline_daily 基表；max(trade_date) 纯
+        # 聚合，与 FINAL 后结果一致，绕过质量读视图的全表扫描。
+        df = clickhouse_query_df("SELECT max(trade_date) AS trade_date FROM kline_daily", raw=True)
         if df is not None and not df.empty:
             value = df.iloc[0]["trade_date"]
             return str(value)[:10]
@@ -1018,7 +1041,11 @@ def _sector_candidates_for_codes(codes: List[str], peer_limit: int) -> Tuple[Dic
         sector_sql = ",".join(_quote(code) for code in sorted(set(sector_codes)))
         direct_sql = ",".join(_quote(code) for code in codes)
         latest_date = _latest_daily_date()
-        date_join = f"AND k.trade_date = toDate({_quote(latest_date)})" if latest_date else ""
+        # R14（2026-11-09）：原 LEFT JOIN kline_daily 会被重写为无界质量读视图、
+        # 日期谓词推不进 JOIN 右表。改为基表子查询先按 (code, trade_date) 用
+        # argMax(col, created_at) 等价 FINAL 去重（日期条件内推到子查询 WHERE），
+        # 再以 LEFT JOIN 挂回，聚合语义与视图版一致。
+        kline_subfilter = f"WHERE trade_date = toDate({_quote(latest_date)})" if latest_date else ""
         try:
             peer_df = clickhouse_query_df(
                 f"""
@@ -1029,15 +1056,24 @@ def _sector_candidates_for_codes(codes: List[str], peer_limit: int) -> Tuple[Dic
                     max(k.amount) AS amount
                 FROM sector_stocks ss
                 LEFT JOIN sectors s ON s.code = ss.sector_code
-                LEFT JOIN kline_daily k
+                LEFT JOIN (
+                    SELECT
+                        code,
+                        trade_date,
+                        argMax(change_pct, created_at) AS change_pct,
+                        argMax(amount, created_at) AS amount
+                    FROM kline_daily
+                    {kline_subfilter}
+                    GROUP BY code, trade_date
+                ) k
                     ON k.code = ss.stock_code
-                   {date_join}
                 WHERE ss.sector_code IN ({sector_sql})
                   AND ss.stock_code NOT IN ({direct_sql})
                 GROUP BY ss.stock_code
                 ORDER BY change_pct DESC NULLS LAST, amount DESC NULLS LAST
                 LIMIT {max(1, int(peer_limit))}
-                """
+                """,
+                raw=True,
             )
             if peer_df is not None and not peer_df.empty:
                 peer_codes = [_normalize_code(row.code) or "" for row in peer_df.itertuples(index=False)]
@@ -1062,13 +1098,23 @@ def _stock_snapshot_map(codes: List[str]) -> Dict[str, Dict[str, Any]]:
     latest_date = _latest_daily_date()
     date_filter = f"AND trade_date = toDate({_quote(latest_date)})" if latest_date else ""
     try:
+        # R14（2026-11-09）：基表直查 + GROUP BY (code, trade_date) +
+        # argMax(col, created_at) 等价 FINAL，code/日期谓词随基表下推。
         daily = clickhouse_query_df(
             f"""
-            SELECT code, trade_date, close, change_pct, amount, turnover_rate
+            SELECT
+                code,
+                trade_date,
+                argMax(close, created_at) AS close,
+                argMax(change_pct, created_at) AS change_pct,
+                argMax(amount, created_at) AS amount,
+                argMax(turnover_rate, created_at) AS turnover_rate
             FROM kline_daily
             WHERE code IN ({code_sql})
               {date_filter}
-            """
+            GROUP BY code, trade_date
+            """,
+            raw=True,
         )
         if daily is not None and not daily.empty:
             for row in daily.itertuples(index=False):
@@ -1152,15 +1198,26 @@ def _stock_capital_context_map(codes: List[str]) -> Dict[str, Dict[str, Any]]:
     date_filter = f"AND trade_date <= toDate({_quote(latest_date)})" if latest_date else ""
     result: Dict[str, Dict[str, Any]] = {}
     try:
+        # R14（2026-11-09）：基表直查 + GROUP BY (code, trade_date) +
+        # argMax(col, created_at) 等价 FINAL 去重后再 ORDER BY ... LIMIT n BY
+        # code，与原视图行上的排序/限量语义一致。
         df = clickhouse_query_df(
             f"""
-            SELECT code, trade_date, close, change_pct, amount, turnover_rate
+            SELECT
+                code,
+                trade_date,
+                argMax(close, created_at) AS close,
+                argMax(change_pct, created_at) AS change_pct,
+                argMax(amount, created_at) AS amount,
+                argMax(turnover_rate, created_at) AS turnover_rate
             FROM kline_daily
             WHERE code IN ({code_sql})
               {date_filter}
+            GROUP BY code, trade_date
             ORDER BY code, trade_date DESC
             LIMIT 40 BY code
-            """
+            """,
+            raw=True,
         )
     except Exception as exc:
         logger.warning(f"CLS candidate capital context query failed: {exc}")

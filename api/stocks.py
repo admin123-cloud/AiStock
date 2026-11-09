@@ -247,19 +247,32 @@ def _overlay_fresh_intraday_list_kline(
 
     try:
         placeholders = ",".join(["?"] * len(codes))
+        # R14（2026-11-09）：绕过 kline_minute_5_precise 视图直查基表。内层按
+        # (code, datetime) 用 argMax(col, created_at) 等价 FINAL 取每根 bar 的
+        # 最新版本，日期/代码谓词随基表 WHERE 下推；外层再按 code 聚合，与原
+        # FINAL + argMax(close, datetime) 语义一致。
         intraday_df = clickhouse_query_df(
             f"""
             SELECT
                 code,
-                argMax(close, datetime) AS close,
+                argMax(close, as_of) AS close,
                 sum(amount) AS amount,
-                max(datetime) AS as_of
-            FROM kline_minute_5 FINAL
-            WHERE code IN ({placeholders})
-              AND toDate(datetime) = ?
+                max(as_of) AS as_of
+            FROM (
+                SELECT
+                    code,
+                    datetime AS as_of,
+                    argMax(close, created_at) AS close,
+                    argMax(amount, created_at) AS amount
+                FROM kline_minute_5
+                WHERE code IN ({placeholders})
+                  AND toDate(datetime) = ?
+                GROUP BY code, datetime
+            )
             GROUP BY code
             """,
             [*codes, now.date()],
+            raw=True,
         )
         if intraday_df is None or intraday_df.empty:
             return latest_kline_map
@@ -2710,6 +2723,13 @@ def get_stocks(
         DatabaseSessionManager.close_session(session)
 
 
+# R14（2026-11-09）：/stocks/with-limit 结果的进程内 TTL 缓存（45 秒，monotonic
+# 时钟，键含全部查询参数），与 R13 /market/indices 缓存同风格；命中直接返回，
+# 不重跑基表聚合与分钟 overlay。
+_STOCKS_WITH_LIMIT_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
+_STOCKS_WITH_LIMIT_RESULT_CACHE_TTL_SECONDS = 45.0
+
+
 @router.get("/with-limit")
 def get_stocks_with_limit(
     page: int = Query(1, ge=1, description="页码"),
@@ -2719,6 +2739,28 @@ def get_stocks_with_limit(
     search: Optional[str] = Query(None, description="搜索关键词")
 ):
     """获取带分页限制的股票列表"""
+    cache_key = f"{int(page)}|{int(page_size)}|{market or ''}|{stock_type or ''}|{search or ''}"
+    now = time.monotonic()
+    cached = _STOCKS_WITH_LIMIT_RESULT_CACHE.get(cache_key)
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+    payload = _get_stocks_with_limit_impl(
+        page=page, page_size=page_size, market=market, stock_type=stock_type, search=search
+    )
+    _STOCKS_WITH_LIMIT_RESULT_CACHE[cache_key] = {
+        "expires_at": now + _STOCKS_WITH_LIMIT_RESULT_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return payload
+
+
+def _get_stocks_with_limit_impl(
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    market: Optional[str] = Query(None, description="市场"),
+    stock_type: Optional[str] = Query(None, description="类型"),
+    search: Optional[str] = Query(None, description="搜索关键词")
+):
     session = DatabaseSessionManager.get_session()
     try:
         if not isinstance(market, str):
@@ -2803,20 +2845,40 @@ def get_stocks_with_limit(
                     try:
                         codes = [stock.code for stock in stocks]
                         placeholders = ",".join(["?"] * len(codes))
-                        latest_df = clickhouse_query_df(
-                            f"""
-                            WITH latest AS (
-                                SELECT code, MAX(trade_date) AS max_date
-                                FROM {kline_table}
+                        if kline_table == "kline_daily":
+                            # R14（2026-11-09）：绕过 kline_daily_quality_read 视图
+                            # 直查基表：argMax(col, (trade_date, created_at)) 等价
+                            # FINAL 后取每 code 最新交易日行，code 谓词随基表下推。
+                            latest_df = clickhouse_query_df(
+                                f"""
+                                SELECT
+                                    code,
+                                    max(trade_date) AS trade_date,
+                                    argMax(close, (trade_date, created_at)) AS close,
+                                    argMax(change_pct, (trade_date, created_at)) AS change_pct,
+                                    argMax(amount, (trade_date, created_at)) AS amount
+                                FROM kline_daily
                                 WHERE code IN ({placeholders})
                                 GROUP BY code
+                                """,
+                                codes,
+                                raw=True,
                             )
-                            SELECT k.code, k.trade_date, k.close, k.change_pct, k.amount
-                            FROM {kline_table} k
-                            JOIN latest l ON k.code = l.code AND k.trade_date = l.max_date
-                            """,
-                            codes,
-                        )
+                        else:
+                            latest_df = clickhouse_query_df(
+                                f"""
+                                WITH latest AS (
+                                    SELECT code, MAX(trade_date) AS max_date
+                                    FROM {kline_table}
+                                    WHERE code IN ({placeholders})
+                                    GROUP BY code
+                                )
+                                SELECT k.code, k.trade_date, k.close, k.change_pct, k.amount
+                                FROM {kline_table} k
+                                JOIN latest l ON k.code = l.code AND k.trade_date = l.max_date
+                                """,
+                                codes,
+                            )
                         if latest_df is not None and not latest_df.empty:
                             latest_kline_map = {
                                 row.code: SimpleNamespace(
@@ -2893,19 +2955,22 @@ def get_stocks_with_limit(
             try:
                 codes = [stock.code for stock in stocks]
                 placeholders = ",".join(["?"] * len(codes))
+                # R14（2026-11-09）：同上，基表直查 + argMax(col, (trade_date,
+                # created_at)) 等价 FINAL 后取每 code 最新交易日行。
                 latest_df = clickhouse_query_df(
                     f"""
-                    WITH latest AS (
-                        SELECT code, MAX(trade_date) AS max_date
-                        FROM kline_daily
-                        WHERE code IN ({placeholders})
-                        GROUP BY code
-                    )
-                    SELECT k.code, k.trade_date, k.close, k.change_pct, k.amount
-                    FROM kline_daily k
-                    JOIN latest l ON k.code = l.code AND k.trade_date = l.max_date
+                    SELECT
+                        code,
+                        max(trade_date) AS trade_date,
+                        argMax(close, (trade_date, created_at)) AS close,
+                        argMax(change_pct, (trade_date, created_at)) AS change_pct,
+                        argMax(amount, (trade_date, created_at)) AS amount
+                    FROM kline_daily
+                    WHERE code IN ({placeholders})
+                    GROUP BY code
                     """,
                     codes,
+                    raw=True,
                 )
                 if latest_df is not None and not latest_df.empty:
                     latest_kline_map = {

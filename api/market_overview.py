@@ -3,7 +3,7 @@
 """
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import time
@@ -45,6 +45,26 @@ _QMT_INTRADAY_SENTIMENT_CACHE: Dict[str, Any] = {"expires_at": 0.0, "trade_date"
 # the legacy Shanghai composite code.
 HOME_LIVE_INDEX_CODES = {"999999.SH", "000001.SH", "000680.SH", "399001.SZ", "399006.SZ"}
 QMT_INDEX_CODE_ALIASES = {"999999.SH": "000001.SH"}
+# R13（2026-11-09）：QMT 主机桥不可达时的进程内负缓存——60 秒内不再重试，避免前端
+# ~30 秒轮询对不在线的桥反复撞出 503 连串；桥恢复后成功响应会清除缓存。
+_QMT_BRIDGE_UNREACHABLE_CACHE: Dict[str, Any] = {"expires_at": 0.0, "reason": ""}
+_QMT_BRIDGE_UNREACHABLE_CACHE_SECONDS = 60.0
+# R13（2026-11-09）：/market/indices 结果的进程内 TTL 缓存（monotonic 时钟，按 code
+# 参数分键）；缓存命中直接返回，避免每次轮询都重跑 date_counts 聚合与 QMT 桥探测。
+_MARKET_INDICES_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
+_MARKET_INDICES_RESULT_CACHE_TTL_SECONDS = 45.0
+# R15（2026-11-09）：/market/sentiment（45 秒，无参单键）、/market/margin-sentiment
+# （60 秒，键 days）、/market/emotion-trend（60 秒，键 days|granularity）结果的
+# 进程内 TTL 缓存（monotonic 时钟），与 R13 /market/indices、R14
+# /market/limit-up-ladder 缓存同风格；防首页 ~30 秒轮询重复执行重查询。error
+# 载荷不缓存（与 R14 一致）；margin-sentiment 的 available=False 属正常载荷，
+# 照常缓存。
+_MARKET_SENTIMENT_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
+_MARKET_SENTIMENT_RESULT_CACHE_TTL_SECONDS = 45.0
+_MARGIN_SENTIMENT_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
+_MARGIN_SENTIMENT_RESULT_CACHE_TTL_SECONDS = 60.0
+_EMOTION_TREND_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
+_EMOTION_TREND_RESULT_CACHE_TTL_SECONDS = 60.0
 
 
 def _intraday_emotion_snapshot() -> Optional[Dict[str, Any]]:
@@ -285,9 +305,19 @@ def _latest_qmt_home_index_quotes(codes: List[str]) -> tuple[Dict[str, Dict[str,
     if not bridge_url:
         return {}, {"provider": "qmt_xtdata", "status": "unavailable", "reason": "bridge_url_missing"}
 
+    # R13：桥不可达负缓存命中——60 秒窗口内直接返回不可用，不再发起网络请求。
+    if time.monotonic() < float(_QMT_BRIDGE_UNREACHABLE_CACHE.get("expires_at") or 0.0):
+        return {}, {
+            "provider": "qmt_xtdata",
+            "status": "unavailable",
+            "reason": f"bridge_negative_cache: {_QMT_BRIDGE_UNREACHABLE_CACHE.get('reason') or 'unreachable'}",
+        }
+
     try:
         separator = "&" if "?" in bridge_url else "?"
-        with urlopen(f"{bridge_url}{separator}{urlencode({'codes': ','.join(qmt_codes)})}", timeout=5) as response:
+        # R13：urllib 的单一 timeout 同时约束 connect 与 read，压到 2 秒，避免对不在线
+        # 的主机桥长时间阻塞首页请求（原为 5 秒）。
+        with urlopen(f"{bridge_url}{separator}{urlencode({'codes': ','.join(qmt_codes)})}", timeout=2) as response:
             body = json.loads(response.read().decode("utf-8"))
         raw_ticks = body.get("ticks") if isinstance(body, dict) and body.get("ok") else None
         if not isinstance(raw_ticks, dict):
@@ -295,7 +325,16 @@ def _latest_qmt_home_index_quotes(codes: List[str]) -> tuple[Dict[str, Dict[str,
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
         logger.warning(f"QMT home index quote unavailable: {reason}")
+        # R13：任何"桥不可用"结果（连接失败/超时/无效响应）都进入 60 秒负缓存。
+        _QMT_BRIDGE_UNREACHABLE_CACHE.update(
+            {
+                "expires_at": time.monotonic() + _QMT_BRIDGE_UNREACHABLE_CACHE_SECONDS,
+                "reason": reason,
+            }
+        )
         return {}, {"provider": "qmt_xtdata", "status": "unavailable", "reason": reason}
+    # R13：桥可用——清除负缓存，后续失败可被立即感知。
+    _QMT_BRIDGE_UNREACHABLE_CACHE.update({"expires_at": 0.0, "reason": ""})
 
     quotes: Dict[str, Dict[str, Any]] = {}
     for requested_code, qmt_code in zip(requested, qmt_codes):
@@ -815,9 +854,9 @@ def _legacy_get_market_indices(code: Optional[str] = None):
         return {"indices": [], "trading_date": None}
 
 
-@router.get("/indices")
-def get_market_indices(code: Optional[str] = None):
-    """获取主要指数数据，并返回关键指数健康状态。"""
+def _compute_market_indices(code: Optional[str] = None):
+    """获取主要指数数据，并返回关键指数健康状态（原始计算路径，R13 起由带 TTL 缓存的
+    get_market_indices 包装）。"""
     try:
         session = next(db.get_session())
         try:
@@ -860,6 +899,13 @@ def get_market_indices(code: Optional[str] = None):
             if clickhouse_available():
                 try:
                     kline_table = _resolve_table_name("kline_daily")
+                    # R13：date_counts 加 60 自然日下界（Asia/Shanghai）——聚合输入从全表
+                    # ~5 年压到 ~40 个交易日；本端点语义只需最近 20 个交易日（原
+                    # LIMIT 20 DESC），窗口不改变结果，但消除对 17.6M 行 kline_daily
+                    # 的无界全表 GROUP BY（CH code 241 内存超限根因）。
+                    indices_since = (
+                        datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=60)
+                    ).isoformat()
                     date_counts_df = clickhouse_query_df(
                         """
                         SELECT k.trade_date AS trade_date, COUNT(DISTINCT k.code) AS row_count
@@ -870,10 +916,12 @@ def get_market_indices(code: Optional[str] = None):
                          AND c.market = 'SH'
                          AND c.is_trading = 1
                         WHERE s.type = 'index'
+                          AND k.trade_date >= ?
                         GROUP BY k.trade_date
                         ORDER BY k.trade_date DESC
                         LIMIT 20
-                        """.format(kline_table=kline_table, stocks_table=stocks_table)
+                        """.format(kline_table=kline_table, stocks_table=stocks_table),
+                        [indices_since],
                     )
                     latest_date = None
                     if date_counts_df is not None and not date_counts_df.empty:
@@ -1204,6 +1252,26 @@ def get_market_indices(code: Optional[str] = None):
             "validation_reason": str(exc),
             "blocked_codes": [],
         }
+
+
+@router.get("/indices")
+def get_market_indices(code: Optional[str] = None):
+    """获取主要指数数据，并返回关键指数健康状态。
+
+    R13（2026-11-09）：进程内 TTL 结果缓存（45 秒，monotonic 时钟，按 code 参数
+    分键）；缓存命中直接返回，不重跑 date_counts 聚合与 QMT 桥探测。
+    """
+    cache_key = code or ""
+    now = time.monotonic()
+    cached = _MARKET_INDICES_RESULT_CACHE.get(cache_key)
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+    payload = _compute_market_indices(code)
+    _MARKET_INDICES_RESULT_CACHE[cache_key] = {
+        "expires_at": now + _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return payload
 
 
 @router.get("/sentiment-legacy")
@@ -1678,13 +1746,31 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
 
 @router.get("/margin-sentiment")
 def get_margin_sentiment(days: int = 30):
-    """Return confirmed exchange-published daily margin-financing sentiment."""
-    return load_margin_sentiment(days=days)
+    """Return confirmed exchange-published daily margin-financing sentiment.
+
+    R15（2026-11-09）：进程内 TTL 结果缓存（60 秒，monotonic 时钟，键 days），
+    与 R13/R14 缓存同风格；数据源 market_margin_sentiment 为官方交易所日度摘要
+    的预计算落库事实（本就快），TTL 仅防首页轮询重复查询；available=False 载荷
+    照常缓存（无 "error" 键）。
+    """
+    cache_key = str(int(days))
+    now = time.monotonic()
+    cached = _MARGIN_SENTIMENT_RESULT_CACHE.get(cache_key)
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+    payload = load_margin_sentiment(days=days)
+    _MARGIN_SENTIMENT_RESULT_CACHE[cache_key] = {
+        "expires_at": now + _MARGIN_SENTIMENT_RESULT_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return payload
 
 
-@router.get("/sentiment")
-def get_market_sentiment():
-    """获取市场涨跌统计数据（含同花顺风格涨跌分布）。"""
+def _compute_market_sentiment():
+    """获取市场涨跌统计数据（含同花顺风格涨跌分布）。
+
+    原始计算路径，R15 起由带 TTL 缓存的 get_market_sentiment 包装。
+    """
     session = next(db.get_session())
     try:
         clickhouse_payload = _load_market_sentiment_from_clickhouse(session)
@@ -1998,6 +2084,35 @@ def get_market_sentiment():
         session.close()
 
 
+@router.get("/sentiment")
+def get_market_sentiment():
+    """获取市场涨跌统计数据（含同花顺风格涨跌分布）。
+
+    R15（2026-11-09）：进程内 TTL 结果缓存（45 秒，monotonic 时钟，无参单键），
+    与 R13 /market/indices 缓存同风格；缓存命中直接返回，不重跑 CH 聚合与
+    SQLAlchemy 查询；error 载荷不缓存（与 R14 limit-up-ladder 一致）。
+    """
+    now = time.monotonic()
+    cached = _MARKET_SENTIMENT_RESULT_CACHE.get("")
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+    payload = _compute_market_sentiment()
+    if isinstance(payload, dict) and "error" in payload:
+        return payload
+    _MARKET_SENTIMENT_RESULT_CACHE[""] = {
+        "expires_at": now + _MARKET_SENTIMENT_RESULT_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return payload
+
+
+# R14（2026-11-09）：/market/limit-up-ladder 结果的进程内 TTL 缓存（60 秒，
+# monotonic 时钟，键含归一化后的 min_streak/max_streak/history_days），与 R13
+# /market/indices 缓存同风格；error 载荷不缓存。
+_LIMIT_UP_LADDER_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
+_LIMIT_UP_LADDER_RESULT_CACHE_TTL_SECONDS = 60.0
+
+
 @router.get("/limit-up-ladder")
 def get_limit_up_ladder(
     min_streak: int = 2,
@@ -2009,18 +2124,41 @@ def get_limit_up_ladder(
     max_streak = max(min_streak, min(int(max_streak), 20))
     history_days = max(1, min(int(history_days), 30))
 
+    cache_key = f"{min_streak}|{max_streak}|{history_days}"
+    now = time.monotonic()
+    cached = _LIMIT_UP_LADDER_RESULT_CACHE.get(cache_key)
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+    payload = _compute_limit_up_ladder(min_streak, max_streak, history_days)
+    if isinstance(payload, dict) and "error" in payload:
+        return payload
+    _LIMIT_UP_LADDER_RESULT_CACHE[cache_key] = {
+        "expires_at": now + _LIMIT_UP_LADDER_RESULT_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return payload
+
+
+def _compute_limit_up_ladder(
+    min_streak: int,
+    max_streak: int,
+    history_days: int,
+):
     session = next(db.get_session())
     try:
         latest_date = None
         if clickhouse_available():
             try:
+                # R14（2026-11-09）：raw=True 绕过 kline_daily_quality_read 视图
+                # 直查基表；MAX(trade_date) 纯聚合，与 FINAL 结果一致。
                 latest_date = clickhouse_scalar(
                     """
                     SELECT MAX(k.trade_date)
                     FROM kline_daily k
                     JOIN stocks s ON s.code = k.code
                     WHERE s.type = 'stock' AND COALESCE(s.quit, false) = false
-                    """
+                    """,
+                    raw=True,
                 )
             except Exception as exc:
                 logger.warning(f"ClickHouse limit-up latest date fallback to SQLAlchemy engine: {exc}")
@@ -2049,6 +2187,8 @@ def get_limit_up_ladder(
         trade_dates_desc = []
         if clickhouse_available():
             try:
+                # R14（2026-11-09）：raw=True 直查基表；DISTINCT trade_date 与
+                # FINAL 去重后结果一致，trade_date <= ? 谓词随基表下推。
                 date_df = clickhouse_query_df(
                     """
                     SELECT DISTINCT trade_date
@@ -2058,6 +2198,7 @@ def get_limit_up_ladder(
                     LIMIT ?
                     """,
                     [_date_text(latest_date), int(lookback_days)],
+                    raw=True,
                 )
                 if date_df is not None and not date_df.empty:
                     trade_dates_desc = [item for item in date_df["trade_date"].tolist()]
@@ -2105,15 +2246,28 @@ def get_limit_up_ladder(
                 code_placeholders = ",".join(["?"] * len(stock_codes))
                 date_texts = [_date_text(item) for item in trade_dates_desc]
                 date_placeholders = ",".join(["?"] * len(date_texts))
+                # R14（2026-11-09）：绕过 kline_daily_quality_read 视图直查基表，
+                # code/日期谓词随基表 WHERE 下推；GROUP BY (code, trade_date) +
+                # argMax(col, created_at) 等价 FINAL 版本语义，HAVING open > 0
+                # 与原视图行上的 WHERE open > 0 一致。
                 kline_df = clickhouse_query_df(
                     f"""
-                    SELECT code, trade_date, open, close, change_pct, amount, turnover_rate
+                    SELECT
+                        code,
+                        trade_date,
+                        argMax(open, created_at) AS open,
+                        argMax(close, created_at) AS close,
+                        argMax(change_pct, created_at) AS change_pct,
+                        argMax(amount, created_at) AS amount,
+                        argMax(turnover_rate, created_at) AS turnover_rate
                     FROM kline_daily
                     WHERE code IN ({code_placeholders})
                       AND trade_date IN ({date_placeholders})
-                      AND open > 0
+                    GROUP BY code, trade_date
+                    HAVING open > 0
                     """,
                     stock_codes + date_texts,
+                    raw=True,
                 )
                 if kline_df is not None:
                     kline_rows = [
@@ -2284,7 +2438,33 @@ def get_limit_up_ladder(
 
 @router.get("/emotion-trend")
 def get_emotion_trend(days: int = 30, granularity: str = "daily"):
-    """获取情绪周期趋势数据。"""
+    """获取情绪周期趋势数据。
+
+    R15（2026-11-09）：进程内 TTL 结果缓存（60 秒，monotonic 时钟，键
+    days|granularity），与 R13/R14 缓存同风格；error 载荷不缓存。
+    R15 审计结论：本端点经 market_warehouse 网关的查询表为 kline_minute_60
+    （hourly）与 emotion_cycle（daily），均不在 quality_read_sql 的
+    kline_daily / kline_minute_5 FINAL 视图重写集合内（emotion_cycle 为日度
+    小表，其显式 FINAL 是基表去重而非网关视图重写，无谓词下推阻断问题），
+    故不适用 R14 raw+argMax 改法，按 R15 任务书备选分支仅加 TTL。
+    """
+    cache_key = f"{int(days)}|{granularity}"
+    now = time.monotonic()
+    cached = _EMOTION_TREND_RESULT_CACHE.get(cache_key)
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+    payload = _compute_emotion_trend(days=days, granularity=granularity)
+    if isinstance(payload, dict) and "error" in payload:
+        return payload
+    _EMOTION_TREND_RESULT_CACHE[cache_key] = {
+        "expires_at": now + _EMOTION_TREND_RESULT_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return payload
+
+
+def _compute_emotion_trend(days: int = 30, granularity: str = "daily"):
+    """获取情绪周期趋势数据（原始计算路径，R15 起由带 TTL 缓存的 get_emotion_trend 包装）。"""
     session = next(db.get_session())
     try:
         if granularity == "hourly":
