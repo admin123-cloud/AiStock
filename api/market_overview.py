@@ -3,7 +3,7 @@
 """
 
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 import json
 import os
 import time
@@ -18,7 +18,6 @@ from sqlalchemy import and_, case, desc, func, or_, text
 
 from models.stock_models import EmotionCycle, KlineDaily, Stock
 from services.market_turnover_forecast import get_intraday_turnover_forecast
-from services.market_sentiment_cache import load_homepage_sentiment
 from services.margin_sentiment import load_margin_sentiment
 from utils.database import db
 from utils.logger import get_logger
@@ -53,14 +52,15 @@ _QMT_BRIDGE_UNREACHABLE_CACHE_SECONDS = 60.0
 # 参数分键）；缓存命中直接返回，避免每次轮询都重跑 date_counts 聚合与 QMT 桥探测。
 _MARKET_INDICES_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
 _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS = 45.0
-# R15（2026-11-09）：/market/sentiment（45 秒，无参单键）、/market/margin-sentiment
-# （60 秒，键 days）、/market/emotion-trend（60 秒，键 days|granularity）结果的
-# 进程内 TTL 缓存（monotonic 时钟），与 R13 /market/indices、R14
-# /market/limit-up-ladder 缓存同风格；防首页 ~30 秒轮询重复执行重查询。error
-# 载荷不缓存（与 R14 一致）；margin-sentiment 的 available=False 属正常载荷，
-# 照常缓存。
+# R20（2026-11-09，Owner 指令）：/market/sentiment 数据源改为 kline_daily 按需
+# 重算（停读 market_sentiment_snapshot 预计算快照——刷新调度器已停用，首页 date
+# 停在 2026-10-30），缓存分档：盘中（Asia/Shanghai 交易日 09:15~15:00）TTL=300s
+# 每 5 分钟重算一次；盘后/非交易时段缓存键绑定 kline_daily 的 max(trade_date)
+# （raw 轻量查询、免 FINAL），数据日期不变即命中，当天补数完成后首个请求触发
+# 重算一次。/market/margin-sentiment（60 秒，键 days）、/market/emotion-trend
+# （60 秒，键 days|granularity）维持 R15 的 TTL 缓存不变；error 载荷不缓存。
 _MARKET_SENTIMENT_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
-_MARKET_SENTIMENT_RESULT_CACHE_TTL_SECONDS = 45.0
+_SENTIMENT_INTRADAY_TTL_SECONDS = 300.0
 _MARGIN_SENTIMENT_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
 _MARGIN_SENTIMENT_RESULT_CACHE_TTL_SECONDS = 60.0
 _EMOTION_TREND_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -1369,39 +1369,16 @@ def _legacy_get_market_sentiment():
 
 
 def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
-    cached_payload = load_homepage_sentiment()
-    if cached_payload:
-        latest_date = cached_payload["date"]
-        latest_date_value = datetime.fromisoformat(latest_date).date()
-        latest_cycle = (
-            session.query(EmotionCycle)
-            .filter(EmotionCycle.date == latest_date)
-            .order_by(desc(EmotionCycle.date))
-            .first()
-        )
-        previous_cycle = (
-            session.query(EmotionCycle)
-            .filter(EmotionCycle.date < latest_cycle.date)
-            .order_by(desc(EmotionCycle.date))
-            .first()
-            if latest_cycle
-            else None
-        )
-        cached_payload["sentiment_level"] = _sentiment_level(cached_payload["sentiment_score"])
-        cached_payload["emotion_phase"] = _build_emotion_phase(
-            trade_date=latest_date_value,
-            sentiment_score=cached_payload["sentiment_score"],
-            up_count=cached_payload["up_count"],
-            down_count=cached_payload["down_count"],
-            unchanged_count=cached_payload["unchanged_count"],
-            up_5_count=cached_payload["up_5_percent_count"],
-            down_5_count=cached_payload["down_5_percent_count"],
-            limit_up_count=cached_payload["limit_up_count"],
-            limit_down_count=cached_payload["limit_down_count"],
-            latest_cycle=latest_cycle,
-            previous_cycle=previous_cycle,
-        )
-        return cached_payload
+    """R20（2026-11-09）：直接从 kline_daily 按需计算，不再读预计算快照。
+
+    旧路径优先读 market_sentiment_snapshot 预计算快照（由已停用的调度器刷新，
+    首页 date 停在 2026-10-30）；R20 起停读快照，始终走下方 kline_daily 聚合。
+    口径提取自快照任务本体 services.market_sentiment_cache.refresh_daily_history
+    （api/system_config.py refresh_market_sentiment_snapshot_task 调用）：
+    universe = kline_daily JOIN stocks WHERE s.type='stock' AND k.open>0；
+    up/down/unchanged = pct>0/<0/=0；up_5/down_5 = >=5/<=-5；
+    limit_up/down = >=9.9/<=-9.9；9 桶分布边界同其 _COLUMNS。提取复用，不重写。
+    """
     if not clickhouse_available():
         return None
     stocks_table = _resolve_table_name("stocks")
@@ -1657,6 +1634,7 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             "threshold_amount": 2_000_000_000_000,
             "unit": "CNY",
             "latest_date": latest_date_text,
+            "latest_is_provisional": False,
         },
         "turnover_forecast_intraday": turnover_forecast,
         "sentiment_score": sentiment_score,
@@ -1675,6 +1653,9 @@ def _load_market_sentiment_from_clickhouse(session) -> Optional[Dict[str, Any]]:
             previous_cycle=previous_cycle,
         ),
         "source": "clickhouse",
+        # R20：与快照时代载荷结构对齐——确认日线口径下无盘中态；
+        # 盘中覆盖层（_load_qmt_intraday_market_sentiment 命中时）会整体覆写。
+        "intraday_status": None,
     }
     if not intraday:
         return payload
@@ -2084,23 +2065,72 @@ def _compute_market_sentiment():
         session.close()
 
 
+_SENTIMENT_INTRADAY_START = dt_time(9, 15)
+_SENTIMENT_INTRADAY_END = dt_time(15, 0)
+
+
+def _is_sentiment_intraday_session(now_sh: datetime) -> bool:
+    """R20 盘中判定：Asia/Shanghai 交易日 09:15~15:00（含端点）。
+
+    交易日判定复用 scheduler.trading_calendar.TradingCalendar（trade_calendar
+    表为主、周末规则兜底）；日历异常时 fail-closed 视为盘后——走数据日期绑定
+    缓存，绝不把判不出的时段当作盘中长缓存。
+    """
+    try:
+        from scheduler.trading_calendar import TradingCalendar
+
+        if not TradingCalendar.is_trading_day(now_sh):
+            return False
+    except Exception as exc:
+        logger.warning(f"sentiment intraday session trading-day check failed: {exc}")
+        return False
+    current = now_sh.time()
+    return _SENTIMENT_INTRADAY_START <= current <= _SENTIMENT_INTRADAY_END
+
+
+def _kline_daily_latest_trade_date() -> Optional[str]:
+    """R20 盘后缓存键：kline_daily 的 max(trade_date)（raw 轻量通道、免 FINAL）。"""
+    if not clickhouse_available():
+        return None
+    kline_table = _resolve_table_name("kline_daily")
+    if not _has_clickhouse_table(kline_table):
+        return None
+    try:
+        value = clickhouse_scalar(f"SELECT max(trade_date) FROM {kline_table}", raw=True)
+    except Exception as exc:
+        logger.warning(f"sentiment cache key max(trade_date) query failed: {exc}")
+        return None
+    return _date_text(value) if value is not None else None
+
+
 @router.get("/sentiment")
 def get_market_sentiment():
     """获取市场涨跌统计数据（含同花顺风格涨跌分布）。
 
-    R15（2026-11-09）：进程内 TTL 结果缓存（45 秒，monotonic 时钟，无参单键），
-    与 R13 /market/indices 缓存同风格；缓存命中直接返回，不重跑 CH 聚合与
-    SQLAlchemy 查询；error 载荷不缓存（与 R14 limit-up-ladder 一致）。
+    R20（2026-11-09）：数据源改为 kline_daily 最新有数据交易日按需重算（停读
+    已停用调度器维护的预计算快照）。缓存分档：盘中（Asia/Shanghai 交易日
+    09:15~15:00）TTL=300s 每 5 分钟重算一次；盘后/非交易时段缓存键绑定
+    kline_daily 的 max(trade_date)，数据日期不变即命中、补数完成后首个请求
+    重算一次。error 载荷不缓存（与 R14/R15 一致）。
     """
-    now = time.monotonic()
     cached = _MARKET_SENTIMENT_RESULT_CACHE.get("")
-    if cached is not None and now < float(cached.get("expires_at") or 0.0):
-        return cached["payload"]
+    now = time.monotonic()
+    if cached is not None:
+        if _is_sentiment_intraday_session(datetime.now(ZoneInfo("Asia/Shanghai"))):
+            if now < float(cached.get("expires_at") or 0.0):
+                return cached["payload"]
+        else:
+            latest_trade_date = _kline_daily_latest_trade_date()
+            if latest_trade_date is not None and cached.get("data_date") == latest_trade_date:
+                return cached["payload"]
     payload = _compute_market_sentiment()
     if isinstance(payload, dict) and "error" in payload:
         return payload
     _MARKET_SENTIMENT_RESULT_CACHE[""] = {
-        "expires_at": now + _MARKET_SENTIMENT_RESULT_CACHE_TTL_SECONDS,
+        "expires_at": now + _SENTIMENT_INTRADAY_TTL_SECONDS,
+        # 计算完成后现取数据日期作盘后缓存键：若计算期间恰有补数落地，键不等
+        # 会让下个请求再重算一次并收敛（恰好实现"补齐后重算一次"）。
+        "data_date": _kline_daily_latest_trade_date(),
         "payload": payload,
     }
     return payload
