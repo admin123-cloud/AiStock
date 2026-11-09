@@ -1,25 +1,33 @@
 # -*- coding: utf-8 -*-
-"""5 分钟数据自动采集器（R21：消除 TDX 客户端手动下载环节）。
+"""5 分钟数据自动采集器（R21 建立；R22 源升级：东财 push2his 为默认主源）。
 
-源选型（2026-11-09 评估，证据 ``F:/Aistock/data/data/runtime/minute_collect_auto_r21/``）：
-  - A=pytdx TDX hq 协议直连：**不可行**。25 个公共 hq 主机全部无法取 K 线
-    （多数 connect 后即被服务端断开 head_buf!=0x10；少数半通主机 quotes/
-    minute/finance 正常但 get_security_bars 对旧命令返回空包——struct.error
-    于 0 字节 buffer）。仓库既有 data_fetcher.pytdx 模块已在 QMT 退役中删除。
-    A 路径保留为实现（协议若复活可直接启用），--source A 运行时会如实报
-    源不可达（退出码 3）。
-  - B=腾讯 m5（复用 R16 tencent_m5_fetch）：10 样本股 × 11-06/11-09 与库内
-    lc5 基准逐 bar 对比 20/20 全过（48 槽齐、OHLC ≤1%、量 ≤3%、volume 比值
-    median=1.0000），单股 ~0.17s、失败 0。**评估结论=选 B**。
+源选型（R22 2026-11-09 评估，证据
+``F:/Aistock/data/data/runtime/minute_source_eval_r22/eval_comparison_r22.json``）：
+  - east=东财 push2his 5m（**默认源**）：带 amount（元）。10 样本股 × 11-06/11-09
+    与库内 lc5 基准逐 bar：价 20/20、量 18/20、48 槽 20/20、日额与 kline_daily
+    核对 20/20（≤0.1%）、量比 median=1.0000、单码 ~0.4s、深度实测 1536 根≈32
+    交易日、覆盖北交所 920xxx（腾讯无覆盖）。已知口径差：15:00 bar 含完整
+    收盘集合竞价（TDX lc5 仅部分归因），末 bar 量/额差 >3% 仅出现在竞价重的
+    股票（30 码 × 2 日扩展探针 8/60 键、全部且仅 15:00 bar、日合计差 ≤0.06%）。
+  - sina=新浪 5m：评估未过、不入生产——低流动键缺零量 bar（本批实测 43/45/42
+    根 ≠48 槽）、volume 单位为股且非整百（→非整手，与 kline_minute_5.volume
+    Int64 列冲突无法无损入列）、个别 bar amount 噪声（日合计仍一致）。
+  - B=腾讯 m5（R21 主源 → R22 兜底）：无 amount（NULL 如实）；最近 320 根≈6.7
+    交易日；920xxx.BJ 无覆盖。
+  - A=pytdx TDX hq 协议直连：**不可行**（25 个公共 hq 主机全部无法取 K 线），
+    实现保留（协议若复活可直接启用）。
+  源回退顺序 SOURCE_FALLBACK_ORDER=("east","B")：采集器单次运行单源不混写；
+    某源拒绝/不可达（退出码 3/4）时由编排层按序换源重跑（本次 11-02/11-03
+    两缺口键即 east 被日线包络如实拒绝后以 B 补齐的实例）。
 
-治理含义（B 为腾讯主源）：
-  1. 腾讯由交叉源转为主源；**日线仲裁升级为强制门禁**（stock.kline_daily 来自
-     TDX 官网盘后包，构成独立第二源：OHLC 包络 ≤1% + 量合计 ≤3%，无当日
-     日线一律 fail-closed 并提示先跑 daily_kline_pipeline）。
-  2. 腾讯 m5 **无成交额字段**（实证 item[6]={}）：B 行 amount=NULL 如实入库
-     （表列本就 Nullable，绝不以 0 或公式推算造假）；读回验证含
-     countIf(amount IS NOT NULL) 非空计数核对，B 行出现非 NULL amount 即
-     视为脏数据 fail-closed 回滚。
+治理含义（east 为带额主源）：
+  1. **日线仲裁升级为强制门禁**（stock.kline_daily 来自 TDX 官网盘后包，构成
+     独立第二源：OHLC 包络 ≤1% + 量/额合计 ≤3%，无当日日线一律 fail-closed
+     并提示先跑 daily_kline_pipeline）。
+  2. amount 口径分源：east 行 amount=元（与 lc5/日线同口径）；B 行 amount=NULL
+     如实入库（表列本就 Nullable，绝不以 0 或公式推算造假）；读回验证含
+     countIf(amount IS NOT NULL) 非空计数核对（期望值按写入行实际计算——B 行
+     应全 NULL、east 行应全非 NULL），不符即 fail-closed 回滚。
   3. 写路径完全复用 R16 治理：同锁 scope ``kline_minute_backfill_window``
      （与 R16 窗口补全互斥）、同 id 方案（minute_row_id，RUN_TAG 同域）、
      锁内反连接、分批插入、读回验证、精确 id 回滚、journal——因 amount=None
@@ -30,7 +38,7 @@ CLI：
   --mode {audit,dry-run,formal-write}
   --trade-date YYYY-MM-DD   缺省自动解析=正式表最近缺口日（自 kline_daily 最新日
                             起向回扫 --max-days+15 个交易日内第一个缺口日）
-  --source {auto,A,B}       auto=按评估结论（当前 B）
+  --source {auto,east,B,A}  auto=按评估结论（当前 east）；sina 未过评估不可选
   --max-days N              自动解析深度上限（默认 5，公共 API 深度边界）；
                             最近缺口深于上限 → fail-closed，提示 TDX 客户端
                             lc5 + R16 窗口补全兜底或分日补
@@ -44,6 +52,7 @@ import argparse
 import json
 import random
 import sys
+import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -72,8 +81,9 @@ from minute_backfill_window import (  # noqa: E402
 )
 
 __all__ = [
-    "EVALUATED_SOURCE", "EXIT_SOURCE_UNREACHABLE", "EXIT_DEGRADED",
-    "resolve_source", "trading_days_desc", "resolve_trade_date",
+    "EVALUATED_SOURCE", "SOURCE_FALLBACK_ORDER", "EAST_DEPTH_LIMIT_DAYS",
+    "EXIT_SOURCE_UNREACHABLE", "EXIT_DEGRADED",
+    "resolve_source", "east_m5_fetch", "trading_days_desc", "resolve_trade_date",
     "check_depth_vs_source", "gate_bars", "fetch_day_bars", "collect_day",
     "classify_outcome", "formal_write_auto", "verify_existing",
     "day_readback_summary", "run", "main",
@@ -81,9 +91,18 @@ __all__ = [
 
 # ── 常量契约 ─────────────────────────────────────────────────
 
-#: 2026-11-09 源评估结论（A=pytdx 协议失效于全部 25 主机；B=腾讯 20/20 全过）
-EVALUATED_SOURCE = "B"
-EVALUATION_EVIDENCE = r"F:\Aistock\data\data\runtime\minute_collect_auto_r21\eval_comparison.json"
+#: 2026-11-09 R22 源评估结论：east=东财 push2his 5m（带 amount 元）为默认源；
+#: sina=新浪 m5 评估未过（低流动键缺零量 bar≠48 槽、volume 股且非整百无法
+#: 无损入 Int64 手列、个别 bar amount 噪声）不入生产；B=腾讯无额兜底；
+#: A=pytdx 协议失效（25 主机）保留实现。证据：EVALUATION_EVIDENCE。
+EVALUATED_SOURCE = "east"
+EVALUATION_EVIDENCE = r"F:\Aistock\data\data\runtime\minute_source_eval_r22\eval_comparison_r22.json"
+#: 源回退顺序（编排层换源重跑用；采集器单次运行单源，不静默混源）
+SOURCE_FALLBACK_ORDER = ("east", "B")
+#: 东财 push2his 单次 lmt 实测上限 1536 根（600519 lmt=4000 仅回 1536）≈32 交易日
+#: → 安全深度 25（探针证据见评估报告 depth_probe）
+EAST_DEPTH_LIMIT_DAYS = 25
+EAST_LMT = 2000
 #: 腾讯 m5 最近 320 根 ≈ 6.67 交易日 → B 源安全深度 6 个交易日
 TENCENT_DEPTH_LIMIT_DAYS = 6
 DEFAULT_MAX_DAYS = 5
@@ -95,6 +114,16 @@ EXIT_OK, EXIT_FATAL = 0, 1
 EXIT_SOURCE_UNREACHABLE, EXIT_DEGRADED = 3, 4
 
 DEFAULT_RUNTIME_BASE = r"F:\Aistock\data\data\runtime\minute_collect_auto"
+EAST_HOSTS = [
+    "https://push2his.eastmoney.com",
+    "https://91.push2his.eastmoney.com",
+    "https://push2delay.eastmoney.com",
+]
+EAST_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+EAST_KLINE_URL = ("{host}/api/qt/stock/kline/get?secid={secid}&klt=5&fqt=0"
+                  "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57"
+                  "&end=20500101&lmt={lmt}")
 PYTDX_HOSTS = [
     ("180.153.18.170", 7709), ("123.125.108.90", 7709),
     ("47.103.48.45", 7709), ("119.147.212.81", 7709),
@@ -103,12 +132,66 @@ PYTDX_PAGE = 800
 
 
 def resolve_source(choice: str) -> str:
-    """auto → 按评估结论；显式 A/B 原样返回。"""
+    """auto → 按评估结论（R22=east）；显式 east/B/A 原样返回。
+
+    sina 评估未过（48 槽不齐/股非整百/amount 噪声）不提供为生产选项。
+    """
     if choice == "auto":
         return EVALUATED_SOURCE
-    if choice in ("A", "B"):
+    if choice in ("east", "B", "A"):
         return choice
-    raise SystemExit(f"非法 --source: {choice!r}")
+    raise SystemExit(f"非法 --source: {choice!r}（可选 auto/east/B/A；"
+                     f"sina 评估未过不入生产，证据 {EVALUATION_EVIDENCE}）")
+
+
+# ── 东财 push2his 5m 拉取 ────────────────────────────────────
+
+def _east_secid(code: str) -> str:
+    num, suffix = code.split(".")
+    return ("1." if suffix.upper() == "SH" else "0.") + num  # SH=1；SZ/BJ=0
+
+
+def east_m5_fetch(code: str, fetcher: Optional[Callable[[str], dict]] = None,
+                  lmt: int = EAST_LMT) -> List[dict]:
+    """东财 push2his 5m K 线（不复权，secid=市场.代码）。
+
+    klines 行 "时间,开,收,高,低,量(手),额(元)"——volume 与 lc5 同为手
+    （R22 实测与 lc5 量比 median=1.0000）；amount=元、与 lc5/kline_daily
+    日合计一致（R22 实测 20/20 ≤0.1%）。任意行缺额（"-"）→ RuntimeError
+    fail-closed（源契约破坏），0 根 → RuntimeError "返回 0 根"（无覆盖语义）。
+    """
+    if fetcher is not None:
+        payload = fetcher(code)
+    else:
+        payload = None
+        last_exc: Optional[Exception] = None
+        for host in EAST_HOSTS:
+            try:
+                req = urllib.request.Request(
+                    EAST_KLINE_URL.format(host=host, secid=_east_secid(code), lmt=lmt),
+                    headers={"User-Agent": EAST_UA,
+                             "Referer": "https://quote.eastmoney.com/"})
+                payload = json.loads(
+                    urllib.request.urlopen(req, timeout=15).read().decode("utf-8"))
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc, payload = exc, None
+        if payload is None:
+            raise RuntimeError(f"东财 push2his {code} 拉取失败: {last_exc}")
+    node = (payload or {}).get("data") or {}
+    klines = node.get("klines")
+    if not isinstance(klines, list) or not klines:
+        raise RuntimeError(f"东财 push2his {code} 返回 0 根")
+    out: List[dict] = []
+    for line in klines:
+        parts = line.split(",")
+        if len(parts) < 7 or parts[6] in ("-", ""):
+            raise RuntimeError(f"东财 {code} kline 行缺 amount: {line[:48]}")
+        out.append({"datetime": datetime.strptime(parts[0], "%Y-%m-%d %H:%M"),
+                    "open": float(parts[1]), "close": float(parts[2]),
+                    "high": float(parts[3]), "low": float(parts[4]),
+                    "volume": float(parts[5]), "amount": float(parts[6])})
+    return out
 
 
 # ── 交易日解析（纯函数）──────────────────────────────────────
@@ -166,10 +249,16 @@ def resolve_trade_date(*, explicit: Optional[str], calendar: Dict[str, int],
 
 
 def check_depth_vs_source(source: str, depth: int) -> None:
-    """B 源受腾讯 m5 最近 320 根（≈6.7 交易日）窗口限制。"""
+    """各源可回溯深度边界：east 25（lmt 上限 1536 根≈32 交易日取安全余量）；
+    B 6（腾讯 m5 最近 320 根 ≈ 6.7 交易日）；A 协议分页无此限。"""
     if source == "B" and int(depth) > TENCENT_DEPTH_LIMIT_DAYS:
         raise SystemExit(
             f"源 B（腾讯 m5）只覆盖最近 320 根 ≈ 6.7 交易日，目标深度 {depth} 无覆盖；"
+            f"需 TDX 客户端 lc5 + R16 窗口补全兜底")
+    if source == "east" and int(depth) > EAST_DEPTH_LIMIT_DAYS:
+        raise SystemExit(
+            f"源 east（东财 push2his）单次最多约 1536 根 ≈ 32 交易日"
+            f"（安全深度 {EAST_DEPTH_LIMIT_DAYS}），目标深度 {depth} 无覆盖；"
             f"需 TDX 客户端 lc5 + R16 窗口补全兜底")
 
 
@@ -226,8 +315,11 @@ def gate_bars(code: str, day: str, bars: Sequence[dict], daily: Optional[Sequenc
               *, source: str, created_at: datetime) -> Tuple[List[Tuple], Optional[str]]:
     """逐 (code, day) 门禁：48 槽 → 值域 → 单位 → 日线仲裁 → 行构造。
 
-    返回 (rows, None) 或 ([], 拒绝原因)。B 行 amount=None（源无额，如实）；
-    A 行 amount=元、volume 股→手（shares_to_lots 整百校验）。
+    返回 (rows, None) 或 ([], 拒绝原因)。分源口径：
+      - east：volume 已是手（整数校验），amount=元必在（缺即 fail-closed），
+        日线仲裁含额（量/额合计 ≤3%，复用 1021_1030 envelope_gate）；
+      - B：volume 手，amount=None（源无额，如实）；
+      - A：volume 股→手（shares_to_lots 整百校验），amount=元直传。
     """
     if daily is None:
         return [], ("日线基准行缺失：日线仲裁为强制门禁，"
@@ -242,25 +334,12 @@ def gate_bars(code: str, day: str, bars: Sequence[dict], daily: Optional[Sequenc
         return [], f"值域门禁: {reason}"
 
     lots: List[int] = []
-    amount: Optional[float] = None
     if source == "B":
         for b in bars:
             v = float(b["volume"])
             if abs(v - round(v)) > 1e-9:
                 return [], f"volume 非整数（手）: {v} 疑似单位错配（fail-closed）"
             lots.append(int(round(v)))
-        amount = None  # 腾讯 m5 无成交额：如实 NULL，不造数
-    else:
-        try:
-            for b in bars:
-                v = float(b["volume"])
-                if abs(v - round(v)) > 1e-9:
-                    raise Lc5FormatError(f"{code}: 源 volume 非整数股 {v}")
-                lots.append(shares_to_lots(code, int(round(v))))
-        except Lc5FormatError as exc:
-            return [], f"单位门禁: {exc}"
-
-    if source == "B":
         reason = envelope_gate_pv(bars, daily)
         if reason:
             return [], f"日线仲裁: {reason}"
@@ -268,7 +347,34 @@ def gate_bars(code: str, day: str, bars: Sequence[dict], daily: Optional[Sequenc
                           lot, None, created_at) for b, lot in zip(bars, lots)]
         return rows, None
 
+    if source == "east":
+        for b in bars:
+            v = float(b["volume"])
+            if abs(v - round(v)) > 1e-9:
+                return [], f"volume 非整数（手）: {v} 疑似单位错配（fail-closed）"
+            lots.append(int(round(v)))
+            if b.get("amount") is None:
+                return [], "单位门禁: east 行缺 amount（源契约破坏，fail-closed）"
+        ns_bars = [SimpleNamespace(open=b["open"], high=b["high"], low=b["low"],
+                                   close=b["close"], volume=lot, amount=float(b["amount"]))
+                   for b, lot in zip(bars, lots)]
+        reason = mb.envelope_gate(ns_bars, daily)
+        if reason:
+            return [], f"日线仲裁: {reason}"
+        rows = [build_row(code, b["datetime"], b["open"], b["high"], b["low"], b["close"],
+                          lot, float(b["amount"]), created_at)
+                for b, lot in zip(bars, lots)]
+        return rows, None
+
     # A：amount 存在 → 直接复用 1021_1030 的 envelope_gate（含额 ≤3%）
+    try:
+        for b in bars:
+            v = float(b["volume"])
+            if abs(v - round(v)) > 1e-9:
+                raise Lc5FormatError(f"{code}: 源 volume 非整数股 {v}")
+            lots.append(shares_to_lots(code, int(round(v))))
+    except Lc5FormatError as exc:
+        return [], f"单位门禁: {exc}"
     ns_bars = [SimpleNamespace(open=b["open"], high=b["high"], low=b["low"], close=b["close"],
                                volume=lot, amount=float(b["amount"]))
                for b, lot in zip(bars, lots)]
@@ -287,15 +393,18 @@ def fetch_day_bars(code: str, day: str, *, source: str,
                    pytdx_api: Any = None) -> List[dict]:
     """拉取 code 在 day 的 5m bar（统一内部格式：naive 北京时间 dict）。
 
-    B：fetcher(code)→全量近期 bar（默认 tencent_m5_fetch，volume 已手）。
+    east：fetcher(code)→全量近期 bar（默认 east_m5_fetch，volume 手、amount 元）。
+    B：fetcher(code)→全量近期 bar（默认 tencent_m5_fetch，volume 已手、无额）。
     A：pytdx get_security_bars(category=0) 分页，volume=股、amount=元。
     拉取传输层失败 → RuntimeError 上抛（调用方记 fetch_error）。
     """
-    if source == "B":
-        bars = fetcher(code) if fetcher else tencent_m5_fetch(code)
+    if source in ("east", "B"):
+        bars = fetcher(code) if fetcher else (
+            east_m5_fetch(code) if source == "east" else tencent_m5_fetch(code))
         return [{"datetime": b["datetime"], "open": float(b["open"]), "high": float(b["high"]),
                  "low": float(b["low"]), "close": float(b["close"]),
-                 "volume": float(b["volume"]), "amount": None}
+                 "volume": float(b["volume"]),
+                 "amount": (None if b.get("amount") is None else float(b["amount"]))}
                 for b in bars if b["datetime"].strftime("%Y-%m-%d") == day]
 
     api = pytdx_api or _connect_pytdx()
@@ -443,7 +552,9 @@ def verify_existing(client: Any, trade_date: str, codes: Sequence[str], *,
     results, pass_n, fail_n = [], 0, 0
     for code in codes:
         db_rows = _day_bars_query(client, [code], ch)
-        ours = {str(r["dt"])[11:16]: r for r in db_rows}
+        # ch_window 单日窗口上界多覆盖一整个北京日（R19 已知陷阱）：必须按目标日过滤，
+        # 否则相邻日 bar 按 HH:MM 键覆盖目标日值、日量合计翻倍（R22 生产实测触发回滚）
+        ours = {str(r["dt"])[11:16]: r for r in db_rows if str(r["dt"])[:10] == trade_date}
         try:
             src = fetch_day_bars(code, trade_date, source=source,
                                  fetcher=fetcher, pytdx_api=pytdx_api)
@@ -455,6 +566,8 @@ def verify_existing(client: Any, trade_date: str, codes: Sequence[str], *,
         issues = []
         vol_our = sum(float(r["volume"]) for r in ours.values())
         vol_tx = sum(b["volume"] for b in theirs.values())
+        amt_our = sum(float(r["amount"]) for r in ours.values() if r["amount"] is not None)
+        amt_tx = sum(b["amount"] for b in theirs.values() if b.get("amount") is not None)
         for hm, ob in sorted(ours.items()):
             tb = theirs.get(hm)
             if tb is None:
@@ -465,8 +578,14 @@ def verify_existing(client: Any, trade_date: str, codes: Sequence[str], *,
                     issues.append(f"{hm} {field} {ob[field]} vs {tb[field]}")
             if not code.endswith(".SZ") and rel_diff(float(ob["volume"]), tb["volume"]) > vol_tol:
                 issues.append(f"{hm} volume {ob['volume']} vs {tb['volume']}")
+            # 源带额（east/A）时逐 bar 额比对；B 源无额跳过
+            if tb.get("amount") is not None and ob["amount"] is not None:
+                if rel_diff(float(ob["amount"]), tb["amount"]) > vol_tol:
+                    issues.append(f"{hm} amount {ob['amount']:.0f} vs {tb['amount']:.0f}")
         if code.endswith(".SZ") and rel_diff(vol_our, vol_tx) > vol_tol:
             issues.append(f"日量合计 {vol_our} vs {vol_tx}")
+        if amt_tx > 0 and amt_our > 0 and rel_diff(amt_our, amt_tx) > vol_tol:
+            issues.append(f"日额合计 {amt_our:.0f} vs {amt_tx:.0f}")
         ok = ours and theirs and not issues
         pass_n += ok
         fail_n += not ok
@@ -486,6 +605,8 @@ def day_readback_summary(client: Any, trade_date: str) -> dict:
     per_code: Counter = Counter()
     amount_nonnull: set = set()
     for r in bars:
+        if str(r["dt"])[:10] != trade_date:   # 同上：单日窗口含相邻日，只统计目标日
+            continue
         per_code[str(r["code"])] += 1
         if r["amount"] is not None:
             amount_nonnull.add(str(r["code"]))
@@ -523,8 +644,10 @@ FROM {TARGET_TABLE}{suffix}
 WHERE datetime >= toDateTime('{ch_win[0]}') AND datetime < toDateTime('{ch_win[1]}')
   AND code IN ({mb._sql_str(chunk)}) GROUP BY d, code""")
         for r in rows:
+            # B 行全 NULL 时 CH sum(amount) 返回 NULL（R22 生产实测），按 0 聚合；
+            # 非空计数 amt_nonnull 才是 NULL 语义的核对载体
             out[(str(r["d"]), str(r["code"]))] = (
-                int(r["n"]), float(r["v"]), float(r["a"]), int(r["amt_nonnull"]))
+                int(r["n"]), float(r["v"] or 0.0), float(r["a"] or 0.0), int(r["amt_nonnull"]))
     return out
 
 
@@ -537,10 +660,11 @@ def _sample_field_check_auto(client: Any, rows: List[Tuple],
     sample_keys = rng.sample(sorted(by_key), min(per_key, len(by_key)))
     problems = []
     for code, day in sample_keys:
-        want = {r[1].astimezone(CN_TZ).strftime("%H:%M"): r for r in by_key[(code, day)]}
+        want = {r[1].astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M"): r for r in by_key[(code, day)]}
         got_rows = _day_bars_query(client, [code],
                                    ch_window(date.fromisoformat(day), date.fromisoformat(day)))
-        got = {str(r["dt"])[11:16]: r for r in got_rows}
+        # 只取目标北京日：ch_window 单日上界含相邻日，HH:MM 键会被相邻日 bar 覆盖
+        got = {str(r["dt"]): r for r in got_rows if str(r["dt"])[:10] == day}
         if len(got) != len(want):
             problems.append(f"{code} {day} 行数 {len(got)} != {len(want)}")
         for hm, w in want.items():
@@ -552,7 +676,8 @@ def _sample_field_check_auto(client: Any, rows: List[Tuple],
                                (6, "volume"), (7, "amount")):
                 if w[idx] is None:
                     continue
-                if rel_diff(float(g[field]), float(w[idx])) > 1e-6:
+                # 写入非 None 而库读回 None = 脏数据，fail-closed（不得 float(None) 崩溃）
+                if g[field] is None or rel_diff(float(g[field]), float(w[idx])) > 1e-6:
                     problems.append(f"{code} {hm} {field} {g[field]} != {w[idx]}")
     if problems:
         raise RuntimeError(f"{TARGET_TABLE} 抽样字段校验失败: {problems[:5]}")
@@ -671,7 +796,9 @@ def run(argv: Optional[Sequence[str]] = None, *,
         description="5 分钟数据自动采集器（R21；写路径复用 R16 窗口治理，只写 stock.kline_minute_5）")
     parser.add_argument("--mode", choices=("audit", "dry-run", "formal-write"), required=True)
     parser.add_argument("--trade-date", default=None, help="YYYY-MM-DD；缺省=自动解析最近缺口日")
-    parser.add_argument("--source", choices=("auto", "A", "B"), default="auto")
+    parser.add_argument("--source", choices=("auto", "east", "B", "A"), default="auto",
+                        help="auto=按评估结论（R22=east 东财带额）；B=腾讯无额兜底；"
+                             "sina 评估未过不可选")
     parser.add_argument("--max-days", type=int, default=DEFAULT_MAX_DAYS,
                         help=f"自动解析深度上限（默认 {DEFAULT_MAX_DAYS}，公共 API 深度边界）")
     parser.add_argument("--fetch-workers", type=int, default=2)
@@ -709,6 +836,7 @@ def run(argv: Optional[Sequence[str]] = None, *,
                                 max_days=args.max_days)
     report: dict = {"mode": args.mode, "source": source, "latest_daily": latest_daily,
                     "evaluated_source": EVALUATED_SOURCE,
+                    "source_fallback_order": list(SOURCE_FALLBACK_ORDER),
                     "evaluation_evidence": EVALUATION_EVIDENCE}
     if target is None:
         report.update({"status": "no_gap", "scan_trading_days": len(scan_days),

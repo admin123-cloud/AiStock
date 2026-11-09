@@ -1,0 +1,25 @@
+{
+  "excluded_by_category": {
+    "fund": 1,
+    "index": 2
+  },
+  "kept": 6,
+  "kept_by_market": {
+    "bj": 2,
+    "sh": 2,
+    "sz": 2
+  },
+  "kept_codes": [
+    "000001.SZ",
+    "300001.SZ",
+    "600000.SH",
+    "688981.SH",
+    "920000.BJ",
+    "920982.BJ"
+  ],
+  "note": "synthetic fixture generated from test_daily_kline_pipeline.synthetic_zip(); expected summary computed via utils.market_sources adapter (source of truth)",
+  "size_bytes": 7242,
+  "stock_zero_volume": 1,
+  "total_rows": 10,
+  "zip_sha256": "a80a7ba5f6a2d392854141e3902939ca41d43caf73d62bde2ca8d84fbf75ed0f"
+}

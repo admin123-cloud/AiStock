@@ -57,11 +57,54 @@ CREATED_AT = datetime(2026, 11, 9, 9, 0, tzinfo=UTC)
 # ── 源选择与常量契约 ──────────────────────────────────────────
 
 def test_auto_source_resolves_to_evaluated():
-    # 评估结论（A=pytdx 协议失效）必须固化为常量，auto 按它选源
-    assert mca.EVALUATED_SOURCE in ("A", "B")
-    assert mca.resolve_source("auto") == mca.EVALUATED_SOURCE
-    assert mca.resolve_source("A") == "A"
+    # R22 评估结论（east=东财 push2his 带 amount）必须固化为常量，auto 按它选源
+    assert mca.EVALUATED_SOURCE == "east"
+    assert mca.resolve_source("auto") == "east"
+    assert mca.resolve_source("east") == "east"
     assert mca.resolve_source("B") == "B"
+    assert mca.resolve_source("A") == "A"
+    # 回退顺序：east → B（腾讯无额兜底）；sina 评估未过不在生产选项
+    assert mca.SOURCE_FALLBACK_ORDER == ("east", "B")
+
+
+def test_resolve_source_rejects_sina_and_unknown():
+    # sina 未过评估（48 槽不齐/股非整百/amount 噪声）→ 显式拒绝并指证据
+    with pytest.raises(SystemExit, match="sina"):
+        mca.resolve_source("sina")
+    with pytest.raises(SystemExit, match="非法"):
+        mca.resolve_source("C")
+
+
+def test_depth_vs_source_east_limit():
+    # 东财 push2his lmt 上限实测 1536 根≈32 交易日 → 安全深度 25
+    with pytest.raises(SystemExit, match="1536"):
+        mca.check_depth_vs_source("east", 26)
+    mca.check_depth_vs_source("east", 25)  # 边界内不抛
+
+
+def test_east_m5_fetch_parses_klines_with_amount():
+    payload = {"data": {"klines": [
+        "2026-11-09 09:35,10.00,10.20,10.50,9.80,100,100000.0",
+        "2026-11-09 09:40,10.20,10.10,10.30,10.00,50,51000.5"]}}
+    bars = mca.east_m5_fetch("600519.SH", fetcher=lambda code: payload)
+    assert len(bars) == 2
+    b0 = bars[0]
+    assert b0["datetime"] == datetime(2026, 11, 9, 9, 35)
+    assert (b0["open"], b0["close"], b0["high"], b0["low"]) == (10.0, 10.2, 10.5, 9.8)
+    assert b0["volume"] == 100.0 and b0["amount"] == 100000.0
+
+
+def test_east_m5_fetch_missing_amount_is_contract_violation():
+    payload = {"data": {"klines": ["2026-11-09 09:35,10.0,10.2,10.5,9.8,100,-"]}}
+    with pytest.raises(RuntimeError, match="缺 amount"):
+        mca.east_m5_fetch("600519.SH", fetcher=lambda code: payload)
+
+
+def test_east_m5_fetch_zero_bars_means_no_coverage():
+    with pytest.raises(RuntimeError, match="返回 0 根"):
+        mca.east_m5_fetch("600519.SH", fetcher=lambda code: {"data": {"klines": []}})
+    with pytest.raises(RuntimeError, match="返回 0 根"):
+        mca.east_m5_fetch("600519.SH", fetcher=lambda code: {"data": {}})
 
 
 def test_pytdx_import_is_lazy():
@@ -215,6 +258,41 @@ def test_gate_a_source_non_integral_shares_rejected():
     assert rows == [] and reject
 
 
+def test_gate_east_source_carries_amount_with_id_parity():
+    # east：volume 已手（整数校验）、amount=元直传、日线仲裁含额；id 与 lc5 同域
+    bars = make_bars(volume=100.0, amount=1000.0)   # 日合计 vol 4800 手 / amt 48000 元
+    rows, reject = mca.gate_bars("600519.SH", DAY, bars,
+                                 daily_ref_row(volume=4800.0, amount=48000.0),
+                                 source="east", created_at=CREATED_AT)
+    assert reject is None and len(rows) == 48
+    assert rows[0][7] == 1000.0, "east 行带额（元，与 lc5/日线同口径）"
+    assert isinstance(rows[0][6], int)
+    assert rows[0][9] == mb.minute_row_id("600519.SH",
+                                          rows[0][1].astimezone(CN).replace(tzinfo=None), "5m")
+
+
+def test_gate_east_daily_amount_mismatch_rejected():
+    bars = make_bars(volume=100.0, amount=1000.0)   # 日额合计 48000
+    daily = daily_ref_row(volume=4800.0, amount=40000.0)  # 日线额差 20% → 拒
+    rows, reject = mca.gate_bars("600519.SH", DAY, bars, daily,
+                                 source="east", created_at=CREATED_AT)
+    assert rows == [] and reject and "amount" in reject
+
+
+def test_gate_east_missing_amount_rejected():
+    bars = make_bars(volume=100.0)                  # amount=None → 源契约破坏
+    rows, reject = mca.gate_bars("600519.SH", DAY, bars, daily_ref_row(),
+                                 source="east", created_at=CREATED_AT)
+    assert rows == [] and reject and "amount" in reject
+
+
+def test_gate_east_fractional_volume_rejected():
+    bars = make_bars(volume=100.5, amount=1000.0)   # 手出现小数 → 单位错配
+    rows, reject = mca.gate_bars("600519.SH", DAY, bars, daily_ref_row(),
+                                 source="east", created_at=CREATED_AT)
+    assert rows == [] and reject and "volume" in reject
+
+
 # ── 源拉取（注入 fetcher，零网络）────────────────────────────
 
 def test_fetch_day_bars_b_filters_to_day():
@@ -230,6 +308,22 @@ def test_fetch_day_bars_b_no_coverage_returns_empty():
     fetcher = lambda code: make_bars("2026-11-06")  # noqa: E731
     bars = mca.fetch_day_bars("600519.SH", DAY, source="B", fetcher=fetcher)
     assert bars == []
+
+
+def test_fetch_day_bars_east_filters_day_and_keeps_amount():
+    payload = make_bars(DAY, amount=1000.0) + make_bars("2026-11-06", amount=999.0)
+    fetcher = lambda code: payload  # noqa: E731
+    bars = mca.fetch_day_bars("600519.SH", DAY, source="east", fetcher=fetcher)
+    assert len(bars) == 48
+    assert all(b["datetime"].strftime("%Y-%m-%d") == DAY for b in bars)
+    assert all(b["amount"] == 1000.0 for b in bars), "east 行 amount 必须透传（元）"
+
+
+def test_fetch_day_bars_east_amount_none_passthrough_for_gate():
+    # fetch 层不吞错：源缺额透传 None，由 gate_bars 的源契约门禁 fail-closed
+    fetcher = lambda code: make_bars(DAY)  # noqa: E731  amount=None
+    bars = mca.fetch_day_bars("600519.SH", DAY, source="east", fetcher=fetcher)
+    assert all(b["amount"] is None for b in bars)
 
 
 def test_fetch_day_bars_a_pages_and_converts():
@@ -443,6 +537,33 @@ def test_formal_write_auto_detects_fabricated_amount_for_none_rows():
                               journal=lambda e: None, lock_owner="aistock-engineer", purpose="t")
 
 
+def test_formal_write_auto_tolerates_null_amount_sum_from_db():
+    # R22 生产实测：B 行全 NULL 时 CH 的 sum(amount) 返回 None（非 0）——
+    # 读回聚合必须按 0 处理而不是 float(None) 崩溃（首次 11-03 B 写入因此回滚）
+    rows = good_rows(1)
+    key = (rows[0][1].astimezone(CN).strftime("%Y-%m-%d"), rows[0][0])
+    client = LockableFakeClient(readback={key: (48, 4800.0, None, 0)}, bars=make_bars())  # a=None！
+    report = mca.formal_write_auto(lambda: client, rows, CH_WIN,
+                                   journal=lambda e: None, lock_owner="aistock-engineer",
+                                   purpose="t")
+    assert report["status"] == "ok"
+
+
+def test_formal_write_auto_sample_check_ignores_adjacent_day():
+    # ch_window(单日) 上界含相邻北京日（R19 陷阱）：读回若按 HH:MM 折叠，
+    # 相邻日 bar 会覆盖目标日值 → 假 mismatch 回滚（R22 生产实测）。
+    # 抽样校验必须只比目标日。
+    rows = good_rows(1)
+    key = (rows[0][1].astimezone(CN).strftime("%Y-%m-%d"), rows[0][0])
+    adjacent = make_bars("2026-11-10", close_scale=2.0, volume=999.0)  # 不同值防同值巧合
+    client = LockableFakeClient(readback={key: (48, 4800.0, 0.0, 0)},
+                                bars=make_bars() + adjacent)
+    report = mca.formal_write_auto(lambda: client, rows, CH_WIN,
+                                   journal=lambda e: None, lock_owner="aistock-engineer",
+                                   purpose="t")
+    assert report["status"] == "ok"
+
+
 # ── verify_existing（与库内 lc5 逐 bar 一致性）───────────────
 
 class VerifyFakeClient:
@@ -475,6 +596,63 @@ def test_verify_existing_pass_and_mismatch():
         return bars
     rep2 = mca.verify_existing(client, DAY, ["600519.SH"], source="B", fetcher=skewed)
     assert rep2["fail"] == 1 and rep2["detail"][0]["status"] == "mismatch"
+
+
+def test_verify_existing_east_amount_mismatch():
+    # east 带额：逐 bar 额 ≤3% 比对启用——源额偏 50% 必须检出
+    db_bars = make_bars(amount=1000.0)
+    client = VerifyFakeClient(db_bars)
+    same = lambda code: make_bars(amount=1000.0)  # noqa: E731
+    rep = mca.verify_existing(client, DAY, ["600519.SH"], source="east", fetcher=same)
+    assert rep["fail"] == 0 and rep["pass"] == 1
+
+    def skewed_amt(code):
+        bars = make_bars(amount=1500.0)
+        return bars
+    rep2 = mca.verify_existing(client, DAY, ["600519.SH"], source="east", fetcher=skewed_amt)
+    assert rep2["fail"] == 1
+    assert any("amount" in i for i in rep2["detail"][0]["issues"])
+
+
+def test_verify_existing_ignores_adjacent_day_bars():
+    # 单日 ch_window 含相邻北京日：库里相邻日 bar 不得参与比对/日量合计
+    db_bars = make_bars() + make_bars("2026-11-10", close_scale=2.0, volume=999.0)
+    client = VerifyFakeClient(db_bars)
+    same = lambda code: make_bars()  # noqa: E731
+    rep = mca.verify_existing(client, DAY, ["600519.SH"], source="B", fetcher=same)
+    assert rep["fail"] == 0 and rep["pass"] == 1
+    assert rep["detail"][0]["db_bars"] == 48, "只统计目标日 48 根"
+
+
+class ReadbackFakeClient:
+    """day_readback_summary 查询面：当日在库码全集 + 逐 bar 行（含相邻日）。"""
+
+    def __init__(self, codes, bars):
+        self.codes = list(codes)
+        self.bars = list(bars)
+
+    def query(self, sql, settings=None):
+        class R:
+            def __init__(self, names, rows):
+                self.column_names = names
+                self.result_rows = rows
+        if "SELECT DISTINCT code" in sql:
+            return R(["code"], [(c,) for c in self.codes])
+        if "FROM stock.kline_minute_5" in sql:
+            rows = [(b["datetime"].strftime("%Y-%m-%d %H:%M"), "600519.SH",
+                     b["open"], b["high"], b["low"], b["close"],
+                     int(b["volume"]), b["amount"])
+                    for b in sorted(self.bars, key=lambda x: x["datetime"])]
+            return R(["dt", "code", "open", "high", "low", "close", "volume", "amount"], rows)
+        raise AssertionError(f"unexpected: {sql[:80]}")
+
+
+def test_day_readback_summary_counts_only_target_day():
+    bars = make_bars() + make_bars("2026-11-10", close_scale=2.0)
+    client = ReadbackFakeClient(["600519.SH"], bars)
+    rep = mca.day_readback_summary(client, DAY)
+    assert rep["codes"] == 1 and rep["total_bars"] == 48 and rep["bars_48"] == 1
+    assert rep["bars_not_48"] == {}
 
 
 # ── run() 端到端（注入 fake client/fetcher；无 DB/网络）──────
@@ -569,11 +747,12 @@ def json_load(tmp_path):
 def test_run_missing_day_formal_write_inserts(tmp_path):
     client = RunFakeClient(missing_by_day={DAY: 2},
                            daily_rows={DAY: 5583},
-                           minute_bars=make_bars())
-    rows = mca.gate_bars("600500.SH", DAY, make_bars(), daily_ref_row(),
-                         source="B", created_at=CREATED_AT)[0]
-    rows += mca.gate_bars("600501.SH", DAY, make_bars(), daily_ref_row(),
-                          source="B", created_at=CREATED_AT)[0]
+                           minute_bars=make_bars(amount=1000.0))
+    # auto → east（R22 默认源，带额）：fetcher 必须供 amount 才过源契约门禁
+    rows = mca.gate_bars("600500.SH", DAY, make_bars(amount=1000.0), daily_ref_row(),
+                         source="east", created_at=CREATED_AT)[0]
+    rows += mca.gate_bars("600501.SH", DAY, make_bars(amount=1000.0), daily_ref_row(),
+                          source="east", created_at=CREATED_AT)[0]
     agg = readback_for(rows)
 
     def q(sql, settings=None):
@@ -588,7 +767,7 @@ def test_run_missing_day_formal_write_inserts(tmp_path):
     rc = mca.run(["--mode", "formal-write", "--trade-date", DAY,
                   "--out-dir", str(tmp_path)],
                  client_factory=lambda: client,
-                 fetcher=lambda code: make_bars())
+                 fetcher=lambda code: make_bars(amount=1000.0))
     assert rc == 0
     assert len(client.inserts) == 1 and client.inserts[0][2] == mb.INSERT_COLUMNS
     assert not client.lock_exists
