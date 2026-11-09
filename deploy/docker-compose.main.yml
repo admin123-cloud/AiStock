@@ -66,6 +66,7 @@ services:
     mem_limit: 3g
     environment:
       <<: *backend_env
+      PYTHONPATH: /app
     volumes:
       - F:/AiStock/app/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
       # 管道写入方：挂真实数据根（可写）——报告/journal 落 runtime/postclose_auto 等
