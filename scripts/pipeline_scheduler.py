@@ -91,6 +91,11 @@ def cn_now(now_fn: Optional[Callable[[], datetime]] = None) -> datetime:
 
 def default_out_root() -> Path:
     """报告/日志根目录：AISTOCK_DATA_ROOT/runtime/postclose_auto（env 优先）。"""
+    import sys as _sys
+
+    _root = str(Path(__file__).resolve().parents[1])
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
     from utils.paths import data_root  # 延迟导入，保持模块 import 轻量
 
     return data_root() / "runtime" / "postclose_auto"
