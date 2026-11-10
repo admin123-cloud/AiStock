@@ -6954,12 +6954,12 @@ def _upsert_gen2_daily_execution_record(payload: Dict[str, Any]) -> Dict[str, An
     return {"ok": True, "record": _sanitize(record), "ledger_path": str(GEN2_DAILY_EXECUTION_LEDGER_PATH)}
 
 
-def _build_gen2_daily_trade_ticket(
+def _build_gen2_daily_trade_ticket_payload(
     signal_date: Optional[str],
     limit: int = 30,
     formal_limit: int = 3,
-    persist: bool = True,
 ) -> Dict[str, Any]:
+    """R43：纯读构建核心——零落盘；GET 链一律走本函数（静态守卫口径）。"""
     safe_limit = max(10, min(int(limit or 30), 100))
     safe_formal_limit = max(1, min(int(formal_limit or 3), 5))
     pool = _build_gen2_selection_pool(signal_date, safe_limit)
@@ -7036,13 +7036,24 @@ def _build_gen2_daily_trade_ticket(
             ),
         }
     )
-    if persist:
-        ticket["outputs"] = _save_gen2_daily_trade_ticket(ticket)
     ticket["execution_record"] = _find_gen2_daily_execution_record(
         str(ticket.get("signal_date") or ""),
         str(ticket.get("strategy_code") or "g2_v2_complete"),
     )
     return _sanitize(ticket)
+
+
+def _build_gen2_daily_trade_ticket(
+    signal_date: Optional[str],
+    limit: int = 30,
+    formal_limit: int = 3,
+    persist: bool = True,
+) -> Dict[str, Any]:
+    """写面包装：persist=True 时落盘（仅 POST 链使用；R43 后 GET 恒走只读核心）。"""
+    ticket = _build_gen2_daily_trade_ticket_payload(signal_date=signal_date, limit=limit, formal_limit=formal_limit)
+    if persist:
+        ticket["outputs"] = _save_gen2_daily_trade_ticket(ticket)
+    return ticket
 
 
 def _build_gen2_live_selection_summary(signal_date: Optional[str]) -> Dict[str, Any]:
@@ -11528,12 +11539,20 @@ def get_gen2_daily_trade_ticket(
     formal_limit: int = Query(3, ge=1, le=5, description="formal trade ticket candidate limit"),
     persist: bool = Query(True, description="write JSON and Markdown ticket artifacts"),
 ):
-    return _build_gen2_daily_trade_ticket(
+    # R43：GET 只读——persist 参数优雅忽略（恒不落盘，_save_gen2_daily_trade_ticket
+    # 零调用）；outputs 键保留旧形状仅报告目标路径。落盘通道迁移 POST 待批。
+    ticket = _build_gen2_daily_trade_ticket_payload(
         signal_date=signal_date,
         limit=limit,
         formal_limit=formal_limit,
-        persist=bool(persist),
     )
+    selected = _normalize_date_str(ticket.get("signal_date")) or datetime.now().strftime("%Y-%m-%d")
+    ticket["outputs"] = {
+        "json_path": str(GEN2_DAILY_TICKET_DIR / f"{selected}.json"),
+        "markdown_path": str(GEN2_DAILY_TICKET_DIR / f"{selected}.md"),
+        "latest_path": str(GEN2_DAILY_TICKET_LATEST_PATH),
+    }
+    return ticket
 
 
 @router.get("/gen2/daily-trade-ticket/execution")
@@ -11542,7 +11561,7 @@ def get_gen2_daily_trade_execution(
 ):
     selected_date = _normalize_date_str(signal_date)
     if not selected_date:
-        ticket = _build_gen2_daily_trade_ticket(None, limit=30, formal_limit=3, persist=False)
+        ticket = _build_gen2_daily_trade_ticket_payload(None, limit=30, formal_limit=3)
         selected_date = _normalize_date_str(ticket.get("signal_date"))
     record = _find_gen2_daily_execution_record(selected_date or "")
     return _sanitize(

@@ -80,7 +80,7 @@ R43_PURIFIED_ROUTES = [
 ]
 
 # 分批推进：每批 commit 时其类别测试必须全绿（①→②→③→④）。
-ACTIVE_CATEGORIES = {"1", "2", "3"}
+ACTIVE_CATEGORIES = {"1", "2", "3", "4"}
 
 assert len(R43_PURIFIED_ROUTES) == 35, "R43 范围必须是 35 条（39 封禁 − #14 R42 − ⑤类 sync-ths 3 条）"
 
@@ -710,3 +710,85 @@ def test_r43_cat3_cached_readers_never_run(monkeypatch) -> None:
     packet = gsa._read_live_launch_packet_cached()
     assert packet["mode"] == "g3_live_launch_packet_v1"
     assert isinstance(packet.get("artifacts"), dict)
+
+
+# ---------------------------------------------------------------- 行为守卫（④）
+
+
+def test_r43_cat4_workflow_status_readonly_no_write(monkeypatch) -> None:
+    import api.gen3_state_alpha as gsa
+
+    def _boom(*args, **kwargs):  # pragma: no cover - regression tripwire
+        raise AssertionError("GET workflow/status must not persist operations state")
+
+    fake = _RecordingScheduler({gsa._monitor_job_id: _FakeJob(gsa._monitor_job_id)})
+    monkeypatch.setattr(gsa, "_monitor_scheduler", fake)
+    monkeypatch.setattr(gsa, "_startup_schedulers_enabled", lambda: True)
+    monkeypatch.setattr(gsa, "_write_json", _boom)
+
+    payload = _call_async(gsa.get_gen3_state_alpha_workflow_status())
+    assert payload["available"] is True and "monitor" in payload
+    assert payload["monitor"]["scheduler_enabled"] is True
+    assert fake.mutations == []
+
+
+def test_r43_cat4_replacement_assessment_readonly(monkeypatch) -> None:
+    import api.gen3_state_alpha as gsa
+
+    def _boom(*args, **kwargs):  # pragma: no cover - regression tripwire
+        raise AssertionError("GET replacement-assessment must not write artifacts")
+
+    fake = _RecordingScheduler()
+    monkeypatch.setattr(gsa, "_monitor_scheduler", fake)
+    monkeypatch.setattr(gsa, "_startup_schedulers_enabled", lambda: True)
+    monkeypatch.setattr(gsa, "_write_json", _boom)
+
+    payload = _call_async(gsa.get_gen3_state_alpha_replacement_assessment())
+    assert "checked_at" in payload and "blocking_gates" in payload
+    audits = payload.get("audits") if isinstance(payload.get("audits"), dict) else payload
+    assert fake.mutations == []
+
+
+def test_r43_cat4_daily_trade_ticket_never_persists(monkeypatch) -> None:
+    import api.trading as tr
+
+    def _boom(*args, **kwargs):  # pragma: no cover - regression tripwire
+        raise AssertionError("GET daily-trade-ticket must not persist artifacts")
+
+    monkeypatch.setattr(tr, "_save_gen2_daily_trade_ticket", _boom)
+    monkeypatch.setattr(
+        tr,
+        "_build_gen2_selection_pool",
+        lambda signal_date, limit: {
+            "available": True,
+            "signal_date": "2026-11-10",
+            "rows": [],
+            "pipeline": [],
+            "data_freshness": None,
+            "branch_freshness": None,
+            "row_count": 0,
+            "trigger_count": 0,
+            "complete_count": 0,
+            "quality_pass_count": 0,
+            "source_latest_date": None,
+        },
+    )
+    monkeypatch.setattr(tr, "_load_ths_capital_holdings_cache", lambda: {"rows": []})
+
+    ticket = tr.get_gen2_daily_trade_ticket(signal_date="2026-11-10", limit=10, formal_limit=3, persist=True)
+    assert ticket["signal_date"] == "2026-11-10"
+    assert set(ticket["outputs"]) == {"json_path", "markdown_path", "latest_path"}
+    assert ticket["outputs"]["json_path"].endswith("2026-11-10.json")
+    assert not (tr.GEN2_DAILY_TICKET_DIR / "2026-11-10.json").exists()
+
+    execution = tr.get_gen2_daily_trade_execution(signal_date="2026-11-10")
+    assert execution["signal_date"] == "2026-11-10" and "record" in execution
+
+
+def test_r43_cat4_tdx_gateway_probe_default_off() -> None:
+    import api.system_config as sc
+
+    payload = _call_async(sc.get_tdx_gateway_diagnostics())
+    assert payload["success"] is True
+    assert payload["data"]["requested_run_probe"] is False
+    assert payload["data"]["deprecated"] is True

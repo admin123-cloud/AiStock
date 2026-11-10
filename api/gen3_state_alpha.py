@@ -5815,7 +5815,10 @@ def _current_paper_execution_audit() -> dict[str, Any]:
 
 
 def _observation_scheduler_audit() -> dict[str, Any]:
-    state = configure_observation_scheduler()
+    # R43：只读现场快照（原 configure_observation_scheduler 会 add/remove_job）。
+    state = _scheduler_state_readonly(
+        _load_observation_scheduler_state(), _observation_job_id, _observation_retry_job_id
+    )
     blockers: list[str] = []
     if not bool(state.get("enabled")):
         blockers.append("observation_scheduler_disabled")
@@ -5858,7 +5861,8 @@ def _observation_scheduler_audit() -> dict[str, Any]:
 
 
 def _shadow_monitor_audit() -> dict[str, Any]:
-    state = configure_shadow_monitor_scheduler()
+    # R43：只读现场快照（原 configure_shadow_monitor_scheduler 会 add/remove_job）。
+    state = _scheduler_state_readonly(_load_monitor_state(), _monitor_job_id)
     notification = _notification_config_check(state.get("recipient_email") or None)
     email_enabled = bool(state.get("email_enabled"))
     blockers: list[str] = []
@@ -9535,7 +9539,8 @@ def _build_daily_action_plan(
 
 
 def _build_replacement_assessment(historical: dict[str, Any] | None = None) -> dict[str, Any]:
-    workflow = _build_workflow_status()
+    # R43：GET 链只读——workflow 状态用只读孪生（零调度器配置/零 .write_probe/零落盘）。
+    workflow = _build_workflow_status_readonly()
     historical = historical or _read_historical_trades(
         limit=500,
         route="all",
@@ -9941,7 +9946,8 @@ def _build_replacement_assessment(historical: dict[str, Any] | None = None) -> d
             "window_metrics": windows,
         },
     }
-    _write_json(REPLACEMENT_ASSESSMENT_PATH, assessment)
+    # R43：GET 链只读——不再落盘 replacement_assessment.json（api 内零读者；
+    # 落盘通道迁移待批，需要持久化走写面 refresh 链）。
     return assessment
 
 
@@ -15813,7 +15819,8 @@ async def get_gen3_state_alpha_replacement_assessment() -> dict[str, Any]:
 
 @router.get("/workflow/status")
 async def get_gen3_state_alpha_workflow_status() -> dict[str, Any]:
-    return _wrap_guardrails(_build_workflow_status())
+    # R43：GET 只读——零调度器配置/零 .write_probe/零 OPERATIONS_STATE_PATH 落盘。
+    return _wrap_guardrails(_build_workflow_status_readonly())
 
 
 @router.post("/workflow/refresh/run-once")

@@ -8142,7 +8142,8 @@ async def initialize_tdx_gateway():
 
 
 @router.get("/tdx-gateway/diagnostics")
-async def get_tdx_gateway_diagnostics(run_probe: bool = True):
+async def get_tdx_gateway_diagnostics(run_probe: bool = False):
+    """R43：GET 只读——run_probe 默认 False（外呼探测 POST 化待批）。"""
     return {
         "success": True,
         "message": "TDX Gateway diagnostics are legacy and disabled; use QMT/xtquant data-source diagnostics.",
