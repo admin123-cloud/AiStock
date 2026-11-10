@@ -125,7 +125,8 @@ const strategyMaintenanceTasks: StrategyTask[] = [
 ]
 
 const klinePeriods = [
-  { value: '1m', label: '1分钟' }, { value: '5m', label: '5分钟' }, { value: '15m', label: '15分钟' },
+  // R36：按 Owner 裁决隐藏 1 分钟入口（仅前端不展示）
+  { value: '5m', label: '5分钟' }, { value: '15m', label: '15分钟' },
   { value: '30m', label: '30分钟' }, { value: '60m', label: '60分钟' }, { value: '1d', label: '日线' },
   { value: '1w', label: '周线' }, { value: '1mon', label: '月线' }, { value: '1q', label: '季线' }, { value: '1y', label: '年线' },
 ]

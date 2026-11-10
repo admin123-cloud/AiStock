@@ -48,7 +48,7 @@ interface NavigationResponse {
 }
 
 const PERIODS = [
-  { label: '1分钟', value: '1m' },
+  // R36：按 Owner 裁决隐藏 1 分钟入口（后端 /kline/1m 路由保留，仅前端不展示）
   { label: '15分钟', value: '15m' },
   { label: '30分钟', value: '30m' },
   { label: '60分钟', value: '60m' },
