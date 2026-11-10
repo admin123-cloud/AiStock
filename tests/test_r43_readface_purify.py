@@ -80,7 +80,7 @@ R43_PURIFIED_ROUTES = [
 ]
 
 # 分批推进：每批 commit 时其类别测试必须全绿（①→②→③→④）。
-ACTIVE_CATEGORIES = {"1", "2"}
+ACTIVE_CATEGORIES = {"1", "2", "3"}
 
 assert len(R43_PURIFIED_ROUTES) == 35, "R43 范围必须是 35 条（39 封禁 − #14 R42 − ⑤类 sync-ths 3 条）"
 
@@ -610,3 +610,103 @@ def test_r43_cat2_gen3_directory_writable_status_never_writes(tmp_path) -> None:
     check = gsa._directory_writable_status("x", missing)
     assert check["ok"] is False and not missing.exists()
     assert ".write_probe" not in str(list(tmp_path.iterdir()))
+
+
+# ---------------------------------------------------------------- 行为守卫（③）
+
+
+def _forbid_runners(monkeypatch, gsa) -> None:
+    def _boom(*args, **kwargs):  # pragma: no cover - regression tripwire
+        raise AssertionError("GET chain must not run readiness/packet builders")
+
+    for name in (
+        "_run_realtime_readiness_review_once",
+        "_run_live_launch_packet_once",
+        "_run_state_router_refresh",
+        "_read_or_run_realtime_readiness_review",
+        "_read_or_run_live_launch_packet",
+    ):
+        monkeypatch.setattr(gsa, name, _boom)
+
+
+_CAT3_HANDLERS = [
+    ("live-launch-packet", "get_gen3_state_alpha_live_launch_packet", {}),
+    ("premarket-control", "get_gen3_state_alpha_premarket_control", {}),
+    ("live-learning-ledger", "get_gen3_state_alpha_live_learning_ledger", {}),
+    ("live-launch-decision", "get_gen3_state_alpha_live_launch_decision", {}),
+    ("live-blocker-evidence-board", "get_gen3_state_alpha_live_blocker_evidence_board", {}),
+    ("live-launch-readiness-audit", "get_gen3_state_alpha_live_launch_readiness_audit", {}),
+    ("live-action-console", "get_gen3_state_alpha_live_action_console", {}),
+    ("strategy-tuning-axis-board", "get_gen3_state_alpha_strategy_tuning_axis_board", {}),
+    ("strategy-tuning-review-queue", "get_gen3_state_alpha_strategy_tuning_review_queue", {}),
+    ("strategy-tuning-completion-audit", "get_gen3_state_alpha_strategy_tuning_completion_audit", {}),
+    ("strategy-tuning-replay-suggestions", "get_gen3_state_alpha_strategy_tuning_replay_suggestions", {"limit": 10}),
+    ("strategy-tuning-replay-session", "get_gen3_state_alpha_strategy_tuning_replay_session", {"limit": 5}),
+    ("broker/holdings/post-sync-acceptance", "get_gen3_state_alpha_broker_post_sync_acceptance", {}),
+]
+
+
+def test_r43_cat3_missing_artifacts_return_not_ready(monkeypatch, tmp_path) -> None:
+    import api.gen3_state_alpha as gsa
+
+    empty = tmp_path / "empty_runtime"
+    empty.mkdir()
+    monkeypatch.setattr(gsa, "REALTIME_READINESS_REVIEW_DIR", empty)
+    monkeypatch.setattr(gsa, "LIVE_LAUNCH_PACKET_DIR", empty)
+    monkeypatch.setattr(gsa, "LIVE_LAUNCH_PACKET_PATH", empty / "launch_packet.json")
+    _forbid_runners(monkeypatch, gsa)
+
+    for route, handler_name, kwargs in _CAT3_HANDLERS:
+        payload = _call_async(getattr(gsa, handler_name)(refresh=True, **kwargs))
+        assert payload.get("status") == "not_ready", f"{route}: {payload}"
+        assert payload.get("reason") and payload.get("artifact")
+        assert any(item["artifact"] in {"realtime_readiness_review", "live_launch_packet"} for item in payload["missing"])
+        assert payload["formal_buy_signal"] is False and payload["order_path_enabled"] is False
+
+
+def test_r43_cat3_present_artifacts_payload_normal_no_run(monkeypatch, tmp_path) -> None:
+    import json as _json
+
+    import api.gen3_state_alpha as gsa
+
+    review_dir = tmp_path / "g3_realtime_readiness_review_v1"
+    review_dir.mkdir()
+    (review_dir / "summary.json").write_text(
+        _json.dumps({"live_admission_status": "manual_review", "entry_date": "2026-11-10"}),
+        encoding="utf-8",
+    )
+    packet_dir = tmp_path / "g3_live_launch_packet_v1"
+    packet_dir.mkdir()
+    (packet_dir / "launch_packet.json").write_text(
+        _json.dumps({"summary": {"entry_date": "2026-11-10", "next_trade_entry_date": "2026-11-11"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gsa, "REALTIME_READINESS_REVIEW_DIR", review_dir)
+    monkeypatch.setattr(gsa, "LIVE_LAUNCH_PACKET_DIR", packet_dir)
+    monkeypatch.setattr(gsa, "LIVE_LAUNCH_PACKET_PATH", packet_dir / "launch_packet.json")
+    _forbid_runners(monkeypatch, gsa)
+
+    packet = _call_async(gsa.get_gen3_state_alpha_live_launch_packet(refresh=True))
+    assert packet["ok"] is True and packet["packet"].get("summary", {}).get("entry_date") == "2026-11-10"
+
+    decision = _call_async(gsa.get_gen3_state_alpha_live_launch_decision(refresh=True))
+    assert decision.get("status") != "not_ready" and "ok" in decision
+
+    queue = _call_async(gsa.get_gen3_state_alpha_strategy_tuning_review_queue(refresh=True))
+    assert queue.get("status") != "not_ready"
+
+    premarket = _call_async(gsa.get_gen3_state_alpha_premarket_control(refresh=True))
+    assert premarket["ok"] is True and premarket["summary"].get("live_admission_status") == "manual_review"
+
+
+def test_r43_cat3_cached_readers_never_run(monkeypatch) -> None:
+    import api.gen3_state_alpha as gsa
+
+    _forbid_runners(monkeypatch, gsa)
+    review = gsa._read_realtime_readiness_review_cached()
+    assert review["mode"] == "g3_realtime_readiness_review_v1"
+    assert isinstance(review.get("summary"), (dict, type(None)))
+
+    packet = gsa._read_live_launch_packet_cached()
+    assert packet["mode"] == "g3_live_launch_packet_v1"
+    assert isinstance(packet.get("artifacts"), dict)

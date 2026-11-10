@@ -10926,7 +10926,8 @@ def _broker_holdings_sync_preflight() -> dict[str, Any]:
     staleness = _staleness_minutes(updated_at)
     holdings = broker.get("holdings") if isinstance(broker.get("holdings"), list) else []
     capital = broker.get("capital") if isinstance(broker.get("capital"), dict) else {}
-    review = _read_or_run_realtime_readiness_review(refresh=False)
+    # R43：只读网关——缺失时 not_ready 标记，绝不补跑。
+    review = _read_realtime_readiness_review_cached()
     command = _current_premarket_action_card(review)
     current_action_group = _clean_review_text(command.get("action_group"))
     is_current_action = current_action_group == "sync_broker_holding_price"
@@ -11001,7 +11002,8 @@ def _broker_holdings_sync_preflight() -> dict[str, Any]:
 
 def _broker_holdings_sync_confirmation_packet() -> dict[str, Any]:
     preflight = _broker_holdings_sync_preflight()
-    review = _read_or_run_realtime_readiness_review(refresh=False)
+    # R43：只读网关——缺失时 not_ready 标记，绝不补跑。
+    review = _read_realtime_readiness_review_cached()
     command = _current_premarket_action_card(review)
     current_action = command.get("current_action") if isinstance(command.get("current_action"), dict) else {}
     action_group = _clean_review_text(command.get("action_group"))
@@ -11156,8 +11158,8 @@ def _broker_holdings_sync_outcome_verifier() -> dict[str, Any]:
 
 
 def _build_broker_post_sync_acceptance_packet(refresh: bool = False) -> dict[str, Any]:
-    if refresh:
-        _read_or_run_realtime_readiness_review(refresh=True)
+    # R43：refresh 参数保留但 GET/POST 构建链一律只读（不预跑 readiness review）；
+    # 需要重建走 POST /realtime-readiness-review/run。
     outcome = _broker_holdings_sync_outcome_verifier()
     outcome_payload = outcome.get("outcome") if isinstance(outcome.get("outcome"), dict) else {}
     broker = outcome.get("broker") if isinstance(outcome.get("broker"), dict) else {}
@@ -11351,7 +11353,8 @@ def _record_broker_post_sync_execution_evidence(payload: dict[str, Any] | None =
 
 
 def _build_g3_live_action_console(refresh: bool = False) -> dict[str, Any]:
-    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    # R43：只读网关——缺失时 not_ready 标记，绝不补跑；refresh 参数保留但被忽略。
+    review = _read_realtime_readiness_review_cached()
     command = _current_premarket_action_card(review)
     preflight = _broker_holdings_sync_preflight()
     confirmation = _broker_holdings_sync_confirmation_packet()
@@ -11850,8 +11853,9 @@ def _normalize_live_learning_row(row: dict[str, Any], *, origin: str, priority: 
 
 
 def _build_live_learning_ledger(refresh: bool = False) -> dict[str, Any]:
-    review = _read_or_run_realtime_readiness_review(refresh=refresh)
-    packet_result = _read_or_run_live_launch_packet(refresh=refresh)
+    # R43：只读网关——缺失时 not_ready 标记，绝不补跑；refresh 参数保留但被忽略。
+    review = _read_realtime_readiness_review_cached()
+    packet_result = _read_live_launch_packet_cached()
     rows: list[dict[str, Any]] = []
     for origin, source_rows in (
         ("launch_day_learning_queue", packet_result.get("launch_day_learning_queue")),
@@ -11906,9 +11910,8 @@ def _build_live_learning_ledger(refresh: bool = False) -> dict[str, Any]:
 
 
 def _build_live_launch_decision_card(refresh: bool = False) -> dict[str, Any]:
-    review = _read_or_run_realtime_readiness_review(refresh=refresh)
-    if refresh:
-        _read_or_run_live_launch_packet(refresh=True)
+    # R43：只读网关——缺失时 not_ready 标记，绝不补跑；refresh 分支移除（重建走 POST）。
+    review = _read_realtime_readiness_review_cached()
     command = _current_premarket_action_card(review)
     learning = _build_live_learning_ledger(refresh=False)
     learning_rows = learning.get("learning_ledger") if isinstance(learning.get("learning_ledger"), list) else []
@@ -12027,7 +12030,8 @@ def _live_blocker_trade_impact(resolution_type: str, review_scope: str) -> str:
 
 
 def _build_live_blocker_evidence_board(refresh: bool = False) -> dict[str, Any]:
-    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    # R43：只读网关——缺失时 not_ready 标记，绝不补跑；refresh 参数保留但被忽略。
+    review = _read_realtime_readiness_review_cached()
     summary = review.get("summary") if isinstance(review.get("summary"), dict) else {}
     resolution_rows = review.get("live_blocker_resolution_plan")
     evidence_rows = review.get("live_blocker_evidence_ledger")
@@ -13320,6 +13324,77 @@ def _read_or_run_live_launch_packet(refresh: bool = False) -> dict[str, Any]:
     return _run_live_launch_packet_once()
 
 
+def _read_realtime_readiness_review_cached() -> dict[str, Any]:
+    """R43 只读网关（GET 链专用）：readiness review 产物在则原样返回；缺失返回
+    not_ready 标记载荷（含空骨架字段），绝不触发 _run_realtime_readiness_review_once。
+
+    真实重建能力保留在写面：POST /realtime-readiness-review/run 与
+    /live-launch-packet/run（POST 化待批项照旧）。
+    """
+    review = _read_realtime_readiness_review()
+    if review.get("summary"):
+        return {
+            "ok": True,
+            "mode": "g3_realtime_readiness_review_v1",
+            **review,
+        }
+    return {
+        "ok": False,
+        "mode": "g3_realtime_readiness_review_v1",
+        "status": "not_ready",
+        "reason": "realtime readiness review artifact missing; read-only request must not rebuild it (R43)",
+        "artifact": str(REALTIME_READINESS_REVIEW_DIR / "summary.json"),
+        **review,
+    }
+
+
+def _read_live_launch_packet_cached() -> dict[str, Any]:
+    """R43 只读网关（GET 链专用）：launch packet 产物在则原样返回；缺失返回
+    not_ready 标记载荷，绝不触发 _run_live_launch_packet_once。"""
+    packet = _read_live_launch_packet()
+    if packet.get("packet"):
+        return {
+            "ok": True,
+            "mode": "g3_live_launch_packet_v1",
+            **packet,
+        }
+    return {
+        "ok": False,
+        "mode": "g3_live_launch_packet_v1",
+        "status": "not_ready",
+        "reason": "live launch packet artifact missing; read-only request must not rebuild it (R43)",
+        "artifact": str(LIVE_LAUNCH_PACKET_PATH),
+        **packet,
+    }
+
+
+def _readface_artifact_gate(required: list[tuple[str, Path]]) -> dict[str, Any] | None:
+    """R43 缺件门：必需产物任一缺失→标准 not_ready 载荷；全在→None（正常构建）。"""
+    missing = [{"artifact": name, "path": str(path)} for name, path in required if not path.exists()]
+    if not missing:
+        return None
+    return {
+        "ok": False,
+        "status": "not_ready",
+        "reason": "required artifact(s) missing; GET auto-rebuild disabled (R43 read-only); rebuild via POST run endpoints",
+        "missing": missing,
+        "artifact": missing[0]["path"],
+        "formal_buy_signal": False,
+        "auto_order_allowed": False,
+        "order_path_enabled": False,
+    }
+
+
+def _live_chain_artifact_gate() -> dict[str, Any] | None:
+    """live-launch/strategy-tuning 家族共用的缺件门（review summary + launch packet）。"""
+    return _readface_artifact_gate(
+        [
+            ("realtime_readiness_review", REALTIME_READINESS_REVIEW_DIR / "summary.json"),
+            ("live_launch_packet", LIVE_LAUNCH_PACKET_PATH),
+        ]
+    )
+
+
 def _readiness_review_admission_summary(review: dict[str, Any]) -> dict[str, Any]:
     summary = review.get("summary") if isinstance(review.get("summary"), dict) else {}
     return {
@@ -13442,8 +13517,11 @@ async def run_gen3_state_alpha_realtime_readiness_review() -> dict[str, Any]:
 async def get_gen3_state_alpha_live_launch_packet(
     refresh: bool = Query(default=False, description="Rebuild the G3 live launch packet before reading it."),
 ) -> dict[str, Any]:
-    packet = _read_or_run_live_launch_packet(refresh=refresh)
-    return _wrap_guardrails(packet)
+    # R43：缺件→not_ready 标准载荷，绝不自动补跑；refresh 优雅忽略（重建走 POST /live-launch-packet/run）。
+    gate = _readface_artifact_gate([("live_launch_packet", LIVE_LAUNCH_PACKET_PATH)])
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_read_live_launch_packet_cached())
 
 
 @router.post("/live-launch-packet/run")
@@ -13455,49 +13533,77 @@ async def run_gen3_state_alpha_live_launch_packet() -> dict[str, Any]:
 async def get_gen3_state_alpha_live_learning_ledger(
     refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before building the learning ledger."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_live_learning_ledger(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_live_learning_ledger(refresh=False))
 
 
 @router.get("/live-launch-decision")
 async def get_gen3_state_alpha_live_launch_decision(
     refresh: bool = Query(default=False, description="Refresh readiness review before building the live launch decision card."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_live_launch_decision_card(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_live_launch_decision_card(refresh=False))
 
 
 @router.get("/live-blocker-evidence-board")
 async def get_gen3_state_alpha_live_blocker_evidence_board(
     refresh: bool = Query(default=False, description="Refresh readiness review before building the live blocker evidence board."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_live_blocker_evidence_board(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_live_blocker_evidence_board(refresh=False))
 
 
 @router.get("/live-launch-readiness-audit")
 async def get_gen3_state_alpha_live_launch_readiness_audit(
     refresh: bool = Query(default=False, description="Refresh readiness review before building the live launch readiness audit."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_live_launch_readiness_audit(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_live_launch_readiness_audit(refresh=False))
 
 
 @router.get("/strategy-tuning-axis-board")
 async def get_gen3_state_alpha_strategy_tuning_axis_board(
     refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before building the read-only G3 tuning axis board."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_g3_strategy_tuning_axis_board(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_g3_strategy_tuning_axis_board(refresh=False))
 
 
 @router.get("/strategy-tuning-review-queue")
 async def get_gen3_state_alpha_strategy_tuning_review_queue(
     refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before building the read-only G3 tuning review queue."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_g3_strategy_tuning_review_queue(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_g3_strategy_tuning_review_queue(refresh=False))
 
 
 @router.get("/strategy-tuning-completion-audit")
 async def get_gen3_state_alpha_strategy_tuning_completion_audit(
     refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before auditing G3 tuning review completion."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_g3_strategy_tuning_completion_audit(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_g3_strategy_tuning_completion_audit(refresh=False))
 
 
 @router.get("/strategy-tuning-replay-suggestions")
@@ -13505,7 +13611,11 @@ async def get_gen3_state_alpha_strategy_tuning_replay_suggestions(
     refresh: bool = Query(default=False, description="Refresh readiness review and launch packet before generating G3 tuning replay suggestions."),
     limit: int = Query(default=50, ge=1, le=200, description="Maximum replay suggestions returned."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_g3_strategy_tuning_replay_suggestions(refresh=refresh, limit=limit))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_g3_strategy_tuning_replay_suggestions(refresh=False, limit=limit))
 
 
 @router.get("/strategy-tuning-replay-session")
@@ -13513,7 +13623,11 @@ async def get_gen3_state_alpha_strategy_tuning_replay_session(
     refresh: bool = Query(default=False, description="Refresh readiness review before building the ordered G3 tuning replay session."),
     limit: int = Query(default=12, ge=1, le=50, description="Maximum replay session steps returned."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_g3_strategy_tuning_replay_session(refresh=refresh, limit=limit))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_g3_strategy_tuning_replay_session(refresh=False, limit=limit))
 
 
 @router.get("/strategy-tuning-current-step-completion-packet")
@@ -13527,7 +13641,11 @@ async def get_gen3_state_alpha_strategy_tuning_current_step_completion_packet(
 async def get_gen3_state_alpha_broker_post_sync_acceptance(
     refresh: bool = Query(default=False, description="Refresh readiness review before checking post-sync acceptance."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_broker_post_sync_acceptance_packet(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_broker_post_sync_acceptance_packet(refresh=False))
 
 
 @router.post("/broker/holdings/post-sync-acceptance/record-execution-evidence")
@@ -13541,7 +13659,11 @@ async def record_gen3_state_alpha_broker_post_sync_execution_evidence(
 async def get_gen3_state_alpha_live_action_console(
     refresh: bool = Query(default=False, description="Refresh readiness review before building the live action console."),
 ) -> dict[str, Any]:
-    return _wrap_guardrails(_build_g3_live_action_console(refresh=refresh))
+    # R43：缺件→not_ready；refresh 优雅忽略。
+    gate = _live_chain_artifact_gate()
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    return _wrap_guardrails(_build_g3_live_action_console(refresh=False))
 
 
 @router.post("/live-action-console/step-review")
@@ -13723,7 +13845,11 @@ async def save_gen3_state_alpha_launch_day_playbook_review_and_run(payload: dict
 async def get_gen3_state_alpha_premarket_control(
     refresh: bool = Query(default=False, description="Run the realtime readiness review before reading the command card."),
 ) -> dict[str, Any]:
-    review = _read_or_run_realtime_readiness_review(refresh=refresh)
+    # R43：缺件→not_ready 标准载荷，绝不自动补跑；refresh 优雅忽略（重建走 POST /realtime-readiness-review/run）。
+    gate = _readface_artifact_gate([("realtime_readiness_review", REALTIME_READINESS_REVIEW_DIR / "summary.json")])
+    if gate is not None:
+        return _wrap_guardrails(gate)
+    review = _read_realtime_readiness_review_cached()
     return _wrap_guardrails(
         {
             "ok": bool(review.get("summary")),
