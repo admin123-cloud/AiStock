@@ -3308,10 +3308,12 @@ def get_stock_industry(code: str):
     Returns:
         行业信息
     """
-    from data_fetcher.pytdx import PytdxDataSource
-    from utils.config import ConfigManager
-
+    # R29：data_fetcher.pytdx 已随数据源退役删除（仓库无此模块），导入必须放在
+    # try 内走本处理器自身的优雅降级（200 + industry=None + message），
+    # 置于 try 外会以 ModuleNotFoundError 直接 500（2026-11-10 盘中实测）。
     try:
+        from data_fetcher.pytdx import PytdxDataSource
+        from utils.config import ConfigManager
         # 创建Pytdx数据源
         config_manager = ConfigManager()
         data_sources_config = config_manager.get_data_sources_config()
