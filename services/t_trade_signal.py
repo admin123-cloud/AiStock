@@ -322,11 +322,14 @@ def day_vwap(bars5_today: Sequence[Mapping[str, Any]]) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 EAST_K_URL = ("http://push2his.eastmoney.com/api/qt/stock/kline/get"
-              "?secid={secid}&fields1=f1,f2,f3&fields2=f51,f53,f56,f57"
+              "?secid={secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f56,f57"
               "&klt={klt}&fqt=1&end=20500101&lmt={lmt}")
 
 def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
-    """东财 push2his 前复权分时K（含当日）：[{ts, close, volume(手), amount(元)}]。"""
+    """东财 push2his 前复权分时K（含当日）：[{ts, open, close, volume(手), amount(元)}]。
+
+    R40 起含 open（f52，影子做T虚拟成交次开价用）；既有消费方按 key 取值不受影响。
+    """
     url = EAST_K_URL.format(secid=east_secid(code), klt=klt, lmt=lmt)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -335,12 +338,14 @@ def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
     out = []
     for row in klines:
         parts = row.split(",")
-        if len(parts) < 4:
+        if len(parts) < 5:
             continue
         out.append({
-            "ts": parts[0], "close": float(parts[1]),
-            "volume": float(parts[2]) if parts[2] else 0.0,
-            "amount": float(parts[3]) if parts[3] else 0.0,
+            "ts": parts[0],
+            "open": float(parts[1]) if parts[1] else float(parts[2]),
+            "close": float(parts[2]) if parts[2] else 0.0,
+            "volume": float(parts[3]) if parts[3] else 0.0,
+            "amount": float(parts[4]) if parts[4] else 0.0,
         })
     return out
 

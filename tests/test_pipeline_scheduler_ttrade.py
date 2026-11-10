@@ -111,6 +111,21 @@ class TestRegistration:
         finally:
             sched.shutdown(wait=False) if sched.running else None
 
+    def test_r40_shadow_finalize_job_registered(self):
+        from apscheduler.schedulers.blocking import BlockingScheduler
+
+        sched = BlockingScheduler(timezone=ps.BEIJING_TZ)
+        try:
+            jobs = ps.register_t_tracker_jobs(sched)
+            assert all(j is not None for j in jobs)
+            job = sched.get_job(ps.TTRACKER_SHADOW_FINALIZE_JOB_ID)
+            assert job is not None
+            assert job.max_instances == 1 and job.coalesce is True
+            # 15:16：严格晚于 broker_sync 15:15（任务书「15:15 后」语义）
+            assert ps.TTRACKER_SHADOW_FINALIZE_CRON_TIME > ps.TTRACKER_BROKER_SYNC_CRON_TIME
+        finally:
+            sched.shutdown(wait=False) if sched.running else None
+
 
 class TestStepSemantics:
     def test_regime_runs_subprocess_on_trading_day(self):
@@ -129,6 +144,15 @@ class TestStepSemantics:
             now_fn=lambda: _bj("15:10"))
         assert report["status"] == "success"
         assert runner.calls[0][-1] == "--reconcile"
+
+    def test_r40_shadow_finalize_runs_subprocess(self):
+        runner = _Runner()
+        report = ps.run_t_tracker_shadow_finalize(
+            is_trading_day=lambda d: True, runner=runner,
+            now_fn=lambda: _bj("15:16"))
+        assert report["status"] == "success"
+        assert runner.calls[0][1].endswith("t_trade_tracker.py")
+        assert runner.calls[0][-1] == "--shadow-finalize"
 
     def test_beat_window_guard_noop_before_0936(self):
         runner = _Runner()

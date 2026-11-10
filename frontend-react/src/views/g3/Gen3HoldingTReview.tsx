@@ -14,7 +14,7 @@ import {
 } from '@/components/catalyst/table'
 import { useToast } from '@/components/toast'
 import { Card, ChangeValue, PageHeader, SectionTitle, StatCard } from '@/components/ui'
-import { getGen3HoldingTReview, recordGen3HoldingTManualExecution } from '@/api/trading'
+import { getGen3HoldingTReview, getGen3HoldingTShadowReview, recordGen3HoldingTManualExecution } from '@/api/trading'
 
 type Row = Record<string, any>
 
@@ -30,11 +30,26 @@ function statusColor(value: any): 'emerald' | 'amber' | 'zinc' {
   return value === 'completed' ? 'emerald' : value === 'needs_actual_fill' ? 'amber' : 'zinc'
 }
 
+function shadowStatus(value: any): string {
+  return ({ awaiting_fill: '待虚拟成交', tracking: '跟踪中', finalized: '已终结' } as Record<string, string>)[value] || value || '--'
+}
+
+function ProgressBar({ pct, pass }: { pct: number | null; pass: boolean | null }) {
+  const width = pct === null ? 0 : Math.max(0, Math.min(100, pct))
+  const tone = pass === null ? 'bg-zinc-400' : pass ? 'bg-emerald-500' : 'bg-amber-500'
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+      <div className={`h-full rounded-full ${tone}`} style={{ width: `${width}%` }} />
+    </div>
+  )
+}
+
 export default function Gen3HoldingTReview() {
   const toast = useToast()
   const today = new Date().toISOString().slice(0, 10)
   const [tradeDate, setTradeDate] = useState(today)
   const [review, setReview] = useState<Row>({})
+  const [shadow, setShadow] = useState<Row>({})
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
@@ -46,6 +61,10 @@ export default function Gen3HoldingTReview() {
     note: '',
   })
   const stocks: Row[] = review.stocks || []
+  const shadowSignals: Row[] = shadow.signals || []
+  const rolling: Row = shadow.rolling_4w || {}
+  const rollingStats: Row = rolling.stats || {}
+  const progress: Row = rolling.progress || {}
 
   async function load(date = tradeDate) {
     setLoading(true)
@@ -59,6 +78,12 @@ export default function Gen3HoldingTReview() {
       toast.error(error?.message || '读取做T复盘失败')
     } finally {
       setLoading(false)
+    }
+    try {
+      const payload: any = await getGen3HoldingTShadowReview({ trade_date: date })
+      setShadow(payload || {})
+    } catch {
+      setShadow({})
     }
   }
 
@@ -232,6 +257,90 @@ export default function Gen3HoldingTReview() {
           </div>
         </Card>
       ))}
+
+      <Card className="mt-6 border-dashed">
+        <SectionTitle
+          title="影子盘 · vertical_ramp_distribution（R39 修正式观察验证）"
+          actions={<Badge color="zinc">observe_only · 零推送 · 零真实交易</Badge>}
+        />
+        <p className="mb-3 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
+          影子信号只落 runtime/t_tracker/shadow/ 台账，绝不进 pending_push、绝不微信推送、不影响上方真T草案；
+          虚拟成交 = 信号 bar 次开价 × 底仓 1/3 整百，结局跟踪 30/60/120min 与当日收盘（判定基准 = 120min 净%，尾盘触发改用收盘净%）。
+        </p>
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label={`4周滚动胜率（门槛 ${Math.round((progress.win_rate_min ?? 0.6) * 100)}%）`}
+            value={rollingStats.win_rate == null ? '--' : `${(rollingStats.win_rate * 100).toFixed(1)}%`}
+            tone={progress.win_rate_pass == null ? 'info' : progress.win_rate_pass ? 'up' : 'warning'}
+            hint={`判定样本 ${rollingStats.n ?? 0} 笔 · ${rolling.wins ?? 0}胜/${rollingStats.losses ?? 0}负`}
+          />
+          <StatCard
+            label={`4周均笔净%（门槛 +${progress.avg_net_pct_min ?? 0.3}%）`}
+            value={rollingStats.avg_net_pct == null ? '--' : `${rollingStats.avg_net_pct > 0 ? '+' : ''}${rollingStats.avg_net_pct.toFixed(3)}%`}
+            tone={progress.avg_net_pct_pass == null ? 'info' : progress.avg_net_pct_pass ? 'up' : 'warning'}
+            hint="含费净口径（卖0.0666%+买0.0186%）"
+          />
+          <StatCard label="覆盖交易日" value={(rolling.days_with_data || []).length} hint={`窗口 ${rolling.from || '--'} ~ ${rolling.to || '--'}`} />
+          <StatCard
+            label="通过标准达成"
+            value={progress.overall_pass == null ? '样本累积中' : progress.overall_pass ? '已达标' : '未达标'}
+            tone={progress.overall_pass == null ? 'info' : progress.overall_pass ? 'up' : 'warning'}
+            hint="wr≥60% 且 avg≥+0.3%（两条件同时）"
+          />
+        </section>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <div className="mb-1 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+              <span>胜率进度（对 60% 门槛）</span>
+              <span className="tabular-nums">{rollingStats.win_rate == null ? '--' : `${(rollingStats.win_rate * 100).toFixed(1)}%`}</span>
+            </div>
+            <ProgressBar pct={progress.win_rate_progress_pct == null ? null : Number(progress.win_rate_progress_pct)} pass={progress.win_rate_pass == null ? null : Boolean(progress.win_rate_pass)} />
+          </div>
+          <div>
+            <div className="mb-1 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+              <span>均笔净%进度（对 +0.3% 门槛）</span>
+              <span className="tabular-nums">{rollingStats.avg_net_pct == null ? '--' : `${rollingStats.avg_net_pct > 0 ? '+' : ''}${rollingStats.avg_net_pct.toFixed(3)}%`}</span>
+            </div>
+            <ProgressBar pct={progress.avg_progress_pct == null ? null : Number(progress.avg_progress_pct)} pass={progress.avg_net_pct_pass == null ? null : Boolean(progress.avg_net_pct_pass)} />
+          </div>
+        </div>
+        <div className="mt-4">
+          <Table dense>
+            <TableHead>
+              <TableRow>
+                {['日期/信号bar', '票', '触发特征实值', '虚拟成交', '量', '最新虚拟盈亏', '状态'].map((h) => <TableHeader key={h}>{h}</TableHeader>)}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {shadowSignals.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-zinc-500 dark:text-zinc-400">当日无影子触发</TableCell>
+                </TableRow>
+              )}
+              {shadowSignals.map((row: Row) => (
+                <TableRow key={row.id}>
+                  <TableCell className="whitespace-nowrap">{row.signal_bar_ts || '--'}</TableCell>
+                  <TableCell className="whitespace-nowrap">{row.code} {row.name}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums text-zinc-600 dark:text-zinc-300">
+                    gain30 +{row.features?.gain30_pct}% · down{row.features?.down30} · RSI5 {row.features?.rsi5} · 乖离 +{row.features?.vwap_dev_pct}%
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">
+                    {row.virtual_fill ? `${price(row.virtual_fill.price)} @ ${String(row.virtual_fill.bar_ts || '').slice(11)}` : '--'}
+                  </TableCell>
+                  <TableCell className="tabular-nums">{row.virtual_fill?.qty ?? '--'}</TableCell>
+                  <TableCell>
+                    <ChangeValue value={row.latest_net_pct == null ? null : Number(row.latest_net_pct)} digits={3} />
+                    {row.judged?.basis === 'close_fallback' && <span className="ml-1 text-xs text-zinc-400">收盘口径</span>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge color={row.status === 'finalized' ? 'emerald' : row.status === 'tracking' ? 'amber' : 'zinc'}>{shadowStatus(row.status)}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </Card>
     </div>
   )
 }

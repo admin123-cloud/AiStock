@@ -114,8 +114,9 @@ _PROJECT_NAMESPACES = ('api', 'services', 'strategies', 'utils')
 # （112 条 router GET，其中 8 条经 AISTOCK_READFACE_PREVIEW 守卫后为纯读；另含本文件
 # 自有 health×2）；39 条伪读实写/任务触发/调度器变更/外呼 GET 封禁；全部 127 条
 # POST/PUT/DELETE 一律封禁。/api/stocks/select/* 11 条在 api/stocks.py:5826 已被
-# QMT 退役剥离（运行时死路由），不入集。历史：R11 7 路径→R13 18→R15 22→R29 27→R30 114。
-# 完整 (METHOD, path) 矩阵：114 条路径各自的 GET 与 HEAD 共 228 对，一个不多、一个不少；
+# QMT 退役剥离（运行时死路由），不入集。历史：R11 7 路径→R13 18→R15 22→R29 27→R30 114
+# →R40 115（holding-t/shadow-review，影子做T复盘纯读）。
+# 完整 (METHOD, path) 矩阵：115 条路径各自的 GET 与 HEAD 共 230 对，一个不多、一个不少；
 # 任何 OPTIONS、其他方法、未识别路由类型或额外路径都是违规。路径模板取自各 router 文件
 # 的实际装饰器（含 /api/stocks/ 尾斜杠与参数名）。
 ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
@@ -161,6 +162,8 @@ ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('HEAD', '/api/gen3-state-alpha/holding-t/portfolio-state'),
     ('GET', '/api/gen3-state-alpha/holding-t/review'),
     ('HEAD', '/api/gen3-state-alpha/holding-t/review'),
+    ('GET', '/api/gen3-state-alpha/holding-t/shadow-review'),
+    ('HEAD', '/api/gen3-state-alpha/holding-t/shadow-review'),
     ('GET', '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}'),
     ('HEAD', '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}'),
     ('GET', '/api/gen3-state-alpha/holding-tick-watchlist'),

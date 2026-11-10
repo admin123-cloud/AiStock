@@ -6,8 +6,12 @@
   python scripts/t_trade_tracker.py --beat     [--now "2026-11-11 10:01:00"]
   python scripts/t_trade_tracker.py --reconcile [--date 2026-11-11] [--fills-file path.json]
   python scripts/t_trade_tracker.py --replay --date 2026-11-10 [--cache cache.json]
+  python scripts/t_trade_tracker.py --shadow-tick     [--now ...]（R40 影子单拍）
+  python scripts/t_trade_tracker.py --shadow-finalize [--date 2026-11-11]（R40 影子日终）
+  python scripts/t_trade_tracker.py --shadow-replay --date 2026-11-10 [--cache ...]（R40 影子回放）
 
-零交易零 formal 写；产物全部在 runtime/t_tracker（回放写 replay/ 子目录，不动生产草案）。
+零交易零 formal 写；产物全部在 runtime/t_tracker（回放写 replay/ 子目录，不动生产草案；
+影子写 shadow/ 子目录，与 drafts/pending_push 物理隔离，绝不推送）。
 """
 from __future__ import annotations
 
@@ -23,6 +27,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from services import t_trade_shadow  # noqa: E402
 from services import t_trade_signal as tts  # noqa: E402
 from services.t_trade_signal import BEIJING_TZ, fmt_ts, parse_ts  # noqa: E402
 
@@ -61,12 +66,22 @@ def cmd_regime(args: argparse.Namespace) -> int:
 def cmd_beat(args: argparse.Namespace) -> int:
     now = _parse_now(args.now)
     report = tts.run_beat(now=now, out_dir=args.out_dir)
+    # R40 影子拍（observe_only）：同一进程随真节拍运行，但物理隔离 + 独立异常面
+    # ——影子任何失败不影响真节拍结果与退出码，只如实打印 shadow 状态。
+    shadow_summary: dict[str, Any] = {"status": "skipped"}
+    if not args.no_shadow:
+        try:
+            shadow_summary = t_trade_shadow.shadow_beat(now=now, out_dir=args.out_dir)
+        except Exception as exc:  # noqa: BLE001
+            shadow_summary = {"status": f"error:{type(exc).__name__}", "detail": str(exc)}
     print(json.dumps({"status": report.get("status"), "ts": report.get("ts"),
                       "new_draft_ids": report.get("new_draft_ids", []),
                       "suppressed": {c: r.get("suppressed")
                                      for c, r in (report.get("codes") or {}).items()
-                                     if isinstance(r, dict) and r.get("suppressed")}},
-                     ensure_ascii=False))
+                                     if isinstance(r, dict) and r.get("suppressed")},
+                      "shadow": {k: shadow_summary.get(k)
+                                 for k in ("status", "new_signal_ids", "signals_total")},
+                      }, ensure_ascii=False))
     return 0 if report.get("status") == "ok" else 1
 
 
@@ -161,18 +176,102 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_shadow_tick(args: argparse.Namespace) -> int:
+    now = _parse_now(args.now)
+    report = t_trade_shadow.shadow_beat(now=now, out_dir=args.out_dir)
+    print(json.dumps(report, ensure_ascii=False))
+    return 0 if report.get("status") == "ok" else 1
+
+
+def cmd_shadow_finalize(args: argparse.Namespace) -> int:
+    for_date = _parse_date(args.date)
+    now = datetime.now(BEIJING_TZ).replace(tzinfo=None)
+    report = t_trade_shadow.finalize_shadow_day(for_date=for_date, now=now,
+                                                out_dir=args.out_dir)
+    print(json.dumps({k: report.get(k) for k in
+                      ("date", "signals_total", "finalized", "judged_stats",
+                       "rolling_4w")},
+                     ensure_ascii=False))
+    return 0 if report.get("beat_status") == "ok" else 1
+
+
+def cmd_shadow_replay(args: argparse.Namespace) -> int:
+    """影子回放：真节拍同律（09:36~14:56 每 5min）跑 shadow_beat + 15:05 日终固化。
+
+    与 cmd_replay 的关键差异：写 shadow/（影子台账本体，供复盘页/滚动统计使用），
+    绝不触碰 drafts/pending_push；行情缓存独立（需含 open 字段，480 根覆盖 RSI 收窗）。
+    """
+    day = _parse_date(args.date)
+    now = datetime.now(BEIJING_TZ).replace(tzinfo=None)
+    pool = tts.load_broker_holdings()
+    codes = [str(h["code"]).split(".")[0] for h in pool["holdings"]]
+
+    cache_file = Path(args.cache) if args.cache else (
+        tts.tracker_dir() / "replay" / f"shadow_cache_{day.strftime('%Y%m%d')}.json")
+    if cache_file.is_file():
+        cache = _load_cache(cache_file)
+    else:
+        cache: dict[str, Any] = {"fetched_at": fmt_ts(now)}
+        for code in codes:
+            cache[code] = {"bars5": tts.fetch_east_klines(code, 5, lmt=480)}
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+
+    regime_loader = lambda d: tts._load_json(tts.regime_file_path(tts.tracker_dir(), d))  # noqa: E731
+    # 镜像线上 lmt=120：每拍只用已收 bar 的最后 120 根（RSI 收窗确定性）
+    bars5_loader = lambda code: [b for b in ((cache.get(code) or {}).get("bars5") or [])
+                                 if str(b["ts"]) <= "{} 15:00".format(day.isoformat())]  # noqa: E731
+
+    beats = []
+    for beat_now in _replay_beat_times(day):
+        report = t_trade_shadow.shadow_beat(
+            now=beat_now, out_dir=args.out_dir, holdings_loader=lambda: pool,
+            regime_loader=regime_loader, bars5_loader=bars5_loader)
+        beats.append({"ts": report.get("ts"), "status": report.get("status"),
+                      "new_signal_ids": report.get("new_signal_ids", [])})
+
+    summary = t_trade_shadow.finalize_shadow_day(
+        for_date=day, now=now, out_dir=args.out_dir,
+        holdings_loader=lambda: pool, regime_loader=regime_loader, bars5_loader=bars5_loader)
+    out = {
+        "schema": "t_tracker_shadow_replay/1", "date": day.isoformat(),
+        "generated_at": fmt_ts(now), "beats": len(beats),
+        "signal_count": summary.get("signals_total"),
+        "judged_stats": summary.get("judged_stats"),
+        "signals": [{k: s.get(k) for k in ("id", "signal_ts", "signal_bar_ts", "code",
+                                           "features", "virtual_fill", "outcomes",
+                                           "judged", "status")}
+                    for s in (tts._load_json(t_trade_shadow.shadow_day_path(
+                        tts.tracker_dir(args.out_dir), day)) or {}).get("signals", [])],
+        "timeline": [b for b in beats if b.get("new_signal_ids")],
+        "cache_file": str(cache_file),
+    }
+    out_file = tts.tracker_dir(args.out_dir) / "replay" / f"shadow_{day.strftime('%Y%m%d')}_report.json"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(json.dumps({"signal_count": out["signal_count"],
+                      "judged_stats": out["judged_stats"],
+                      "report": str(out_file)}, ensure_ascii=False))
+    return 0
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="R37 L1 半自动做T引擎 CLI")
+    parser = argparse.ArgumentParser(description="R37 L1 半自动做T引擎 CLI（R40 含影子做T）")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--regime", action="store_true", help="09:25 周期判定")
-    mode.add_argument("--beat", action="store_true", help="盘中信号节拍（单次）")
+    mode.add_argument("--beat", action="store_true", help="盘中信号节拍（单次，含影子拍）")
     mode.add_argument("--reconcile", action="store_true", help="15:10 当日成交对账")
     mode.add_argument("--replay", action="store_true", help="回放验证（写 replay/ 目录）")
+    mode.add_argument("--shadow-tick", action="store_true", help="R40 影子单拍（写 shadow/）")
+    mode.add_argument("--shadow-finalize", action="store_true", help="R40 影子日终固化+滚动统计")
+    mode.add_argument("--shadow-replay", action="store_true", help="R40 影子全日回放（写 shadow/）")
     parser.add_argument("--date", help="YYYY-MM-DD（默认今天）")
     parser.add_argument("--now", help="beat 用北京时间 YYYY-MM-DD HH:MM:SS（默认当前）")
     parser.add_argument("--fills-file", help="对账成交文件（{fills:[...]}）")
     parser.add_argument("--cache", help="回放行情缓存文件路径")
     parser.add_argument("--out-dir", help="覆盖 t_tracker 根目录（测试用）")
+    parser.add_argument("--no-shadow", action="store_true",
+                        help="beat 时跳过影子拍（真节拍单独调试用）")
     return parser
 
 
@@ -184,7 +283,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return cmd_beat(args)
     if args.reconcile:
         return cmd_reconcile(args)
-    return cmd_replay(args)
+    if args.replay:
+        return cmd_replay(args)
+    if args.shadow_tick:
+        return cmd_shadow_tick(args)
+    if args.shadow_finalize:
+        return cmd_shadow_finalize(args)
+    return cmd_shadow_replay(args)
 
 
 if __name__ == "__main__":

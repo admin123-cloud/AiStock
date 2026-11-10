@@ -15,6 +15,10 @@
      formal 表写）——t_trade_regime 工作日 09:25 周期判定；t_trade_signal_beat
      工作日 09:36~14:56 每 5min（minute 1-56/5，与快照 */5 错峰 1min）；
      t_trade_reconcile 工作日 15:10 当日成交对账。16:15 盘后管道不受影响；
+  4. R40（2026-11-10）：影子做T（observe_only）——t_trade_signal_beat 每拍附带影子
+     评估（services/t_trade_shadow.py，独立异常面，失败不影响真节拍），产物
+     runtime/t_tracker/shadow/，绝不进 pending_push；t_trade_shadow_finalize
+     工作日 15:16 日终固化 + 4 周滚动统计。零交易零 formal 表写不变；
   2. run_postclose_pipelines() 为可在测试中 import 的纯编排函数（依赖全部可注入）：
      - 顺序 subprocess：daily_kline_pipeline.py --formal-write（失败重试 3 次、
        间隔 600s）→ minute_collect_auto.py --mode formal-write（rc 0/1 继续，
@@ -79,6 +83,7 @@ TTRACKER_RECONCILE_JOB_ID = "t_trade_reconcile"  # 工作日 15:10 当日成交�
 TTRACKER_SCRIPT = "t_trade_tracker.py"
 TTRACKER_BROKER_SYNC_JOB_ID = "broker_state_sync"   # 工作日 15:15 fills→broker_state（R38c）
 TTRACKER_BROKER_SYNC_SCRIPT = "broker_state_sync.py"
+TTRACKER_SHADOW_FINALIZE_JOB_ID = "t_trade_shadow_finalize"  # 工作日 15:16 影子做T日终固化（R40）
 # 快照任务 minute=*/5（09:00/09:05/…），做T节拍 minute=1-56/5（09:01/09:06/…）→ 错峰 1min；
 # 窗口收口后实际节拍 09:36~14:56（任务书：09:35~14:55 每 5min + 错峰 1min 语义）。
 TTRACKER_BEAT_CRON_MINUTE = "1-56/5"
@@ -88,6 +93,7 @@ TTRACKER_BEAT_WINDOW_END = dt_time(14, 56)
 TTRACKER_REGIME_CRON_TIME = dt_time(9, 25)
 TTRACKER_RECONCILE_CRON_TIME = dt_time(15, 10)
 TTRACKER_BROKER_SYNC_CRON_TIME = dt_time(15, 15)   # R38c：reconcile 后 5min
+TTRACKER_SHADOW_FINALIZE_CRON_TIME = dt_time(15, 16)  # R40：15:15 后收盘已定，影子日终固化
 
 STAGE_INTRADAY = "intraday_snapshot"
 
@@ -700,6 +706,21 @@ def run_broker_state_sync(
     )
 
 
+def run_t_tracker_shadow_finalize(
+    *,
+    mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """15:16 影子做T日终固化（R40；observe_only 台账 shadow/ + 4 周滚动统计）。"""
+    return _run_t_tracker_step(
+        "shadow_finalize", "--shadow-finalize", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner, logger_=logger_,
+    )
+
+
 def build_t_tracker_beat_cron_trigger():
     """做T节拍 cron：mon-fri 09:01~14:56 每 5min 错峰 +1min（窗口函数再收口）。"""
     from apscheduler.triggers.cron import CronTrigger
@@ -767,9 +788,23 @@ def register_t_tracker_jobs(scheduler) -> list:
         coalesce=True,
         replace_existing=True,
     )
+    scheduler.add_job(
+        run_t_tracker_shadow_finalize,
+        trigger=CronTrigger(
+            day_of_week=CRON_DAY_OF_WEEK,
+            hour=TTRACKER_SHADOW_FINALIZE_CRON_TIME.hour,
+            minute=TTRACKER_SHADOW_FINALIZE_CRON_TIME.minute,
+            timezone=BEIJING_TZ,
+        ),
+        id=TTRACKER_SHADOW_FINALIZE_JOB_ID,
+        name="影子做T·日终固化+滚动统计（R40，工作日 15:16，observe_only 零推送）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     return [scheduler.get_job(jid) for jid in
             (TTRACKER_REGIME_JOB_ID, TTRACKER_BEAT_JOB_ID, TTRACKER_RECONCILE_JOB_ID,
-             TTRACKER_BROKER_SYNC_JOB_ID)]
+             TTRACKER_BROKER_SYNC_JOB_ID, TTRACKER_SHADOW_FINALIZE_JOB_ID)]
 
 
 # ---------------------------------------------------------------------------
@@ -932,11 +967,12 @@ def serve(
     )
     logger.info(
         "调度注册：R37 L1做T regime=%s@%s beat=%s(min %s,%s 时) reconcile=%s@%s "
-        "broker_sync=%s@%s（R38c，错峰快照 1min）",
+        "broker_sync=%s@%s shadow_finalize=%s@%s（R40 observe_only）",
         TTRACKER_REGIME_JOB_ID, TTRACKER_REGIME_CRON_TIME.strftime("%H:%M"),
         TTRACKER_BEAT_JOB_ID, TTRACKER_BEAT_CRON_MINUTE, TTRACKER_BEAT_CRON_HOURS,
         TTRACKER_RECONCILE_JOB_ID, TTRACKER_RECONCILE_CRON_TIME.strftime("%H:%M"),
         TTRACKER_BROKER_SYNC_JOB_ID, TTRACKER_BROKER_SYNC_CRON_TIME.strftime("%H:%M"),
+        TTRACKER_SHADOW_FINALIZE_JOB_ID, TTRACKER_SHADOW_FINALIZE_CRON_TIME.strftime("%H:%M"),
     )
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown

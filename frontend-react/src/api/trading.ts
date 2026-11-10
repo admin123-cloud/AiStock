@@ -333,6 +333,14 @@ export function getGen3HoldingTReview(params) {
   })
 }
 
+export function getGen3HoldingTShadowReview(params) {
+  return request({
+    url: '/gen3-state-alpha/holding-t/shadow-review',
+    method: 'get',
+    params
+  })
+}
+
 export function recordGen3HoldingTManualExecution(data) {
   return request({
     url: '/gen3-state-alpha/holding-t/manual-execution',

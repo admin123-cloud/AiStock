@@ -91,6 +91,7 @@ def health_check():
 
 # R30 全站只读面 allowlist：162 条 GET 逐条副作用审计后的放行集（123 条 router GET，
 # 其中 8 条经 AISTOCK_READFACE_PREVIEW 守卫后为纯读）+ 2 条本文件 health 端点。
+# R40 增补：/gen3-state-alpha/holding-t/shadow-review（影子做T复盘，runtime/t_tracker/shadow 纯读）。
 # 封禁集（39 条 GET + 全部 POST/PUT/DELETE）不在此列；逐条判定与证据行号见
 # runtime/full_readface_allowlist_r30/ 审计表。按字母序稳定排列，便于评审与测试断言。
 _ALLOWED_PREVIEW_PATHS = frozenset({
@@ -115,6 +116,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/gen3-state-alpha/historical-decision-replay-tasks',
     '/api/gen3-state-alpha/holding-t/portfolio-state',
     '/api/gen3-state-alpha/holding-t/review',
+    '/api/gen3-state-alpha/holding-t/shadow-review',
     '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}',
     '/api/gen3-state-alpha/holding-tick-watchlist',
     '/api/gen3-state-alpha/launch-day-playbook-reviews',

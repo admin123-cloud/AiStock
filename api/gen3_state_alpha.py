@@ -14670,6 +14670,23 @@ async def get_gen3_holding_t_review(
     return _wrap_guardrails({"ok": True, **review, "order_path_enabled": False})
 
 
+@router.get("/holding-t/shadow-review")
+async def get_gen3_holding_t_shadow_review(
+    trade_date: str | None = Query(default=None, description="Trading date in YYYY-MM-DD; defaults to today."),
+) -> dict[str, Any]:
+    """R40 影子做T复盘（observe_only 台账只读：触发清单+滚动统计+通过标准达成度）。
+
+    纯读 runtime/t_tracker/shadow/；影子信号绝不进 pending_push、零真实交易。
+    """
+    try:
+        from services.t_trade_shadow import read_shadow_review
+
+        return _wrap_guardrails({"ok": True, **read_shadow_review(trade_date), "order_path_enabled": False})
+    except Exception as exc:
+        logger.warning("Failed to load holding-t shadow review: %s", exc)
+        return _wrap_guardrails({"ok": False, "message": str(exc), "signals": [], "order_path_enabled": False})
+
+
 @router.post("/holding-t/manual-execution")
 async def post_gen3_holding_t_manual_execution(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Store a user-entered fill for attribution; it never talks to a broker."""
