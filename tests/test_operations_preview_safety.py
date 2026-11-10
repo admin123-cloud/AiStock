@@ -30,7 +30,16 @@ R15（Owner 2026-11-09 首页补全裁决，任务书 20261109_unified_stack_hom
   - GET、HEAD /api/market/margin-sentiment
   - GET、HEAD /api/market/emotion-trend
   - GET、HEAD /api/news/cls/event/{event_id}
-HEAD 仅限上述 22 个 GET 路径；OPTIONS、其他方法或路径都不在 allowlist，不得从
+R29（2026-11-10 盘中报障修复，任务书 20261110_detail_paths_allowlist_r29.md）：股票
+详情页端点族 5 条 GET 路径补入，allowlist 22→27——
+  - GET、HEAD /api/stocks/{code}/kline-stats
+  - GET、HEAD /api/stocks/{code}/kline/{period}
+  - GET、HEAD /api/stocks/{code}/navigation
+  - GET、HEAD /api/stocks/{code}/industry
+  - GET、HEAD /api/stocks/{code}/boards
+五条在 api/stocks.py 均为 @router.get（3146/3686/3270/3300/3349），同路径无 POST 注册；
+POST 写端点（/{code}/sync、/{code}/sync-light、/update、/update-indices）路径不同且
+绝不入集。HEAD 仅限上述 27 个 GET 路径；OPTIONS、其他方法或路径都不在 allowlist，不得从
 路由矩阵中滤掉。docs、redoc、OpenAPI 端点必须全部关闭；任何写库/外网/sync 端点
 （如 cls_news 的 POST /sync、stocks 的 update/sync/kline 写路径、market 的
 calculate-emotion-cycle、sectors 的 sync/update 类）都必须被后置过滤剔除。
@@ -107,7 +116,11 @@ _PROJECT_NAMESPACES = ('api', 'services', 'strategies', 'utils')
 # Owner 2026-11-09 首页补全裁决（任务书 20261109_unified_stack_homepage_r15.md）：
 # 补入 market/sentiment、market/margin-sentiment、market/emotion-trend（情绪页）
 # 与 news/cls/event/{event_id}（事件详情点查）4 条只读路径，allowlist 18→22。
-# 完整 (METHOD, path) 矩阵：22 条路径各自的 GET 与 HEAD 共 44 对，一个不多、
+# R29（2026-11-10，任务书 20261110_detail_paths_allowlist_r29.md）：详情页端点族
+# kline-stats、kline/{period}、navigation、industry、boards 5 条 GET 路径补入，
+# allowlist 22→27；同路径无 POST 注册，写端点 /sync、/sync-light、/update、
+# /update-indices 绝不入集。
+# 完整 (METHOD, path) 矩阵：27 条路径各自的 GET 与 HEAD 共 54 对，一个不多、
 # 一个不少；任何 OPTIONS、其他方法、未识别路由类型或额外路径都是违规。路径模板
 # 取自各 router 文件的实际装饰器（含 /api/stocks/ 尾斜杠与 /api/sectors/{code}、
 # /api/news/cls/event/{event_id} 参数名）。
@@ -146,6 +159,16 @@ ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('HEAD', '/api/stocks/{code}'),
     ('GET', '/api/stocks/with-limit'),
     ('HEAD', '/api/stocks/with-limit'),
+    ('GET', '/api/stocks/{code}/kline-stats'),
+    ('HEAD', '/api/stocks/{code}/kline-stats'),
+    ('GET', '/api/stocks/{code}/kline/{period}'),
+    ('HEAD', '/api/stocks/{code}/kline/{period}'),
+    ('GET', '/api/stocks/{code}/navigation'),
+    ('HEAD', '/api/stocks/{code}/navigation'),
+    ('GET', '/api/stocks/{code}/industry'),
+    ('HEAD', '/api/stocks/{code}/industry'),
+    ('GET', '/api/stocks/{code}/boards'),
+    ('HEAD', '/api/stocks/{code}/boards'),
     ('GET', '/api/news/cls/status'),
     ('HEAD', '/api/news/cls/status'),
     ('GET', '/api/news/cls/latest'),
@@ -609,6 +632,46 @@ def test_business_http_routes_exactly_match_allowlist(tmp_path, monkeypatch):
         '（R13 统一栈 + R15 首页补全，Owner 2026-11-09 裁决：观察架构替代 '
         '3000，从完整后端借鉴只读面）。'
     )
+
+
+# R29（2026-11-10 盘中报障，任务书 20261110_detail_paths_allowlist_r29.md）：详情页
+# 五路径的显式方法面锁定。矩阵测试（54 对精确相等）已全局覆盖；本测试把 R29 契约
+# 单独固化：五路径 GET+HEAD 必须在路由面（200 分派），OPTIONS/POST/PUT/DELETE/PATCH
+# 不得在路由面（Starlette 对"路径命中、方法不匹配"返回 405，且预览栈无 CORS 中间件、
+# 不存在自动 OPTIONS 响应）；stocks 写端点（POST /{code}/sync、/{code}/sync-light、
+# /update、/update-indices）路径整体不得出现在路由面——POST 绝不入白名单。
+_R29_DETAIL_PATHS = (
+    '/api/stocks/{code}/kline-stats',
+    '/api/stocks/{code}/kline/{period}',
+    '/api/stocks/{code}/navigation',
+    '/api/stocks/{code}/industry',
+    '/api/stocks/{code}/boards',
+)
+
+_R29_FORBIDDEN_WRITE_PATHS = (
+    '/api/stocks/{code}/sync',
+    '/api/stocks/{code}/sync-light',
+    '/api/stocks/update',
+    '/api/stocks/update-indices',
+)
+
+
+def test_r29_detail_paths_allow_get_head_only(tmp_path, monkeypatch):
+    """R29：详情页五路径仅暴露 GET+HEAD；OPTIONS/POST 等一律不在路由面（405）。"""
+    surface = _inspect_preview_route_surface(tmp_path, monkeypatch)
+    pairs = surface['pairs']
+    for path in _R29_DETAIL_PATHS:
+        assert ('GET', path) in pairs, f'详情页路径缺失 GET 路由: {path}'
+        assert ('HEAD', path) in pairs, f'详情页路径缺失 HEAD 路由: {path}'
+        for method in ('OPTIONS', 'POST', 'PUT', 'DELETE', 'PATCH'):
+            assert (method, path) not in pairs, (
+                f'详情页路径不得暴露 {method} 路由: {path}'
+                '（路径命中而方法不匹配必须 405，POST 绝不入白名单）'
+            )
+    for write_path in _R29_FORBIDDEN_WRITE_PATHS:
+        assert write_path not in surface['paths'], (
+            f'写端点绝不允许进入预览栈路由面: {write_path}'
+        )
 
 
 def test_documentation_paths_absent_from_route_table(tmp_path, monkeypatch):

@@ -1,12 +1,19 @@
 """统一栈安全观察模式入口（Owner 2026-11-09 裁决：观察架构替代 3000 完整栈成为唯一入口，
-3001 上缺失的接口从完整后端借鉴补齐）。仅暴露 22 只读路径（GET/HEAD）：
+3001 上缺失的接口从完整后端借鉴补齐）。仅暴露 27 只读路径（GET/HEAD）：
 /api/health/runtime、/api/health/check、/api/operations/data-calendar、/api/operations/tasks、
 /api/operations/mainwave-daily、/api/operations/incidents、/api/operations/data-review-queue、
 /api/market/indices、/api/market/limit-up-ladder、/api/market/sentiment、
 /api/market/margin-sentiment、/api/market/emotion-trend、/api/sectors/stats、/api/sectors/{code}、
 /api/stocks/、/api/stocks/{code}、/api/stocks/with-limit、/api/news/cls/status、
 /api/news/cls/latest、/api/news/cls/signals、/api/news/cls/radar-summary、
-/api/news/cls/event/{event_id}。
+/api/news/cls/event/{event_id}、
+/api/stocks/{code}/kline-stats、/api/stocks/{code}/kline/{period}、/api/stocks/{code}/navigation、
+/api/stocks/{code}/industry、/api/stocks/{code}/boards。
+
+R29（2026-11-10 盘中报障修复，任务书 20261110_detail_paths_allowlist_r29.md）：股票详情页
+端点族 5 条补入（kline-stats、kline/{period}、navigation、industry、boards），允许集合
+22→27。五条在 api/stocks.py 均为 @router.get（3146/3686/3270/3300/3349），同路径无 POST
+注册；/sync、/sync-light、/update 等写端点路径不同，绝不入集。
 
 复用既有 router（api.operations / api.market_overview / api.stocks / api.sectors /
 api.cls_news，include_router 后置过滤，原注册参数原样保留，零行为漂移）；
@@ -60,7 +67,10 @@ def health_check():
 # （Starlette 依 methods 集合分派，HEAD 请求命中同一 handler；原注册参数原样保留，零行为漂移）。
 # 允许集合 = R12 既有 7 条 + R13 统一栈扩展 11 条（候选 12 条中 /api/stocks/search 无路由定义）
 # + R15 首页补全 4 条（market/sentiment、market/margin-sentiment、market/emotion-trend、
-# news/cls/event/{event_id}）。
+# news/cls/event/{event_id}）
+# + R29 详情页 5 条（20261110_detail_paths_allowlist_r29.md：stocks/{code} 下 kline-stats、
+# kline/{period}、navigation、industry、boards；已对 api/stocks.py 实际装饰器逐一断言为
+# @router.get，同路径无 POST 注册；写端点 /sync、/sync-light、/update 绝不入集）。
 _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/health/runtime', '/api/health/check',
     '/api/operations/data-calendar', '/api/operations/tasks',
@@ -70,6 +80,9 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/market/sentiment', '/api/market/margin-sentiment', '/api/market/emotion-trend',
     '/api/sectors/stats', '/api/sectors/{code}',
     '/api/stocks/', '/api/stocks/{code}', '/api/stocks/with-limit',
+    '/api/stocks/{code}/kline-stats', '/api/stocks/{code}/kline/{period}',
+    '/api/stocks/{code}/navigation', '/api/stocks/{code}/industry',
+    '/api/stocks/{code}/boards',
     '/api/news/cls/status', '/api/news/cls/latest',
     '/api/news/cls/signals', '/api/news/cls/radar-summary',
     '/api/news/cls/event/{event_id}',
