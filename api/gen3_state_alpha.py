@@ -14299,12 +14299,17 @@ def _load_holding_tick_sector_members(codes: list[str]) -> dict[str, dict[str, A
             f"""
             SELECT ss.sector_code AS sector_code, ss.stock_code AS code,
                    anyOrNull(st.name) AS name,
-                   argMax(kd.amount, kd.trade_date) AS recent_amount
+                   kd.recent_amount AS recent_amount
             FROM sector_stocks AS ss FINAL
             LEFT JOIN stocks AS st FINAL ON st.code = ss.stock_code
-            LEFT JOIN kline_daily AS kd FINAL ON kd.code = ss.stock_code
+            LEFT JOIN (
+                SELECT code, argMax(amount, trade_date) AS recent_amount
+                FROM kline_daily FINAL
+                WHERE trade_date >= today() - 30
+                GROUP BY code
+            ) AS kd ON kd.code = ss.stock_code
             WHERE ss.sector_code IN ({_quote_sql_list(sector_codes)})
-            GROUP BY ss.sector_code, ss.stock_code
+            GROUP BY ss.sector_code, ss.stock_code, kd.recent_amount
             ORDER BY sector_code, recent_amount DESC, code ASC
             LIMIT 12 BY sector_code
             """
