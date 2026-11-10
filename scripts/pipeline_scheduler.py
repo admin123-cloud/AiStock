@@ -10,6 +10,11 @@
      09:00~15:55 每 5min 触发，节拍函数内窗口守卫收口到 09:35~15:05，subprocess
      调 intraday_snapshot_collect.py 写两张运营层快照表（不碰 kline_* 正式表），
      连续失败 ≥3 轮置 alarm（状态落 runtime/intraday_snapshot/scheduler_state.json）；
+  3. R37（2026-11-10）：L1 半自动做T三任务（全部 subprocess 调
+     scripts/t_trade_tracker.py，产物在 runtime/t_tracker 运营层，零交易零
+     formal 表写）——t_trade_regime 工作日 09:25 周期判定；t_trade_signal_beat
+     工作日 09:36~14:56 每 5min（minute 1-56/5，与快照 */5 错峰 1min）；
+     t_trade_reconcile 工作日 15:10 当日成交对账。16:15 盘后管道不受影响；
   2. run_postclose_pipelines() 为可在测试中 import 的纯编排函数（依赖全部可注入）：
      - 顺序 subprocess：daily_kline_pipeline.py --formal-write（失败重试 3 次、
        间隔 600s）→ minute_collect_auto.py --mode formal-write（rc 0/1 继续，
@@ -31,7 +36,7 @@
 """
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 import argparse
 import json
@@ -66,6 +71,20 @@ INTRADAY_WINDOW_START = dt_time(9, 35)
 INTRADAY_WINDOW_END = dt_time(15, 5)
 # 连续失败 ≥3 轮置 alarm（任务书：失败退避重试，连续失败告警字段）
 INTRADAY_ALARM_THRESHOLD = 3
+
+# R37（2026-11-10）：L1 半自动做T三任务（产物 runtime/t_tracker，零交易零 formal 写）。
+TTRACKER_REGIME_JOB_ID = "t_trade_regime"        # 工作日 09:25 盘前周期判定
+TTRACKER_BEAT_JOB_ID = "t_trade_signal_beat"     # 工作日 09:36~14:56 每 5min 信号节拍
+TTRACKER_RECONCILE_JOB_ID = "t_trade_reconcile"  # 工作日 15:10 当日成交对账
+TTRACKER_SCRIPT = "t_trade_tracker.py"
+# 快照任务 minute=*/5（09:00/09:05/…），做T节拍 minute=1-56/5（09:01/09:06/…）→ 错峰 1min；
+# 窗口收口后实际节拍 09:36~14:56（任务书：09:35~14:55 每 5min + 错峰 1min 语义）。
+TTRACKER_BEAT_CRON_MINUTE = "1-56/5"
+TTRACKER_BEAT_CRON_HOURS = "9-14"
+TTRACKER_BEAT_WINDOW_START = dt_time(9, 36)
+TTRACKER_BEAT_WINDOW_END = dt_time(14, 56)
+TTRACKER_REGIME_CRON_TIME = dt_time(9, 25)
+TTRACKER_RECONCILE_CRON_TIME = dt_time(15, 10)
 
 STAGE_INTRADAY = "intraday_snapshot"
 
@@ -572,6 +591,154 @@ def register_intraday_job(scheduler, job_func: Optional[Callable[[], Any]] = Non
 
 
 # ---------------------------------------------------------------------------
+# R37 L1 半自动做T三任务（regime 09:25 / beat 09:36~14:56 每5min / reconcile 15:10）
+# ---------------------------------------------------------------------------
+
+def in_t_tracker_beat_window(now_bj: datetime) -> bool:
+    """窗口守卫：09:36 ≤ 北京钟 ≤ 14:56（cron 触发面 09:01~14:56 由它收口）。"""
+    current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
+    return TTRACKER_BEAT_WINDOW_START <= current <= TTRACKER_BEAT_WINDOW_END
+
+
+def _run_t_tracker_step(
+    step: str,
+    cli_flag: str,
+    *,
+    mode: str,
+    now_bj: datetime,
+    is_trading_day: Optional[Callable[[date], bool]],
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]],
+    window_guard: Optional[Callable[[datetime], bool]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """做T任务通用节拍：窗口/交易日守卫 → subprocess → 报告 dict（不落盘状态）。"""
+    log = logger_ or logger
+    base = {"schema": "t_tracker_scheduler_step/1", "step": step, "mode": mode,
+            "beat_at_beijing": now_bj.isoformat()}
+    if window_guard is not None and not window_guard(now_bj):
+        return {**base, "status": "no_op_window"}
+    check = is_trading_day or _default_is_trading_day
+    try:
+        trading = bool(check(now_bj.date()))
+    except Exception as exc:  # noqa: BLE001 - 日历判断异常 fail-closed 记失败
+        log.error("[t_tracker:%s] 交易日判断失败：%s", step, exc)
+        return {**base, "status": "failure", "reason": f"trading_day_check_failed: {exc}"}
+    if not trading:
+        return {**base, "status": "no_op_non_trading"}
+    run = runner or _default_runner
+    cmd = [sys.executable, str(SCRIPTS_DIR / TTRACKER_SCRIPT), cli_flag]
+    result = run(cmd) or {}
+    try:
+        rc = int(result.get("returncode", -1))
+    except (TypeError, ValueError):
+        rc = -1
+    if rc != 0:
+        log.error("[t_tracker:%s] rc=%s stderr=%s", step, rc,
+                  str(result.get("stderr") or "")[-300:])
+    return {**base, "status": "success" if rc == 0 else "failure", "rc": rc}
+
+
+def run_t_tracker_regime(
+    *, mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """09:25 盘前周期判定（写 runtime/t_tracker/regime_<date>.json）。"""
+    return _run_t_tracker_step(
+        "regime", "--regime", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner, logger_=logger_,
+    )
+
+
+def run_t_tracker_beat(
+    *, mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """盘中信号节拍（草案落 runtime/t_tracker/drafts + pending_push）。"""
+    return _run_t_tracker_step(
+        "beat", "--beat", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner,
+        window_guard=in_t_tracker_beat_window, logger_=logger_,
+    )
+
+
+def run_t_tracker_reconcile(
+    *, mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """15:10 当日成交对账（台账 runtime/t_tracker/ledger/）。"""
+    return _run_t_tracker_step(
+        "reconcile", "--reconcile", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner, logger_=logger_,
+    )
+
+
+def build_t_tracker_beat_cron_trigger():
+    """做T节拍 cron：mon-fri 09:01~14:56 每 5min 错峰 +1min（窗口函数再收口）。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    return CronTrigger(
+        day_of_week=CRON_DAY_OF_WEEK,
+        hour=TTRACKER_BEAT_CRON_HOURS,
+        minute=TTRACKER_BEAT_CRON_MINUTE,
+        timezone=BEIJING_TZ,
+    )
+
+
+def register_t_tracker_jobs(scheduler) -> list:
+    """注册做T三任务（regime/beat/reconcile）；返回 job 列表。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler.add_job(
+        run_t_tracker_regime,
+        trigger=CronTrigger(
+            day_of_week=CRON_DAY_OF_WEEK,
+            hour=TTRACKER_REGIME_CRON_TIME.hour,
+            minute=TTRACKER_REGIME_CRON_TIME.minute,
+            timezone=BEIJING_TZ,
+        ),
+        id=TTRACKER_REGIME_JOB_ID,
+        name="L1做T·盘前周期判定（R37，工作日 09:25）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_t_tracker_beat,
+        trigger=build_t_tracker_beat_cron_trigger(),
+        id=TTRACKER_BEAT_JOB_ID,
+        name="L1做T·盘中信号节拍（R37，09:36~14:56 每 5min 错峰快照 1min）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_t_tracker_reconcile,
+        trigger=CronTrigger(
+            day_of_week=CRON_DAY_OF_WEEK,
+            hour=TTRACKER_RECONCILE_CRON_TIME.hour,
+            minute=TTRACKER_RECONCILE_CRON_TIME.minute,
+            timezone=BEIJING_TZ,
+        ),
+        id=TTRACKER_RECONCILE_JOB_ID,
+        name="L1做T·当日成交对账（R37，工作日 15:10）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return [scheduler.get_job(jid) for jid in
+            (TTRACKER_REGIME_JOB_ID, TTRACKER_BEAT_JOB_ID, TTRACKER_RECONCILE_JOB_ID)]
+
+
+# ---------------------------------------------------------------------------
 # 调度器装配
 # ---------------------------------------------------------------------------
 
@@ -699,6 +866,7 @@ def serve(
     scheduler = factory(timezone=BEIJING_TZ)
     register_postclose_job(scheduler, lambda: _log_pipeline_result(pipeline))
     register_intraday_job(scheduler)
+    register_t_tracker_jobs(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -727,6 +895,12 @@ def serve(
         INTRADAY_CRON_MINUTE_STEP, "Asia/Shanghai",
         INTRADAY_WINDOW_START.strftime("%H:%M"), INTRADAY_WINDOW_END.strftime("%H:%M"),
         intraday_next.isoformat() if intraday_next else "pending",
+    )
+    logger.info(
+        "调度注册：R37 L1做T regime=%s@%s beat=%s(min %s,%s 时) reconcile=%s@%s（错峰快照 1min）",
+        TTRACKER_REGIME_JOB_ID, TTRACKER_REGIME_CRON_TIME.strftime("%H:%M"),
+        TTRACKER_BEAT_JOB_ID, TTRACKER_BEAT_CRON_MINUTE, TTRACKER_BEAT_CRON_HOURS,
+        TTRACKER_RECONCILE_JOB_ID, TTRACKER_RECONCILE_CRON_TIME.strftime("%H:%M"),
     )
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown
