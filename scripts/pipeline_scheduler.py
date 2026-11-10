@@ -77,6 +77,8 @@ TTRACKER_REGIME_JOB_ID = "t_trade_regime"        # 工作日 09:25 盘前周期�
 TTRACKER_BEAT_JOB_ID = "t_trade_signal_beat"     # 工作日 09:36~14:56 每 5min 信号节拍
 TTRACKER_RECONCILE_JOB_ID = "t_trade_reconcile"  # 工作日 15:10 当日成交对账
 TTRACKER_SCRIPT = "t_trade_tracker.py"
+TTRACKER_BROKER_SYNC_JOB_ID = "broker_state_sync"   # 工作日 15:15 fills→broker_state（R38c）
+TTRACKER_BROKER_SYNC_SCRIPT = "broker_state_sync.py"
 # 快照任务 minute=*/5（09:00/09:05/…），做T节拍 minute=1-56/5（09:01/09:06/…）→ 错峰 1min；
 # 窗口收口后实际节拍 09:36~14:56（任务书：09:35~14:55 每 5min + 错峰 1min 语义）。
 TTRACKER_BEAT_CRON_MINUTE = "1-56/5"
@@ -85,6 +87,7 @@ TTRACKER_BEAT_WINDOW_START = dt_time(9, 36)
 TTRACKER_BEAT_WINDOW_END = dt_time(14, 56)
 TTRACKER_REGIME_CRON_TIME = dt_time(9, 25)
 TTRACKER_RECONCILE_CRON_TIME = dt_time(15, 10)
+TTRACKER_BROKER_SYNC_CRON_TIME = dt_time(15, 15)   # R38c：reconcile 后 5min
 
 STAGE_INTRADAY = "intraday_snapshot"
 
@@ -610,6 +613,7 @@ def _run_t_tracker_step(
     runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]],
     window_guard: Optional[Callable[[datetime], bool]] = None,
     logger_: Optional[logging.Logger] = None,
+    script: str = TTRACKER_SCRIPT,
 ) -> dict:
     """做T任务通用节拍：窗口/交易日守卫 → subprocess → 报告 dict（不落盘状态）。"""
     log = logger_ or logger
@@ -626,7 +630,7 @@ def _run_t_tracker_step(
     if not trading:
         return {**base, "status": "no_op_non_trading"}
     run = runner or _default_runner
-    cmd = [sys.executable, str(SCRIPTS_DIR / TTRACKER_SCRIPT), cli_flag]
+    cmd = [sys.executable, str(SCRIPTS_DIR / script), cli_flag]
     result = run(cmd) or {}
     try:
         rc = int(result.get("returncode", -1))
@@ -678,6 +682,21 @@ def run_t_tracker_reconcile(
     return _run_t_tracker_step(
         "reconcile", "--reconcile", mode=mode, now_bj=cn_now(now_fn),
         is_trading_day=is_trading_day, runner=runner, logger_=logger_,
+    )
+
+
+def run_broker_state_sync(
+    *, mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """15:15 fills→broker_state 幂等同步（R38c；脚本自带 fail-closed 门禁）。"""
+    return _run_t_tracker_step(
+        "broker_state_sync", "--sync", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner, logger_=logger_,
+        script=TTRACKER_BROKER_SYNC_SCRIPT,
     )
 
 
@@ -734,8 +753,23 @@ def register_t_tracker_jobs(scheduler) -> list:
         coalesce=True,
         replace_existing=True,
     )
+    scheduler.add_job(
+        run_broker_state_sync,
+        trigger=CronTrigger(
+            day_of_week=CRON_DAY_OF_WEEK,
+            hour=TTRACKER_BROKER_SYNC_CRON_TIME.hour,
+            minute=TTRACKER_BROKER_SYNC_CRON_TIME.minute,
+            timezone=BEIJING_TZ,
+        ),
+        id=TTRACKER_BROKER_SYNC_JOB_ID,
+        name="L1做T·broker_state 成交同步（R38c，工作日 15:15）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     return [scheduler.get_job(jid) for jid in
-            (TTRACKER_REGIME_JOB_ID, TTRACKER_BEAT_JOB_ID, TTRACKER_RECONCILE_JOB_ID)]
+            (TTRACKER_REGIME_JOB_ID, TTRACKER_BEAT_JOB_ID, TTRACKER_RECONCILE_JOB_ID,
+             TTRACKER_BROKER_SYNC_JOB_ID)]
 
 
 # ---------------------------------------------------------------------------
@@ -897,10 +931,12 @@ def serve(
         intraday_next.isoformat() if intraday_next else "pending",
     )
     logger.info(
-        "调度注册：R37 L1做T regime=%s@%s beat=%s(min %s,%s 时) reconcile=%s@%s（错峰快照 1min）",
+        "调度注册：R37 L1做T regime=%s@%s beat=%s(min %s,%s 时) reconcile=%s@%s "
+        "broker_sync=%s@%s（R38c，错峰快照 1min）",
         TTRACKER_REGIME_JOB_ID, TTRACKER_REGIME_CRON_TIME.strftime("%H:%M"),
         TTRACKER_BEAT_JOB_ID, TTRACKER_BEAT_CRON_MINUTE, TTRACKER_BEAT_CRON_HOURS,
         TTRACKER_RECONCILE_JOB_ID, TTRACKER_RECONCILE_CRON_TIME.strftime("%H:%M"),
+        TTRACKER_BROKER_SYNC_JOB_ID, TTRACKER_BROKER_SYNC_CRON_TIME.strftime("%H:%M"),
     )
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown
