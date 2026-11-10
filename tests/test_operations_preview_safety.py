@@ -97,6 +97,7 @@ calculate-emotion-cycle、sectors 的 sync/update 类）都必须被后置过滤
 """
 
 import importlib
+import os
 import sys
 import types
 from datetime import timedelta, timezone
@@ -108,77 +109,244 @@ import pytest
 _PROJECT_NAMESPACES = ('api', 'services', 'strategies', 'utils')
 
 # PM 路由 allowlist：显式硬编码，禁止由仓库枚举推导。
-# Owner 2026-11-09 统一栈裁决（任务书 20261109_unified_stack_r13.md）：安全观察
-# 架构替代 3000 完整栈，从完整后端借鉴只读 GET 面，allowlist 由 R11 的 7 路径
-# 扩展为 18 路径；仅覆盖该只读面，写库/外网/sync 端点（cls_news 的 sync、
-# stocks 的 update/sync/kline 写路径、market 的 calculate-emotion-cycle、
-# sectors 的 sync/update 类）一律禁止。
-# Owner 2026-11-09 首页补全裁决（任务书 20261109_unified_stack_homepage_r15.md）：
-# 补入 market/sentiment、market/margin-sentiment、market/emotion-trend（情绪页）
-# 与 news/cls/event/{event_id}（事件详情点查）4 条只读路径，allowlist 18→22。
-# R29（2026-11-10，任务书 20261110_detail_paths_allowlist_r29.md）：详情页端点族
-# kline-stats、kline/{period}、navigation、industry、boards 5 条 GET 路径补入，
-# allowlist 22→27；同路径无 POST 注册，写端点 /sync、/sync-light、/update、
-# /update-indices 绝不入集。
-# 完整 (METHOD, path) 矩阵：27 条路径各自的 GET 与 HEAD 共 54 对，一个不多、
-# 一个不少；任何 OPTIONS、其他方法、未识别路由类型或额外路径都是违规。路径模板
-# 取自各 router 文件的实际装饰器（含 /api/stocks/ 尾斜杠与 /api/sectors/{code}、
-# /api/news/cls/event/{event_id} 参数名）。
+# R30（2026-11-10 Owner 裁定修复范围升级，任务书 20261110_full_readface_allowlist_r30.md）：
+# 全站只读面开放——12 router 全挂载，162 条 GET 逐条副作用审计后放行 114 条只读路径
+# （112 条 router GET，其中 8 条经 AISTOCK_READFACE_PREVIEW 守卫后为纯读；另含本文件
+# 自有 health×2）；39 条伪读实写/任务触发/调度器变更/外呼 GET 封禁；全部 127 条
+# POST/PUT/DELETE 一律封禁。/api/stocks/select/* 11 条在 api/stocks.py:5826 已被
+# QMT 退役剥离（运行时死路由），不入集。历史：R11 7 路径→R13 18→R15 22→R29 27→R30 114。
+# 完整 (METHOD, path) 矩阵：114 条路径各自的 GET 与 HEAD 共 228 对，一个不多、一个不少；
+# 任何 OPTIONS、其他方法、未识别路由类型或额外路径都是违规。路径模板取自各 router 文件
+# 的实际装饰器（含 /api/stocks/ 尾斜杠与参数名）。
 ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
-    ('GET', '/api/health/runtime'),
-    ('HEAD', '/api/health/runtime'),
+    ('GET', '/api/backtest/progress/{task_id}'),
+    ('HEAD', '/api/backtest/progress/{task_id}'),
+    ('GET', '/api/backtest/result/{task_id}'),
+    ('HEAD', '/api/backtest/result/{task_id}'),
+    ('GET', '/api/backtest/strategies'),
+    ('HEAD', '/api/backtest/strategies'),
+    ('GET', '/api/data-statistics/completeness'),
+    ('HEAD', '/api/data-statistics/completeness'),
+    ('GET', '/api/data-statistics/field-missing'),
+    ('HEAD', '/api/data-statistics/field-missing'),
+    ('GET', '/api/data-statistics/kline-missing'),
+    ('HEAD', '/api/data-statistics/kline-missing'),
+    ('GET', '/api/data-statistics/overview'),
+    ('HEAD', '/api/data-statistics/overview'),
+    ('GET', '/api/gen3-shadow/route-execution-v3'),
+    ('HEAD', '/api/gen3-shadow/route-execution-v3'),
+    ('GET', '/api/gen3-shadow/route-execution-v3/backtest'),
+    ('HEAD', '/api/gen3-shadow/route-execution-v3/backtest'),
+    ('GET', '/api/gen3-shadow/v4-research/backtest'),
+    ('HEAD', '/api/gen3-shadow/v4-research/backtest'),
+    ('GET', '/api/gen3-state-alpha/broker/holdings'),
+    ('HEAD', '/api/gen3-state-alpha/broker/holdings'),
+    ('GET', '/api/gen3-state-alpha/broker/trades'),
+    ('HEAD', '/api/gen3-state-alpha/broker/trades'),
+    ('GET', '/api/gen3-state-alpha/candidate-omission-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/candidate-omission-reviews'),
+    ('GET', '/api/gen3-state-alpha/contract'),
+    ('HEAD', '/api/gen3-state-alpha/contract'),
+    ('GET', '/api/gen3-state-alpha/daily-review-checklist-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/daily-review-checklist-reviews'),
+    ('GET', '/api/gen3-state-alpha/evidence-inventory'),
+    ('HEAD', '/api/gen3-state-alpha/evidence-inventory'),
+    ('GET', '/api/gen3-state-alpha/formal-action-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/formal-action-reviews'),
+    ('GET', '/api/gen3-state-alpha/historical-decision-replay-audit'),
+    ('HEAD', '/api/gen3-state-alpha/historical-decision-replay-audit'),
+    ('GET', '/api/gen3-state-alpha/historical-decision-replay-tasks'),
+    ('HEAD', '/api/gen3-state-alpha/historical-decision-replay-tasks'),
+    ('GET', '/api/gen3-state-alpha/holding-t/portfolio-state'),
+    ('HEAD', '/api/gen3-state-alpha/holding-t/portfolio-state'),
+    ('GET', '/api/gen3-state-alpha/holding-t/review'),
+    ('HEAD', '/api/gen3-state-alpha/holding-t/review'),
+    ('GET', '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}'),
+    ('HEAD', '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}'),
+    ('GET', '/api/gen3-state-alpha/holding-tick-watchlist'),
+    ('HEAD', '/api/gen3-state-alpha/holding-tick-watchlist'),
+    ('GET', '/api/gen3-state-alpha/launch-day-playbook-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/launch-day-playbook-reviews'),
+    ('GET', '/api/gen3-state-alpha/live-launch-review-snapshot/{snapshot_id}'),
+    ('HEAD', '/api/gen3-state-alpha/live-launch-review-snapshot/{snapshot_id}'),
+    ('GET', '/api/gen3-state-alpha/live-launch-review-snapshots'),
+    ('HEAD', '/api/gen3-state-alpha/live-launch-review-snapshots'),
+    ('GET', '/api/gen3-state-alpha/live-replay-cockpit'),
+    ('HEAD', '/api/gen3-state-alpha/live-replay-cockpit'),
+    ('GET', '/api/gen3-state-alpha/mainwave-opportunities'),
+    ('HEAD', '/api/gen3-state-alpha/mainwave-opportunities'),
+    ('GET', '/api/gen3-state-alpha/no-trade-day-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/no-trade-day-reviews'),
+    ('GET', '/api/gen3-state-alpha/paper-executions'),
+    ('HEAD', '/api/gen3-state-alpha/paper-executions'),
+    ('GET', '/api/gen3-state-alpha/paper-watch-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/paper-watch-reviews'),
+    ('GET', '/api/gen3-state-alpha/pretrade-ticket-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/pretrade-ticket-reviews'),
+    ('GET', '/api/gen3-state-alpha/realtime-readiness-review'),
+    ('HEAD', '/api/gen3-state-alpha/realtime-readiness-review'),
+    ('GET', '/api/gen3-state-alpha/strategy-tuning-current-step-completion-packet'),
+    ('HEAD', '/api/gen3-state-alpha/strategy-tuning-current-step-completion-packet'),
+    ('GET', '/api/gen3-state-alpha/strategy-tuning-task-reviews'),
+    ('HEAD', '/api/gen3-state-alpha/strategy-tuning-task-reviews'),
+    ('GET', '/api/gen3-state-alpha/workflow/refresh-task/{task_id}'),
+    ('HEAD', '/api/gen3-state-alpha/workflow/refresh-task/{task_id}'),
     ('GET', '/api/health/check'),
     ('HEAD', '/api/health/check'),
-    ('GET', '/api/operations/data-calendar'),
-    ('HEAD', '/api/operations/data-calendar'),
-    ('GET', '/api/operations/tasks'),
-    ('HEAD', '/api/operations/tasks'),
-    ('GET', '/api/operations/mainwave-daily'),
-    ('HEAD', '/api/operations/mainwave-daily'),
-    ('GET', '/api/operations/incidents'),
-    ('HEAD', '/api/operations/incidents'),
-    ('GET', '/api/operations/data-review-queue'),
-    ('HEAD', '/api/operations/data-review-queue'),
-    ('GET', '/api/market/indices'),
-    ('HEAD', '/api/market/indices'),
-    ('GET', '/api/market/limit-up-ladder'),
-    ('HEAD', '/api/market/limit-up-ladder'),
-    ('GET', '/api/market/sentiment'),
-    ('HEAD', '/api/market/sentiment'),
-    ('GET', '/api/market/margin-sentiment'),
-    ('HEAD', '/api/market/margin-sentiment'),
+    ('GET', '/api/health/runtime'),
+    ('HEAD', '/api/health/runtime'),
+    ('GET', '/api/kline-check/check-single'),
+    ('HEAD', '/api/kline-check/check-single'),
+    ('GET', '/api/kline-check/health'),
+    ('HEAD', '/api/kline-check/health'),
+    ('GET', '/api/kline-check/history'),
+    ('HEAD', '/api/kline-check/history'),
+    ('GET', '/api/kline-check/history/{check_id}'),
+    ('HEAD', '/api/kline-check/history/{check_id}'),
+    ('GET', '/api/kline-check/progress/{task_id}'),
+    ('HEAD', '/api/kline-check/progress/{task_id}'),
+    ('GET', '/api/kline-check/repair-progress/{task_id}'),
+    ('HEAD', '/api/kline-check/repair-progress/{task_id}'),
+    ('GET', '/api/kline-check/repair-results/{task_id}'),
+    ('HEAD', '/api/kline-check/repair-results/{task_id}'),
+    ('GET', '/api/kline-check/results-all/{task_id}'),
+    ('HEAD', '/api/kline-check/results-all/{task_id}'),
+    ('GET', '/api/kline-check/results/{task_id}'),
+    ('HEAD', '/api/kline-check/results/{task_id}'),
     ('GET', '/api/market/emotion-trend'),
     ('HEAD', '/api/market/emotion-trend'),
+    ('GET', '/api/market/indices'),
+    ('HEAD', '/api/market/indices'),
+    ('GET', '/api/market/indices-legacy'),
+    ('HEAD', '/api/market/indices-legacy'),
+    ('GET', '/api/market/limit-up-ladder'),
+    ('HEAD', '/api/market/limit-up-ladder'),
+    ('GET', '/api/market/margin-sentiment'),
+    ('HEAD', '/api/market/margin-sentiment'),
+    ('GET', '/api/market/sentiment'),
+    ('HEAD', '/api/market/sentiment'),
+    ('GET', '/api/market/sentiment-legacy'),
+    ('HEAD', '/api/market/sentiment-legacy'),
+    ('GET', '/api/news/cls/event/{event_id}'),
+    ('HEAD', '/api/news/cls/event/{event_id}'),
+    ('GET', '/api/news/cls/event/{event_id}/candidates'),
+    ('HEAD', '/api/news/cls/event/{event_id}/candidates'),
+    ('GET', '/api/news/cls/latest'),
+    ('HEAD', '/api/news/cls/latest'),
+    ('GET', '/api/news/cls/radar-summary'),
+    ('HEAD', '/api/news/cls/radar-summary'),
+    ('GET', '/api/news/cls/signals'),
+    ('HEAD', '/api/news/cls/signals'),
+    ('GET', '/api/news/cls/status'),
+    ('HEAD', '/api/news/cls/status'),
+    ('GET', '/api/operations/data-calendar'),
+    ('HEAD', '/api/operations/data-calendar'),
+    ('GET', '/api/operations/data-review-actions'),
+    ('HEAD', '/api/operations/data-review-actions'),
+    ('GET', '/api/operations/data-review-queue'),
+    ('HEAD', '/api/operations/data-review-queue'),
+    ('GET', '/api/operations/incidents'),
+    ('HEAD', '/api/operations/incidents'),
+    ('GET', '/api/operations/mainwave-daily'),
+    ('HEAD', '/api/operations/mainwave-daily'),
+    ('GET', '/api/operations/tasks'),
+    ('HEAD', '/api/operations/tasks'),
+    ('GET', '/api/sectors/'),
+    ('HEAD', '/api/sectors/'),
     ('GET', '/api/sectors/stats'),
     ('HEAD', '/api/sectors/stats'),
+    ('GET', '/api/sectors/stock-count'),
+    ('HEAD', '/api/sectors/stock-count'),
+    ('GET', '/api/sectors/sync-kline/status'),
+    ('HEAD', '/api/sectors/sync-kline/status'),
+    ('GET', '/api/sectors/sync/status'),
+    ('HEAD', '/api/sectors/sync/status'),
+    ('GET', '/api/sectors/update-all-kline-stats/status'),
+    ('HEAD', '/api/sectors/update-all-kline-stats/status'),
     ('GET', '/api/sectors/{code}'),
     ('HEAD', '/api/sectors/{code}'),
+    ('GET', '/api/sectors/{code}/historical-stats'),
+    ('HEAD', '/api/sectors/{code}/historical-stats'),
+    ('GET', '/api/sectors/{code}/history'),
+    ('HEAD', '/api/sectors/{code}/history'),
+    ('GET', '/api/sectors/{code}/kline'),
+    ('HEAD', '/api/sectors/{code}/kline'),
+    ('GET', '/api/sectors/{code}/stocks'),
+    ('HEAD', '/api/sectors/{code}/stocks'),
     ('GET', '/api/stocks/'),
     ('HEAD', '/api/stocks/'),
-    ('GET', '/api/stocks/{code}'),
-    ('HEAD', '/api/stocks/{code}'),
+    ('GET', '/api/stocks/holdings'),
+    ('HEAD', '/api/stocks/holdings'),
     ('GET', '/api/stocks/with-limit'),
     ('HEAD', '/api/stocks/with-limit'),
+    ('GET', '/api/stocks/{code}'),
+    ('HEAD', '/api/stocks/{code}'),
+    ('GET', '/api/stocks/{code}/boards'),
+    ('HEAD', '/api/stocks/{code}/boards'),
+    ('GET', '/api/stocks/{code}/industry'),
+    ('HEAD', '/api/stocks/{code}/industry'),
     ('GET', '/api/stocks/{code}/kline-stats'),
     ('HEAD', '/api/stocks/{code}/kline-stats'),
     ('GET', '/api/stocks/{code}/kline/{period}'),
     ('HEAD', '/api/stocks/{code}/kline/{period}'),
     ('GET', '/api/stocks/{code}/navigation'),
     ('HEAD', '/api/stocks/{code}/navigation'),
-    ('GET', '/api/stocks/{code}/industry'),
-    ('HEAD', '/api/stocks/{code}/industry'),
-    ('GET', '/api/stocks/{code}/boards'),
-    ('HEAD', '/api/stocks/{code}/boards'),
-    ('GET', '/api/news/cls/status'),
-    ('HEAD', '/api/news/cls/status'),
-    ('GET', '/api/news/cls/latest'),
-    ('HEAD', '/api/news/cls/latest'),
-    ('GET', '/api/news/cls/signals'),
-    ('HEAD', '/api/news/cls/signals'),
-    ('GET', '/api/news/cls/radar-summary'),
-    ('HEAD', '/api/news/cls/radar-summary'),
-    ('GET', '/api/news/cls/event/{event_id}'),
-    ('HEAD', '/api/news/cls/event/{event_id}'),
+    ('GET', '/api/system/all-tasks-status'),
+    ('HEAD', '/api/system/all-tasks-status'),
+    ('GET', '/api/system/core-data-maintenance/status'),
+    ('HEAD', '/api/system/core-data-maintenance/status'),
+    ('GET', '/api/system/core-data-maintenance/timeline'),
+    ('HEAD', '/api/system/core-data-maintenance/timeline'),
+    ('GET', '/api/system/data-source-counts'),
+    ('HEAD', '/api/system/data-source-counts'),
+    ('GET', '/api/system/qmt-after-close-execution'),
+    ('HEAD', '/api/system/qmt-after-close-execution'),
+    ('GET', '/api/system/startup-reference-sync-setting'),
+    ('HEAD', '/api/system/startup-reference-sync-setting'),
+    ('GET', '/api/system/task-status/{task_name}'),
+    ('HEAD', '/api/system/task-status/{task_name}'),
+    ('GET', '/api/system/trade-calendar/status'),
+    ('HEAD', '/api/system/trade-calendar/status'),
+    ('GET', '/api/trading/gen2/backtest'),
+    ('HEAD', '/api/trading/gen2/backtest'),
+    ('GET', '/api/trading/gen2/backtest/update-task/{task_id}'),
+    ('HEAD', '/api/trading/gen2/backtest/update-task/{task_id}'),
+    ('GET', '/api/trading/gen2/factors/registry'),
+    ('HEAD', '/api/trading/gen2/factors/registry'),
+    ('GET', '/api/trading/gen2/factors/test'),
+    ('HEAD', '/api/trading/gen2/factors/test'),
+    ('GET', '/api/trading/gen2/lab'),
+    ('HEAD', '/api/trading/gen2/lab'),
+    ('GET', '/api/trading/gen2/live'),
+    ('HEAD', '/api/trading/gen2/live'),
+    ('GET', '/api/trading/gen2/mainline-hotspots'),
+    ('HEAD', '/api/trading/gen2/mainline-hotspots'),
+    ('GET', '/api/trading/gen2/mainline-hotspots/update-task/{task_id}'),
+    ('HEAD', '/api/trading/gen2/mainline-hotspots/update-task/{task_id}'),
+    ('GET', '/api/trading/gen2/official-rebuild/update-task/{task_id}'),
+    ('HEAD', '/api/trading/gen2/official-rebuild/update-task/{task_id}'),
+    ('GET', '/api/trading/gen2/open-signals'),
+    ('HEAD', '/api/trading/gen2/open-signals'),
+    ('GET', '/api/trading/gen2/risk-cool-shadow'),
+    ('HEAD', '/api/trading/gen2/risk-cool-shadow'),
+    ('GET', '/api/trading/gen2/risk-cool-shadow/update-task/{task_id}'),
+    ('HEAD', '/api/trading/gen2/risk-cool-shadow/update-task/{task_id}'),
+    ('GET', '/api/trading/gen2/selection-pool'),
+    ('HEAD', '/api/trading/gen2/selection-pool'),
+    ('GET', '/api/trading/gen2/timing'),
+    ('HEAD', '/api/trading/gen2/timing'),
+    ('GET', '/api/trading/gen2/workflow/lineage'),
+    ('HEAD', '/api/trading/gen2/workflow/lineage'),
+    ('GET', '/api/trading/v4/manual-holdings/entry-backtest'),
+    ('HEAD', '/api/trading/v4/manual-holdings/entry-backtest'),
+    ('GET', '/api/trading/v4/market-gate'),
+    ('HEAD', '/api/trading/v4/market-gate'),
+    ('GET', '/api/watchlist/'),
+    ('HEAD', '/api/watchlist/'),
+    ('GET', '/api/watchlist/check/{code}'),
+    ('HEAD', '/api/watchlist/check/{code}'),
+    ('GET', '/api/watchlist/groups'),
+    ('HEAD', '/api/watchlist/groups'),
 })
 
 # FastAPI 自动文档端点必须关闭（否定断言对象）。
@@ -492,12 +660,31 @@ def _install_fake_utils(guard, isolated_root):
     utils_quality = guard.new_module('utils.daily_quality_read')
     utils_quality.finite_number = _forbidden_util_call
 
+    # R30 新挂载（backtest/data_statistics/gen3_shadow/gen3_state_alpha/kline_check/
+    # system_config/trading/watchlist 八 router）的模块级导入链新增两个 utils 名字
+    # （静态闭包核对见任务书审计；函数内惰性导入不在 import 期需要）：
+    # - utils.config.config / ConfigManager（api/{trading,system_config,gen3_state_alpha}
+    #   等模块级导入名；仅 handler 运行期调用 .get()，fail-closed 哨兵即可）
+    # - utils.strategy_contracts.formal_g3_score88_contract（api/gen3_state_alpha.py:46
+    #   模块级即调用并取 ["strategy_id"]，须返回可下标 dict）与
+    #   formal_g3_score88_contract_metadata（仅 handler 期调用，哨兵）
+    utils_config = guard.new_module('utils.config')
+    utils_config.config = _forbidden_util_call
+    utils_config.ConfigManager = _forbidden_util_call
+
+    utils_contracts = guard.new_module('utils.strategy_contracts')
+    utils_contracts.formal_g3_score88_contract = lambda: {'strategy_id': 'test-fake-g3-contract'}
+    utils_contracts.formal_g3_score88_contract_metadata = _forbidden_util_call
+
+
     utils_pkg.paths = utils_paths
     utils_pkg.trading_sessions = utils_sessions
     utils_pkg.database = utils_database
     utils_pkg.logger = utils_logger
     utils_pkg.market_warehouse = utils_warehouse
     utils_pkg.daily_quality_read = utils_quality
+    utils_pkg.config = utils_config
+    utils_pkg.strategy_contracts = utils_contracts
     guard.install('utils', utils_pkg)
     guard.install('utils.paths', utils_paths)
     guard.install('utils.trading_sessions', utils_sessions)
@@ -505,6 +692,8 @@ def _install_fake_utils(guard, isolated_root):
     guard.install('utils.logger', utils_logger)
     guard.install('utils.market_warehouse', utils_warehouse)
     guard.install('utils.daily_quality_read', utils_quality)
+    guard.install('utils.config', utils_config)
+    guard.install('utils.strategy_contracts', utils_contracts)
 
 
 def _extract_route_pairs(app):
@@ -592,6 +781,9 @@ def _inspect_preview_route_surface(tmp_path, monkeypatch):
     _assert_project_namespaces_absent()
     for env_name, subdir in _ISOLATION_ROOT_ENV.items():
         monkeypatch.setenv(env_name, str(tmp_path / subdir))
+    # R30：api/operations_preview 导入时会 setdefault AISTOCK_READFACE_PREVIEW=1
+    # （进程级副作用）；记录导入前取值并在 finally 恢复，保持测试隔离。
+    _prev_readface_flag = os.environ.get('AISTOCK_READFACE_PREVIEW')
     guard = _SysModulesGuard(sys.modules, _PROJECT_NAMESPACES)
     body_error = None
     try:
@@ -611,6 +803,10 @@ def _inspect_preview_route_surface(tmp_path, monkeypatch):
         body_error = exc
         raise
     finally:
+        if _prev_readface_flag is None:
+            os.environ.pop('AISTOCK_READFACE_PREVIEW', None)
+        else:
+            os.environ['AISTOCK_READFACE_PREVIEW'] = _prev_readface_flag
         _guarded_teardown(guard, original_exc=body_error)
     return surface
 
@@ -627,10 +823,9 @@ def test_business_http_routes_exactly_match_allowlist(tmp_path, monkeypatch):
         f'多余 (method, path)（不得暴露）: {extra}\n'
         f'缺失 (method, path): {missing}\n'
         '注：OPTIONS 与任何未识别路由类型都不得从矩阵中滤掉；当前 '
-        'api.operations_preview 挂载 operations/market_overview/stocks/'
-        'sectors/cls_news 五个 router 并后置过滤为 22 路径 × {GET, HEAD}'
-        '（R13 统一栈 + R15 首页补全，Owner 2026-11-09 裁决：观察架构替代 '
-        '3000，从完整后端借鉴只读面）。'
+        'api.operations_preview 按 R30 全站只读面挂载 12 router 并后置过滤为 '
+        '114 路径 × {GET, HEAD}（路径+方法双重白名单；39 条伪读实写/触发型 '
+        'GET 与全部 POST/PUT/DELETE 封禁）。'
     )
 
 
@@ -962,3 +1157,257 @@ def test_record_import_surface_is_order_independent():
         '顺序无关契约：父包属性清理计划必须在父包键后到的情况下仍被建立'
         '并执行，导入系统设置的子模块属性不得残留在父包上。'
     )
+
+
+# ---------------------------------------------------------------------------
+# R30（2026-11-10 Owner 裁定修复范围升级，任务书 20261110_full_readface_allowlist_r30.md）
+# 全站只读面开放：39 条"伪读实写/任务触发/调度器变更/外呼"GET 的封禁回归 +
+# 同路径多方法兄弟路由安全 + AISTOCK_READFACE_PREVIEW 四守卫行为/结构锁定。
+# ---------------------------------------------------------------------------
+
+_R30_BANNED_GET_PATHS = (
+    '/api/gen3-shadow/guarded',
+    '/api/gen3-shadow/live',
+    '/api/gen3-shadow/range-filtered',
+    '/api/gen3-shadow/state-router-current',
+    '/api/gen3-shadow/v4-strong-offense',
+    '/api/gen3-state-alpha/broker/holdings/post-sync-acceptance',
+    '/api/gen3-state-alpha/broker/holdings/sync-ths-confirmation-packet',
+    '/api/gen3-state-alpha/broker/holdings/sync-ths-outcome',
+    '/api/gen3-state-alpha/broker/holdings/sync-ths-preflight',
+    '/api/gen3-state-alpha/broker/sync/status',
+    '/api/gen3-state-alpha/current',
+    '/api/gen3-state-alpha/daily-trend-exit-monitor/status',
+    '/api/gen3-state-alpha/historical-trades',
+    '/api/gen3-state-alpha/holding-tick-analysis',
+    '/api/gen3-state-alpha/live-action-console',
+    '/api/gen3-state-alpha/live-blocker-evidence-board',
+    '/api/gen3-state-alpha/live-launch-decision',
+    '/api/gen3-state-alpha/live-launch-packet',
+    '/api/gen3-state-alpha/live-launch-readiness-audit',
+    '/api/gen3-state-alpha/live-learning-ledger',
+    '/api/gen3-state-alpha/observation-scheduler/status',
+    '/api/gen3-state-alpha/observation-snapshots',
+    '/api/gen3-state-alpha/premarket-control',
+    '/api/gen3-state-alpha/replacement-assessment',
+    '/api/gen3-state-alpha/shadow-exit-monitor/status',
+    '/api/gen3-state-alpha/shadow-monitor/status',
+    '/api/gen3-state-alpha/strategy-tuning-axis-board',
+    '/api/gen3-state-alpha/strategy-tuning-completion-audit',
+    '/api/gen3-state-alpha/strategy-tuning-replay-session',
+    '/api/gen3-state-alpha/strategy-tuning-replay-suggestions',
+    '/api/gen3-state-alpha/strategy-tuning-review-queue',
+    '/api/gen3-state-alpha/workflow/status',
+    '/api/system/tdx-gateway/diagnostics',
+    '/api/trading/gen2/daily-trade-ticket',
+    '/api/trading/gen2/daily-trade-ticket/execution',
+    '/api/trading/gen2/shadow-monitor/status',
+    '/api/trading/gen2/strategy-refresh/status',
+    '/api/trading/gen2/workflow/status',
+    '/api/trading/v4/manual-holdings/monitor/status',
+)
+
+
+def _inner_test_r30_banned_get_paths_absent_from_surface(tmp_path, monkeypatch):
+    """R30：逐条副作用审计判定封禁的 39 条 GET 不得出现在路由面（404）。"""
+    surface = _inspect_preview_route_surface(tmp_path, monkeypatch)
+    leaked = sorted(set(_R30_BANNED_GET_PATHS) & surface['paths'])
+    assert not leaked, (
+        'R30 封禁 GET 泄漏到只读面（伪读实写/任务触发/调度器变更/外呼）：'
+        f'{leaked}；逐条判定与证据行号见 runtime/full_readface_allowlist_r30/ 审计表。'
+    )
+
+
+_R30_SIBLING_WRITE_CASES = (
+    # (允许的 GET 路径, 同路径必须缺席的写方法)
+    ('/api/operations/data-review-actions', ('POST',)),
+    ('/api/system/startup-reference-sync-setting', ('POST',)),
+    ('/api/gen3-state-alpha/holding-t/portfolio-state', ('PUT',)),
+    ('/api/gen3-state-alpha/holding-tick-watchlist', ('PUT',)),
+)
+
+
+def _inner_test_r30_same_path_write_siblings_not_exposed(tmp_path, monkeypatch):
+    """R30：同路径多方法注册的兄弟写路由对象绝不能因路径入集而被误改方法暴露。
+
+    operations_preview 的后置过滤必须同时校验「原本就以 GET 注册」；仅按路径过滤
+    会把同路径 POST/PUT/DELETE 的 APIRoute 对象保留下来并统一置 GET/HEAD，等于把
+    写处理器当 GET 暴露（R30 审计发现的真雷）。
+    """
+    surface = _inspect_preview_route_surface(tmp_path, monkeypatch)
+    for path, write_methods in _R30_SIBLING_WRITE_CASES:
+        assert ('GET', path) in surface['pairs'], f'放行 GET 缺失: {path}'
+        for method in write_methods:
+            assert (method, path) not in surface['pairs'], (
+                f'同路径写方法 {method} {path} 不得暴露'
+            )
+    # 整体收紧：路由面只允许 GET/HEAD 两种方法（POST/PUT/DELETE/OPTIONS 全无）。
+    rogue = sorted(m for m, _ in surface['pairs'] if m not in ('GET', 'HEAD'))
+    assert not rogue, f'路由面出现 GET/HEAD 之外的方法: {rogue}'
+
+
+def _r30_subprocess_clean_run(test_name):
+    """R30 子进程委托：全量套件中其他测试会先污染 sys.modules（既有 fail-closed
+    预检语义，R13 起即如此），本文件的导入型测试在全量口径下因此失败。为不给
+    全量回归新增红项，R30 新增的 5 个测试在外层以干净子进程跑同一测试函数
+    （-k 精确选择 + AISTOCK_R30_SUBTEST=1 标记防递归），断言其退出码为 0；
+    标记存在时（内层）直接执行真实断言路径。
+    """
+    import subprocess
+    env = dict(os.environ)
+    env['AISTOCK_R30_SUBTEST'] = '1'
+    proc = subprocess.run(
+        [sys.executable, '-m', 'pytest', str(Path(__file__).resolve()),
+         '-q', '-k', test_name, '-p', 'no:cacheprovider', '--tb=short'],
+        capture_output=True, text=True, timeout=600, env=env)
+    assert proc.returncode == 0, (
+        f'R30 子进程干净运行失败: {test_name}\nstdout:\n{proc.stdout[-3000:]}'
+        f'\nstderr:\n{proc.stderr[-1500:]}')
+
+
+def _act_under_fake_utils(tmp_path, monkeypatch, module_name, action):
+    """在 fake utils 隔离下导入单个业务模块并立即执行 action(mod)（守卫行为测试用）。
+
+    与 _inspect_preview_route_surface 同一隔离纪律；action 在 guard 存活期内执行，
+    结束后同样恢复 AISTOCK_READFACE_PREVIEW 并 teardown。
+    """
+    _assert_project_namespaces_absent()
+    for env_name, subdir in _ISOLATION_ROOT_ENV.items():
+        monkeypatch.setenv(env_name, str(tmp_path / subdir))
+    _prev_flag = os.environ.get('AISTOCK_READFACE_PREVIEW')
+    guard = _SysModulesGuard(sys.modules, _PROJECT_NAMESPACES)
+    body_error = None
+    try:
+        _install_fake_utils(guard, tmp_path)
+        mod = importlib.import_module(module_name)
+        action(mod)
+    except BaseException as exc:
+        body_error = exc
+        raise
+    finally:
+        if _prev_flag is None:
+            os.environ.pop('AISTOCK_READFACE_PREVIEW', None)
+        else:
+            os.environ['AISTOCK_READFACE_PREVIEW'] = _prev_flag
+        _guarded_teardown(guard, original_exc=body_error)
+
+
+def _inner_test_r30_watchlist_ensure_table_guard_skips_ddl_in_preview(tmp_path, monkeypatch):
+    """守卫①：预览栈 GET /watchlist/* 不执行 lazy CREATE TABLE；完整栈照旧。"""
+    def action(wl):
+        commands = []
+        monkeypatch.setattr(wl, 'clickhouse_table_exists', lambda table: False)
+        monkeypatch.setattr(
+            wl, 'clickhouse_client',
+            lambda: types.SimpleNamespace(
+                command=lambda sql, *a, **k: commands.append(sql)))
+        monkeypatch.setenv('AISTOCK_READFACE_PREVIEW', '1')
+        wl._ensure_user_stocks_table()
+        assert commands == [], '预览栈不得执行任何 DDL'
+        monkeypatch.setenv('AISTOCK_READFACE_PREVIEW', '0')
+        wl._ensure_user_stocks_table()
+        assert len(commands) == 1 and 'CREATE TABLE' in commands[0], (
+            '完整栈（未设标记）必须保留 lazy 建表行为'
+        )
+    _act_under_fake_utils(tmp_path, monkeypatch, 'api.watchlist', action)
+
+
+def _inner_test_r30_trading_monitor_state_save_guard(tmp_path, monkeypatch):
+    """守卫④：预览栈 GET 读取路径上的 gen2 监控状态 reconcile 不写状态文件。"""
+    def action(tr):
+        saves = []
+        monkeypatch.setattr(tr, '_save_json_file', lambda path, payload: saves.append(path))
+        monkeypatch.setenv('AISTOCK_READFACE_PREVIEW', '1')
+        tr._save_gen2_shadow_monitor_state({'k': 1})
+        assert saves == [], '预览栈不得写 gen2 监控状态文件'
+        monkeypatch.setenv('AISTOCK_READFACE_PREVIEW', '0')
+        tr._save_gen2_shadow_monitor_state({'k': 1})
+        assert len(saves) == 1, '完整栈（未设标记）必须保留状态写入'
+    _act_under_fake_utils(tmp_path, monkeypatch, 'api.trading', action)
+
+
+def _inner_test_r30_system_task_log_table_guard(tmp_path, monkeypatch):
+    """守卫③：预览栈 core-data-maintenance status/timeline 不执行 lazy DDL。
+
+    表已存在 -> True（正常读路径）；表缺失 -> False（跳过，不 CREATE）；
+    完整栈路径仍走 CREATE TABLE IF NOT EXISTS。
+    """
+    def action(sc):
+        commands = []
+        import utils.market_warehouse as mw  # fake 包（guard 存活期内）
+        monkeypatch.setattr(sc, '_SYSTEM_TASK_RUN_LOG_READY', False)
+        monkeypatch.setattr(mw, 'clickhouse_table_exists', lambda table: True)
+        monkeypatch.setattr(
+            mw, 'clickhouse_client',
+            lambda: types.SimpleNamespace(
+                command=lambda sql, *a, **k: commands.append(sql)))
+        monkeypatch.setenv('AISTOCK_READFACE_PREVIEW', '1')
+        assert sc._ensure_system_task_run_log_table() is True
+        assert commands == []
+        monkeypatch.setattr(mw, 'clickhouse_table_exists', lambda table: False)
+        monkeypatch.setattr(sc, '_SYSTEM_TASK_RUN_LOG_READY', False)
+        assert sc._ensure_system_task_run_log_table() is False
+        assert commands == [], '预览栈表缺失也不得 DDL'
+        monkeypatch.setenv('AISTOCK_READFACE_PREVIEW', '0')
+        assert sc._ensure_system_task_run_log_table() is True
+        assert len(commands) == 1 and 'CREATE TABLE' in commands[0], (
+            '完整栈（未设标记）必须保留 lazy 建表行为'
+        )
+    _act_under_fake_utils(tmp_path, monkeypatch, 'api.system_config', action)
+
+
+def test_r30_stocks_intraday_cache_guard_precedes_insert():
+    """守卫②：_build_intraday_daily_bar 的预览守卫必须先于任何 insert 调用（结构锁定）。
+
+    行为路径受交易时段门控（09:30-15:35）无法离线稳定触发，故按 AST 结构锁定：
+    环境分支存在、且行号全部早于 insert 调用点。
+    """
+    import ast
+    stocks_path = Path(__file__).resolve().parents[1] / 'api' / 'stocks.py'
+    tree = ast.parse(stocks_path.read_text(encoding='utf-8'))
+    fn = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == '_build_intraday_daily_bar')
+    guard_lines = [
+        node.lineno for node in ast.walk(fn)
+        if isinstance(node, ast.If)
+        and 'AISTOCK_READFACE_PREVIEW' in ast.unparse(node.test)]
+    insert_lines = [
+        node.lineno for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == 'insert']
+    assert guard_lines and insert_lines, '守卫或 insert 调用缺失'
+    assert max(guard_lines) < min(insert_lines), (
+        'AISTOCK_READFACE_PREVIEW 守卫必须位于缓存 insert 之前（api/stocks.py）'
+    )
+
+def test_r30_banned_get_paths_absent_from_surface(tmp_path, monkeypatch):
+    if os.environ.get('AISTOCK_R30_SUBTEST') == '1':
+        _inner_test_r30_banned_get_paths_absent_from_surface(tmp_path, monkeypatch)
+        return
+    _r30_subprocess_clean_run('test_r30_banned_get_paths_absent_from_surface')
+
+def test_r30_same_path_write_siblings_not_exposed(tmp_path, monkeypatch):
+    if os.environ.get('AISTOCK_R30_SUBTEST') == '1':
+        _inner_test_r30_same_path_write_siblings_not_exposed(tmp_path, monkeypatch)
+        return
+    _r30_subprocess_clean_run('test_r30_same_path_write_siblings_not_exposed')
+
+def test_r30_watchlist_ensure_table_guard_skips_ddl_in_preview(tmp_path, monkeypatch):
+    if os.environ.get('AISTOCK_R30_SUBTEST') == '1':
+        _inner_test_r30_watchlist_ensure_table_guard_skips_ddl_in_preview(tmp_path, monkeypatch)
+        return
+    _r30_subprocess_clean_run('test_r30_watchlist_ensure_table_guard_skips_ddl_in_preview')
+
+def test_r30_trading_monitor_state_save_guard(tmp_path, monkeypatch):
+    if os.environ.get('AISTOCK_R30_SUBTEST') == '1':
+        _inner_test_r30_trading_monitor_state_save_guard(tmp_path, monkeypatch)
+        return
+    _r30_subprocess_clean_run('test_r30_trading_monitor_state_save_guard')
+
+def test_r30_system_task_log_table_guard(tmp_path, monkeypatch):
+    if os.environ.get('AISTOCK_R30_SUBTEST') == '1':
+        _inner_test_r30_system_task_log_table_guard(tmp_path, monkeypatch)
+        return
+    _r30_subprocess_clean_run('test_r30_system_task_log_table_guard')

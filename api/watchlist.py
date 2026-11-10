@@ -7,6 +7,7 @@ ClickHouse helpers instead of legacy ORM sessions.
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -46,6 +47,10 @@ def normalize_stock_code(code: str) -> str:
 
 def _ensure_user_stocks_table() -> None:
     if clickhouse_table_exists("user_stocks"):
+        return
+    # R30 只读面守卫：预览栈（AISTOCK_READFACE_PREVIEW=1）不执行任何 DDL；
+    # user_stocks 表由完整栈负责创建，预览栈只读（表缺失时后续查询如实失败）。
+    if os.environ.get("AISTOCK_READFACE_PREVIEW") == "1":
         return
     clickhouse_client().command(
         """

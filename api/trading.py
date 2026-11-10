@@ -1004,6 +1004,10 @@ def _load_gen2_shadow_monitor_state() -> Dict[str, Any]:
 
 
 def _save_gen2_shadow_monitor_state(state: Dict[str, Any]) -> None:
+    # R30 只读面守卫：预览栈（AISTOCK_READFACE_PREVIEW=1）不写监控状态文件，
+    # GET 读取路径上的状态 reconcile 仅作用于本次响应的内存副本。
+    if os.environ.get("AISTOCK_READFACE_PREVIEW") == "1":
+        return
     _save_json_file(GEN2_SHADOW_MONITOR_STATE_PATH, _sanitize(state))
 
 

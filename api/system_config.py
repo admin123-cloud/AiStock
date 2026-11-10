@@ -439,6 +439,18 @@ def _ensure_system_task_run_log_table() -> bool:
     global _SYSTEM_TASK_RUN_LOG_READY
     if _SYSTEM_TASK_RUN_LOG_READY:
         return True
+    # R30 只读面守卫：预览栈（AISTOCK_READFACE_PREVIEW=1）不执行任何 DDL；
+    # system_task_run_log 由完整栈负责创建，预览栈按"表已存在与否"如实返回。
+    if os.environ.get("AISTOCK_READFACE_PREVIEW") == "1":
+        try:
+            from utils.market_warehouse import clickhouse_table_exists
+
+            if clickhouse_table_exists("system_task_run_log"):
+                _SYSTEM_TASK_RUN_LOG_READY = True
+                return True
+        except Exception:
+            logger.exception("preview read-face system_task_run_log existence probe failed")
+        return False
     with _SYSTEM_TASK_RUN_LOG_LOCK:
         if _SYSTEM_TASK_RUN_LOG_READY:
             return True

@@ -197,6 +197,10 @@ def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
         }
         # Cache the same display-only fact for list/overview consumers.  A
         # ReplacingMergeTree row is append-only and never mutates formal daily data.
+        # R30 只读面守卫：预览栈（AISTOCK_READFACE_PREVIEW=1）不写任何展示缓存表，
+        # 盘中临时日线仅随本次响应返回；完整栈（未设该变量）行为不变。
+        if os.environ.get("AISTOCK_READFACE_PREVIEW") == "1":
+            return payload
         if clickhouse_table_exists(INTRADAY_DAILY_TABLE):
             try:
                 from utils.market_warehouse import quality_clickhouse_client as clickhouse_client
