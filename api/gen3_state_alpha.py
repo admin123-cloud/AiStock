@@ -3452,10 +3452,15 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
         STATE_ROUTER_RUNTIME_DIR / "latest_route_diagnostics.csv",
     )
     now_ts = time.time()
-    try:
-        memo_key = (int(limit), tuple(round(p.stat().st_mtime, 6) for p in memo_paths))
-    except OSError:
-        memo_key = None
+    # R44：文件可能缺件（如 preview 栈只挂 gen3_state_alpha 子树）——mtime 取
+    # 不到用 None 占位；文件出现/消失都会改变键、正确失效。
+    def _mtime_or_none(p) -> float | None:
+        try:
+            return round(p.stat().st_mtime, 6)
+        except OSError:
+            return None
+
+    memo_key = (int(limit), tuple(_mtime_or_none(p) for p in memo_paths))
     if memo_key is not None:
         hit = _CURRENT_RUNTIME_MEMO.get(memo_key)
         if hit is not None and hit[0] > now_ts:
@@ -10694,6 +10699,8 @@ def _attach_latest_market_prices(rows: list[dict[str, Any]]) -> list[dict[str, A
         # quality_read 视图改写后自 JOIN 无外层裁剪（query_log 实测 1.07GiB/
         # 40M 行、50~166s/次，R14 同族病灶）；argMax(close, (trade_date, created_at))
         # 与 FINAL 视图逐码取最新版语义等价（输出别名避开聚合实参列名，R23 纪律）。
+        # R44b：主查询加 120 日窗（只扫 ~6 个月分区）；窗内无行的码走无界回退
+        # 查询取历史最新——逐码结果与无界查询完全一致。
         prices = clickhouse_query_df(
             f"""
             SELECT code,
@@ -10701,10 +10708,30 @@ def _attach_latest_market_prices(rows: list[dict[str, Any]]) -> list[dict[str, A
                    max(trade_date) AS latest_trade_date
             FROM kline_daily
             WHERE code IN ({quoted_codes})
+              AND trade_date >= today() - INTERVAL 120 DAY
             GROUP BY code
             """,
             raw=True,
         )
+        found_codes = {str(item).strip().upper() for item in prices.get("code").tolist()} if not prices.empty else set()
+        missing_codes = [code for code in codes if code not in found_codes]
+        if missing_codes:
+            missing_quoted = ", ".join(f"'{code}'" for code in missing_codes)
+            fallback = clickhouse_query_df(
+                f"""
+                SELECT code,
+                       argMax(close, (trade_date, created_at)) AS close,
+                       max(trade_date) AS latest_trade_date
+                FROM kline_daily
+                WHERE code IN ({missing_quoted})
+                GROUP BY code
+                """,
+                raw=True,
+            )
+            if not fallback.empty:
+                import pandas as _pd
+
+                prices = _pd.concat([prices, fallback], ignore_index=True)
     except Exception:
         logger.exception("Failed to attach latest market prices for shadow ledger rows.")
         return rows

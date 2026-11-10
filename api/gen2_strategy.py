@@ -800,7 +800,22 @@ def _load_current_shadow_ledger() -> pd.DataFrame:
     return d
 
 
+_SOURCE_DATE_SPAN_CACHE: Dict[str, Any] = {}
+
+
 def _source_date_span(path: Path, date_col: str) -> Dict[str, Any]:
+    # R44（2026-11-10）：日期跨度由文件内容唯一决定——按 (path, mtime, col) 记忆
+    # 化。freshness 链每个请求读 5 个大 parquet（bind mount 下单读秒级、CPU
+    # 解压每次重复付），文件未变时结果必然一致；出现/消失/改写经 mtime 键正确
+    # 失效。纯加速零语义变化。
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = None
+    cache_key = f"{path}|{mtime}|{date_col}"
+    hit = _SOURCE_DATE_SPAN_CACHE.get(cache_key)
+    if hit is not None:
+        return dict(hit)
     if not path.exists():
         return {"exists": False, "rows": 0, "min_date": "", "max_date": ""}
     try:
@@ -812,14 +827,19 @@ def _source_date_span(path: Path, date_col: str) -> Dict[str, Any]:
         logger.warning(f"load source date span failed: {path}: {exc}")
         return {"exists": True, "rows": 0, "min_date": "", "max_date": "", "error": str(exc)}
     if date_col not in df.columns or df.empty:
-        return {"exists": True, "rows": int(len(df)), "min_date": "", "max_date": ""}
-    dates = pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d").dropna()
-    return {
-        "exists": True,
-        "rows": int(len(df)),
-        "min_date": str(dates.min()) if not dates.empty else "",
-        "max_date": str(dates.max()) if not dates.empty else "",
-    }
+        result = {"exists": True, "rows": int(len(df)), "min_date": "", "max_date": ""}
+    else:
+        dates = pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d").dropna()
+        result = {
+            "exists": True,
+            "rows": int(len(df)),
+            "min_date": str(dates.min()) if not dates.empty else "",
+            "max_date": str(dates.max()) if not dates.empty else "",
+        }
+    if len(_SOURCE_DATE_SPAN_CACHE) > 64:
+        _SOURCE_DATE_SPAN_CACHE.clear()
+    _SOURCE_DATE_SPAN_CACHE[cache_key] = dict(result)
+    return result
 
 
 def build_gen2_data_freshness(requested_date: Optional[str] = None, selected_date: Optional[str] = None) -> Dict[str, Any]:

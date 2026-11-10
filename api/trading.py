@@ -3158,10 +3158,23 @@ def _previous_stock_trade_date(signal_date: str) -> Optional[str]:
         logger.warning(f"resolve previous stock trade date invalid: signal_date={signal_date!r}")
         return None
     # R44（2026-11-10）：ORM→raw 基表直查（同 _resolve_latest_stock_trade_date，
-    # 视图改写版实测 53s/次；max() 对重复版本不敏感、语义等价）。
+    # 视图改写版实测 53s/次）。两步法：带日期上界的全局 max（分区裁剪可答）+
+    # 单日验证；验证不过回退全量精确查询（等价兜底）。
     from utils.market_warehouse import clickhouse_scalar
 
     try:
+        candidate = clickhouse_scalar(
+            f"SELECT max(trade_date) FROM kline_daily WHERE trade_date < '{normalized}'",
+            raw=True,
+        )
+        candidate_text = _normalize_date_str(candidate) if candidate is not None else None
+        if (
+            candidate_text
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate_text)
+            and candidate_text < normalized
+            and _stock_trade_date_candidates_ok(candidate_text)
+        ):
+            return candidate_text
         prev = clickhouse_scalar(
             f"""
             SELECT max(k.trade_date)
@@ -3176,7 +3189,7 @@ def _previous_stock_trade_date(signal_date: str) -> Optional[str]:
         )
         return _normalize_date_str(prev)
     except Exception as exc:
-        logger.warning(f"resolve previous stock trade date failed: signal_date={signal_date}, error={exc}")
+        logger.warning(f"resolve previous stock trade date failed: signal_date={signal_date}, error: {exc}")
         return None
 
 
@@ -7573,13 +7586,45 @@ def _load_selection_score_rows(
     return data
 
 
-def _resolve_latest_stock_trade_date() -> Optional[str]:
-    # R44（2026-11-10）：ORM 路径经 before_cursor_execute 的 quality_read 视图
-    # 改写（MAX(trade_date) JOIN stocks 实测 82s/483MB 全表聚合，R14 同族）；
-    # 改 market_warehouse raw=True 基表直查，max() 对重复版本不敏感、语义等价。
+def _stock_trade_date_candidates_ok(trade_date: str) -> bool:
+    """R44（2026-11-10）：单日验证查询——只裁剪单分区，几十毫秒。
+
+    与旧全表 JOIN 完全同谓词（type='stock'/quit=0/st 空），用于两步法验证
+    候选日是否确有合格股票行；不存在时调用方回退全量精确查询。
+    """
     from utils.market_warehouse import clickhouse_scalar
 
-    latest = clickhouse_scalar(
+    exists = clickhouse_scalar(
+        f"""
+        SELECT 1
+        FROM kline_daily AS k
+        INNER JOIN stocks AS s ON s.code = k.code
+        WHERE k.trade_date = '{trade_date}'
+          AND s.type = 'stock'
+          AND s.quit = 0
+          AND (s.st = 0 OR s.st IS NULL)
+        LIMIT 1
+        """,
+        raw=True,
+    )
+    return exists is not None and bool(exists)
+
+
+def _resolve_latest_stock_trade_date() -> Optional[str]:
+    # R44（2026-11-10）：ORM 路径经 before_cursor_execute 的 quality_read 视图
+    # 改写（MAX(trade_date) JOIN stocks 实测 82s/483MB 全表聚合，R14 同族）。
+    # 两步法：先取全局 max(trade_date)（分区 minmax 直接可答），再单日验证
+    # 合格股票行；验证不过则回退原全量精确查询（等价性兜底，覆盖"最新日仅
+    # 指数行"的病理情形）。
+    from utils.market_warehouse import clickhouse_scalar
+
+    latest = clickhouse_scalar("SELECT max(trade_date) FROM kline_daily", raw=True)
+    if latest is None:
+        return None
+    latest_text = _normalize_date_str(latest)
+    if latest_text and re.fullmatch(r"\d{4}-\d{2}-\d{2}", latest_text) and _stock_trade_date_candidates_ok(latest_text):
+        return latest_text
+    full = clickhouse_scalar(
         """
         SELECT max(k.trade_date)
         FROM kline_daily AS k
@@ -7590,12 +7635,12 @@ def _resolve_latest_stock_trade_date() -> Optional[str]:
         """,
         raw=True,
     )
-    if latest is None:
+    if full is None:
         return None
     try:
-        return str(pd.Timestamp(latest).date())
+        return str(pd.Timestamp(full).date())
     except Exception:
-        return str(latest)
+        return str(full)
 
 
 def _is_trading_day(date_text: Optional[str]) -> bool:

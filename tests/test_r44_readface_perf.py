@@ -75,6 +75,7 @@ def test_p1_latest_market_prices_raw_argmax_shape():
     assert "argMax(close, (trade_date, created_at))" in sql
     assert "INNER" not in sql and "JOIN" not in sql, "self-join through view was the 50s+ pathology"
     assert "WHERE code IN" in sql
+    assert "today() - INTERVAL 120 DAY" in sql, "bounded window (R44b) required"
     # R23 alias discipline: no `max(X) AS X` output alias feeding aggregate args
     assert "max(trade_date) AS trade_date" not in sql
 
@@ -125,6 +126,30 @@ def test_p1_behavior_fail_closed_without_ch(monkeypatch):
     monkeypatch.setattr(sys.modules["utils.market_warehouse"], "clickhouse_query_df", boom)
     rows = [{"code": "000001.SZ"}]
     assert gsa._attach_latest_market_prices(rows) == rows
+
+
+def test_p1_behavior_window_fallback_merges_missing_codes(monkeypatch):
+    import api.gen3_state_alpha as gsa
+
+    queries: list[str] = []
+
+    def fake_query_df(sql, params=None, *, raw=False):
+        queries.append(sql)
+        if "INTERVAL 120 DAY" in sql:
+            return pd.DataFrame(
+                {"code": ["000001.SZ"], "close": [10.5], "latest_trade_date": [pd.Timestamp("2026-11-10").date()]}
+            )
+        return pd.DataFrame(
+            {"code": ["301999.SZ"], "close": [33.3], "latest_trade_date": [pd.Timestamp("2025-01-02").date()]}
+        )
+
+    monkeypatch.setattr(sys.modules["utils.market_warehouse"], "clickhouse_query_df", fake_query_df)
+    rows = [{"code": "000001.SZ"}, {"code": "301999.SZ"}]
+    out = gsa._attach_latest_market_prices(rows)
+    assert len(queries) == 2, "missing code must trigger the unbounded fallback query"
+    assert "INTERVAL 120 DAY" not in queries[1]
+    assert out[0]["latest_price"] == 10.5 and out[0]["latest_price_date"] == "2026-11-10"
+    assert out[1]["latest_price"] == 33.3 and out[1]["latest_price_date"] == "2025-01-02"
 
 
 # ---------------------------------------------------------------- P2 交易日解析 raw
@@ -280,6 +305,31 @@ def test_p4_runtime_memo_clears():
 
     gsa._CURRENT_RUNTIME_MEMO.clear()
     assert gsa._CURRENT_RUNTIME_MEMO == {}
+
+
+def test_p4_runtime_memo_survives_missing_artifacts(monkeypatch, tmp_path):
+    """R44b 回归：preview 栈只挂 gen3_state_alpha 子树、router 文件缺件时，
+    memo 键必须用 None 占位而不是整体失效（部署容器实测 size=0 的病灶）。"""
+    import api.gen3_state_alpha as gsa
+
+    alpha = tmp_path / "gen3_state_alpha"
+    alpha.mkdir()
+    router = tmp_path / "gen3_state_router_shadow"  # 目录整体不创建：两文件缺件
+    for name in ("latest_summary.json", "latest_shadow_tickets.csv", "shadow_ledger.csv"):
+        (alpha / name).write_text("{}\n" if name.endswith(".json") else "code\n", encoding="utf-8")
+
+    monkeypatch.setattr(gsa, "STATE_ALPHA_RUNTIME_DIR", alpha)
+    monkeypatch.setattr(gsa, "STATE_ROUTER_RUNTIME_DIR", router)
+    monkeypatch.setattr(gsa, "_read_json", lambda p: {"generated_at": "2026-11-10 15:00:00"})
+    monkeypatch.setattr(gsa, "_read_csv_records", lambda p, limit=None: [])
+    monkeypatch.setattr(gsa, "_read_shadow_ledger_records", lambda p, limit=None: [])
+    monkeypatch.setattr(gsa, "_enrich_trade_strategy_records", lambda rows: list(rows or []))
+    monkeypatch.setattr(gsa, "_broker_snapshot", lambda: {})
+    monkeypatch.setattr(gsa, "_attach_latest_market_prices", lambda rows, *a, **k: list(rows or []))
+
+    gsa._CURRENT_RUNTIME_MEMO.clear()
+    gsa._load_current_runtime(50)
+    assert len(gsa._CURRENT_RUNTIME_MEMO) == 1, "missing router artifacts must not disable the memo"
 
 
 def test_p4_freshness_file_memo():
