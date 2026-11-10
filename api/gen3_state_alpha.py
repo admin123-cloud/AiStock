@@ -196,6 +196,19 @@ def _date_text(value: Any) -> str:
     return "" if pd.isna(ts) else ts.strftime("%Y-%m-%d")
 
 
+def _read_only_refresh_result(requested: bool) -> dict[str, Any]:
+    """R43 只读面守卫：GET 一律不触发更新 subprocess。
+
+    GET 传 refresh=true 时优雅忽略（照常返回缓存产物）；重建能力保留在
+    写面（POST 化待批）。返回体保持旧版 ran/ok/returncode 键，前端零改动。
+    """
+    result: dict[str, Any] = {"ran": False, "ok": None, "returncode": None}
+    if requested:
+        result["ignored"] = True
+        result["ignored_reason"] = "GET is read-only (R43); rebuild moved to POST (pending approval)"
+    return result
+
+
 def _formal_observation_date(requested_date: str | None = None) -> str:
     """Use the actual Shanghai observation day unless an explicit backfill date is supplied."""
     return _date_text(requested_date) or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
@@ -13708,11 +13721,8 @@ async def get_gen3_state_alpha_current(
     refresh: bool = Query(default=False, description="Run the current G3 State Alpha shadow refresh before reading artifacts."),
     entry_date: str | None = Query(default=None, description="Optional entry date for refresh, e.g. 2026-06-18."),
 ) -> dict[str, Any]:
-    refresh_result = _run_state_router_refresh(entry_date.strip() if isinstance(entry_date, str) and entry_date.strip() else None) if refresh else {
-        "ran": False,
-        "ok": None,
-        "returncode": None,
-    }
+    # R43：GET 只读——refresh=true 优雅忽略，绝不触发 _run_state_router_refresh。
+    refresh_result = _read_only_refresh_result(refresh)
     summary_path = STATE_ROUTER_RUNTIME_DIR / "latest_summary.json"
     selected_path = STATE_ROUTER_RUNTIME_DIR / "latest_candidates.csv"
     all_path = STATE_ROUTER_RUNTIME_DIR / "latest_all_source_candidates.csv"

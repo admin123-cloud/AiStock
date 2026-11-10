@@ -102,6 +102,19 @@ def _path_status(path: Path) -> dict[str, Any]:
     }
 
 
+def _read_only_refresh_result(requested: bool) -> dict[str, Any]:
+    """R43 只读面守卫：GET 一律不触发更新 subprocess。
+
+    GET 传 refresh=true 时优雅忽略（照常返回缓存产物）；重建能力保留在
+    写面（POST 化待批）。返回体保持旧版 ran/ok/returncode 键，前端零改动。
+    """
+    result: dict[str, Any] = {"ran": False, "ok": None, "returncode": None}
+    if requested:
+        result["ignored"] = True
+        result["ignored_reason"] = "GET is read-only (R43); rebuild moved to POST (pending approval)"
+    return result
+
+
 def _to_float(value: Any) -> float | None:
     try:
         if value is None or pd.isna(value):
@@ -829,11 +842,8 @@ async def get_gen3_shadow_live(
     still returns observe-only candidates.
     """
 
-    refresh_result = _run_daily_update(as_of=as_of, allow_after_close=allow_after_close) if refresh else {
-        "ran": False,
-        "ok": None,
-        "returncode": None,
-    }
+    # R43：GET 只读——refresh=true 优雅忽略，绝不触发 _run_daily_update。
+    refresh_result = _read_only_refresh_result(refresh)
 
     diagnosis_path = DEFAULT_REPORT_DIR / "g3_shadow_daily_diagnosis.csv"
     summary_path = DEFAULT_REPORT_DIR / "entry" / "g3_shadow_live_summary.csv"
@@ -1262,11 +1272,8 @@ async def get_gen3_guarded_shadow(
     keeps all order/formal-signal switches disabled.
     """
 
-    refresh_result = _run_guarded_update(as_of=as_of) if refresh else {
-        "ran": False,
-        "ok": None,
-        "returncode": None,
-    }
+    # R43：GET 只读——refresh=true 优雅忽略，绝不触发 _run_guarded_update。
+    refresh_result = _read_only_refresh_result(refresh)
 
     latest_summary_path = GUARDED_RUNTIME_DIR / "latest_summary.json"
     latest_candidates_path = GUARDED_RUNTIME_DIR / "latest_candidates.csv"
@@ -1340,11 +1347,8 @@ async def get_gen3_range_filtered_shadow(
     it never enables formal buy signals or order routing.
     """
 
-    refresh_result = _run_range_filtered_update(as_of=as_of) if refresh else {
-        "ran": False,
-        "ok": None,
-        "returncode": None,
-    }
+    # R43：GET 只读——refresh=true 优雅忽略，绝不触发 _run_range_filtered_update。
+    refresh_result = _read_only_refresh_result(refresh)
 
     latest_summary_path = RANGE_FILTERED_RUNTIME_DIR / "latest_summary.json"
     latest_candidates_path = RANGE_FILTERED_RUNTIME_DIR / "latest_candidates.csv"
@@ -1424,11 +1428,8 @@ async def get_gen3_v4_strong_offense_shadow(
     """
 
     effective_as_of = as_of if isinstance(as_of, str) and as_of.strip() else None
-    refresh_result = _run_v4_strong_offense_update(as_of=effective_as_of) if refresh else {
-        "ran": False,
-        "ok": None,
-        "returncode": None,
-    }
+    # R43：GET 只读——refresh=true 优雅忽略，绝不触发 _run_v4_strong_offense_update。
+    refresh_result = _read_only_refresh_result(refresh)
 
     latest_summary_path = V4_STRONG_OFFENSE_RUNTIME_DIR / "latest_summary.json"
     latest_candidates_path = V4_STRONG_OFFENSE_RUNTIME_DIR / "latest_candidates.csv"
@@ -1542,11 +1543,8 @@ async def get_gen3_state_router_current_shadow(
     """
 
     effective_entry_date = entry_date if isinstance(entry_date, str) and entry_date.strip() else None
-    refresh_result = _run_state_router_current_update(effective_entry_date) if refresh else {
-        "ran": False,
-        "ok": None,
-        "returncode": None,
-    }
+    # R43：GET 只读——refresh=true 优雅忽略，绝不触发 _run_state_router_current_update。
+    refresh_result = _read_only_refresh_result(refresh)
 
     latest_summary_path = STATE_ROUTER_CURRENT_RUNTIME_DIR / "latest_summary.json"
     latest_candidates_path = STATE_ROUTER_CURRENT_RUNTIME_DIR / "latest_candidates.csv"
