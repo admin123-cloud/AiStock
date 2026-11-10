@@ -364,7 +364,11 @@ def test_r43_get_closure_no_forbidden_zone_strings(route_id: str) -> None:
 def _call_async(coro):
     import asyncio
 
-    return asyncio.run(coro)
+    # R44：GET handler 已转普通 def（同步体出事件循环）；对非协程直接透传，
+    # 断言不变。
+    if hasattr(coro, "__await__"):
+        return asyncio.run(coro)
+    return coro
 
 
 def test_r43_cat1_gen3_shadow_refresh_true_never_runs(monkeypatch) -> None:

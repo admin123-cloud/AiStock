@@ -15,6 +15,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -3431,7 +3432,34 @@ def _directory_writable_status(name: str, path: Path) -> dict[str, Any]:
     }
 
 
+_CURRENT_RUNTIME_MEMO: dict[tuple, tuple[float, dict[str, Any]]] = {}
+_CURRENT_RUNTIME_MEMO_TTL_SECONDS = 15.0
+
+
 def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
+    # R44（2026-11-10）：同一请求链内被反复调用（workflow_status 1 次 +
+    # replacement_assessment 2~3 次，各自读同一组 CSV/JSON + 最新价查询）。
+    # 以全部输入工件 mtime 为键、15s TTL 封顶做 memo：文件未变且未过期→
+    # 直接复用；kline_daily 只在盘后管道写入，15s 封顶兜住跨日变更。纯加速，
+    # 除 exit_checked_at/checked_at 等时间戳字段外输出零变化。
+    memo_paths = (
+        STATE_ALPHA_RUNTIME_DIR / "latest_summary.json",
+        STATE_ALPHA_RUNTIME_DIR / "latest_shadow_tickets.csv",
+        STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_summary.json",
+        STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_shadow_tickets.csv",
+        STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv",
+        STATE_ROUTER_RUNTIME_DIR / "latest_summary.json",
+        STATE_ROUTER_RUNTIME_DIR / "latest_route_diagnostics.csv",
+    )
+    now_ts = time.time()
+    try:
+        memo_key = (int(limit), tuple(round(p.stat().st_mtime, 6) for p in memo_paths))
+    except OSError:
+        memo_key = None
+    if memo_key is not None:
+        hit = _CURRENT_RUNTIME_MEMO.get(memo_key)
+        if hit is not None and hit[0] > now_ts:
+            return hit[1]
     summary_path = STATE_ALPHA_RUNTIME_DIR / "latest_summary.json"
     tickets_path = STATE_ALPHA_RUNTIME_DIR / "latest_shadow_tickets.csv"
     afterhours_summary_path = STATE_ALPHA_RUNTIME_DIR / "afterhours_latest_summary.json"
@@ -3458,7 +3486,7 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     )
     ledger = _filter_open_shadow_ledger_records(ledger_audit)
     diagnostics = _read_csv_records(diagnostics_path, limit=50)
-    return {
+    result = {
         "summary": summary,
         "tickets": tickets,
         "runtime_pair": "afterhours_pending_confirmation" if use_afterhours_pair else "current",
@@ -3467,6 +3495,11 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
         "pipeline": _build_pipeline(summary, tickets, diagnostics),
         "readiness_checks": _build_readiness(summary, tickets, ledger),
     }
+    if memo_key is not None:
+        if len(_CURRENT_RUNTIME_MEMO) > 64:
+            _CURRENT_RUNTIME_MEMO.clear()
+        _CURRENT_RUNTIME_MEMO[memo_key] = (now_ts + _CURRENT_RUNTIME_MEMO_TTL_SECONDS, result)
+    return result
 
 
 def _build_workflow_status() -> dict[str, Any]:
@@ -10657,18 +10690,20 @@ def _attach_latest_market_prices(rows: list[dict[str, Any]]) -> list[dict[str, A
     try:
         from utils.market_warehouse import clickhouse_query_df
 
+        # R44（2026-11-10）：raw=True 基表直查 + argMax 等价重写。原查询经
+        # quality_read 视图改写后自 JOIN 无外层裁剪（query_log 实测 1.07GiB/
+        # 40M 行、50~166s/次，R14 同族病灶）；argMax(close, (trade_date, created_at))
+        # 与 FINAL 视图逐码取最新版语义等价（输出别名避开聚合实参列名，R23 纪律）。
         prices = clickhouse_query_df(
             f"""
-            SELECT k.code, k.trade_date, k.close
-            FROM kline_daily AS k
-            INNER JOIN (
-                SELECT code, max(trade_date) AS max_date
-                FROM kline_daily
-                WHERE code IN ({quoted_codes})
-                GROUP BY code
-            ) AS latest
-                ON k.code = latest.code AND k.trade_date = latest.max_date
-            """
+            SELECT code,
+                   argMax(close, (trade_date, created_at)) AS close,
+                   max(trade_date) AS latest_trade_date
+            FROM kline_daily
+            WHERE code IN ({quoted_codes})
+            GROUP BY code
+            """,
+            raw=True,
         )
     except Exception:
         logger.exception("Failed to attach latest market prices for shadow ledger rows.")
@@ -10683,7 +10718,7 @@ def _attach_latest_market_prices(rows: list[dict[str, Any]]) -> list[dict[str, A
             continue
         price_by_code[code] = {
             "latest_price": close,
-            "latest_price_date": _date_text(item.get("trade_date")),
+            "latest_price_date": _date_text(item.get("latest_trade_date")),
             "latest_price_source": "clickhouse:kline_daily",
         }
     if not price_by_code:
@@ -13643,8 +13678,10 @@ async def get_gen3_state_alpha_strategy_tuning_current_step_completion_packet(
     return _wrap_guardrails(_build_g3_strategy_tuning_current_step_completion_packet(refresh=refresh))
 
 
+# R44（2026-11-10）：async def 纯同步体重跑事件循环（慢链会拖住全站快端点，
+# PM 实测 15s 假超时即此成因）；零 await → 改普通 def 交线程池，响应语义不变。
 @router.get("/broker/holdings/post-sync-acceptance")
-async def get_gen3_state_alpha_broker_post_sync_acceptance(
+def get_gen3_state_alpha_broker_post_sync_acceptance(
     refresh: bool = Query(default=False, description="Refresh readiness review before checking post-sync acceptance."),
 ) -> dict[str, Any]:
     # R43：缺件→not_ready；refresh 优雅忽略。
@@ -13661,8 +13698,9 @@ async def record_gen3_state_alpha_broker_post_sync_execution_evidence(
     return _wrap_guardrails(_record_broker_post_sync_execution_evidence(payload))
 
 
+# R44：同步体出事件循环（同上）。
 @router.get("/live-action-console")
-async def get_gen3_state_alpha_live_action_console(
+def get_gen3_state_alpha_live_action_console(
     refresh: bool = Query(default=False, description="Refresh readiness review before building the live action console."),
 ) -> dict[str, Any]:
     # R43：缺件→not_ready；refresh 优雅忽略。
@@ -14002,8 +14040,9 @@ async def execute_gen3_state_alpha_premarket_next_action(
     )
 
 
+# R44：同步体出事件循环（同上）。
 @router.get("/current")
-async def get_gen3_state_alpha_current(
+def get_gen3_state_alpha_current(
     limit: int = Query(default=30, ge=1, le=200, description="Maximum candidate rows returned."),
     refresh: bool = Query(default=False, description="Run the current G3 State Alpha shadow refresh before reading artifacts."),
     entry_date: str | None = Query(default=None, description="Optional entry date for refresh, e.g. 2026-06-18."),
@@ -14411,8 +14450,9 @@ def _read_score88_replay_trades(limit: int, sort_order: str) -> dict[str, Any]:
     }
 
 
+# R44：同步体出事件循环（同上）。
 @router.get("/historical-trades")
-async def get_gen3_state_alpha_historical_trades(
+def get_gen3_state_alpha_historical_trades(
     limit: int = Query(default=200, ge=1, le=2000, description="Maximum closed trade rows returned."),
     route: str | None = Query(default="all", description="Route filter: all, institutional_mainwave, panic_repair, old_g3_route_v3."),
     window: str | None = Query(default="all", description="Window filter: all, pre_2024_09, post_2024_09, weak_2022, valid_2024, blind_2026ytd."),
@@ -15812,13 +15852,15 @@ async def run_gen3_state_alpha_broker_sync_once(payload: dict[str, Any] = Body(d
     )
 
 
+# R44：同步体出事件循环（同上）。
 @router.get("/replacement-assessment")
-async def get_gen3_state_alpha_replacement_assessment() -> dict[str, Any]:
+def get_gen3_state_alpha_replacement_assessment() -> dict[str, Any]:
     return _wrap_guardrails(_build_replacement_assessment())
 
 
+# R44：同步体出事件循环（同上）。
 @router.get("/workflow/status")
-async def get_gen3_state_alpha_workflow_status() -> dict[str, Any]:
+def get_gen3_state_alpha_workflow_status() -> dict[str, Any]:
     # R43：GET 只读——零调度器配置/零 .write_probe/零 OPERATIONS_STATE_PATH 落盘。
     return _wrap_guardrails(_build_workflow_status_readonly())
 
@@ -15937,8 +15979,9 @@ async def run_gen3_state_alpha_shadow_entry_monitor_once() -> dict[str, Any]:
     return _wrap_guardrails(_run_shadow_entry_monitor_once(source="manual"))
 
 
+# R44：同步体出事件循环（同上）。
 @router.get("/shadow-exit-monitor/status")
-async def get_gen3_state_alpha_shadow_exit_monitor_status() -> dict[str, Any]:
+def get_gen3_state_alpha_shadow_exit_monitor_status() -> dict[str, Any]:
     # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
     state = _scheduler_state_readonly(_load_exit_monitor_state(), _exit_monitor_job_id)
     return _wrap_guardrails(

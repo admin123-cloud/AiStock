@@ -3089,7 +3089,15 @@ def _gen2_minute_table_status(signal_date: str, period_minutes: int, now: dateti
     if not clickhouse_table_exists(table_name):
         result.update({"ok": False, "reason": f"{table_name} does not exist"})
         return result
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(signal_date or "")):
+        # R44：f-string 范围谓词需要严格日期形（旧 ?::DATE 参数对非法值同样
+        # 在服务端报错进 except 分支，此处提前拦截、行为面等价）。
+        result.update({"ok": False, "reason": f"read {table_name} failed: invalid signal_date {signal_date!r}"})
+        return result
     try:
+        # R44（2026-11-10）：toDate 谓词不裁剪 toYYYYMM(datetime) 分区（R20b 前科）；
+        # 改裸列 datetime 范围（列标注 Asia/Shanghai，字符串字面量比较同域，
+        # 实测 002015@11-10 两种谓词 16 行=16 行逐行全等）。
         df = clickhouse_query_df(
             f"""
             SELECT
@@ -3097,9 +3105,9 @@ def _gen2_minute_table_status(signal_date: str, period_minutes: int, now: dateti
                 uniqExact(code) AS code_count,
                 max(datetime) AS max_datetime
             FROM {table_name}
-            WHERE toDate(datetime) = ?::DATE
-            """,
-            [signal_date],
+            WHERE datetime >= '{signal_date} 00:00:00'
+              AND datetime < '{signal_date} 00:00:00' + INTERVAL 1 DAY
+            """
         )
     except Exception as exc:
         result.update({"ok": False, "reason": f"read {table_name} failed: {exc}"})
@@ -3145,20 +3153,27 @@ def _previous_stock_trade_date(signal_date: str) -> Optional[str]:
     normalized = _normalize_date_str(signal_date)
     if not normalized:
         return None
-    sql = text(
-        """
-        SELECT MAX(k.trade_date) AS prev_date
-        FROM kline_daily k
-        JOIN stocks s ON s.code = k.code
-        WHERE k.trade_date < :signal_date
-          AND s.type = 'stock'
-          AND s.quit = 0
-          AND (s.st = 0 OR s.st IS NULL)
-        """
-    )
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+        # R44：f-string 谓词需严格日期形（旧绑定参数对非法值同样报错进 except）。
+        logger.warning(f"resolve previous stock trade date invalid: signal_date={signal_date!r}")
+        return None
+    # R44（2026-11-10）：ORM→raw 基表直查（同 _resolve_latest_stock_trade_date，
+    # 视图改写版实测 53s/次；max() 对重复版本不敏感、语义等价）。
+    from utils.market_warehouse import clickhouse_scalar
+
     try:
-        with db.engine.connect() as conn:
-            prev = conn.execute(sql, {"signal_date": normalized}).scalar()
+        prev = clickhouse_scalar(
+            f"""
+            SELECT max(k.trade_date)
+            FROM kline_daily AS k
+            INNER JOIN stocks AS s ON s.code = k.code
+            WHERE k.trade_date < '{normalized}'
+              AND s.type = 'stock'
+              AND s.quit = 0
+              AND (s.st = 0 OR s.st IS NULL)
+            """,
+            raw=True,
+        )
         return _normalize_date_str(prev)
     except Exception as exc:
         logger.warning(f"resolve previous stock trade date failed: signal_date={signal_date}, error={exc}")
@@ -3246,14 +3261,19 @@ def _daily_stock_coverage_status(trade_date: str, name: str, min_codes: int = 30
     normalized = _normalize_date_str(trade_date)
     if not normalized:
         return _pipeline_check(stage, name, False, f"{name} trade_date empty")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+        # R44：f-string 谓词需严格日期形；旧 ?::DATE 对非法值同样服务端报错。
+        return _pipeline_check(stage, name, False, f"{name} coverage read failed: invalid trade_date {normalized!r}")
     try:
+        # R44（2026-11-10）：raw 基表直查。经 quality_read 视图改写后该 count
+        # 每次全表扫视图（R14 同族）；GROUP BY code 在查询内去重，行数口径与
+        # FINAL 视图逐日全等（近 5 日实测 dup=0，且该形状对 dup 也稳健）。
         df = clickhouse_query_df(
-            """
+            f"""
             SELECT count() AS row_count, uniqExact(code) AS code_count
-            FROM kline_daily
-            WHERE trade_date = ?::DATE
+            FROM (SELECT code FROM kline_daily WHERE trade_date = '{normalized}' GROUP BY code)
             """,
-            [normalized],
+            raw=True,
         )
         row = df.iloc[0] if df is not None and not df.empty else {}
         row_count = _to_int(row.get("row_count"), 0)
@@ -3397,6 +3417,24 @@ def _stage_summary(checks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ]
 
 
+_FRESHNESS_FILE_CACHE: Dict[str, Any] = {}
+
+
+def _freshness_file_memo(key: str, mtime: float, compute):
+    """R44（2026-11-10）：freshness 检查里同一 parquet/CSV 日期列在同一请求内
+    被读 2 次以上（ok 判定 + message 判定各一遍），且大文件走 bind mount 读
+    很慢；按 (path, mtime, after_date[, 列集]) 记忆化——文件未变结果不变，纯
+    加速零语义变化。"""
+    hit = _FRESHNESS_FILE_CACHE.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    value = compute()
+    if len(_FRESHNESS_FILE_CACHE) > 256:
+        _FRESHNESS_FILE_CACHE.clear()
+    _FRESHNESS_FILE_CACHE[key] = (mtime, value)
+    return value
+
+
 def _freshness_pipeline_checks(signal_date: str, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     freshness = build_gen2_data_freshness(signal_date, signal_date)
     sources = freshness.get("sources") or {}
@@ -3453,30 +3491,46 @@ def _freshness_pipeline_checks(signal_date: str, now: Optional[datetime] = None)
         if not path.exists():
             return False
         try:
-            df = pd.read_parquet(path, columns=["entry_date", "pattern", "trigger_type"])
-            df["entry_date"] = pd.to_datetime(df["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-            return bool(
-                (
-                    df["entry_date"].gt(str(after_date or ""))
-                    & df["pattern"].eq(str(GEN2_OPEN_RULE_V1.get("pattern") or ""))
-                    & df["trigger_type"].eq(str(GEN2_OPEN_RULE_V1.get("trigger_type") or ""))
-                ).any()
-            )
-        except Exception:
+            mtime = path.stat().st_mtime
+        except OSError:
             return False
+
+        def _compute() -> bool:
+            try:
+                df = pd.read_parquet(path, columns=["entry_date", "pattern", "trigger_type"])
+                df["entry_date"] = pd.to_datetime(df["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                return bool(
+                    (
+                        df["entry_date"].gt(str(after_date or ""))
+                        & df["pattern"].eq(str(GEN2_OPEN_RULE_V1.get("pattern") or ""))
+                        & df["trigger_type"].eq(str(GEN2_OPEN_RULE_V1.get("trigger_type") or ""))
+                    ).any()
+                )
+            except Exception:
+                return False
+
+        return _freshness_file_memo(f"official_triggers|{path}|{mtime}|{after_date}", mtime, _compute)
 
     def _has_new_rows(path: Path, after_date: str, is_csv: bool = False) -> bool:
         if not path.exists():
             return False
         try:
-            if is_csv:
-                df = pd.read_csv(path, usecols=["entry_date"])
-            else:
-                df = pd.read_parquet(path, columns=["entry_date"])
-            dates = pd.to_datetime(df["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-            return bool(dates.gt(str(after_date or "")).any())
-        except Exception:
+            mtime = path.stat().st_mtime
+        except OSError:
             return False
+
+        def _compute() -> bool:
+            try:
+                if is_csv:
+                    df = pd.read_csv(path, usecols=["entry_date"])
+                else:
+                    df = pd.read_parquet(path, columns=["entry_date"])
+                dates = pd.to_datetime(df["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                return bool(dates.gt(str(after_date or "")).any())
+            except Exception:
+                return False
+
+        return _freshness_file_memo(f"has_new_rows|{path}|{mtime}|{after_date}|{is_csv}", mtime, _compute)
 
     def _rebuilt_after(upstream: Path, downstream: Path) -> bool:
         try:
@@ -3632,14 +3686,19 @@ def _clickhouse_artifact_summary(table: str, date_col: str, target_date: Optiona
     if not normalized:
         result["read_ok"] = True
         return result
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+        # R44：范围谓词需严格日期形；旧 ?::DATE 对非法值同样服务端报错。
+        result["message"] = f"read failed: invalid target_date {normalized!r}"
+        return result
     try:
+        # R44（2026-11-10）：toDate→裸列范围（分区裁剪；行集等价见 _gen2_minute_table_status）。
         df = clickhouse_query_df(
             f"""
             SELECT count() AS row_count, uniqExact(code) AS code_count
             FROM {table}
-            WHERE toDate({date_col}) = ?::DATE
-            """,
-            [normalized],
+            WHERE {date_col} >= '{normalized} 00:00:00'
+              AND {date_col} < '{normalized} 00:00:00' + INTERVAL 1 DAY
+            """
         )
         row = df.iloc[0] if df is not None and not df.empty else {}
         result.update(
@@ -7515,18 +7574,22 @@ def _load_selection_score_rows(
 
 
 def _resolve_latest_stock_trade_date() -> Optional[str]:
-    sql = text(
+    # R44（2026-11-10）：ORM 路径经 before_cursor_execute 的 quality_read 视图
+    # 改写（MAX(trade_date) JOIN stocks 实测 82s/483MB 全表聚合，R14 同族）；
+    # 改 market_warehouse raw=True 基表直查，max() 对重复版本不敏感、语义等价。
+    from utils.market_warehouse import clickhouse_scalar
+
+    latest = clickhouse_scalar(
         """
-        SELECT MAX(k.trade_date) AS latest_date
-        FROM kline_daily k
-        JOIN stocks s ON s.code = k.code
+        SELECT max(k.trade_date)
+        FROM kline_daily AS k
+        INNER JOIN stocks AS s ON s.code = k.code
         WHERE s.type = 'stock'
           AND s.quit = 0
           AND (s.st = 0 OR s.st IS NULL)
-        """
+        """,
+        raw=True,
     )
-    with db.engine.connect() as conn:
-        latest = conn.execute(sql).scalar()
     if latest is None:
         return None
     try:
@@ -10180,19 +10243,22 @@ def _gen2_intraday_cutoff_status(table: str, target_date: str, min_codes: int = 
     normalized_date = _normalize_date_str(target_date)
     if not normalized_date:
         return {"ok": False, "table": table, "target_date": target_date, "error": "invalid target_date"}
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized_date):
+        return {"ok": False, "table": table, "target_date": normalized_date, "error": f"invalid target_date {normalized_date!r}"}
     try:
+        # R44（2026-11-10）：toDate→裸列范围（分区裁剪；行集等价见 _gen2_minute_table_status）。
         df = clickhouse_query_df(
             f"""
             SELECT
                 datetime AS dt,
                 uniq(code) AS codes
             FROM {table}
-            WHERE toDate(datetime) = toDate(?)
+            WHERE datetime >= '{normalized_date} 00:00:00'
+              AND datetime < '{normalized_date} 00:00:00' + INTERVAL 1 DAY
             GROUP BY dt
             ORDER BY dt DESC
             LIMIT 12
-            """,
-            [normalized_date],
+            """
         )
     except Exception as exc:
         return {"ok": False, "table": table, "target_date": normalized_date, "error": str(exc)}
