@@ -2176,6 +2176,56 @@ def _configure_v4_monitor_scheduler() -> Dict[str, Any]:
     }
 
 
+def _v4_monitor_status_readonly() -> Dict[str, Any]:
+    """R43 只读调度器状态（GET 链专用）：读现场，绝不 remove/add_job/start。
+
+    键集与 _configure_v4_monitor_scheduler() 各分支一致（启用分支额外附
+    scheduler_enabled/scheduler_wired 现场快照，旧禁用分支本就含这两个键）。
+    """
+    state = _load_v4_monitor_state()
+    if not _startup_schedulers_enabled():
+        return {
+            "enabled": bool(state.get("enabled")),
+            "interval_seconds": int(state.get("interval_seconds") or 60),
+            "trading_hours_only": bool(state.get("trading_hours_only")),
+            "quiet_minutes": int(state.get("quiet_minutes") or 0),
+            "repeat_reminder_minutes": int(state.get("repeat_reminder_minutes") or 60),
+            "reminder_active": bool(state.get("reminder_active")),
+            "reminder_activated_at": state.get("reminder_activated_at"),
+            "recipient_email": str(state.get("recipient_email") or ""),
+            "next_run_time": None,
+            "last_run_at": state.get("last_run_at"),
+            "last_email_sent_at": state.get("last_email_sent_at"),
+            "last_error": state.get("last_error"),
+            "scheduler_enabled": False,
+            "scheduler_wired": False,
+            "scheduler_disabled_reason": "AISTOCK_STARTUP_SCHEDULERS_ENABLED=0",
+        }
+    scheduler = _v4_monitor_scheduler
+    job = None
+    if scheduler is not None:
+        try:
+            job = scheduler.get_job(_v4_monitor_job_id)
+        except Exception:
+            job = None
+    return {
+        "enabled": bool(state.get("enabled")),
+        "interval_seconds": int(state.get("interval_seconds") or 60),
+        "trading_hours_only": bool(state.get("trading_hours_only")),
+        "quiet_minutes": int(state.get("quiet_minutes") or 0),
+        "repeat_reminder_minutes": int(state.get("repeat_reminder_minutes") or 60),
+        "reminder_active": bool(state.get("reminder_active")),
+        "reminder_activated_at": state.get("reminder_activated_at"),
+        "recipient_email": str(state.get("recipient_email") or ""),
+        "next_run_time": str(job.next_run_time) if job and job.next_run_time else None,
+        "last_run_at": state.get("last_run_at"),
+        "last_email_sent_at": state.get("last_email_sent_at"),
+        "last_error": state.get("last_error"),
+        "scheduler_enabled": bool(job),
+        "scheduler_wired": bool(scheduler is not None and getattr(scheduler, "running", False)),
+    }
+
+
 def init_v4_manual_holdings_monitor_scheduler_from_config() -> Dict[str, Any]:
     return _configure_v4_monitor_scheduler()
 
@@ -3159,8 +3209,16 @@ def _file_pipeline_status(stage: str, name: str, path: Path, min_bytes: int = 1)
 
 
 def _directory_writable_status(stage: str, name: str, path: Path) -> Dict[str, Any]:
+    # R43：纯 stat 判定——不 mkdir、不写探针；GET 链零目录副作用。
     try:
-        path.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            return _pipeline_check(
+                stage,
+                name,
+                False,
+                f"{name} directory missing (read-only check, not auto-created): {path}",
+                path=str(path),
+            )
         ok = os.access(path, os.W_OK)
         return _pipeline_check(stage, name, ok, "" if ok else f"{name} is not writable: {path}", path=str(path))
     except Exception as exc:
@@ -3305,20 +3363,10 @@ def _alpha191_artifact_status(signal_date: str, prev_trade_date: Optional[str], 
 
 
 def _notification_config_status(recipient_override: Optional[str] = None) -> Dict[str, Any]:
+    """R43：仅报配置在场状态，不做 SMTP 登录外呼探测（探测 POST 化待批）。"""
     stage = "notification"
     try:
         cfg = _load_smtp_config_for_monitor(recipient_override)
-        probe = _smtp_login_probe(cfg)
-        if not probe.get("ok"):
-            return _pipeline_check(
-                stage,
-                "smtp_config",
-                False,
-                "SMTP login probe failed: " + " | ".join(probe.get("errors") or []),
-                to_emails=cfg.get("to_emails"),
-                server=cfg.get("server"),
-                port=cfg.get("port"),
-            )
         return _pipeline_check(
             stage,
             "smtp_config",
@@ -3327,8 +3375,8 @@ def _notification_config_status(recipient_override: Optional[str] = None) -> Dic
             to_emails=cfg.get("to_emails"),
             server=cfg.get("server"),
             port=cfg.get("port"),
-            send_mode=probe.get("mode"),
-            effective_port=probe.get("port"),
+            send_mode="config_only",
+            effective_port=cfg.get("port"),
         )
     except Exception as exc:
         return _pipeline_check(stage, "smtp_config", False, f"SMTP config unavailable: {exc}")
@@ -4594,6 +4642,69 @@ def _configure_gen2_strategy_refresh_scheduler() -> Dict[str, Any]:
     }
 
 
+def _gen2_strategy_refresh_status_readonly() -> Dict[str, Any]:
+    """R43 只读调度器状态（GET 链专用）：读现场，绝不 remove/add_job/start。
+
+    键集与 _configure_gen2_strategy_refresh_scheduler() 各分支一致（启用分支
+    额外附 scheduler_enabled/scheduler_wired 现场快照）。
+    """
+    state = _load_gen2_strategy_refresh_state()
+    current_bar_slot = _gen2_30m_bar_slot(datetime.now(), int(state.get("data_delay_minutes") or 2))
+    if not _startup_schedulers_enabled():
+        return {
+            "enabled": bool(state.get("enabled")),
+            "trading_hours_only": bool(state.get("trading_hours_only")),
+            "data_delay_minutes": int(state.get("data_delay_minutes") or 2),
+            "run_shadow_monitor": bool(state.get("run_shadow_monitor")),
+            "run_mainline_hotspots": bool(state.get("run_mainline_hotspots")),
+            "mainline_mode": str(state.get("mainline_mode") or "sector"),
+            "mainline_limit": int(state.get("mainline_limit") or 30),
+            "force_each_bar_once": bool(state.get("force_each_bar_once", True)),
+            "current_bar_slot": current_bar_slot,
+            "next_run_time": None,
+            "last_bar_slot": state.get("last_bar_slot"),
+            "last_run_at": state.get("last_run_at"),
+            "last_success_at": state.get("last_success_at"),
+            "last_skip_at": state.get("last_skip_at"),
+            "last_error": state.get("last_error"),
+            "last_result": state.get("last_result"),
+            "last_mainline_task_id": state.get("last_mainline_task_id"),
+            "state_path": str(GEN2_STRATEGY_REFRESH_STATE_PATH),
+            "scheduler_enabled": False,
+            "scheduler_wired": False,
+            "scheduler_disabled_reason": "AISTOCK_STARTUP_SCHEDULERS_ENABLED=0",
+        }
+    scheduler = _v4_monitor_scheduler
+    job = None
+    if scheduler is not None:
+        try:
+            job = scheduler.get_job(_gen2_strategy_refresh_job_id)
+        except Exception:
+            job = None
+    return {
+        "enabled": bool(state.get("enabled")),
+        "trading_hours_only": bool(state.get("trading_hours_only")),
+        "data_delay_minutes": int(state.get("data_delay_minutes") or 2),
+        "run_shadow_monitor": bool(state.get("run_shadow_monitor")),
+        "run_mainline_hotspots": bool(state.get("run_mainline_hotspots")),
+        "mainline_mode": str(state.get("mainline_mode") or "sector"),
+        "mainline_limit": int(state.get("mainline_limit") or 30),
+        "force_each_bar_once": bool(state.get("force_each_bar_once", True)),
+        "current_bar_slot": current_bar_slot,
+        "next_run_time": str(job.next_run_time) if job and job.next_run_time else None,
+        "last_bar_slot": state.get("last_bar_slot"),
+        "last_run_at": state.get("last_run_at"),
+        "last_success_at": state.get("last_success_at"),
+        "last_skip_at": state.get("last_skip_at"),
+        "last_error": state.get("last_error"),
+        "last_result": state.get("last_result"),
+        "last_mainline_task_id": state.get("last_mainline_task_id"),
+        "state_path": str(GEN2_STRATEGY_REFRESH_STATE_PATH),
+        "scheduler_enabled": bool(job),
+        "scheduler_wired": bool(scheduler is not None and getattr(scheduler, "running", False)),
+    }
+
+
 def _configure_gen2_shadow_buy_monitor_scheduler() -> Dict[str, Any]:
     state = _load_gen2_shadow_monitor_state()
     if not _startup_schedulers_enabled():
@@ -4695,6 +4806,86 @@ def _configure_gen2_shadow_buy_monitor_scheduler() -> Dict[str, Any]:
         "last_heartbeat_sent_at": state.get("last_heartbeat_sent_at"),
         "last_error": state.get("last_error"),
         "last_result": state.get("last_result"),
+    }
+
+
+def _gen2_shadow_buy_monitor_status_readonly() -> Dict[str, Any]:
+    """R43 只读调度器状态（GET 链专用）：读现场，绝不 remove/add_job/start。
+
+    键集与 _configure_gen2_shadow_buy_monitor_scheduler() 各分支一致（启用分支
+    额外附 scheduler_enabled/scheduler_wired 现场快照）。
+    """
+    state = _load_gen2_shadow_monitor_state()
+    if not _startup_schedulers_enabled():
+        return {
+            "enabled": bool(state.get("enabled")),
+            "interval_seconds": int(state.get("interval_seconds") or 120),
+            "pool_rank": int(state.get("pool_rank") or 200),
+            "alpha191_gate": str(state.get("alpha191_gate") or "off"),
+            "trading_hours_only": bool(state.get("trading_hours_only")),
+            "heartbeat_enabled": bool(state.get("heartbeat_enabled", True)),
+            "heartbeat_email_minutes": int(state.get("heartbeat_email_minutes") or 30),
+            "official_rebuild_enabled": bool(state.get("official_rebuild_enabled", True)),
+            "official_rebuild_legacy_330": bool(state.get("official_rebuild_legacy_330", True)),
+            "official_rebuild_include_breakout": bool(state.get("official_rebuild_include_breakout", True)),
+            "official_rebuild_timeout_seconds": int(state.get("official_rebuild_timeout_seconds") or 10800),
+            "official_rebuild_retry_minutes": int(state.get("official_rebuild_retry_minutes") or 10),
+            "recipient_email": str(state.get("recipient_email") or ""),
+            "next_run_time": None,
+            "last_official_rebuild_date": state.get("last_official_rebuild_date"),
+            "last_official_rebuild_at": state.get("last_official_rebuild_at"),
+            "last_official_rebuild_ok": state.get("last_official_rebuild_ok"),
+            "last_official_rebuild_attempt_at": state.get("last_official_rebuild_attempt_at"),
+            "last_official_rebuild_failed_at": state.get("last_official_rebuild_failed_at"),
+            "last_official_rebuild_task_id": state.get("last_official_rebuild_task_id"),
+            "last_official_rebuild_task_status": state.get("last_official_rebuild_task_status"),
+            "last_official_rebuild_result": state.get("last_official_rebuild_result"),
+            "last_run_at": state.get("last_run_at"),
+            "last_email_sent_at": state.get("last_email_sent_at"),
+            "last_heartbeat_sent_at": state.get("last_heartbeat_sent_at"),
+            "last_error": state.get("last_error"),
+            "last_result": state.get("last_result"),
+            "scheduler_enabled": False,
+            "scheduler_wired": False,
+            "scheduler_disabled_reason": "AISTOCK_STARTUP_SCHEDULERS_ENABLED=0",
+        }
+    scheduler = _v4_monitor_scheduler
+    job = None
+    if scheduler is not None:
+        try:
+            job = scheduler.get_job(_gen2_shadow_monitor_job_id)
+        except Exception:
+            job = None
+    return {
+        "enabled": bool(state.get("enabled")),
+        "interval_seconds": int(state.get("interval_seconds") or 120),
+        "pool_rank": int(state.get("pool_rank") or 200),
+        "alpha191_gate": str(state.get("alpha191_gate") or "off"),
+        "trading_hours_only": bool(state.get("trading_hours_only")),
+        "heartbeat_enabled": bool(state.get("heartbeat_enabled", True)),
+        "heartbeat_email_minutes": int(state.get("heartbeat_email_minutes") or 30),
+        "official_rebuild_enabled": bool(state.get("official_rebuild_enabled", True)),
+        "official_rebuild_legacy_330": bool(state.get("official_rebuild_legacy_330", True)),
+        "official_rebuild_include_breakout": bool(state.get("official_rebuild_include_breakout", True)),
+        "official_rebuild_timeout_seconds": int(state.get("official_rebuild_timeout_seconds") or 10800),
+        "official_rebuild_retry_minutes": int(state.get("official_rebuild_retry_minutes") or 10),
+        "recipient_email": str(state.get("recipient_email") or ""),
+        "next_run_time": str(job.next_run_time) if job and job.next_run_time else None,
+        "last_official_rebuild_date": state.get("last_official_rebuild_date"),
+        "last_official_rebuild_at": state.get("last_official_rebuild_at"),
+        "last_official_rebuild_ok": state.get("last_official_rebuild_ok"),
+        "last_official_rebuild_attempt_at": state.get("last_official_rebuild_attempt_at"),
+        "last_official_rebuild_failed_at": state.get("last_official_rebuild_failed_at"),
+        "last_official_rebuild_task_id": state.get("last_official_rebuild_task_id"),
+        "last_official_rebuild_task_status": state.get("last_official_rebuild_task_status"),
+        "last_official_rebuild_result": state.get("last_official_rebuild_result"),
+        "last_run_at": state.get("last_run_at"),
+        "last_email_sent_at": state.get("last_email_sent_at"),
+        "last_heartbeat_sent_at": state.get("last_heartbeat_sent_at"),
+        "last_error": state.get("last_error"),
+        "last_result": state.get("last_result"),
+        "scheduler_enabled": bool(job),
+        "scheduler_wired": bool(scheduler is not None and getattr(scheduler, "running", False)),
     }
 
 
@@ -11262,7 +11453,9 @@ def get_gen2_workflow_status(
     signal_date: Optional[str] = Query(None, description="signal date"),
 ):
     state = _load_gen2_shadow_monitor_state()
-    reconciled_official_rebuild = _reconcile_official_rebuild_state_if_needed(state, datetime.now())
+    # R43：GET 只读——不再触发状态 reconcile 落盘（_save_gen2_shadow_monitor_state），
+    # official_rebuild 直接取既有状态值；需要刷新走写面 POST。
+    reconciled_official_rebuild = None
     requested_date = _normalize_date_str(signal_date)
     latest_trade_date = _normalize_date_str(_resolve_latest_stock_trade_date())
     if not requested_date:
@@ -11284,7 +11477,8 @@ def get_gen2_workflow_status(
         alpha191_gate=str(state.get("alpha191_gate") or "g2_v2_complete"),
         recipient_override=state.get("recipient_email"),
     )
-    monitor_status = _configure_gen2_shadow_buy_monitor_scheduler()
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    monitor_status = _gen2_shadow_buy_monitor_status_readonly()
     return _sanitize(
         {
             "available": True,
@@ -11993,7 +12187,8 @@ def save_v4_manual_holdings_state(payload: Dict[str, Any]):
 
 @router.get("/gen2/shadow-monitor/status")
 def get_gen2_shadow_buy_monitor_status():
-    return _sanitize(_configure_gen2_shadow_buy_monitor_scheduler())
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    return _sanitize(_gen2_shadow_buy_monitor_status_readonly())
 
 
 @router.post("/gen2/shadow-monitor/config")
@@ -12045,7 +12240,8 @@ def run_gen2_shadow_buy_monitor_once(payload: Dict[str, Any]):
 
 @router.get("/gen2/strategy-refresh/status")
 def get_gen2_strategy_refresh_status():
-    return _sanitize(_configure_gen2_strategy_refresh_scheduler())
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    return _sanitize(_gen2_strategy_refresh_status_readonly())
 
 
 @router.post("/gen2/strategy-refresh/config")
@@ -12083,7 +12279,8 @@ def run_gen2_strategy_refresh_once(payload: Dict[str, Any]):
 
 @router.get("/v4/manual-holdings/monitor/status")
 def get_v4_manual_holdings_monitor_status():
-    return _sanitize(_configure_v4_monitor_scheduler())
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    return _sanitize(_v4_monitor_status_readonly())
 
 
 @router.post("/v4/manual-holdings/monitor/config")

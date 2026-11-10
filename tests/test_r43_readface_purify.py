@@ -80,7 +80,7 @@ R43_PURIFIED_ROUTES = [
 ]
 
 # 分批推进：每批 commit 时其类别测试必须全绿（①→②→③→④）。
-ACTIVE_CATEGORIES = {"1"}
+ACTIVE_CATEGORIES = {"1", "2"}
 
 assert len(R43_PURIFIED_ROUTES) == 35, "R43 范围必须是 35 条（39 封禁 − #14 R42 − ⑤类 sync-ths 3 条）"
 
@@ -421,3 +421,192 @@ def test_r43_cat1_refresh_false_payload_shape_unchanged() -> None:
     live = _call_async(gs.get_gen3_shadow_live(as_of=None, refresh=False, allow_after_close=False, limit=20))
     assert live["refresh"] == {"ran": False, "ok": None, "returncode": None}
     assert {"ok", "mode", "diagnosis", "summary", "candidates", "blocked", "recent_signal_dates", "refresh", "artifacts"} <= set(live)
+
+
+# ---------------------------------------------------------------- 行为守卫（②）
+
+
+class _FakeJob:
+    def __init__(self, job_id: str) -> None:
+        self.id = job_id
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+
+        self.next_run_time = _dt.now() + _td(minutes=30)
+
+
+class _RecordingScheduler:
+    """假 APScheduler：允许 get_job；一切变更/启动调用都被记录为 mutation。"""
+
+    running = True
+
+    def __init__(self, jobs: dict[str, object] | None = None) -> None:
+        self.jobs = jobs or {}
+        self.mutations: list[str] = []
+
+    def get_job(self, job_id: str):
+        return self.jobs.get(job_id)
+
+    def add_job(self, *args, **kwargs):
+        self.mutations.append("add_job")
+        return None
+
+    def remove_job(self, *args, **kwargs):
+        self.mutations.append("remove_job")
+        return None
+
+    def start(self, *args, **kwargs):
+        self.mutations.append("start")
+        return None
+
+    def shutdown(self, *args, **kwargs):
+        self.mutations.append("shutdown")
+        return None
+
+
+def test_r43_cat2_gen3_status_gets_never_mutate_scheduler(monkeypatch) -> None:
+    import api.gen3_state_alpha as gsa
+
+    fake = _RecordingScheduler(
+        {
+            gsa._monitor_job_id: _FakeJob(gsa._monitor_job_id),
+            gsa._exit_monitor_job_id: _FakeJob(gsa._exit_monitor_job_id),
+            gsa._daily_trend_exit_monitor_job_id: _FakeJob(gsa._daily_trend_exit_monitor_job_id),
+            gsa._observation_job_id: _FakeJob(gsa._observation_job_id),
+            gsa._observation_retry_job_id: _FakeJob(gsa._observation_retry_job_id),
+            gsa._broker_sync_job_id: _FakeJob(gsa._broker_sync_job_id),
+        }
+    )
+    monkeypatch.setattr(gsa, "_monitor_scheduler", fake)
+    monkeypatch.setattr(gsa, "_startup_schedulers_enabled", lambda: True)
+
+    monitor = _call_async(gsa.get_gen3_state_alpha_shadow_monitor_status(include_workflow=True))
+    assert monitor["ok"] is True and monitor["monitor"]["scheduler_enabled"] is True
+    assert monitor["monitor"]["scheduler_wired"] is True
+    assert "workflow" in monitor and monitor["workflow"]["monitor"]["scheduler_enabled"] is True
+    assert "state_alpha_runtime_dir" in [c.get("name") for c in monitor["workflow"]["pipeline_checks"]]
+
+    broker = _call_async(gsa.get_gen3_state_alpha_broker_sync_status())
+    assert broker["scheduler"]["wired"] is True
+
+    exit_monitor = _call_async(gsa.get_gen3_state_alpha_shadow_exit_monitor_status())
+    assert exit_monitor["monitor"]["scheduler_enabled"] is True
+
+    daily = _call_async(gsa.get_gen3_state_alpha_daily_trend_exit_monitor_status())
+    assert daily["monitor"]["scheduler_enabled"] is True
+
+    obs = _call_async(gsa.get_gen3_state_alpha_observation_scheduler_status())
+    assert obs["scheduler"]["scheduler_enabled"] is True
+    assert obs["scheduler"]["job_ids"] == [gsa._observation_job_id, gsa._observation_retry_job_id]
+
+    snaps = _call_async(gsa.get_gen3_state_alpha_observation_snapshots(limit=5))
+    assert snaps["ok"] is True and snaps["scheduler"]["scheduler_enabled"] is True
+
+    assert fake.mutations == [], f"GET 链出现调度器变更: {fake.mutations}"
+
+
+def test_r43_cat2_gen3_status_disabled_branch_schema(monkeypatch) -> None:
+    import api.gen3_state_alpha as gsa
+
+    fake = _RecordingScheduler()
+    monkeypatch.setattr(gsa, "_monitor_scheduler", fake)
+    monkeypatch.setattr(gsa, "_startup_schedulers_enabled", lambda: False)
+
+    payload = _call_async(gsa.get_gen3_state_alpha_shadow_monitor_status())
+    assert payload["monitor"]["scheduler_enabled"] is False
+    assert payload["monitor"]["scheduler_wired"] is False
+    assert payload["monitor"]["scheduler_disabled_reason"].startswith("AISTOCK_STARTUP_SCHEDULERS")
+    assert fake.mutations == []
+
+
+def test_r43_cat2_gen3_readonly_keys_match_configure(monkeypatch) -> None:
+    import api.gen3_state_alpha as gsa
+
+    fake = _RecordingScheduler({gsa._monitor_job_id: _FakeJob(gsa._monitor_job_id)})
+    monkeypatch.setattr(gsa, "_monitor_scheduler", fake)
+    monkeypatch.setattr(gsa, "_startup_schedulers_enabled", lambda: True)
+
+    configured = gsa.configure_shadow_monitor_scheduler()
+    mutated = [m for m in fake.mutations]
+    fake.mutations.clear()
+    readonly = gsa._scheduler_state_readonly(gsa._load_monitor_state(), gsa._monitor_job_id)
+    assert set(readonly) == set(configured), f"键集漂移: readonly={set(readonly) ^ set(configured)}"
+    assert fake.mutations == [] and mutated  # configure 本身应有变更动作（对照有效性）
+
+
+def test_r43_cat2_trading_status_gets_never_mutate_scheduler(monkeypatch) -> None:
+    import api.trading as tr
+
+    fake = _RecordingScheduler(
+        {
+            tr._v4_monitor_job_id: _FakeJob(tr._v4_monitor_job_id),
+            tr._gen2_shadow_monitor_job_id: _FakeJob(tr._gen2_shadow_monitor_job_id),
+            tr._gen2_strategy_refresh_job_id: _FakeJob(tr._gen2_strategy_refresh_job_id),
+        }
+    )
+    monkeypatch.setattr(tr, "_v4_monitor_scheduler", fake)
+    monkeypatch.setattr(tr, "_startup_schedulers_enabled", lambda: True)
+
+    shadow = tr.get_gen2_shadow_buy_monitor_status()
+    assert shadow["scheduler_enabled"] is True and shadow["scheduler_wired"] is True
+    assert shadow["next_run_time"] is not None
+
+    refresh = tr.get_gen2_strategy_refresh_status()
+    assert refresh["scheduler_enabled"] is True and "current_bar_slot" in refresh
+
+    v4 = tr.get_v4_manual_holdings_monitor_status()
+    assert v4["scheduler_enabled"] is True
+
+    assert fake.mutations == [], f"GET 链出现调度器变更: {fake.mutations}"
+
+
+def test_r43_cat2_trading_readonly_keys_match_configure(monkeypatch) -> None:
+    import api.trading as tr
+
+    fake = _RecordingScheduler({tr._v4_monitor_job_id: _FakeJob(tr._v4_monitor_job_id)})
+    monkeypatch.setattr(tr, "_v4_monitor_scheduler", fake)
+    monkeypatch.setattr(tr, "_startup_schedulers_enabled", lambda: True)
+
+    configured = tr._configure_v4_monitor_scheduler()
+    fake.mutations.clear()
+    readonly = tr._v4_monitor_status_readonly()
+    assert set(readonly) == set(configured) | {"scheduler_enabled", "scheduler_wired"}
+    assert fake.mutations == []
+
+
+def test_r43_cat2_notification_status_no_smtp_probe(monkeypatch) -> None:
+    import api.trading as tr
+
+    def _boom(*args, **kwargs):  # pragma: no cover - regression tripwire
+        raise AssertionError("smtp login probe must not run from status chain")
+
+    monkeypatch.setattr(tr, "_smtp_login_probe", _boom)
+    monkeypatch.setattr(
+        tr,
+        "_load_smtp_config_for_monitor",
+        lambda *a, **k: {"to_emails": ["a@b.c"], "server": "smtp.example", "port": 465},
+    )
+    check = tr._notification_config_status()
+    assert check["ok"] is True and check["send_mode"] == "config_only"
+
+
+def test_r43_cat2_directory_writable_status_never_creates(tmp_path) -> None:
+    import api.trading as tr
+
+    missing = tmp_path / "never_created"
+    check = tr._directory_writable_status("strategy", "shadow_live_output_dir", missing)
+    assert check["ok"] is False and not missing.exists()
+
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    check2 = tr._directory_writable_status("strategy", "shadow_live_output_dir", existing)
+    assert check2["ok"] is True
+
+
+def test_r43_cat2_gen3_directory_writable_status_never_writes(tmp_path) -> None:
+    import api.gen3_state_alpha as gsa
+
+    missing = tmp_path / "never_created_dir"
+    check = gsa._directory_writable_status("x", missing)
+    assert check["ok"] is False and not missing.exists()
+    assert ".write_probe" not in str(list(tmp_path.iterdir()))

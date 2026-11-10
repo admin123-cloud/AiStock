@@ -174,6 +174,49 @@ def _scheduler_disabled_result(state: dict[str, Any], job_id: str) -> dict[str, 
     }
 
 
+def _scheduler_state_readonly(
+    state: dict[str, Any],
+    job_id: str,
+    *extra_job_ids: str,
+) -> dict[str, Any]:
+    """R43 只读调度器状态（GET 链专用）：读 APScheduler 现场，绝不 add/remove_job/start。
+
+    返回键集与各 configure_*_scheduler() 一致；值反映真实现场（job 是否真的
+    在跑），而非旧版"顺手把 job 重配成应有状态再汇报"。禁用开关语义同旧版。
+    """
+    if not _startup_schedulers_enabled():
+        return _scheduler_disabled_result(state, job_id)
+    scheduler = _monitor_scheduler
+    jobs: list[Any] = []
+    if scheduler is not None:
+        for jid in (job_id, *extra_job_ids):
+            try:
+                job = scheduler.get_job(jid)
+            except Exception:
+                job = None
+            if job is not None:
+                jobs.append(job)
+    next_times = [job.next_run_time for job in jobs if getattr(job, "next_run_time", None)]
+    result: dict[str, Any] = {
+        **state,
+        "scheduler_enabled": bool(jobs),
+        "scheduler_wired": bool(scheduler is not None and getattr(scheduler, "running", False)),
+        "job_id": job_id,
+        "next_run_time": min(next_times).isoformat() if next_times else None,
+    }
+    if extra_job_ids:
+        result["job_ids"] = [job.id for job in jobs]
+        result["retry_job_id"] = extra_job_ids[0]
+        result["scheduled_jobs"] = [
+            {
+                "job_id": job.id,
+                "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+            }
+            for job in jobs
+        ]
+    return result
+
+
 def _path_status(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {
@@ -3365,6 +3408,29 @@ def _directory_writable_check(name: str, path: Path) -> dict[str, Any]:
     }
 
 
+def _directory_writable_status(name: str, path: Path) -> dict[str, Any]:
+    """R43 只读目录可写判定：纯 stat + os.access，不 mkdir、不写 .write_probe。
+
+    输出键与 _directory_writable_check 一致；GET 链一律用本函数。
+    """
+    if not path.exists():
+        return {
+            "name": name,
+            "ok": False,
+            "status": "blocked",
+            "path": str(path),
+            "message": "目录不存在（只读判定，GET 不自动创建）",
+        }
+    ok = os.access(path, os.W_OK)
+    return {
+        "name": name,
+        "ok": ok,
+        "status": "pass" if ok else "blocked",
+        "path": str(path),
+        "message": "目录可写" if ok else "目录不可写（os.access 只读判定）",
+    }
+
+
 def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     summary_path = STATE_ALPHA_RUNTIME_DIR / "latest_summary.json"
     tickets_path = STATE_ALPHA_RUNTIME_DIR / "latest_shadow_tickets.csv"
@@ -3484,6 +3550,95 @@ def _build_workflow_status() -> dict[str, Any]:
     }
     _write_json(OPERATIONS_STATE_PATH, status)
     return status
+
+
+def _build_workflow_status_readonly() -> dict[str, Any]:
+    """R43 只读版 workflow status：schema 与 _build_workflow_status 一致，但
+
+    - 调度器状态改为 _scheduler_state_readonly 现场快照（零 add/remove_job/start）
+    - 目录可写判定改为 _directory_writable_status 纯 stat（零 .write_probe/零 mkdir）
+    - 不落盘 OPERATIONS_STATE_PATH（GET 只读；落盘保留在 refresh 写链）
+    """
+    runtime = _load_current_runtime(limit=50)
+    summary = runtime.get("summary") or {}
+    tickets = runtime.get("tickets") or []
+    monitor_state = _load_monitor_state()
+    notification_check = _notification_config_check(monitor_state.get("recipient_email") or None)
+    pipeline_checks = [
+        _artifact_check("state_alpha_summary", STATE_ALPHA_RUNTIME_DIR / "latest_summary.json"),
+        _artifact_check("latest_shadow_tickets", STATE_ALPHA_RUNTIME_DIR / "latest_shadow_tickets.csv"),
+        _artifact_check("shadow_ledger", STATE_ALPHA_RUNTIME_DIR / "shadow_ledger.csv"),
+        _artifact_check("route_diagnostics", STATE_ROUTER_RUNTIME_DIR / "latest_route_diagnostics.csv"),
+        _directory_writable_status("state_alpha_runtime_dir", STATE_ALPHA_RUNTIME_DIR),
+        notification_check,
+    ]
+    qualified_rows = int(summary.get("qualified_shadow_buy_rows") or 0)
+    formal_rows = int(summary.get("formal_buy_signal_rows") or 0)
+    auto_rows = int(summary.get("auto_order_allowed_rows") or 0)
+    order_rows = int(summary.get("order_path_enabled_rows") or 0)
+    pending_next_session = bool(summary.get("pending_next_session_confirmation"))
+    qualified_ok = True if pending_next_session else (qualified_rows == len(tickets) if tickets else qualified_rows == 0)
+    m30_ok = True if pending_next_session else (all(_truthy(item.get("m30_confirmed")) for item in tickets) if tickets else True)
+    business_checks = [
+        {
+            "name": "qualified_shadow_buy",
+            "ok": qualified_ok,
+            "status": "pass" if qualified_ok else "blocked",
+            "message": "next-session candidates are pending first completed 30m confirmation" if pending_next_session else f"qualified_shadow_buy_rows={qualified_rows}, tickets={len(tickets)}",
+        },
+        {
+            "name": "formal_gate_locked",
+            "ok": formal_rows == 0 and auto_rows == 0 and order_rows == 0,
+            "status": "pass" if formal_rows == 0 and auto_rows == 0 and order_rows == 0 else "blocked",
+            "message": f"formal={formal_rows}, auto={auto_rows}, order_path={order_rows}",
+        },
+        {
+            "name": "m30_confirmation_contract",
+            "ok": m30_ok,
+            "status": "pass" if m30_ok else "blocked",
+            "message": "有票据时必须全部通过 30m 确认",
+        },
+    ]
+    pipeline_checks.extend(business_checks)
+    blockers = [item for item in pipeline_checks if not item.get("ok") and item.get("blocking", True)]
+    monitor = _scheduler_state_readonly(monitor_state, _monitor_job_id)
+    exit_monitor = _scheduler_state_readonly(_load_exit_monitor_state(), _exit_monitor_job_id)
+    observation_scheduler = _scheduler_state_readonly(
+        _load_observation_scheduler_state(), _observation_job_id, _observation_retry_job_id
+    )
+    paper_execution_path_ok = True
+    return {
+        "available": True,
+        "ok": not blockers,
+        "checked_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "entry_date": summary.get("entry_date"),
+        "decision_date": summary.get("decision_date"),
+        "diagnosis_code": summary.get("diagnosis_code"),
+        "selected_route": summary.get("selected_route"),
+        "monitor": monitor,
+        "exit_monitor": exit_monitor,
+        "observation_scheduler": observation_scheduler,
+        "pipeline": runtime.get("pipeline") or [],
+        "readiness_checks": runtime.get("readiness_checks") or [],
+        "pipeline_checks": pipeline_checks,
+        "blockers": blockers,
+        "last_result": monitor.get("last_result"),
+        "recent_events": _recent_monitor_events(limit=20),
+        "message": "G3 State Alpha 运行链路可用" if not blockers else "G3 State Alpha 运行链路存在阻断",
+        "g2_parity": {
+            "workflow_status": True,
+            "manual_refresh_task": True,
+            "shadow_monitor_state": True,
+            "candidate_ledger": True,
+            "verification": True,
+            "email_alert": bool(notification_check.get("ok")),
+            "scheduler_wired": bool(monitor.get("scheduler_wired")),
+            "exit_scheduler_wired": bool(exit_monitor.get("scheduler_wired")),
+            "observation_scheduler_wired": bool(observation_scheduler.get("scheduler_wired")),
+            "paper_execution_path": paper_execution_path_ok,
+            "formal_order_path": False,
+        },
+    }
 
 
 def _run_refresh_task(
@@ -15460,7 +15615,8 @@ async def sync_gen3_state_alpha_broker_trades_from_ths(payload: dict[str, Any] =
 
 @router.get("/broker/sync/status")
 async def get_gen3_state_alpha_broker_sync_status() -> dict[str, Any]:
-    state = configure_broker_sync_scheduler()
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    state = _scheduler_state_readonly(_load_broker_sync_state(), _broker_sync_job_id)
     return _wrap_guardrails(
         {
             "ok": True,
@@ -15579,7 +15735,8 @@ async def get_gen3_state_alpha_refresh_task(task_id: str) -> dict[str, Any]:
 async def get_gen3_state_alpha_shadow_monitor_status(
     include_workflow: bool = Query(default=False),
 ) -> dict[str, Any]:
-    state = configure_shadow_monitor_scheduler()
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    state = _scheduler_state_readonly(_load_monitor_state(), _monitor_job_id)
     payload = {
         "ok": True,
         "mode": "g3_state_alpha_shadow_monitor",
@@ -15597,7 +15754,8 @@ async def get_gen3_state_alpha_shadow_monitor_status(
         },
     }
     if include_workflow:
-        payload["workflow"] = _build_workflow_status()
+        # R43：workflow 分支同样只读。
+        payload["workflow"] = _build_workflow_status_readonly()
     return _wrap_guardrails(payload)
 
 
@@ -15648,7 +15806,8 @@ async def run_gen3_state_alpha_shadow_entry_monitor_once() -> dict[str, Any]:
 
 @router.get("/shadow-exit-monitor/status")
 async def get_gen3_state_alpha_shadow_exit_monitor_status() -> dict[str, Any]:
-    state = configure_shadow_exit_monitor_scheduler()
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    state = _scheduler_state_readonly(_load_exit_monitor_state(), _exit_monitor_job_id)
     return _wrap_guardrails(
         {
             "ok": True,
@@ -15731,7 +15890,8 @@ async def run_gen3_state_alpha_shadow_exit_monitor_once(payload: dict[str, Any] 
 
 @router.get("/daily-trend-exit-monitor/status")
 async def get_gen3_state_alpha_daily_trend_exit_monitor_status() -> dict[str, Any]:
-    state = configure_daily_trend_exit_monitor_scheduler()
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    state = _scheduler_state_readonly(_load_daily_trend_exit_monitor_state(), _daily_trend_exit_monitor_job_id)
     return _wrap_guardrails(
         {
             "ok": True,
@@ -16639,7 +16799,10 @@ async def get_gen3_state_alpha_observation_snapshots(
     rows = _load_observation_snapshots()
     formal_rows = _formal_score88_observation_rows(rows)
     accepted_dates = _accepted_observation_dates(formal_rows)
-    scheduler_state = configure_observation_scheduler()
+    # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+    scheduler_state = _scheduler_state_readonly(
+        _load_observation_scheduler_state(), _observation_job_id, _observation_retry_job_id
+    )
     return _wrap_guardrails(
         {
             "ok": True,
@@ -16669,7 +16832,10 @@ async def get_gen3_state_alpha_observation_scheduler_status() -> dict[str, Any]:
         {
             "ok": True,
             "mode": "g3_state_alpha_observation_scheduler",
-            "scheduler": configure_observation_scheduler(),
+            # R43：GET 只读——现场快照，绝不 configure（零 add/remove_job/start）。
+            "scheduler": _scheduler_state_readonly(
+                _load_observation_scheduler_state(), _observation_job_id, _observation_retry_job_id
+            ),
             "accepted_observation_days": len(accepted_dates),
             "accepted_observation_dates": accepted_dates[-30:],
             "latest_snapshot": formal_rows[-1] if formal_rows else None,
