@@ -20,6 +20,26 @@ class TradingCalendar:
     _last_calendar_warning_at: Optional[datetime] = None
     _calendar_warning_interval_sec = 300
 
+    # R44（2026-11-11）：日历答案 TTL 缓存。retirement_window_audit 等链单请求
+    # 触发 24+ 次 get_next_trading_day，每次 2 个 CH HTTP 往返（实测 0.5s/请求）。
+    # trade_calendar 是静态历史+未来表（变更极少），300s TTL 封顶兜日历刷新。
+    _LOOKUP_CACHE: dict = {}
+    _LOOKUP_CACHE_TTL_SEC = 300.0
+
+    @classmethod
+    def _cached_lookup(cls, key: str, compute):
+        import time as _time
+
+        now = _time.time()
+        hit = cls._LOOKUP_CACHE.get(key)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+        value = compute()
+        if len(cls._LOOKUP_CACHE) > 4096:
+            cls._LOOKUP_CACHE.clear()
+        cls._LOOKUP_CACHE[key] = (now + cls._LOOKUP_CACHE_TTL_SEC, value)
+        return value
+
     @classmethod
     def _warn_calendar_fallback(cls, message: str) -> None:
         now = datetime.now()
@@ -32,14 +52,17 @@ class TradingCalendar:
 
     @classmethod
     def _db_calendar_available(cls) -> bool:
-        if clickhouse_available():
-            ok = clickhouse_table_exists("trade_calendar")
-            if not ok:
-                cls._warn_calendar_fallback(
-                    "trade_calendar 在 ClickHouse 中不存在，回退到周末判断"
-                )
-            return ok
-        return True
+        def _probe() -> bool:
+            if clickhouse_available():
+                ok = clickhouse_table_exists("trade_calendar")
+                if not ok:
+                    cls._warn_calendar_fallback(
+                        "trade_calendar 在 ClickHouse 中不存在，回退到周末判断"
+                    )
+                return ok
+            return True
+
+        return cls._cached_lookup("table_exists:trade_calendar", _probe)
 
     @staticmethod
     def _normalize_db_date(value: Any):
@@ -82,16 +105,19 @@ class TradingCalendar:
 
         try:
             target_date = date.date()
-            trade_date = target_date.isoformat()
+            trade_date = date.date().isoformat()
             if cls._db_calendar_available():
-                row = clickhouse_scalar(
-                    """
-                    SELECT is_trading
-                    FROM trade_calendar
-                    WHERE trade_date = ? AND market = 'SH'
-                    LIMIT 1
-                    """,
-                    [trade_date],
+                row = cls._cached_lookup(
+                    f"is_trading:{trade_date}",
+                    lambda: clickhouse_scalar(
+                        """
+                        SELECT is_trading
+                        FROM trade_calendar
+                        WHERE trade_date = ? AND market = 'SH'
+                        LIMIT 1
+                        """,
+                        [trade_date],
+                    ),
                 )
                 if row is not None:
                     return bool(row)
@@ -135,13 +161,16 @@ class TradingCalendar:
         try:
             trade_date = date.date().isoformat()
             if cls._db_calendar_available():
-                next_dt = clickhouse_scalar(
-                    """
-                    SELECT MIN(trade_date)
-                    FROM trade_calendar
-                    WHERE market = 'SH' AND is_trading = 1 AND trade_date > ?
-                    """,
-                    [trade_date],
+                next_dt = cls._cached_lookup(
+                    f"next_trading:{trade_date}",
+                    lambda: clickhouse_scalar(
+                        """
+                        SELECT MIN(trade_date)
+                        FROM trade_calendar
+                        WHERE market = 'SH' AND is_trading = 1 AND trade_date > ?
+                        """,
+                        [trade_date],
+                    ),
                 )
                 if next_dt:
                     return datetime.combine(next_dt, date.time())
@@ -161,13 +190,16 @@ class TradingCalendar:
         try:
             trade_date = date.date().isoformat()
             if cls._db_calendar_available():
-                prev_dt = clickhouse_scalar(
-                    """
-                    SELECT MAX(trade_date)
-                    FROM trade_calendar
-                    WHERE market = 'SH' AND is_trading = 1 AND trade_date < ?
-                    """,
-                    [trade_date],
+                prev_dt = cls._cached_lookup(
+                    f"prev_trading:{trade_date}",
+                    lambda: clickhouse_scalar(
+                        """
+                        SELECT MAX(trade_date)
+                        FROM trade_calendar
+                        WHERE market = 'SH' AND is_trading = 1 AND trade_date < ?
+                        """,
+                        [trade_date],
+                    ),
                 )
                 if prev_dt:
                     return datetime.combine(prev_dt, date.time())
