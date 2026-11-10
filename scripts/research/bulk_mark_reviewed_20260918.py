@@ -23,7 +23,7 @@ for i, it in enumerate(items, 1):
         'research:scripts/research/check_yearly_5m_pack.py',
         'research:scripts/research/count_yearly_real_bars.py',
         'research:scripts/research/yearly5m_real_counts.json',
-        'research:F:/AiDevelop/ai-workspace/projects/AiStock/changes/2026-09-18-free-5m-history-source-research.md',
+        'research:H:/Agent-Memory-System/projects/aistock/changes/2026-09-18-free-5m-history-source-research.md',
     ]
     body = {
         'action': 'mark_reviewed',

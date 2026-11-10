@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from utils.market_warehouse import clickhouse_client
 
-OUT = Path(r"F:\AiDevelop\ai-workspace\projects\AiStock\changes\pre2010_review_samples_20260921")
+OUT = Path(r"H:\Agent-Memory-System\projects\aistock\changes\pre2010_review_samples_20260921")
 RUNTIME = Path(r"F:\AiStock\data\data\runtime")
 PRICE_TOL = 0.005
 VOL_TOL = 0.001

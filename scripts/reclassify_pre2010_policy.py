@@ -129,7 +129,7 @@ def main() -> int:
         2004: {"15": (3927664, 3696, 443920, 0, 1171640), "30": (1963832, 1848, 221960, 0, 546478), "60": (981916, 924, 110980, 0, 233735), "1d": (245479, 0, 70408, 0, 252)},
         2005: {"15": (4016144, 3712, 419600, 0, 1259886), "30": (2008072, 1856, 209800, 0, 565600), "60": (1004036, 928, 104900, 0, 224026), "1d": (251009, 0, 69398, 0, 302)},
     }
-    p0305 = Path(r"F:\AiDevelop\ai-workspace\projects\AiStock\changes\2026-09-21-ocean-2003-2005-detail-materialization.md")
+    p0305 = Path(r"H:\Agent-Memory-System\projects\aistock\changes\2026-09-21-ocean-2003-2005-detail-materialization.md")
     report["sources"].append({"path": str(p0305), "sha256": sha(p0305)})
     for year, periods in derived_0305.items():
         for period, (candidate, missing, extra, dup, diff) in periods.items():
@@ -147,7 +147,7 @@ def main() -> int:
         2008: {"15": (4838288, 3744, 388912, 2630186), "30": (2419144, 1872, 194456, 1106353), "60": (1209572, 936, 97228, 399349), "1d": (302393, 0, 66550, 3940)},
         2009: {"15": (5257456, 2464, 212336, 3746646), "30": (2628728, 1232, 106168, 1618376), "60": (1314364, 616, 53084, 603982), "1d": (328591, 0, 55946, 1453)},
     }
-    p0609 = Path(r"F:\AiDevelop\ai-workspace\projects\AiStock\changes\2026-09-21-pre2010-new-candidate-derived-audit-2006-2009.md")
+    p0609 = Path(r"H:\Agent-Memory-System\projects\aistock\changes\2026-09-21-pre2010-new-candidate-derived-audit-2006-2009.md")
     report["sources"].append({"path": str(p0609), "sha256": sha(p0609)})
     for year, periods in derived_0609.items():
         for period, (candidate, missing, extra, diff) in periods.items():

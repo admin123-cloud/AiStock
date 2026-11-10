@@ -2,7 +2,7 @@
 """Big QMT Python 3.6 model: allowlisted market operations on its main thread.
 
 Run this file as a Python model in Big QMT. No accounts or order APIs.
-Knowledge: F:/AiDevelop/ai-workspace/projects/AiStock
+Knowledge: H:/Agent-Memory-System/projects/aistock
 """
 import datetime
 import json

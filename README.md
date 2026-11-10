@@ -2,7 +2,7 @@
 
 项目设计、需求、运行说明与经验统一维护于：
 
-[AiStock项目知识库](F:/AiDevelop/ai-workspace/projects/AiStock/README.md)
+[AiStock项目知识库](H:/Agent-Memory-System/projects/aistock/README.md)
 
 任何启动、改造或新增功能前，先读取知识库的README、CURRENT、LEARNINGS及相关专题；完成后回写知识库。工作约定见本目录AGENTS.md。
 

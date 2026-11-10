@@ -119,7 +119,7 @@ def build(output, *, source_root=ROOT):
                 'state_resolution':'relative to config file, never the process working directory',
                 'environment':['AISTOCK_WATCHDOG_URL','AISTOCK_WATCHDOG_STATE','AISTOCK_WATCHDOG_SMTP_PASSWORD'],
                 'time_basis':'UTC+08:00 for new events; no historical timezone conversion',
-                'knowledge_base':'F:/AiDevelop/ai-workspace/projects/AiStock/changes/2026-09-09-delivery-observability-final.md',
+                'knowledge_base':'H:/Agent-Memory-System/projects/aistock/changes/2026-09-09-delivery-observability-final.md',
                 'files':{name:hashlib.sha256((output/name).read_bytes()).hexdigest()
                          for name in ('watchdog.py','watchdog.json')}}
     (output/'manifest.json').write_bytes(json.dumps(manifest,ensure_ascii=False,indent=2).encode('utf-8'))
