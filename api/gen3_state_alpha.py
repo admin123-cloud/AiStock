@@ -3435,6 +3435,33 @@ def _directory_writable_status(name: str, path: Path) -> dict[str, Any]:
 _CURRENT_RUNTIME_MEMO: dict[tuple, tuple[float, dict[str, Any]]] = {}
 _CURRENT_RUNTIME_MEMO_TTL_SECONDS = 15.0
 
+# R44b（2026-11-10）：中层构建器通用 memo。live-action-console 链在单个请求内
+# 重复构建同一批子包（outcome verifier ×4、completion packet ×2、acceptance
+# packet ×2……）；键=显式锚点文件 mtime + 参数，TTL 20s 封顶兜未列尽的输入。
+# 仅包 GET 只读链（refresh=False）；refresh=True（POST 写链）一律直通重算。
+_BUILDER_MEMO: dict[str, tuple[tuple, float, Any]] = {}
+_BUILDER_MEMO_TTL_SECONDS = 20.0
+
+
+def _mtime_or_none(path) -> float | None:
+    try:
+        return round(path.stat().st_mtime, 6)
+    except OSError:
+        return None
+
+
+def _builder_memo(name: str, key_paths: tuple, args_key: tuple, compute, ttl: float | None = None):
+    sig = (args_key, tuple(_mtime_or_none(p) for p in key_paths))
+    now_ts = time.time()
+    hit = _BUILDER_MEMO.get(name)
+    if hit is not None and hit[0] == sig and hit[1] > now_ts:
+        return hit[2]
+    value = compute()
+    if len(_BUILDER_MEMO) > 64:
+        _BUILDER_MEMO.clear()
+    _BUILDER_MEMO[name] = (sig, now_ts + (ttl or _BUILDER_MEMO_TTL_SECONDS), value)
+    return value
+
 
 def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     # R44（2026-11-10）：同一请求链内被反复调用（workflow_status 1 次 +
@@ -3454,12 +3481,6 @@ def _load_current_runtime(limit: int = 50) -> dict[str, Any]:
     now_ts = time.time()
     # R44：文件可能缺件（如 preview 栈只挂 gen3_state_alpha 子树）——mtime 取
     # 不到用 None 占位；文件出现/消失都会改变键、正确失效。
-    def _mtime_or_none(p) -> float | None:
-        try:
-            return round(p.stat().st_mtime, 6)
-        except OSError:
-            return None
-
     memo_key = (int(limit), tuple(_mtime_or_none(p) for p in memo_paths))
     if memo_key is not None:
         hit = _CURRENT_RUNTIME_MEMO.get(memo_key)
@@ -11149,6 +11170,17 @@ def _broker_holdings_sync_confirmation_packet() -> dict[str, Any]:
 
 
 def _broker_holdings_sync_outcome_verifier() -> dict[str, Any]:
+    # R44b：GET/console 链重复调用（console+acceptance+completion 内嵌），锚点
+    # 文件 mtime + 20s TTL memo。
+    return _builder_memo(
+        "broker_holdings_sync_outcome_verifier",
+        (BROKER_STATE_PATH, PREMARKET_ACTION_ATTEMPTS_PATH, REALTIME_READINESS_REVIEW_DIR / "live_blocker_evidence_ledger.csv"),
+        (),
+        _broker_holdings_sync_outcome_verifier_uncached,
+    )
+
+
+def _broker_holdings_sync_outcome_verifier_uncached() -> dict[str, Any]:
     attempts = _load_premarket_action_attempts()
     broker = _broker_snapshot()
     preflight = _broker_holdings_sync_preflight()
@@ -11226,6 +11258,19 @@ def _broker_holdings_sync_outcome_verifier() -> dict[str, Any]:
 
 
 def _build_broker_post_sync_acceptance_packet(refresh: bool = False) -> dict[str, Any]:
+    # R44b：console 内嵌 + GET 端点各建一次；锚点含 task reviews（POST 记录
+    # 证据后 mtime 即变、立刻失效）。refresh=True（POST 链）直通重算。
+    if refresh:
+        return _build_broker_post_sync_acceptance_packet_uncached(refresh=True)
+    return _builder_memo(
+        "broker_post_sync_acceptance_packet",
+        (BROKER_STATE_PATH, PREMARKET_ACTION_ATTEMPTS_PATH, STRATEGY_TUNING_TASK_REVIEWS_PATH),
+        (),
+        _build_broker_post_sync_acceptance_packet_uncached,
+    )
+
+
+def _build_broker_post_sync_acceptance_packet_uncached(refresh: bool = False) -> dict[str, Any]:
     # R43：refresh 参数保留但 GET/POST 构建链一律只读（不预跑 readiness review）；
     # 需要重建走 POST /realtime-readiness-review/run。
     outcome = _broker_holdings_sync_outcome_verifier()
@@ -12585,6 +12630,18 @@ def _g3_strategy_tuning_session_stage(axis: str) -> str:
 
 
 def _build_g3_strategy_tuning_replay_session(refresh: bool = False, limit: int = 12) -> dict[str, Any]:
+    # R44b：completion packet 内嵌 + GET 端点；limit 进 memo 键，refresh=True 直通。
+    if refresh:
+        return _build_g3_strategy_tuning_replay_session_uncached(refresh=True, limit=limit)
+    return _builder_memo(
+        "g3_strategy_tuning_replay_session",
+        (STRATEGY_TUNING_TASK_REVIEWS_PATH,),
+        (int(limit),),
+        lambda: _build_g3_strategy_tuning_replay_session_uncached(limit=limit),
+    )
+
+
+def _build_g3_strategy_tuning_replay_session_uncached(refresh: bool = False, limit: int = 12) -> dict[str, Any]:
     completion = _build_g3_strategy_tuning_completion_audit(refresh=refresh)
     suggestions_payload = _build_g3_strategy_tuning_replay_suggestions(refresh=False, limit=max(limit, 50))
     completion_summary = completion.get("summary") if isinstance(completion.get("summary"), dict) else {}
@@ -12699,6 +12756,19 @@ def _build_g3_strategy_tuning_replay_session(refresh: bool = False, limit: int =
 
 
 def _build_g3_strategy_tuning_current_step_completion_packet(refresh: bool = False) -> dict[str, Any]:
+    # R44b：console + acceptance 内嵌 + GET 端点三处重复构建；锚点含 task
+    # reviews（POST 记录证据写该文件，mtime 变即失效）。refresh=True 直通。
+    if refresh:
+        return _build_g3_strategy_tuning_current_step_completion_packet_uncached(refresh=True)
+    return _builder_memo(
+        "g3_strategy_tuning_current_step_completion_packet",
+        (STRATEGY_TUNING_TASK_REVIEWS_PATH, BROKER_STATE_PATH, PREMARKET_ACTION_ATTEMPTS_PATH),
+        (),
+        _build_g3_strategy_tuning_current_step_completion_packet_uncached,
+    )
+
+
+def _build_g3_strategy_tuning_current_step_completion_packet_uncached(refresh: bool = False) -> dict[str, Any]:
     session_result = _build_g3_strategy_tuning_replay_session(refresh=refresh, limit=12)
     session = session_result.get("session") if isinstance(session_result.get("session"), dict) else {}
     current_step = session.get("current_step") if isinstance(session.get("current_step"), dict) else {}
@@ -12951,6 +13021,18 @@ def _build_g3_strategy_tuning_review_queue(refresh: bool = False) -> dict[str, A
 
 
 def _build_g3_strategy_tuning_completion_audit(refresh: bool = False) -> dict[str, Any]:
+    # R44b：replay-session/console 内嵌 + GET 端点；refresh=True 直通。
+    if refresh:
+        return _build_g3_strategy_tuning_completion_audit_uncached(refresh=True)
+    return _builder_memo(
+        "g3_strategy_tuning_completion_audit",
+        (STRATEGY_TUNING_TASK_REVIEWS_PATH,),
+        (),
+        _build_g3_strategy_tuning_completion_audit_uncached,
+    )
+
+
+def _build_g3_strategy_tuning_completion_audit_uncached(refresh: bool = False) -> dict[str, Any]:
     queue = _build_g3_strategy_tuning_review_queue(refresh=refresh)
     summary = queue.get("summary") if isinstance(queue.get("summary"), dict) else {}
     task_rows = queue.get("task_rows") if isinstance(queue.get("task_rows"), list) else []
@@ -13077,6 +13159,18 @@ def _build_g3_strategy_tuning_completion_audit(refresh: bool = False) -> dict[st
 
 
 def _build_live_launch_readiness_audit(refresh: bool = False) -> dict[str, Any]:
+    # R44b：console/acceptance 内嵌 + GET 端点；refresh=True 直通。
+    if refresh:
+        return _build_live_launch_readiness_audit_uncached(refresh=True)
+    return _builder_memo(
+        "live_launch_readiness_audit",
+        (REALTIME_READINESS_REVIEW_DIR / "summary.json", STRATEGY_TUNING_TASK_REVIEWS_PATH),
+        (),
+        _build_live_launch_readiness_audit_uncached,
+    )
+
+
+def _build_live_launch_readiness_audit_uncached(refresh: bool = False) -> dict[str, Any]:
     decision_result = _build_live_launch_decision_card(refresh=refresh)
     blocker_board = _build_live_blocker_evidence_board(refresh=False)
     learning = _build_live_learning_ledger(refresh=False)
