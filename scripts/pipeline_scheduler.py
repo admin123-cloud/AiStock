@@ -19,6 +19,11 @@
      评估（services/t_trade_shadow.py，独立异常面，失败不影响真节拍），产物
      runtime/t_tracker/shadow/，绝不进 pending_push；t_trade_shadow_finalize
      工作日 15:16 日终固化 + 4 周滚动统计。零交易零 formal 表写不变；
+  5. R42（2026-11-10）：QMT Tick 可用性告警任务 holding_tick_qmt_alert——
+     GET /gen3-state-alpha/holding-tick-analysis 净化为纯读后，SMTP 告警外呼
+     与告警状态写的通知通道。subprocess 调 scripts/holding_tick_qmt_alert.py
+     --once；cron 工作日 09:00~15:50 每 10min，窗口守卫收口 09:25~15:10，
+     脚本侧 30min 冷却限实际发信频率。零 formal 表写、零交易；
   2. run_postclose_pipelines() 为可在测试中 import 的纯编排函数（依赖全部可注入）：
      - 顺序 subprocess：daily_kline_pipeline.py --formal-write（失败重试 3 次、
        间隔 600s）→ minute_collect_auto.py --mode formal-write（rc 0/1 继续，
@@ -40,7 +45,7 @@
 """
 from __future__ import annotations
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 import argparse
 import json
@@ -84,6 +89,19 @@ TTRACKER_SCRIPT = "t_trade_tracker.py"
 TTRACKER_BROKER_SYNC_JOB_ID = "broker_state_sync"   # 工作日 15:15 fills→broker_state（R38c）
 TTRACKER_BROKER_SYNC_SCRIPT = "broker_state_sync.py"
 TTRACKER_SHADOW_FINALIZE_JOB_ID = "t_trade_shadow_finalize"  # 工作日 15:16 影子做T日终固化（R40）
+
+# R42（2026-11-10，任务书 20261110_purify_holding_tick_analysis_r42.md）：
+# QMT Tick 可用性告警任务——GET /gen3-state-alpha/holding-tick-analysis 净化为纯读后，
+# SMTP 告警外呼与告警状态写的去处（scripts/holding_tick_qmt_alert.py 复用 gen3 内
+# _notify_holding_tick_qmt_unavailable/_mark_holding_tick_qmt_available 原语义，
+# 30 分钟冷却/交易时段/邮件开关门控不变）。cron 触发面 09:00~15:50，窗口收口
+# 09:25~15:10；告警邮件冷却 30min，实际发信至多每 30 分钟一封。
+HOLDING_TICK_ALERT_JOB_ID = "holding_tick_qmt_alert"
+HOLDING_TICK_ALERT_SCRIPT = "holding_tick_qmt_alert.py"
+HOLDING_TICK_ALERT_CRON_HOURS = "9-15"
+HOLDING_TICK_ALERT_CRON_MINUTE = "*/10"
+HOLDING_TICK_ALERT_WINDOW_START = dt_time(9, 25)
+HOLDING_TICK_ALERT_WINDOW_END = dt_time(15, 10)
 # 快照任务 minute=*/5（09:00/09:05/…），做T节拍 minute=1-56/5（09:01/09:06/…）→ 错峰 1min；
 # 窗口收口后实际节拍 09:36~14:56（任务书：09:35~14:55 每 5min + 错峰 1min 语义）。
 TTRACKER_BEAT_CRON_MINUTE = "1-56/5"
@@ -721,6 +739,33 @@ def run_t_tracker_shadow_finalize(
     )
 
 
+def in_holding_tick_alert_window(now_bj: datetime) -> bool:
+    """R42 窗口守卫：09:25 ≤ 北京钟 ≤ 15:10（cron 触发面 09:00~15:50 由它收口）。"""
+    current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
+    return HOLDING_TICK_ALERT_WINDOW_START <= current <= HOLDING_TICK_ALERT_WINDOW_END
+
+
+def run_holding_tick_qmt_alert(
+    *,
+    mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """R42：QMT Tick 可用性告警节拍（holding-tick-analysis GET 净化后的通知通道）。
+
+    --once 脚本内含告警闸门（30min 冷却/交易时段/邮件开关）与恢复闭环；
+    窗口外/非交易日 no_op，交易日判断异常 fail-closed。
+    """
+    return _run_t_tracker_step(
+        "holding_tick_qmt_alert", "--once", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner,
+        window_guard=in_holding_tick_alert_window, logger_=logger_,
+        script=HOLDING_TICK_ALERT_SCRIPT,
+    )
+
+
 def build_t_tracker_beat_cron_trigger():
     """做T节拍 cron：mon-fri 09:01~14:56 每 5min 错峰 +1min（窗口函数再收口）。"""
     from apscheduler.triggers.cron import CronTrigger
@@ -805,6 +850,31 @@ def register_t_tracker_jobs(scheduler) -> list:
     return [scheduler.get_job(jid) for jid in
             (TTRACKER_REGIME_JOB_ID, TTRACKER_BEAT_JOB_ID, TTRACKER_RECONCILE_JOB_ID,
              TTRACKER_BROKER_SYNC_JOB_ID, TTRACKER_SHADOW_FINALIZE_JOB_ID)]
+
+
+def register_holding_tick_alert_job(scheduler):
+    """注册 R42 QMT Tick 可用性告警任务；返回该 job。
+
+    holding-tick-analysis GET 净化后的通知通道：工作日 09:00~15:50 cron 每 10min，
+    窗口守卫收口 09:25~15:10；脚本侧告警闸门（30min 冷却）限实际发信频率。
+    """
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler.add_job(
+        run_holding_tick_qmt_alert,
+        trigger=CronTrigger(
+            day_of_week=CRON_DAY_OF_WEEK,
+            hour=HOLDING_TICK_ALERT_CRON_HOURS,
+            minute=HOLDING_TICK_ALERT_CRON_MINUTE,
+            timezone=BEIJING_TZ,
+        ),
+        id=HOLDING_TICK_ALERT_JOB_ID,
+        name="QMT Tick 可用性告警（R42，工作日 09:25~15:10 每 10min）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler.get_job(HOLDING_TICK_ALERT_JOB_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -936,6 +1006,7 @@ def serve(
     register_postclose_job(scheduler, lambda: _log_pipeline_result(pipeline))
     register_intraday_job(scheduler)
     register_t_tracker_jobs(scheduler)
+    register_holding_tick_alert_job(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -973,6 +1044,15 @@ def serve(
         TTRACKER_RECONCILE_JOB_ID, TTRACKER_RECONCILE_CRON_TIME.strftime("%H:%M"),
         TTRACKER_BROKER_SYNC_JOB_ID, TTRACKER_BROKER_SYNC_CRON_TIME.strftime("%H:%M"),
         TTRACKER_SHADOW_FINALIZE_JOB_ID, TTRACKER_SHADOW_FINALIZE_CRON_TIME.strftime("%H:%M"),
+    )
+    holding_job = scheduler.get_job(HOLDING_TICK_ALERT_JOB_ID)
+    holding_next = getattr(holding_job, "next_run_time", None) if holding_job else None
+    logger.info(
+        "调度注册：R42 %s cron=[day_of_week=%s %s 每10min %s] 窗口=%s~%s（holding-tick GET 净化后的通知通道）next_run=%s",
+        HOLDING_TICK_ALERT_JOB_ID, CRON_DAY_OF_WEEK, HOLDING_TICK_ALERT_CRON_HOURS,
+        "Asia/Shanghai",
+        HOLDING_TICK_ALERT_WINDOW_START.strftime("%H:%M"), HOLDING_TICK_ALERT_WINDOW_END.strftime("%H:%M"),
+        holding_next.isoformat() if holding_next else "pending",
     )
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown

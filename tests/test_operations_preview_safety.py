@@ -115,8 +115,11 @@ _PROJECT_NAMESPACES = ('api', 'services', 'strategies', 'utils')
 # 自有 health×2）；39 条伪读实写/任务触发/调度器变更/外呼 GET 封禁；全部 127 条
 # POST/PUT/DELETE 一律封禁。/api/stocks/select/* 11 条在 api/stocks.py:5826 已被
 # QMT 退役剥离（运行时死路由），不入集。历史：R11 7 路径→R13 18→R15 22→R29 27→R30 114
-# →R40 115（holding-t/shadow-review，影子做T复盘纯读）。
-# 完整 (METHOD, path) 矩阵：115 条路径各自的 GET 与 HEAD 共 230 对，一个不多、一个不少；
+# →R40 115（holding-t/shadow-review，影子做T复盘纯读）→R42 116（holding-tick-analysis 净化放行）。
+# R42（2026-11-10，任务书 20261110_purify_holding_tick_analysis_r42.md）：R30 审计表
+# #14 /gen3-state-alpha/holding-tick-analysis 净化（GET 链剥离 SMTP 外呼与修复写，
+# AST 守卫锁定零 smtp/文件写/子进程）后放行：115 → 116。
+# 完整 (METHOD, path) 矩阵：116 条路径各自的 GET 与 HEAD 共 232 对，一个不多、一个不少；
 # 任何 OPTIONS、其他方法、未识别路由类型或额外路径都是违规。路径模板取自各 router 文件
 # 的实际装饰器（含 /api/stocks/ 尾斜杠与参数名）。
 ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
@@ -164,6 +167,8 @@ ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('HEAD', '/api/gen3-state-alpha/holding-t/review'),
     ('GET', '/api/gen3-state-alpha/holding-t/shadow-review'),
     ('HEAD', '/api/gen3-state-alpha/holding-t/shadow-review'),
+    ('GET', '/api/gen3-state-alpha/holding-tick-analysis'),
+    ('HEAD', '/api/gen3-state-alpha/holding-tick-analysis'),
     ('GET', '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}'),
     ('HEAD', '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}'),
     ('GET', '/api/gen3-state-alpha/holding-tick-watchlist'),
@@ -1166,6 +1171,9 @@ def test_record_import_surface_is_order_independent():
 # R30（2026-11-10 Owner 裁定修复范围升级，任务书 20261110_full_readface_allowlist_r30.md）
 # 全站只读面开放：39 条"伪读实写/任务触发/调度器变更/外呼"GET 的封禁回归 +
 # 同路径多方法兄弟路由安全 + AISTOCK_READFACE_PREVIEW 四守卫行为/结构锁定。
+# R42（2026-11-10，任务书 20261110_purify_holding_tick_analysis_r42.md）：原 #14
+# holding-tick-analysis 已净化为纯读并放行，移出封禁清单（39 → 38）；纯净性由
+# 下方 R42 AST 守卫 + GET/HEAD-only 面测试锁定。
 # ---------------------------------------------------------------------------
 
 _R30_BANNED_GET_PATHS = (
@@ -1182,7 +1190,6 @@ _R30_BANNED_GET_PATHS = (
     '/api/gen3-state-alpha/current',
     '/api/gen3-state-alpha/daily-trend-exit-monitor/status',
     '/api/gen3-state-alpha/historical-trades',
-    '/api/gen3-state-alpha/holding-tick-analysis',
     '/api/gen3-state-alpha/live-action-console',
     '/api/gen3-state-alpha/live-blocker-evidence-board',
     '/api/gen3-state-alpha/live-launch-decision',
@@ -1414,3 +1421,195 @@ def test_r30_system_task_log_table_guard(tmp_path, monkeypatch):
         _inner_test_r30_system_task_log_table_guard(tmp_path, monkeypatch)
         return
     _r30_subprocess_clean_run('test_r30_system_task_log_table_guard')
+
+
+# ---------------------------------------------------------------------------
+# R42（2026-11-10，任务书 20261110_purify_holding_tick_analysis_r42.md）
+# GET /gen3-state-alpha/holding-tick-analysis 净化放行：调用图闭包 AST 纯净守卫
+# （零 SMTP 外呼/零文件写/零子进程，含跨模块 services/utils/scheduler 一跳内函数）+
+# 该路径 GET/HEAD-only 的显式面锁定（并入 R30 守卫测试族）。
+# ---------------------------------------------------------------------------
+
+_R42_HTA_PATH = '/api/gen3-state-alpha/holding-tick-analysis'
+
+# 闭包内禁止出现的模块级写/外呼函数名（Name 调用）。
+_R42_FORBIDDEN_NAME_CALLS = frozenset({
+    '_send_shadow_email', '_open_smtp_server', '_load_smtp_config',
+    '_write_json', '_append_monitor_event', '_save_monitor_state',
+    '_save_holding_tick_watchlist', '_save_broker_sync_state',
+    '_notify_holding_tick_qmt_unavailable', '_mark_holding_tick_qmt_available',
+    '_run_holding_tick_qmt_alert_once', '_load_monitor_event_rows_with_repair',
+    'subprocess', 'smtplib', 'shutil',
+})
+
+# 闭包内禁止出现的属性调用（obj.<attr>(...)）。
+_R42_FORBIDDEN_ATTR_CALLS = frozenset({
+    'write_text', 'write_bytes', 'write_lines', 'unlink', 'mkdir', 'rmdir',
+    'sendmail', 'starttls', 'Popen', 'popen', 'system', 'rmtree', 'copyfile',
+    'copytree', 'move',
+})
+
+# 特定对象名的属性调用禁令：obj_name -> 禁止的属性集合。
+_R42_FORBIDDEN_OBJ_ATTR_CALLS = {
+    'os': frozenset({'remove', 'mkdir', 'makedirs', 'replace', 'rename', 'removedirs'}),
+    'requests': frozenset({'post', 'put', 'patch', 'delete'}),
+    'subprocess': frozenset({'run', 'call', 'check_call', 'check_output', 'Popen', 'getoutput'}),
+    'smtplib': frozenset({'SMTP', 'SMTP_SSL'}),
+}
+
+
+def _r42_repo_module_imports(tree, repo_root):
+    """repo 内顶层 from X import Y 映射：name -> 模块文件（X 属 api/services/utils/strategies/scheduler）。"""
+    import ast
+    mapping = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            parts = node.module.split('.')
+            if parts[0] in {'api', 'services', 'utils', 'strategies', 'scheduler'}:
+                candidate = repo_root.joinpath(*parts).with_suffix('.py')
+                if candidate.exists():
+                    for alias in node.names:
+                        mapping[alias.asname or alias.name] = candidate
+    return mapping
+
+
+def _r42_call_graph_closure(repo_root, root_function, root_file):
+    """从 root_function 出发的跨文件函数调用闭包（repo 内模块的模块级函数）。"""
+    import ast
+    visited = set()
+    closure = {}  # (file, func_name) -> FunctionDef
+    import_maps = {}
+
+    def load_file(path):
+        path = Path(path).resolve()
+        if path not in import_maps:
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            funcs = {
+                node.name: node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            import_maps[path] = _r42_repo_module_imports(tree, repo_root)
+            closure.update({(path, name): fn for name, fn in funcs.items()})
+            return path, funcs, import_maps[path]
+        tree_map = import_maps[path]
+        # funcs 已并入 closure；重取本文件函数名集合
+        funcs = {name: fn for (p, name), fn in closure.items() if p == path}
+        return path, funcs, tree_map
+
+    root_path = Path(root_file).resolve()
+    _root_tree = ast.parse(root_path.read_text(encoding='utf-8'))
+    root_funcs = {
+        node.name: node
+        for node in _root_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    closure.update({(root_path, name): fn for name, fn in root_funcs.items()})
+    import_maps[root_path] = _r42_repo_module_imports(_root_tree, repo_root)
+
+    stack = [(root_path, root_function)]
+    while stack:
+        file_path, name = stack.pop()
+        key = (file_path, name)
+        if key in visited:
+            continue
+        visited.add(key)
+        fn = closure.get(key)
+        if fn is None:
+            continue
+        _, funcs, imports = load_file(file_path)
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                callee = node.func.id
+                if callee in funcs and (file_path, callee) not in visited:
+                    stack.append((file_path, callee))
+                elif callee in imports:
+                    target_file = imports[callee]
+                    _p, target_funcs, _m = load_file(target_file)
+                    if callee in target_funcs and (target_file, callee) not in visited:
+                        stack.append((target_file, callee))
+    return closure, visited
+
+
+def test_r42_holding_tick_analysis_get_chain_pure_read_ast():
+    """R42 守卫①：GET /holding-tick-analysis 调用链闭包零 smtp/文件写/子进程。
+
+    纯 AST 结构守卫（不导入业务模块）：从路由 handler 出发做跨文件调用闭包，
+    闭包内任何函数体都不得出现 SMTP 外呼、文件/目录写、子进程、HTTP 写方法。
+    """
+    import ast as _ast
+    repo_root = Path(__file__).resolve().parents[1]
+    gen3_file = repo_root / 'api' / 'gen3_state_alpha.py'
+    closure, visited = _r42_call_graph_closure(
+        repo_root, 'get_gen3_state_alpha_holding_tick_analysis', gen3_file)
+
+    # 守卫非空洞自证：闭包必须覆盖分析主体、Tick 读、只读告警评估与闸门。
+    visited_names = {name for (_p, name) in visited}
+    for expected in (
+        'get_gen3_state_alpha_holding_tick_analysis',
+        '_read_holding_tick_analysis',
+        '_wrap_guardrails',
+        '_read_qmt_ticks',
+        '_evaluate_holding_tick_qmt_alert_readonly',
+        '_holding_tick_qmt_alert_gate',
+    ):
+        assert expected in visited_names, (
+            f'R42 AST 守卫闭包不完整（缺 {expected}）——调用图解析失效，守卫不得放行'
+        )
+    # 外呼/写函数必须不在闭包内（防止"删了调用但闭包仍可达"的回归）。
+    for forbidden in ('_send_shadow_email', '_open_smtp_server',
+                      '_notify_holding_tick_qmt_unavailable',
+                      '_mark_holding_tick_qmt_available',
+                      '_append_monitor_event', '_write_json'):
+        assert forbidden not in visited_names, (
+            f'R42 违约：外呼/写函数 {forbidden} 出现在 GET /holding-tick-analysis 闭包'
+        )
+
+    violations = []
+    for key, fn in closure.items():
+        if key not in visited:
+            continue
+        file_path, fn_name = key
+        for node in _ast.walk(fn):
+            loc = f'{Path(file_path).relative_to(repo_root)}:{getattr(node, "lineno", "?")} {fn_name}'
+            if isinstance(node, _ast.Call):
+                if isinstance(node.func, _ast.Name):
+                    if node.func.id in _R42_FORBIDDEN_NAME_CALLS:
+                        violations.append(f'{loc} 调用禁止函数 {node.func.id}()')
+                    if node.func.id == 'open' and len(node.args) > 1:
+                        mode = node.args[1]
+                        mode_text = getattr(mode, 'value', '') if isinstance(mode, _ast.Constant) else ''
+                        if any(ch in mode_text for ch in 'wax+'):
+                            violations.append(f'{loc} open(..., {mode_text!r}) 写模式')
+                elif isinstance(node.func, _ast.Attribute):
+                    attr = node.func.attr
+                    if attr in _R42_FORBIDDEN_ATTR_CALLS:
+                        violations.append(f'{loc} 属性调用 .{attr}()')
+                    value = node.func.value
+                    if isinstance(value, _ast.Name) and value.id in _R42_FORBIDDEN_OBJ_ATTR_CALLS:
+                        if attr in _R42_FORBIDDEN_OBJ_ATTR_CALLS[value.id]:
+                            violations.append(f'{loc} {value.id}.{attr}()')
+    assert not violations, (
+        'R42 违约：GET /holding-tick-analysis 调用链存在 smtp/文件写/子进程：\n'
+        + '\n'.join(violations)
+    )
+
+
+def _inner_test_r42_holding_tick_analysis_get_head_only(tmp_path, monkeypatch):
+    """R42 守卫②：该路径仅暴露 GET+HEAD；OPTIONS/POST/PUT/DELETE/PATCH 不在路由面（405）。"""
+    surface = _inspect_preview_route_surface(tmp_path, monkeypatch)
+    pairs = surface['pairs']
+    assert ('GET', _R42_HTA_PATH) in pairs, 'R42 放行路径缺失 GET 路由'
+    assert ('HEAD', _R42_HTA_PATH) in pairs, 'R42 放行路径缺失 HEAD 路由'
+    for method in ('OPTIONS', 'POST', 'PUT', 'DELETE', 'PATCH'):
+        assert (method, _R42_HTA_PATH) not in pairs, (
+            f'R42 放行路径不得暴露 {method} 路由: {_R42_HTA_PATH}'
+            '（路径命中而方法不匹配必须 405）'
+        )
+
+
+def test_r42_holding_tick_analysis_get_head_only(tmp_path, monkeypatch):
+    if os.environ.get('AISTOCK_R30_SUBTEST') == '1':
+        _inner_test_r42_holding_tick_analysis_get_head_only(tmp_path, monkeypatch)
+        return
+    _r30_subprocess_clean_run('test_r42_holding_tick_analysis_get_head_only')

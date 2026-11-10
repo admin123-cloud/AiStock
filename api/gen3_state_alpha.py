@@ -2324,7 +2324,12 @@ def _save_broker_sync_state(state: dict[str, Any]) -> None:
     _write_json(BROKER_SYNC_STATE_PATH, state)
 
 
-def _load_monitor_event_rows_with_repair() -> list[dict[str, Any]]:
+def _load_monitor_event_rows_readonly() -> list[dict[str, Any]]:
+    """R42：监控事件纯读加载（GET/读路径专用语义）。
+
+    与 _load_monitor_event_rows_with_repair 同一套解析（含"多份完整 JSON 拼接"
+    的内存恢复），但绝不写 .corrupt-* 备份、绝不改写源文件——读路径零副作用。
+    """
     if not MONITOR_EVENTS_PATH.exists():
         return []
     try:
@@ -2332,9 +2337,8 @@ def _load_monitor_event_rows_with_repair() -> list[dict[str, Any]]:
         rows = data.get("events") if isinstance(data, dict) else []
         return rows if isinstance(rows, list) else []
     except Exception:
-        # A previous non-atomic writer may have concatenated several complete
-        # JSON documents. Recover their event arrays, preserve the source for
-        # audit, then let the next append rewrite one valid document.
+        # Recover concatenated JSON documents in memory only; the next writer
+        # (monitor/notification channel) will rewrite one valid document.
         raw = MONITOR_EVENTS_PATH.read_text(encoding="utf-8", errors="replace")
         decoder = json.JSONDecoder()
         cursor = 0
@@ -2351,13 +2355,25 @@ def _load_monitor_event_rows_with_repair() -> list[dict[str, Any]]:
             rows = item.get("events") if isinstance(item, dict) else []
             if isinstance(rows, list):
                 recovered.extend(row for row in rows if isinstance(row, dict))
-        backup = MONITOR_EVENTS_PATH.with_name(
-            f"{MONITOR_EVENTS_PATH.stem}.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}{MONITOR_EVENTS_PATH.suffix}"
-        )
-        if not backup.exists():
-            backup.write_text(raw, encoding="utf-8")
-        logger.warning("Recovered %s monitor events from malformed artifact: %s", len(recovered), MONITOR_EVENTS_PATH)
+        logger.warning("Recovered %s monitor events in memory (readonly, no backup written): %s", len(recovered), MONITOR_EVENTS_PATH)
         return recovered[-300:]
+
+
+def _load_monitor_event_rows_with_repair() -> list[dict[str, Any]]:
+    """写通道加载：解析复用只读版，额外保留 .corrupt-* 审计备份（R42 拆分）。"""
+    if MONITOR_EVENTS_PATH.exists():
+        try:
+            json.loads(MONITOR_EVENTS_PATH.read_text(encoding="utf-8"))
+            return _load_monitor_event_rows_readonly()
+        except Exception:
+            raw = MONITOR_EVENTS_PATH.read_text(encoding="utf-8", errors="replace")
+            backup = MONITOR_EVENTS_PATH.with_name(
+                f"{MONITOR_EVENTS_PATH.stem}.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}{MONITOR_EVENTS_PATH.suffix}"
+            )
+            if not backup.exists():
+                backup.write_text(raw, encoding="utf-8")
+            logger.warning("Preserved malformed monitor events artifact as backup: %s", backup)
+    return _load_monitor_event_rows_readonly()
 
 
 def _append_monitor_event(event: dict[str, Any]) -> None:
@@ -2372,10 +2388,7 @@ def _append_monitor_event(event: dict[str, Any]) -> None:
 
 
 def _recent_monitor_events(limit: int = 20) -> list[dict[str, Any]]:
-    existing = _read_json(MONITOR_EVENTS_PATH)
-    rows = existing.get("events") if isinstance(existing, dict) else []
-    if not isinstance(rows, list):
-        return []
+    rows = _load_monitor_event_rows_readonly()
     return rows[-limit:][::-1]
 
 
@@ -2634,13 +2647,20 @@ def _send_exception_notification(subject: str, detail: str) -> dict[str, Any]:
         return {"sent": False, "error": str(exc)}
 
 
-def _notify_holding_tick_qmt_unavailable(
+def _holding_tick_qmt_alert_gate(
     codes: list[str],
-    source: dict[str, Any],
-    exc: Exception,
+    exc: Exception | None = None,
     *,
     cooldown_minutes: int = 30,
 ) -> dict[str, Any]:
+    """R42：QMT Tick 不可用告警的只读闸门判定（零外呼零写）。
+
+    返回与 _notify_holding_tick_qmt_unavailable 既有返回同 schema：
+      {"sent": False, "reason": "email_disabled"}
+      {"sent": False, "reason": "not_trading_window", "checked_at": ...}
+      {"sent": False, "reason": "cooldown", "last_sent_at": ...}
+      {"sent": False, "reason": "would_send", "checked_at": ...}   # 闸门放行，实际发送只在通知通道
+    """
     monitor = _load_monitor_state()
     now = datetime.now()
     now_text = now.isoformat(sep=" ", timespec="seconds")
@@ -2648,7 +2668,6 @@ def _notify_holding_tick_qmt_unavailable(
         return {"sent": False, "reason": "email_disabled"}
     if monitor.get("trading_hours_only", True) and not _in_trading_window(now):
         return {"sent": False, "reason": "not_trading_window", "checked_at": now_text}
-
     state = _read_json(HOLDING_TICK_ALERT_STATE_PATH)
     last_text = str(state.get("last_unavailable_alert_at") or state.get("last_unavailable_alert_attempt_at") or "").strip()
     last_dt = None
@@ -2659,6 +2678,101 @@ def _notify_holding_tick_qmt_unavailable(
             last_dt = None
     if last_dt is not None and (now - last_dt).total_seconds() < max(1, cooldown_minutes) * 60:
         return {"sent": False, "reason": "cooldown", "last_sent_at": last_text}
+    return {"sent": False, "reason": "would_send", "checked_at": now_text}
+
+
+def _evaluate_holding_tick_qmt_alert_readonly(codes: list[str], exc: Exception) -> dict[str, Any]:
+    """R42：GET /holding-tick-analysis 失败路径的只读告警评估。
+
+    alert 字段 schema 与净化前完全一致（sent/reason[/checked_at|last_sent_at]）；
+    语义变化仅一点：GET 内绝不发信——闸门放行时如实标注 reason=
+    deferred_to_notification_channel（发送移至通知调度通道，带 30 分钟冷却）。
+    """
+    gate = _holding_tick_qmt_alert_gate(codes, exc)
+    if gate.get("reason") != "would_send":
+        return gate
+    return {"sent": False, "reason": "deferred_to_notification_channel", "checked_at": gate.get("checked_at")}
+
+
+def _run_holding_tick_qmt_alert_once(source: str = "scheduler", *, dry_run: bool = False) -> dict[str, Any]:
+    """R42：QMT Tick 可用性告警执行体（通知调度通道专用；GET 链已剥离）。
+
+    codes = 持仓快照 ∪ 盯盘清单；失败 → _notify_holding_tick_qmt_unavailable
+    （邮件+状态写+事件留痕，30 分钟冷却），成功 → _mark_holding_tick_qmt_available
+    （仅在曾告警时发恢复邮件并回写状态）。dry_run=True 只探测+只读评估，
+    零写零发（部署验证/诊断用）。
+    """
+    broker = _broker_snapshot()
+    holdings = broker.get("holdings") if isinstance(broker.get("holdings"), list) else []
+    codes: list[str] = []
+    for row in holdings:
+        code = _normalize_tick_code(row.get("code")) if isinstance(row, dict) else ""
+        if code and code not in codes:
+            codes.append(code)
+    for code in _read_holding_tick_watchlist().get("codes") or []:
+        if code and code not in codes:
+            codes.append(code)
+    checked_at = datetime.now().isoformat(sep=" ", timespec="seconds")
+    if not codes:
+        return {"ok": True, "status": "no_codes", "dry_run": dry_run, "checked_at": checked_at, "source": source, "codes": []}
+    tick_source: dict[str, Any] = {
+        "provider": "QMT xtdata",
+        "host": os.getenv("AISTOCK_QMT_TICK_HOST", "127.0.0.1"),
+        "port": int(os.getenv("AISTOCK_QMT_TICK_PORT", "58610")),
+    }
+    try:
+        _read_qmt_ticks(codes, tick_source)
+    except Exception as exc:
+        error_text = f"{type(exc).__name__}: {exc}"
+        if dry_run:
+            return {
+                "ok": False,
+                "status": "unavailable",
+                "dry_run": True,
+                "checked_at": checked_at,
+                "source": source,
+                "codes": codes[:50],
+                "error": error_text,
+                "gate": _holding_tick_qmt_alert_gate(codes, exc),
+            }
+        result = _notify_holding_tick_qmt_unavailable(codes, tick_source, exc)
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "checked_at": checked_at,
+            "source": source,
+            "codes": codes[:50],
+            "error": error_text,
+            "alert": result,
+        }
+    if dry_run:
+        state = _read_json(HOLDING_TICK_ALERT_STATE_PATH)
+        return {
+            "ok": True,
+            "status": "available",
+            "dry_run": True,
+            "checked_at": checked_at,
+            "source": source,
+            "codes": codes[:50],
+            "alert_state_status": state.get("status") if isinstance(state, dict) else None,
+        }
+    _mark_holding_tick_qmt_available(codes, tick_source)
+    return {"ok": True, "status": "available", "checked_at": checked_at, "source": source, "codes": codes[:50]}
+
+
+def _notify_holding_tick_qmt_unavailable(
+    codes: list[str],
+    source: dict[str, Any],
+    exc: Exception,
+    *,
+    cooldown_minutes: int = 30,
+) -> dict[str, Any]:
+    monitor = _load_monitor_state()
+    gate = _holding_tick_qmt_alert_gate(codes, exc, cooldown_minutes=cooldown_minutes)
+    if gate.get("reason") in {"email_disabled", "not_trading_window", "cooldown"}:
+        return gate
+    now = datetime.now()
+    now_text = str(gate.get("checked_at") or now.isoformat(sep=" ", timespec="seconds"))
 
     normalized_codes = [str(code or "").strip().upper() for code in codes if str(code or "").strip()]
     error_text = f"{type(exc).__name__}: {exc}"
@@ -14469,11 +14583,14 @@ def _read_holding_tick_analysis(codes_text: str | None = None) -> dict[str, Any]
 
     try:
         ticks = _read_qmt_ticks(codes + peer_codes, payload["source"])
-        _mark_holding_tick_qmt_available(codes, payload["source"])
+        # R42：GET 零外呼零写——QMT Tick 可用性告警/恢复通知已移至通知调度通道
+        # （pipeline_scheduler 任务 holding_tick_qmt_alert → scripts/holding_tick_qmt_alert.py，
+        # 调 _run_holding_tick_qmt_alert_once 复用 _notify/_mark 原语义，30 分钟冷却不变）。
     except Exception as exc:
         payload["ok"] = False
         payload["warnings"].append(f"QMT Tick 不可用：{type(exc).__name__}: {exc}")
-        payload["alert"] = _notify_holding_tick_qmt_unavailable(codes, payload["source"], exc)
+        # R42：只读告警评估，alert 字段 schema 不变，零发信零状态写零事件写。
+        payload["alert"] = _evaluate_holding_tick_qmt_alert_readonly(codes, exc)
         return payload
 
     minute_by_code, rsi_by_code = _load_holding_tick_minute_metrics(codes)
