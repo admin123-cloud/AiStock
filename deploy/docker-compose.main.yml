@@ -40,6 +40,8 @@ services:
     volumes:
       - F:/AiStock/app/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
       - F:/Aistock/data/data/local_observation_preview/data:/aistock/data
+      # R33b：只读嵌套挂载真实 runtime/gen3_state_alpha（broker_state.json 所在；应用读 /aistock/data/runtime/...，深路径优先于隔离树挂载；观察栈对真实运行时零写入。整树挂载经 A/B 实证会拦截 holding-t/review 的隔离树回写造成回归，故缩至本子树）
+      - F:/Aistock/data/data/runtime/gen3_state_alpha:/aistock/data/runtime/gen3_state_alpha:ro
       - observation_logs:/aistock/logs
       - observation_reports:/aistock/reports
       - observation_artifacts:/aistock/artifacts
