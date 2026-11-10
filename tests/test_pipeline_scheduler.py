@@ -387,3 +387,126 @@ def test_cli_once_registers_job_listener_and_signals(monkeypatch):
     callback, _mask = fake.listeners[0]
     callback(None)
     assert fake.shutdown_waits == [False]
+
+
+# ---------------------------------------------------------------------------
+# R28（2026-11-10）：盘中东财实时快照任务
+# ---------------------------------------------------------------------------
+
+class TestIntradayWindow:
+    @pytest.mark.parametrize("hh,mm,expected", [
+        (9, 30, False), (9, 34, False), (9, 35, True), (11, 0, True),
+        (14, 59, True), (15, 5, True), (15, 6, False), (15, 55, False),
+    ])
+    def test_window_boundaries(self, hh, mm, expected):
+        now_bj = datetime(2026, 11, 10, hh, mm, tzinfo=ps.BEIJING_TZ)
+        assert ps.in_intraday_window(now_bj) is expected
+
+    def test_naive_beijing_time_also_supported(self):
+        assert ps.in_intraday_window(datetime(2026, 11, 10, 10, 0)) is True
+        assert ps.in_intraday_window(datetime(2026, 11, 10, 16, 0)) is False
+
+
+class TestIntradayBeat:
+    def _beat(self, tmp_path, *, runner, now, trading=True, trading_exc=None):
+        def check(_day):
+            if trading_exc is not None:
+                raise trading_exc
+            return trading
+        return ps.run_intraday_snapshot_beat(
+            mode="scheduled",
+            out_root=tmp_path / "runtime" / "postclose_auto",
+            is_trading_day=check,
+            runner=runner,
+            now_fn=lambda: now,
+            logger_=_QUIET,
+        )
+
+    def test_success_resets_failure_state(self, tmp_path):
+        state_dir = ps.intraday_out_dir(tmp_path / "runtime" / "postclose_auto")
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "scheduler_state.json").write_text(
+            json.dumps({"consecutive_failures": 2, "alarm": False}), encoding="utf-8")
+        now = datetime(2026, 11, 10, 10, 35, tzinfo=ps.BEIJING_TZ)
+        report = self._beat(tmp_path, runner=FakeRunner([_ok()]), now=now)
+        assert report["status"] == "success"
+        assert report["consecutive_failures"] == 0 and report["alarm"] is False
+        state = json.loads((state_dir / "scheduler_state.json").read_text(encoding="utf-8"))
+        assert state["consecutive_failures"] == 0 and state["alarm"] is False
+        assert state["last_success_ts"]
+
+    def test_consecutive_failures_raise_alarm_at_threshold(self, tmp_path):
+        now = datetime(2026, 11, 10, 10, 35, tzinfo=ps.BEIJING_TZ)
+        runner = FakeRunner([{"returncode": 3, "stdout": "", "stderr": "src"}])
+        r1 = self._beat(tmp_path, runner=runner, now=now)
+        r2 = self._beat(tmp_path, runner=runner, now=now)
+        r3 = self._beat(tmp_path, runner=runner, now=now)
+        assert [r["consecutive_failures"] for r in (r1, r2, r3)] == [1, 2, 3]
+        assert r1["alarm"] is False and r2["alarm"] is False and r3["alarm"] is True
+        state = json.loads(
+            (ps.intraday_out_dir(tmp_path / "runtime" / "postclose_auto")
+             / "scheduler_state.json").read_text(encoding="utf-8"))
+        assert state["alarm"] is True and state["last_failure_reason"] == "collector_rc_3"
+        assert len(state["recent_failures"]) == 3
+
+    def test_out_of_window_noop_no_state_touch(self, tmp_path):
+        now = datetime(2026, 11, 10, 15, 10, tzinfo=ps.BEIJING_TZ)
+        runner = FakeRunner([_ok()])
+        report = self._beat(tmp_path, runner=runner, now=now)
+        assert report["status"] == "no_op_window" and runner.calls == []
+
+    def test_non_trading_day_noop(self, tmp_path):
+        now = datetime(2026, 11, 10, 10, 35, tzinfo=ps.BEIJING_TZ)
+        runner = FakeRunner([_ok()])
+        report = self._beat(tmp_path, runner=runner, now=now, trading=False)
+        assert report["status"] == "no_op_non_trading" and runner.calls == []
+
+    def test_calendar_error_fail_closed(self, tmp_path):
+        now = datetime(2026, 11, 10, 10, 35, tzinfo=ps.BEIJING_TZ)
+        runner = FakeRunner([_ok()])
+        report = self._beat(tmp_path, runner=runner, now=now,
+                            trading_exc=RuntimeError("db down"))
+        assert report["status"] == "failure_calendar"
+        assert runner.calls == []  # 判不出交易日绝不采集
+
+    def test_command_targets_intraday_collector(self, tmp_path):
+        now = datetime(2026, 11, 10, 10, 35, tzinfo=ps.BEIJING_TZ)
+        runner = FakeRunner([_ok()])
+        self._beat(tmp_path, runner=runner, now=now)
+        cmd = runner.calls[0]
+        assert cmd[0] == sys.executable
+        assert Path(cmd[1]).name == "intraday_snapshot_collect.py"
+        assert "--out-dir" in cmd
+
+    def test_rc1_counts_as_failure(self, tmp_path):
+        now = datetime(2026, 11, 10, 10, 35, tzinfo=ps.BEIJING_TZ)
+        runner = FakeRunner([{"returncode": 1, "stdout": "", "stderr": "x"}])
+        report = self._beat(tmp_path, runner=runner, now=now)
+        assert report["status"] == "failure" and report["rc"] == 1
+
+
+class TestIntradayRegistration:
+    def test_cron_fields(self):
+        trigger = ps.build_intraday_cron_trigger()
+        fields = {f.name: str(f) for f in trigger.fields}
+        assert fields["day_of_week"] == "mon-fri"
+        assert fields["hour"] == "9-15"
+        assert fields["minute"] == "*/5"
+        assert str(trigger.timezone) in ("Asia/Shanghai", "UTC+08:00")
+
+    def test_serve_registers_both_jobs(self, monkeypatch):
+        fake = FakeScheduler()
+        monkeypatch.setattr(ps.signal, "signal", lambda *_a: None)
+        rc = ps.serve(
+            ["--once"], pipeline_fn=lambda **kw: {"status": "success"},
+            scheduler_factory=lambda **kw: fake,
+        )
+        assert rc == 0
+        job_ids = [j.id for j in fake.jobs]
+        assert ps.JOB_ID in job_ids and ps.INTRADAY_JOB_ID in job_ids
+
+    def test_register_intraday_job_adds_with_coalesce(self):
+        fake = FakeScheduler()
+        job = ps.register_intraday_job(fake)
+        assert job is not None and job.id == ps.INTRADAY_JOB_ID
+        assert job.max_instances == 1  # 单实例防重叠（FakeScheduler._Job 暴露项）

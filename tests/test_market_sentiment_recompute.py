@@ -100,6 +100,8 @@ SNAPSHOT_ERA_KEYS = {
     "change_distribution", "up_down_5_trend_7d", "emotion_curve_30d",
     "turnover_trend_30d", "turnover_forecast_intraday", "sentiment_score",
     "sentiment_level", "emotion_phase", "source", "intraday_status",
+    # R28（2026-11-10）：数据日期明示（盘中快照命中=date；过期回退昨收=最新正式日线日）
+    "data_date",
 }
 
 # 发往 CH 的汇总 SQL 必须保留的口径 token（防口径漂移）
@@ -260,6 +262,9 @@ def fake_environment(monkeypatch):
     monkeypatch.setattr(mo, "clickhouse_scalar", fake.scalar)
     monkeypatch.setattr(mo, "_kline_daily_latest_trade_date", lambda: D2)
     monkeypatch.setattr(mo, "_load_qmt_intraday_market_sentiment", lambda: None)
+    # R28：盘中快照覆盖层打桩为不可用（这些测试聚焦 kline_daily 确认口径，
+    # 快照路径在 test_intraday_market_snapshot_read.py 单独覆盖）
+    monkeypatch.setattr(mo, "latest_market_sentiment_intraday", lambda now=None: None)
 
     def _no_heavy_forecast(**kwargs):
         raise AssertionError("盘后/overlay 未命中分支不得同步执行预测重查询（R20b）")

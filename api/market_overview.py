@@ -22,6 +22,12 @@ from services.market_turnover_forecast import (
     get_intraday_turnover_forecast,
 )
 from services.margin_sentiment import load_margin_sentiment
+from services.intraday_market_snapshot import (
+    emotion_live_point,
+    latest_index_quotes,
+    latest_market_sentiment_intraday,
+    latest_snapshot_ts,
+)
 from utils.database import db
 from utils.logger import get_logger
 from utils.daily_quality_read import finite_number
@@ -145,6 +151,50 @@ def _intraday_emotion_snapshot() -> Optional[Dict[str, Any]]:
 def _append_intraday_emotion_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Append today's provisional point to a confirmed daily trend payload."""
     snapshot = _intraday_emotion_snapshot()
+    if not snapshot or snapshot["date"] in payload.get("dates", []):
+        return payload
+
+    payload["dates"].append(snapshot["date"])
+    live_fields = {
+        "close_up_rate",
+        "intraday_up_rate",
+        "sh_up_rate",
+        "sz_up_rate",
+        "cyb_up_rate",
+        "strong_up_rate",
+        "weak_up_rate",
+    }
+    for field in (
+        "close_up_rate",
+        "intraday_up_rate",
+        "sh_up_rate",
+        "sz_up_rate",
+        "cyb_up_rate",
+        "yesterday_monster_up_rate",
+        "yesterday_strong_up_rate",
+        "yesterday_weak_up_rate",
+        "strong_up_rate",
+        "weak_up_rate",
+        "limit_up_follow_rate",
+    ):
+        series = payload.setdefault(field, [])
+        value = snapshot[field] if field in live_fields else (series[-1] if series else 0.0)
+        series.append(float(value))
+
+    payload["total"] = len(payload["dates"])
+    payload["intraday_snapshot"] = snapshot
+    return payload
+
+
+def _append_live_snapshot_emotion_point(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """R28（2026-11-10）：盘中最新日序列点改用东财实时快照。
+
+    快照不新鲜（>10min）/覆盖不足/表缺失 → emotion_live_point 返回 None，
+    序列保持确认日线口径（fail-closed，不造数）。字段口径与
+    _intraday_emotion_snapshot 一致：close/intraday=实时 pct>0 占比、
+    strong=>3、weak=<-3；yesterday_* 与 limit_up_follow 沿用序列尾值。
+    """
+    snapshot = emotion_live_point()
     if not snapshot or snapshot["date"] in payload.get("dates", []):
         return payload
 
@@ -1004,8 +1054,17 @@ def _compute_market_indices(code: Optional[str] = None):
                         # Prefer the host bridge when it is available, while retaining
                         # today's ClickHouse fact snapshot as the durable fallback.
                         intraday_snapshots.update(bridge_snapshots)
+                        # R28（2026-11-10）：东财实时快照最高优先（intraday_index_snapshot，
+                        # 5min 采集、≤10min 新鲜）；过期时 latest_index_quotes 返回空
+                        # dict（fail-closed），回落 QMT 桥/事实快照/昨收基线不动。
+                        live_quotes, live_status = latest_index_quotes()
+                        if live_quotes:
+                            intraday_snapshots.update(live_quotes)
                         intraday_quote_status = {
-                            "provider": "qmt_xtdata+qmt_clickhouse",
+                            "provider": (
+                                "eastmoney_live_snapshot"
+                                if live_quotes else "qmt_xtdata+qmt_clickhouse"
+                            ),
                             "status": "live" if intraday_snapshots else "unavailable",
                             "quote_count": len(intraday_snapshots),
                             "requested_count": len(codes),
@@ -1018,6 +1077,7 @@ def _compute_market_indices(code: Optional[str] = None):
                                 default=None,
                             ),
                             "bridge_status": bridge_status,
+                            "live_snapshot_status": live_status,
                             "fact_snapshot_status": {
                                 "status": "live" if any(
                                     item.get("source") == "qmt_clickhouse_intraday"
@@ -1640,6 +1700,11 @@ def _load_market_sentiment_from_clickhouse() -> Optional[Dict[str, Any]]:
         "down_5_count": down_5_count,
     }
     intraday = _load_qmt_intraday_market_sentiment()
+    # R28（2026-11-10）：盘中优先东财实时快照（intraday_market_snapshot，5min 采集）；
+    # 旧 QMT 5m 路径保留为次级兜底。快照不新鲜/覆盖不足时服务内部返回 None
+    # （fail-closed），本载荷保持 kline_daily 昨收口径并经 date/data_date 明示。
+    if intraday is None:
+        intraday = latest_market_sentiment_intraday()
     # R20b：成交额预测的重查询只允许在「盘中且 overlay 命中」分支同步执行
     # （endpoint TTL=300s 吸收，且其结果仅盘中有意义）；该服务内部走非 raw
     # 通道（视图重写 + toDate 谓词不裁剪），query_log 实证冷启动可达
@@ -1655,6 +1720,8 @@ def _load_market_sentiment_from_clickhouse() -> Optional[Dict[str, Any]]:
 
     payload = {
         "date": latest_date_text,
+        # R28：数据日期明示（快照过期回退昨收时，date=data_date=最新正式日线日）
+        "data_date": latest_date_text,
         "up_count": up_count,
         "down_count": down_count,
         "unchanged_count": unchanged_count,
@@ -1749,6 +1816,9 @@ def _load_market_sentiment_from_clickhouse() -> Optional[Dict[str, Any]]:
     payload.update(
         {
             "date": intraday["date"],
+            # R28：盘中覆盖层命中时数据日期=快照交易日，as_of=快照时间（北京钟）
+            "data_date": intraday["date"],
+            "as_of": intraday["as_of"],
             "up_count": intraday["up_count"],
             "down_count": intraday["down_count"],
             "unchanged_count": intraday["unchanged_count"],
@@ -1760,13 +1830,13 @@ def _load_market_sentiment_from_clickhouse() -> Optional[Dict[str, Any]]:
             "total_turnover": intraday["total_turnover"],
             "sh_amount": intraday["sh_amount"],
             "sz_amount": intraday["sz_amount"],
-            "turnover_source": "qmt_5m_stock_aggregate",
+            "turnover_source": intraday.get("turnover_source", "qmt_5m_stock_aggregate"),
             "change_distribution": intraday["change_distribution"],
             "sentiment_score": round(sentiment_score, 2),
             "sentiment_level": _sentiment_level(sentiment_score),
-            "source": "qmt_5m_intraday+clickhouse_daily_history",
+            "source": f"{intraday.get('source', 'qmt:kline_minute_5')}+clickhouse_daily_history",
             "intraday_status": {
-                "mode": "provisional_5m",
+                "mode": intraday.get("mode", "provisional_5m"),
                 "as_of": intraday["as_of"],
                 "covered_count": intraday["covered_count"],
                 "expected_count": intraday["expected_count"],
@@ -1874,7 +1944,11 @@ def get_market_sentiment():
     if cached is not None:
         if _is_sentiment_intraday_session(datetime.now(ZoneInfo("Asia/Shanghai"))):
             if now < float(cached.get("expires_at") or 0.0):
-                return cached["payload"]
+                # R28：盘中缓存额外绑定最新快照时间——新快照落库即刻失效重算
+                # （TTL 上限仍 300s；latest_snapshot_ts 轻量标量，异常返回 None 不阻断）
+                cached_ts = cached.get("snapshot_ts")
+                if cached_ts is None or _snapshot_cache_key() == cached_ts:
+                    return cached["payload"]
         else:
             latest_trade_date = _kline_daily_latest_trade_date()
             if latest_trade_date is not None and cached.get("data_date") == latest_trade_date:
@@ -1887,9 +1961,19 @@ def get_market_sentiment():
         # 计算完成后现取数据日期作盘后缓存键：若计算期间恰有补数落地，键不等
         # 会让下个请求再重算一次并收敛（恰好实现"补齐后重算一次"）。
         "data_date": _kline_daily_latest_trade_date(),
+        "snapshot_ts": _snapshot_cache_key(),
         "payload": payload,
     }
     return payload
+
+
+def _snapshot_cache_key() -> Optional[str]:
+    """R28：盘中缓存绑定键——最新快照时间 ISO 文本；表缺失/异常 → None。"""
+    try:
+        ts = latest_snapshot_ts()
+    except Exception:  # noqa: BLE001 - 缓存键失败不阻断主路径
+        return None
+    return ts.isoformat() if ts is not None else None
 
 
 # R14（2026-11-09）：/market/limit-up-ladder 结果的进程内 TTL 缓存（60 秒，
@@ -2582,7 +2666,8 @@ def _compute_emotion_trend(days: int = 30, granularity: str = "daily"):
             "total": len(dates),
             "source": "clickhouse",
         }
-        return payload
+        # R28：盘中最新日序列点改用东财实时快照（不新鲜 fail-closed 保持日线口径）
+        return _append_live_snapshot_emotion_point(payload)
     except Exception as exc:
         logger.error(f"获取情绪周期趋势失败: {exc}")
         return _empty_emotion_trend(str(exc))

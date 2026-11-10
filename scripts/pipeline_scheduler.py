@@ -6,6 +6,10 @@
 设计：
   1. BlockingScheduler（APScheduler，项目已有依赖），时区 Asia/Shanghai，
      cron 工作日（mon-fri）16:15 触发 run_postclose_pipelines()；
+     R28（2026-11-10）：新增盘中任务 intraday_snapshot_collect——cron 工作日
+     09:00~15:55 每 5min 触发，节拍函数内窗口守卫收口到 09:35~15:05，subprocess
+     调 intraday_snapshot_collect.py 写两张运营层快照表（不碰 kline_* 正式表），
+     连续失败 ≥3 轮置 alarm（状态落 runtime/intraday_snapshot/scheduler_state.json）；
   2. run_postclose_pipelines() 为可在测试中 import 的纯编排函数（依赖全部可注入）：
      - 顺序 subprocess：daily_kline_pipeline.py --formal-write（失败重试 3 次、
        间隔 600s）→ minute_collect_auto.py --mode formal-write（rc 0/1 继续，
@@ -27,7 +31,7 @@
 """
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import argparse
 import json
@@ -37,7 +41,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -52,6 +56,18 @@ JOB_ID = "postclose_pipelines"
 CRON_DAY_OF_WEEK = "mon-fri"
 CRON_HOUR = 16
 CRON_MINUTE = 15
+
+# R28（2026-11-10）：盘中东财实时快照采集任务——交易日 09:35~15:05 每 5min，
+# 写 intraday_market_snapshot / intraday_index_snapshot 两张运营层表（非 kline_*）。
+INTRADAY_JOB_ID = "intraday_snapshot_collect"
+INTRADAY_CRON_MINUTE_STEP = 5
+INTRADAY_CRON_HOURS = "9-15"      # 触发面 09:00~15:55，窗口守卫在函数内收口
+INTRADAY_WINDOW_START = dt_time(9, 35)
+INTRADAY_WINDOW_END = dt_time(15, 5)
+# 连续失败 ≥3 轮置 alarm（任务书：失败退避重试，连续失败告警字段）
+INTRADAY_ALARM_THRESHOLD = 3
+
+STAGE_INTRADAY = "intraday_snapshot"
 
 STAGE_DAILY = "daily_kline"
 STAGE_MINUTE = "minute_collect"
@@ -413,6 +429,149 @@ def report_exit_code(report: Mapping[str, Any]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# R28 盘中东财快照节拍（交易日 09:35~15:05 每 5min）
+# ---------------------------------------------------------------------------
+
+def intraday_out_dir(out_root: Optional[Path] = None) -> Path:
+    return (Path(out_root) if out_root else default_out_root()).parent / "intraday_snapshot"
+
+
+def in_intraday_window(now_bj: datetime) -> bool:
+    """窗口守卫：09:35 ≤ 北京钟 ≤ 15:05（含端点；cron 触发面 09:00~15:55 由它收口）。"""
+    current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
+    return INTRADAY_WINDOW_START <= current <= INTRADAY_WINDOW_END
+
+
+def _load_intraday_state(path: Path) -> dict:
+    state = _load_json(path)
+    if not isinstance(state, dict):
+        state = {}
+    state.setdefault("consecutive_failures", 0)
+    state.setdefault("alarm", False)
+    state.setdefault("last_success_ts", None)
+    state.setdefault("last_failure_ts", None)
+    state.setdefault("last_failure_reason", None)
+    state.setdefault("recent_failures", [])
+    return state
+
+
+def run_intraday_snapshot_beat(
+    *,
+    mode: str = "scheduled",
+    out_root: Optional[Path] = None,
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """盘中快照单节拍：窗口/交易日守卫 → subprocess 采集器 → 状态/告警落盘。
+
+    status: success | failure | no_op_window | no_op_non_trading | failure_calendar。
+    采集失败（含源不可达 rc=3、读回不符 rc=1）计入 consecutive_failures，
+    连续 ≥INTRADAY_ALARM_THRESHOLD 轮置 alarm=True（状态文件可被监控读取）。
+    """
+    log = logger_ or logger
+    now_bj = cn_now(now_fn)
+    beat_dir = intraday_out_dir(out_root)
+    beat_dir.mkdir(parents=True, exist_ok=True)
+    state_path = beat_dir / "scheduler_state.json"
+    state = _load_intraday_state(state_path)
+
+    base = {
+        "schema": "intraday_snapshot_beat/1",
+        "mode": mode,
+        "beat_at_beijing": now_bj.isoformat(),
+    }
+
+    if not in_intraday_window(now_bj):
+        log.info("[intraday] 窗口外（%s 北京），跳过", now_bj.strftime("%H:%M"))
+        return {**base, "status": "no_op_window"}
+
+    check = is_trading_day or _default_is_trading_day
+    try:
+        trading = bool(check(now_bj.date()))
+    except Exception as exc:  # noqa: BLE001 - 日历判断异常 fail-closed 记失败
+        log.error("[intraday] 交易日判断失败：%s", exc)
+        state["consecutive_failures"] += 1
+        state["alarm"] = state["consecutive_failures"] >= INTRADAY_ALARM_THRESHOLD
+        state["last_failure_ts"] = datetime.now(BEIJING_TZ).isoformat()
+        state["last_failure_reason"] = f"trading_day_check_failed: {exc}"
+        _atomic_write_json(state_path, state)
+        return {**base, "status": "failure_calendar", "error": state["last_failure_reason"]}
+    if not trading:
+        return {**base, "status": "no_op_non_trading"}
+
+    run = runner or _default_runner
+    cmd = [
+        sys.executable, str(SCRIPTS_DIR / "intraday_snapshot_collect.py"),
+        "--out-dir", str(beat_dir),
+    ]
+    result = run(cmd) or {}
+    try:
+        rc = int(result.get("returncode", -1))
+    except (TypeError, ValueError):
+        rc = -1
+
+    if rc == 0:
+        state["consecutive_failures"] = 0
+        state["alarm"] = False
+        state["last_success_ts"] = datetime.now(BEIJING_TZ).isoformat()
+        state["last_failure_reason"] = None
+        status = "success"
+    else:
+        state["consecutive_failures"] += 1
+        state["alarm"] = state["consecutive_failures"] >= INTRADAY_ALARM_THRESHOLD
+        state["last_failure_ts"] = datetime.now(BEIJING_TZ).isoformat()
+        state["last_failure_reason"] = f"collector_rc_{rc}"
+        state["recent_failures"] = (state["recent_failures"] + [{
+            "ts": state["last_failure_ts"], "rc": rc,
+            "stderr_tail": str(result.get("stderr") or "")[-400:],
+        }])[-20:]
+        status = "failure"
+        log.error(
+            "[intraday] 采集失败 rc=%s（连续 %d 轮，alarm=%s）",
+            rc, state["consecutive_failures"], state["alarm"],
+        )
+    _atomic_write_json(state_path, state)
+    return {
+        **base,
+        "status": status,
+        "rc": rc,
+        "consecutive_failures": state["consecutive_failures"],
+        "alarm": state["alarm"],
+    }
+
+
+def build_intraday_cron_trigger():
+    """交易日面 cron：mon-fri 09:00~15:55 每 5min（窗口由节拍函数收口）。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    return CronTrigger(
+        day_of_week=CRON_DAY_OF_WEEK,
+        hour=INTRADAY_CRON_HOURS,
+        minute=f"*/{INTRADAY_CRON_MINUTE_STEP}",
+        timezone=BEIJING_TZ,
+    )
+
+
+def register_intraday_job(scheduler, job_func: Optional[Callable[[], Any]] = None):
+    """向 scheduler 注册盘中快照 cron 任务；返回该 job。"""
+    if job_func is None:
+        def job_func() -> dict:  # type: ignore[misc]
+            return run_intraday_snapshot_beat(mode="scheduled")
+    scheduler.add_job(
+        job_func,
+        trigger=build_intraday_cron_trigger(),
+        id=INTRADAY_JOB_ID,
+        name="盘中东财实时快照采集（R28，09:35~15:05 每 5min）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler.get_job(INTRADAY_JOB_ID)
+
+
+# ---------------------------------------------------------------------------
 # 调度器装配
 # ---------------------------------------------------------------------------
 
@@ -539,6 +698,7 @@ def serve(
     factory = scheduler_factory or BlockingScheduler
     scheduler = factory(timezone=BEIJING_TZ)
     register_postclose_job(scheduler, lambda: _log_pipeline_result(pipeline))
+    register_intraday_job(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -552,12 +712,21 @@ def serve(
     _install_signal_handlers(scheduler, logger)
     job = scheduler.get_job(JOB_ID)
     next_run = getattr(job, "next_run_time", None) if job else None
+    intraday_job = scheduler.get_job(INTRADAY_JOB_ID)
+    intraday_next = getattr(intraday_job, "next_run_time", None) if intraday_job else None
     logger.info(
         "调度注册：job_id=%s cron=[day_of_week=%s %02d:%02d %s] next_run=%s "
         "once=%s version=%s pid=%d",
         JOB_ID, CRON_DAY_OF_WEEK, CRON_HOUR, CRON_MINUTE, "Asia/Shanghai",
         next_run.isoformat() if next_run else "pending", args.once,
         __version__, os.getpid(),
+    )
+    logger.info(
+        "调度注册：job_id=%s cron=[day_of_week=%s %s 每%02dmin %s] 窗口=%s~%s next_run=%s",
+        INTRADAY_JOB_ID, CRON_DAY_OF_WEEK, INTRADAY_CRON_HOURS,
+        INTRADAY_CRON_MINUTE_STEP, "Asia/Shanghai",
+        INTRADAY_WINDOW_START.strftime("%H:%M"), INTRADAY_WINDOW_END.strftime("%H:%M"),
+        intraday_next.isoformat() if intraday_next else "pending",
     )
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown

@@ -296,6 +296,8 @@ def fake_env(monkeypatch):
 
     monkeypatch.setattr(mo, "db", SimpleNamespace(get_session=_no_session))
     monkeypatch.setattr(mo, "_intraday_emotion_snapshot", lambda: None)
+    # R28：盘中快照实时点打桩为不可用（本套件聚焦确认日线口径）
+    monkeypatch.setattr(mo, "emotion_live_point", lambda: None)
     return fake
 
 
