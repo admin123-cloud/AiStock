@@ -455,69 +455,74 @@ def capture_panel_zero_touch(account: str, panel: Optional[dict[str, Any]],
     try:
         with _ths_window_operation_lock(timeout_seconds=lock_timeout_s,
                                         panel=account):
-            if _is_foreground(hwnd):  # 拿锁瞬间再查一次（竞态防线）
-                return {"status": "skipped_foreground",
-                        "note": "面板在前台（Owner 使用中），本轮让位"}
             try:
-                minimized = bool(window.is_minimized())
-            except Exception:  # noqa: BLE001
-                minimized = False
-            if minimized:
-                return {"status": "skipped_minimized",
-                        "note": "面板最小化；不自动恢复（恢复即抢焦点）"}
-
-            img = print_window_image(hwnd)  # 离屏渲染，不吃焦点不点菜单
-            screenshot: Optional[str] = None
-            png: Path
-            if evidence_dir is not None:
-                evidence_dir.mkdir(parents=True, exist_ok=True)
-                png = evidence_dir / f"{datetime.now().strftime('%H%M%S')}_{account}.png"
-                img.save(png)
-                screenshot = str(png)
-            else:
-                png = Path(os.environ.get("TMPDIR") or
-                           os.environ.get("TEMP") or ".") / "ths_poll_capture.png"
+                if _is_foreground(hwnd):  # 拿锁瞬间再查一次（竞态防线）
+                    return {"status": "skipped_foreground",
+                            "note": "面板在前台（Owner 使用中），本轮让位"}
                 try:
+                    minimized = bool(window.is_minimized())
+                except Exception:  # noqa: BLE001
+                    minimized = False
+                if minimized:
+                    return {"status": "skipped_minimized",
+                            "note": "面板最小化；不自动恢复（恢复即抢焦点）"}
+
+                img = print_window_image(hwnd)  # 离屏渲染，不吃焦点不点菜单
+                screenshot: Optional[str] = None
+                png: Path
+                if evidence_dir is not None:
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    png = evidence_dir / f"{datetime.now().strftime('%H%M%S')}_{account}.png"
                     img.save(png)
                     screenshot = str(png)
-                except Exception:  # noqa: BLE001
-                    screenshot = None
+                else:
+                    png = Path(os.environ.get("TMPDIR") or
+                               os.environ.get("TEMP") or ".") / "ths_poll_capture.png"
+                    try:
+                        img.save(png)
+                        screenshot = str(png)
+                    except Exception:  # noqa: BLE001
+                        screenshot = None
 
-            items, lines = _ocr_image(png)
-            # R48 身份门禁：顶栏「券商-姓名」OCR 标签 vs 期望（fail-closed）。
-            # 同一窗口换登另一账号（2026-11-11 实况 曾*→王*美）时拒绝错标。
-            from services.ths_account_bridge import (
-                identity_matches, parse_identity_label)
-            identity_label = parse_identity_label(lines)
-            gate = identity_matches(identity_label, identity_hint)
-            capital: dict[str, Any] = {}
-            try:
-                with panel_scope(panel):
-                    uia = _read_from_ths_uia_snapshot()
-                cap = uia.get("capital") if isinstance(uia, dict) else None
-                if isinstance(cap, dict):
-                    capital = cap
-            except Exception:  # noqa: BLE001 - UIA 尽力而为
-                capital = {}
-            if gate is False:
-                return {"status": "identity_mismatch",
-                        "identity_label": identity_label,
-                        "identity_hint": identity_hint,
-                        "note": "面板登录身份与账号绑定不符（fail-closed 拒绝采集）",
-                        "ocr_lines": lines[:12], "screenshot": screenshot}
-            holdings = _parse_holdings_from_ocr_items(items, capital=capital or None)
-            if holdings:
-                return {"status": "ok", "holdings": holdings, "capital": capital,
-                        "ocr_lines": lines, "screenshot": screenshot,
-                        "identity_label": identity_label}
-            if _looks_like_other_view(lines) and not _looks_like_holdings_view(lines):
-                return {"status": "view_not_holdings",
-                        "note": "面板当前视图非持仓（零交互不切换）",
+                items, lines = _ocr_image(png)
+                # R48 身份门禁：顶栏「券商-姓名」OCR 标签 vs 期望（fail-closed）。
+                # 同一窗口换登另一账号（2026-11-11 实况 曾*→王*美）时拒绝错标。
+                from services.ths_account_bridge import (
+                    identity_matches, parse_identity_label)
+                identity_label = parse_identity_label(lines)
+                gate = identity_matches(identity_label, identity_hint)
+                capital: dict[str, Any] = {}
+                try:
+                    with panel_scope(panel):
+                        uia = _read_from_ths_uia_snapshot()
+                    cap = uia.get("capital") if isinstance(uia, dict) else None
+                    if isinstance(cap, dict):
+                        capital = cap
+                except Exception:  # noqa: BLE001 - UIA 尽力而为
+                    capital = {}
+                if gate is False:
+                    return {"status": "identity_mismatch",
+                            "identity_label": identity_label,
+                            "identity_hint": identity_hint,
+                            "note": "面板登录身份与账号绑定不符（fail-closed 拒绝采集）",
+                            "ocr_lines": lines[:12], "screenshot": screenshot}
+                holdings = _parse_holdings_from_ocr_items(items, capital=capital or None)
+                if holdings:
+                    return {"status": "ok", "holdings": holdings, "capital": capital,
+                            "ocr_lines": lines, "screenshot": screenshot,
+                            "identity_label": identity_label}
+                if _looks_like_other_view(lines) and not _looks_like_holdings_view(lines):
+                    return {"status": "view_not_holdings",
+                            "note": "面板当前视图非持仓（零交互不切换）",
+                            "ocr_lines": lines[:20], "screenshot": screenshot,
+                            "identity_label": identity_label}
+                return {"status": "error", "error": "EMPTY_HOLDINGS_PARSE",
                         "ocr_lines": lines[:20], "screenshot": screenshot,
                         "identity_label": identity_label}
-            return {"status": "error", "error": "EMPTY_HOLDINGS_PARSE",
-                    "ocr_lines": lines[:20], "screenshot": screenshot,
-                    "identity_label": identity_label}
+            except Exception as exc:  # noqa: BLE001 - R48：块内捕获为状态 dict，
+                # 不经 generator CM 的 throw 传播（换登扰动期会变形，14:46 实证）
+                return {"status": "error",
+                        "error": f"{type(exc).__name__}: {exc}"}
     except TimeoutError:
         return {"status": "skipped_lock",
                 "note": "窗口锁忙（fills 导出/巡读互斥），本轮让位"}

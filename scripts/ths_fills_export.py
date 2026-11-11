@@ -407,26 +407,34 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
         except Exception:
             return None
 
+    inner_error: Optional[Exception] = None
     with panel_scope(panel), _ths_window_operation_lock(panel=account):
-        window = _find_xiadan_window()
         try:
-            was_minimized = bool(window.is_minimized())
-        except Exception:
-            was_minimized = False
-        _click_query_menu_item("today_trades")
-        _today_items, today_lines, shot_today = _ocr_xiadan_window()
-        kept_today = _keep(shot_today, "today_view.png")
-        if identity_hint:  # R48 身份门禁（换登 fail-closed，见 assert_panel_identity）
-            assert_panel_identity(today_lines, identity_hint, account)
-        _click_query_menu_item("history_trades")
-        history_items, history_lines, shot_history = _ocr_xiadan_window()
-        kept_history = _keep(shot_history, "history_view.png")
-        history_rows = _parse_trades_from_ocr_items(history_items)
-        if was_minimized:
+            window = _find_xiadan_window()
             try:
-                window.minimize()
+                was_minimized = bool(window.is_minimized())
             except Exception:
-                pass
+                was_minimized = False
+            _click_query_menu_item("today_trades")
+            _today_items, today_lines, shot_today = _ocr_xiadan_window()
+            kept_today = _keep(shot_today, "today_view.png")
+            if identity_hint:  # R48 身份门禁（换登 fail-closed）
+                assert_panel_identity(today_lines, identity_hint, account)
+            _click_query_menu_item("history_trades")
+            history_items, history_lines, shot_history = _ocr_xiadan_window()
+            kept_history = _keep(shot_history, "history_view.png")
+            history_rows = _parse_trades_from_ocr_items(history_items)
+            if was_minimized:
+                try:
+                    window.minimize()
+                except Exception:
+                    pass
+        except Exception as exc:  # noqa: BLE001 - R48：块内捕获，不依赖
+            # generator CM 的 throw 传播（2026-11-11 14:46 换登扰动期实证：
+            # 经 contextlib 传播会变形为 "generator didn't stop after throw()"）
+            inner_error = exc
+    if inner_error is not None:
+        raise inner_error  # run_export 落 unavailable 标记（真实原因）
     if evidence_dir:
         try:
             evidence_dir.mkdir(parents=True, exist_ok=True)
