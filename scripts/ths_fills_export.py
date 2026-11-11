@@ -379,9 +379,10 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
     """真机采集（仅 host / F:\\python\\python3.10）：锁内依次导出当日/历史成交视图。
 
     R47：panel 指定目标面板（panel_scope 内 _find_xiadan_window 连到该面板 pid）。
-    R49 hotswitch：目标账号≠当前面板账号 → Alt+N 切换 + OCR 身份自证（读不到
-    目标令牌=fail-closed unavailable）；组末位读毕切回常态位。热切换账号
-    统一串行在共享锁 ths_window.lock（单物理面板），lock_name 显式覆盖。
+    R49c hotswitch：目标账号≠当前面板账号 → 账号切换器 ComboBox(aid=2322)
+    SelectionItem 选择 + OCR 身份自证（选不到/读不到目标令牌=fail-closed
+    unavailable）；组末位读毕切回常态位。热切换账号统一串行在共享锁
+    ths_window.lock（单物理面板），lock_name 显式覆盖。
     只触 `_click_query_menu_item` 查询子项（查询菜单），绝不打开下单界面；
     窗口若原为最小化，采集后还原为最小化。两视图截图与 OCR 行归档 evidence_dir。
     R48 身份门禁：首个视图 OCR 后校验顶栏「券商-姓名」含 identity_hint；
@@ -509,12 +510,13 @@ def build_capture_plan(live_panels: list[dict[str, Any]],
                        registry: Any,
                        account_filter: Optional[str] = None) -> dict[str, Any]:
     """live 面板 × 注册表规则 → 采集计划 {account: {panel, identity_hint,
-    hotkey?, hotswitch?, capture 由 main 装配}}。
+    hotswitch?, capture 由 main 装配}}。
 
     acct1 无绑定面板时仍入计划（panel=None → 默认 connect 路径，legacy 行为）；
     其他账号仅有绑定面板才入计划（fail-closed：未绑定面板绝采集）。
-    R49：带 hotkey 的规则共享物理面板（热切换组）——home 在前、组末位
-    restore_after=True（读毕切回常态位），锁统一串行在共享 ths_window.lock。
+    R49c：热切换组共享物理面板——home 在前、组末位
+    restore_after=True（读毕切回常态位），锁统一串行在共享 ths_window.lock；
+    切换机制=ComboBox aid=2322 SelectionItem（注册表 hotkey 仅作绑定标记）。
     """
     resolved = registry.resolve(live_panels)
     from services.ths_hotswitch import build_hotswitch_plan

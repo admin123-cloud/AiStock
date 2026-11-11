@@ -13,8 +13,8 @@
   - 任何意外弹窗只记录（标题/类名/文本），绝不确认绝不关闭；
   - 前台有人 → skipped_foreground 让位；窗口锁 ths_window.lock 全程持有；
   - 身份 fail-closed：顶栏 OCR「券商-姓名」必须命中绑定账号（ths_panels.json），
-    未知身份零触碰；--allow-hotswitch 时才可用 Alt+N 切到目标账号（走
-    services/ths_hotswitch 受控路径，OCR 自证）；
+    未知身份零触碰；--allow-hotswitch 时才可经账号切换器 ComboBox(aid=2322)
+    SelectionItem 切到目标账号（走 services/ths_hotswitch 受控路径，OCR 自证）。
   - 勘察毕：面板若原为最小化 → 恢复最小化；全程 journal。
 
 用法（host F:/python/python3.10）：
@@ -330,7 +330,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--account", default="acct1",
                     help="目标账号（默认 acct1 曾*）")
     ap.add_argument("--allow-hotswitch", action="store_true",
-                    help="面板在另一已知账号时允许 Alt+N 热切换到目标（默认零按键）")
+                    help="面板在另一已知账号时允许经账号切换器 ComboBox "
+                         "SelectionItem 切到目标（默认零交互）")
     ap.add_argument("--walker", choices=["control", "raw"], default="control")
     ap.add_argument("--max-nodes", type=int, default=MAX_NODES)
     args = ap.parse_args(argv)
@@ -411,12 +412,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 status_identity = "identity_mismatch"
             elif args.allow_hotswitch and rule_by_acct.get(hit, {}).get("hotkey"):
                 cfg = {"target_hint": target_hint,
-                       "target_hotkey": target_rule.get("hotkey"),
                        "known_hints": known_hints}
                 try:
                     # 生产窗口契约（fills_export/poll 同源）：pywinauto uia 包装
-                    # 窗满足 hotswitch 服务的完整调用面（焦点/最小化/恢复）；
-                    # 按键只出自受控 hotswitch 模块，本文件自审计仍零输入原语。
+                    # 窗满足 hotswitch 服务的完整调用面（最小化/恢复）；
+                    # 切换交互只出自受控 hotswitch 模块（R49c ComboBox
+                    # SelectionItem），本文件自审计仍零输入原语。
                     win = bridge._find_window_for_panel(panel)
                     res = hotswitch.ensure_target_account(win, cfg)
                 except Exception as exc:  # noqa: BLE001 - 窗口消失/连接失败

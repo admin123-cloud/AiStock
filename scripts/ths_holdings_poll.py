@@ -42,7 +42,8 @@ def _parse_now(text: Optional[str]) -> datetime:
 
 def _build_plan(account_filter: Optional[str]) -> dict[str, dict[str, Any]]:
     """bridge 面板枚举 × 注册表 → 有序计划 {account: {panel, identity_hint,
-    hotkey?, hotswitch?}}（R49：热切换组 home 在前、末位 restore_after）。
+    hotswitch?}}（R49c：热切换组 home 在前、末位 restore_after；切换机制
+    =ComboBox aid=2322 SelectionItem，注册表 hotkey 仅作绑定标记）。
 
     fills 导出器同语义：acct1 无绑定面板也入计划走默认 connect；未绑定其他
     账号绝采集。identity_hint 取自规则（默认 acct1=「曾」，R47 取证锚）。"""
