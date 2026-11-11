@@ -28,10 +28,12 @@ def _runtime_export_dir() -> Path:
 
 
 @contextmanager
-def _ths_window_operation_lock(timeout_seconds: int = 120, panel: str | None = None):
+def _ths_window_operation_lock(timeout_seconds: int = 120, panel: str | None = None,
+                               lock_name: str | None = None):
     """窗口操作锁。panel=None/"acct1" → legacy ths_window.lock（与旧代码互斥）；
-    其他账号 → 分把锁 ths_window.<panel>.lock（R47 双面板防互踩）。"""
-    lock_path = _runtime_export_dir() / _panel_lock_name(panel)
+    其他账号 → 分把锁 ths_window.<panel>.lock（R47 双面板防互踩）；
+    lock_name 显式覆盖（R49 热切换账号统一串行在共享锁上）。"""
+    lock_path = _runtime_export_dir() / (lock_name or _panel_lock_name(panel))
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fh = lock_path.open("a+b")
     locked = False
@@ -1168,6 +1170,10 @@ def _panel_lock_name(panel: str | None) -> str:
     return f"ths_window.{panel}.lock"
 
 
+# R49 热切换：单面板双账号共享同一物理窗口 → 一切操作串行在 legacy 共享锁。
+HOTSWITCH_LOCK_NAME = "ths_window.lock"
+
+
 def filter_trade_panels(panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """候选窗口 → 交易面板：标题含交易系统令牌（进程名不限，第二券商面板
     进程名可能不同；GPU/辅助进程无交易标题自然被滤掉）。"""
@@ -1261,6 +1267,8 @@ class PanelResolution(NamedTuple):
     unbound: list[dict[str, Any]]
     ambiguous_accounts: list[str]
     rules: list[dict[str, Any]]
+    hotswitch_groups: dict[int, list[str]] = {}
+    """R49：{pid: [accounts]}——带 hotkey 的规则共享同一物理面板（热切换组）。"""
 
 
 class PanelRegistry:
@@ -1283,20 +1291,47 @@ class PanelRegistry:
             return {"schema": PANELS_SCHEMA, "rules": []}
         return data
 
-    def bind(self, *, rule: dict[str, Any], account: str, broker_hint: str = "") -> None:
+    def bind(self, *, rule: dict[str, Any], account: str, broker_hint: str = "",
+             identity_hint: str = "", hotkey: str = "") -> None:
         data = self._load()
         rules = [r for r in data.get("rules") or [] if r.get("account") != account]
         rules.append({
             "account": account, "process": rule.get("process") or "",
             "title_contains": rule.get("title_contains") or "",
             "broker_hint": broker_hint,
+            # R48/R49：身份令牌（OCR 顶栏「券商-姓名」期望子串）与热切换键
+            # 必须持久化——巡读/fills 的身份门禁与 Alt+N 切换依赖它们。
+            "identity_hint": identity_hint or rule.get("identity_hint") or "",
+            "hotkey": hotkey or rule.get("hotkey") or "",
             "bound_at": _now_text(),
         })
         payload = {"schema": PANELS_SCHEMA, "rules": rules}
+        if isinstance(data.get("hotswitch"), dict):
+            payload["hotswitch"] = dict(data["hotswitch"])  # 幂等保留热切换配置
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, self.path)
+
+    def set_hotswitch(self, *, home_account: str) -> None:
+        """R49 热切换配置：常态位账号（读毕切回它）。默认 acct1。"""
+        data = self._load()
+        data["hotswitch"] = {"home_account": home_account,
+                             "updated_at": _now_text()}
+        data.setdefault("schema", PANELS_SCHEMA)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, self.path)
+
+    def home_account(self) -> str:
+        data = self._load()
+        hot = data.get("hotswitch")
+        if isinstance(hot, dict):
+            home = str(hot.get("home_account") or "").strip()
+            if home:
+                return home
+        return "acct1"
 
     def _all_rules(self) -> list[dict[str, Any]]:
         customs = [r for r in (self._load().get("rules") or []) if isinstance(r, dict)]
@@ -1314,15 +1349,31 @@ class PanelRegistry:
         by_account: dict[str, dict[str, Any]] = {}
         ambiguous: list[str] = []
         claimed: set[int] = set()
+        # R49 热切换组：带 hotkey 的规则共享同一物理面板（同一 pid 可被多个
+        # 账号认领）；普通规则仍独占认领，且不抢热切换组已共享的面板。
+        hotswitch_groups: dict[int, list[str]] = {}
+        shared_pids: set[int] = set()
+        hotkey_accounts = {str(r.get("account")) for r in rules if r.get("hotkey")}
         for rule in rules:
             account = str(rule.get("account"))
-            hits = [p for p in live_panels if _panel_matches(p, rule) and p["pid"] not in claimed]
+            is_hot = account in hotkey_accounts
+            if is_hot:
+                hits = [p for p in live_panels if _panel_matches(p, rule)]
+            else:
+                hits = [p for p in live_panels
+                        if _panel_matches(p, rule)
+                        and p["pid"] not in claimed and p["pid"] not in shared_pids]
             if len(hits) > 1:
                 ambiguous.append(account)  # 多窗同规则：fail-closed 不绑定
                 continue
             if len(hits) == 1:
                 by_account[account] = hits[0]
-                claimed.add(int(hits[0]["pid"]))
+                pid = int(hits[0]["pid"])
+                if is_hot:
+                    shared_pids.add(pid)
+                    hotswitch_groups.setdefault(pid, []).append(account)
+                else:
+                    claimed.add(pid)
         bound_pids = {int(p["pid"]) for p in by_account.values()}
         unbound = [p for p in live_panels if int(p["pid"]) not in bound_pids]
         return PanelResolution(
@@ -1330,6 +1381,7 @@ class PanelRegistry:
             unbound=unbound,
             ambiguous_accounts=sorted(ambiguous),
             rules=rules,
+            hotswitch_groups=hotswitch_groups,
         )
 
 

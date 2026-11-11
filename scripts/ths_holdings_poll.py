@@ -30,6 +30,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from services import ths_holdings_poll as poll  # noqa: E402
+from services.ths_hotswitch import build_hotswitch_plan  # noqa: E402
 
 
 def _parse_now(text: Optional[str]) -> datetime:
@@ -40,7 +41,8 @@ def _parse_now(text: Optional[str]) -> datetime:
 
 
 def _build_plan(account_filter: Optional[str]) -> dict[str, dict[str, Any]]:
-    """bridge 面板枚举 × 注册表 → {account: {"panel", "identity_hint"}}。
+    """bridge 面板枚举 × 注册表 → 有序计划 {account: {panel, identity_hint,
+    hotkey?, hotswitch?}}（R49：热切换组 home 在前、末位 restore_after）。
 
     fills 导出器同语义：acct1 无绑定面板也入计划走默认 connect；未绑定其他
     账号绝采集。identity_hint 取自规则（默认 acct1=「曾」，R47 取证锚）。"""
@@ -51,19 +53,8 @@ def _build_plan(account_filter: Optional[str]) -> dict[str, dict[str, Any]]:
         live_panels = enumerate_trade_panels()
     except Exception:  # 非 host 环境 → 空面板表
         live_panels = []
-    resolved = load_panel_registry().resolve(live_panels)
-    hint_by_account = {str(r.get("account")): r.get("identity_hint")
-                       for r in resolved.rules if isinstance(r, dict)}
-    plan: dict[str, dict[str, Any]] = {}
-    for account in sorted(resolved.by_account):
-        plan[account] = {"panel": resolved.by_account[account],
-                         "identity_hint": hint_by_account.get(account)}
-    if "acct1" not in plan:
-        plan["acct1"] = {"panel": None,
-                         "identity_hint": hint_by_account.get("acct1")}
-    if account_filter:
-        return {a: e for a, e in plan.items() if a == account_filter}
-    return plan
+    return build_hotswitch_plan(load_panel_registry(), live_panels,
+                                account_filter=account_filter)
 
 
 def cmd_once(args: argparse.Namespace) -> int:
@@ -83,23 +74,28 @@ def cmd_once(args: argparse.Namespace) -> int:
         root=root, now=datetime.now(), plan=plan,
         capture=lambda account, panel, hint=None: poll.capture_panel_zero_touch(
             account, panel, evidence_dir=poll.snapshots_dir(root, now.date()),
-            identity_hint=hint))
+            identity_hint=hint,
+            hotswitch=(plan.get(account) or {}).get("hotswitch")))
     print(json.dumps(report, ensure_ascii=False, default=str))
     statuses = [r.get("status") for r in report.get("accounts", {}).values()]
     return 1 if statuses and all(s == "error" for s in statuses) else 0
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
-    """单面板一次零交互采集（任何时候安全：PrintWindow+UIA 只读，不吃焦点）。"""
+    """单面板一次零交互采集（任何时候安全：PrintWindow+UIA 只读，不吃焦点）。
+
+    R49：--account acct2 时经热切换读目标账号（Alt+N 身份自证，读毕切回常态位）。"""
     root = Path(args.out_dir) if args.out_dir else _tracker_root()
     plan = _build_plan(args.account or "acct1")
     account, entry = next(iter(plan.items()))
     cap = poll.capture_panel_zero_touch(
         account, entry.get("panel"),
         evidence_dir=poll.snapshots_dir(root, date.today()),
-        identity_hint=entry.get("identity_hint"))
+        identity_hint=entry.get("identity_hint"),
+        hotswitch=entry.get("hotswitch"))
     safe = {k: cap.get(k) for k in ("status", "note", "error", "ocr_line_count",
-                                    "screenshot")}
+                                    "screenshot", "identity_label",
+                                    "identity_hint", "switchback_failed")}
     if cap.get("status") == "ok":
         safe["holdings"] = [{k: h.get(k) for k in
                              ("code", "name", "shares", "available_shares",

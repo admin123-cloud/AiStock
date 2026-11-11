@@ -244,7 +244,7 @@ def derive_state(state: dict, replayed: Mapping[str, Any], *,
                 rows[-1]["name"] = pending_meta[code]["name"]
         elif code in old_by_code:
             rows.append(dict(old_by_code[code]))
-    mv_total = sum(_d(r["market_value"]) for r in rows)
+    mv_total = sum((_d(r["market_value"]) for r in rows), Decimal("0"))
     cap = dict(state.get("capital") or {})
     available = cash_available if cash_available is not None \
         else _d(cap.get("available_cash") or 0)
@@ -332,6 +332,22 @@ def validate_init_base(init: Mapping[str, Any], for_date: date) -> dict:
     block = {"schema": SCHEMA, "base_as_of": str(base_as_of), "base": clean,
              "base_cash_available": float(cash) if cash is not None else None,
              "applied": [], "cash_delta": 0.0}
+    # R49：首次接入当日无成交时的物化辅助（价格/名称，可选）——
+    # derive_state 的行重建需要参考价（无 fills 的锚点基线路径）。
+    meta = init.get("base_meta")
+    if isinstance(meta, Mapping):
+        clean_meta = {}
+        for code, v in meta.items():
+            if not isinstance(v, Mapping):
+                continue
+            price = v.get("price")
+            if price is not None and not isinstance(price, (int, float)):
+                raise SyncRefusal("init_invalid",
+                                  {"base_meta_price": {str(code): price}})
+            clean_meta[str(code)] = {
+                "price": float(price) if price is not None else None,
+                "name": str(v.get("name") or "")}
+        block["base_meta"] = clean_meta
     if isinstance(init.get("provenance"), Mapping):
         block["provenance"] = dict(init["provenance"])
     return block
@@ -571,8 +587,9 @@ def run_sync(*, state_file: Path, fills_file: Optional[Path], alerts_file: Path,
             seen.add(fp)
             pending.append(fill)
 
-        if not pending:
-            # 无新成交：幂等 noop，完全不写；与锚点重放不一致 → 漂移告警
+        if not pending and not result.get("inited"):
+            # 无新成交且非首次接入：幂等 noop，完全不写；与锚点重放不一致 → 漂移告警
+            # （R49：首次接入当日无成交仍须落锚点基线 → 不走 noop，继续重放写盘）
             drift = _drift_check(state, base, applied) if not result.get("inited") \
                 else {}
             result.update({"rc": 0, "action": "noop", "pending": 0,
@@ -593,6 +610,17 @@ def run_sync(*, state_file: Path, fills_file: Optional[Path], alerts_file: Path,
         pending_codes = {f["code"] for f in pending}
         pending_meta = {f["code"]: {"price": f["price"], "name": f.get("name") or ""}
                         for f in pending}
+        if result.get("inited") and not pending:
+            # R49：首次接入当日无成交 → 锚点持仓全量物化为基线行
+            # （derive_state 只重建 pending_codes 行，这里把锚点码并入），
+            # 价格/名称取 init_base.base_meta（首读快照现价），缺省 0/空。
+            base_meta = sync.get("base_meta") if isinstance(sync, Mapping) else {}
+            base_meta = base_meta if isinstance(base_meta, Mapping) else {}
+            pending_codes = set(str(c) for c in base)
+            pending_meta = {str(c): {
+                "price": float((base_meta.get(c) or {}).get("price") or 0.0),
+                "name": str((base_meta.get(c) or {}).get("name") or "")}
+                for c in base}
         note = ("R38c autosync：锚点 {} + 当日 {} 笔重放（移动加权/THS 摊薄延续；"
                 "费率 buy max(5,0.0186%)/sell 0.0666% 估）；现金按流水推导；"
                 "FIFO 参考腿见 fills_sync.fifo_reference。零交易零 formal。".format(

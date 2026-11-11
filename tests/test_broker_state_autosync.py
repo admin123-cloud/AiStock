@@ -287,18 +287,22 @@ class TestIdempotent:
 
     def test_no_trade_day_zero_byte_change(self, tmp_path):
         # 真实无成交晨间态：持仓=锚点值（4000@22.377），fills 文件仅含历史行
+        # R49 语义更新：首次接入当日无成交 → 锚点基线物化落盘（write），
+        # 其后无成交轮次 noop 零字节改动（幂等不重放不双计）。
         state = _state_r38b_final()
         state["holdings"][0].update({"shares": 4000, "cost_price": 22.377,
                                      "entry_price": 22.377})
         state["capital"]["available_cash"] = 54818.15
         env = Env(tmp_path, state, fills_rows=[HISTORY_ROW], init_base=INIT_BASE)
-        sha0 = env.sha()
-        res1 = env.run(keep_init=True)
-        assert res1["rc"] == 0 and res1["action"] == "noop"
-        assert env.sha() == sha0                      # 零字节改动
-        res2 = env.run(keep_init=True)
+        res1 = env.run()                            # init 首跑一次性注入
+        assert res1["rc"] == 0 and res1["action"] == "write"  # 基线落盘
+        sha1 = env.sha()
+        res2 = env.run()
         assert res2["rc"] == 0 and res2["action"] == "noop"
-        assert env.sha() == sha0
+        assert env.sha() == sha1                      # 零字节改动
+        res3 = env.run()
+        assert res3["rc"] == 0 and res3["action"] == "noop"
+        assert env.sha() == sha1
         assert env.alerts() == []                     # 无成交不告警
 
     def test_rerun_same_day_no_double_count(self, tmp_path):

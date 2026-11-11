@@ -374,11 +374,14 @@ def assert_panel_identity(today_lines: list[str], identity_hint: Optional[str],
 def _capture_ths_views(evidence_dir: Optional[Path] = None,
                        panel: Optional[dict[str, Any]] = None,
                        account: str = "acct1",
-                       identity_hint: Optional[str] = None) -> dict[str, Any]:
+                       identity_hint: Optional[str] = None,
+                       hotswitch: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """真机采集（仅 host / F:\\python\\python3.10）：锁内依次导出当日/历史成交视图。
 
-    R47：panel 指定目标面板（panel_scope 内 _find_xiadan_window 连到该面板 pid），
-    锁按账号分把（acct1=legacy ths_window.lock 与旧部署互斥，其他=分把锁）。
+    R47：panel 指定目标面板（panel_scope 内 _find_xiadan_window 连到该面板 pid）。
+    R49 hotswitch：目标账号≠当前面板账号 → Alt+N 切换 + OCR 身份自证（读不到
+    目标令牌=fail-closed unavailable）；组末位读毕切回常态位。热切换账号
+    统一串行在共享锁 ths_window.lock（单物理面板），lock_name 显式覆盖。
     只触 `_click_query_menu_item` 查询子项（查询菜单），绝不打开下单界面；
     窗口若原为最小化，采集后还原为最小化。两视图截图与 OCR 行归档 evidence_dir。
     R48 身份门禁：首个视图 OCR 后校验顶栏「券商-姓名」含 identity_hint；
@@ -408,13 +411,32 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
             return None
 
     inner_error: Optional[Exception] = None
-    with panel_scope(panel), _ths_window_operation_lock(panel=account):
+    switchback: dict[str, Any] = {}
+    window: Any = None
+    was_minimized = False
+    today_lines: list[str] = []
+    history_lines: list[str] = []
+    history_rows: list[dict[str, Any]] = []
+    kept_today = kept_history = None
+    with panel_scope(panel), _ths_window_operation_lock(
+            panel=account, lock_name=(hotswitch or {}).get("lock_name")):
+        on_target = False
         try:
             window = _find_xiadan_window()
             try:
                 was_minimized = bool(window.is_minimized())
             except Exception:
                 was_minimized = False
+            if hotswitch:
+                from services import ths_hotswitch as hs
+                pre = hs.ensure_target_account(window, hotswitch)
+                if pre is not None:
+                    raise RuntimeError(
+                        f"PANEL_{str(pre.get('status', 'switch_failed')).upper()}: "
+                        f"label={pre.get('identity_label')!r} "
+                        f"expect~{hotswitch.get('target_hint')!r} "
+                        f"account={account}")
+            on_target = True
             _click_query_menu_item("today_trades")
             _today_items, today_lines, shot_today = _ocr_xiadan_window()
             kept_today = _keep(shot_today, "today_view.png")
@@ -433,6 +455,17 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
             # generator CM 的 throw 传播（2026-11-11 14:46 换登扰动期实证：
             # 经 contextlib 传播会变形为 "generator didn't stop after throw()"）
             inner_error = exc
+        finally:
+            # R49：组末位读毕切回常态位（导出成败均须恢复；best-effort）
+            if on_target and hotswitch and hotswitch.get("restore_after"):
+                from services import ths_hotswitch as hs
+                try:
+                    rb = hs.restore_home_account(window, hotswitch)
+                except Exception as exc:  # noqa: BLE001
+                    rb = {"status": "switchback_failed",
+                          "error": f"{type(exc).__name__}: {exc}"}
+                if rb is not None:
+                    switchback = {"switchback_failed": True, "detail": rb}
     if inner_error is not None:
         raise inner_error  # run_export 落 unavailable 标记（真实原因）
     if evidence_dir:
@@ -448,11 +481,15 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
         ("成交日期" in line or "成交时间" in line) and "代码" in line
         for line in history_lines
     )
+    window_state = {"minimized_before": was_minimized,
+                    "restored_minimized": was_minimized}
+    if switchback:
+        window_state.update(switchback)
     return {
         "today_lines": today_lines,
         "history_rows": history_rows,
         "history_header_seen": history_header_seen,
-        "window_state": {"minimized_before": was_minimized, "restored_minimized": was_minimized},
+        "window_state": window_state,
         "screenshots": {"today": kept_today, "history": kept_history},
     }
 
@@ -469,25 +506,26 @@ KNOWN_ACCOUNTS = ("acct1", "acct2")
 
 
 def build_capture_plan(live_panels: list[dict[str, Any]],
-                       registry: Any) -> dict[str, dict[str, Any]]:
-    """live 面板 × 注册表规则 → 采集计划 {account: {"panel": ...}}。
+                       registry: Any,
+                       account_filter: Optional[str] = None) -> dict[str, Any]:
+    """live 面板 × 注册表规则 → 采集计划 {account: {panel, identity_hint,
+    hotkey?, hotswitch?, capture 由 main 装配}}。
 
     acct1 无绑定面板时仍入计划（panel=None → 默认 connect 路径，legacy 行为）；
     其他账号仅有绑定面板才入计划（fail-closed：未绑定面板绝采集）。
+    R49：带 hotkey 的规则共享物理面板（热切换组）——home 在前、组末位
+    restore_after=True（读毕切回常态位），锁统一串行在共享 ths_window.lock。
     """
     resolved = registry.resolve(live_panels)
-    plan: dict[str, dict[str, Any]] = {}
-    hint_by_account = {str(r.get("account")): r.get("identity_hint")
-                       for r in resolved.rules if isinstance(r, dict)}
-    for account in sorted(resolved.by_account):
-        plan[account] = {"panel": resolved.by_account[account],
-                         "identity_hint": hint_by_account.get(account)}
-    if "acct1" not in plan:
-        plan["acct1"] = {"panel": None,
-                         "identity_hint": hint_by_account.get("acct1")}
+    from services.ths_hotswitch import build_hotswitch_plan
+
+    plan = build_hotswitch_plan(registry, live_panels,
+                                account_filter=account_filter)
     plan["_resolution"] = {  # 上报面（不参与采集）
         "unbound_panels": resolved.unbound,
         "ambiguous_accounts": resolved.ambiguous_accounts,
+        "hotswitch_groups": {str(k): v for k, v
+                             in (resolved.hotswitch_groups or {}).items()},
     }
     return plan
 
@@ -543,21 +581,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         live_panels = enumerate_trade_panels()
     except Exception:  # 非 host/无窗口环境 → 空面板表，acct1 走默认 connect
         live_panels = []
-    plan = build_capture_plan(live_panels, load_panel_registry())
+    plan = build_capture_plan(live_panels, load_panel_registry(),
+                              account_filter=args.account)
     resolution = plan.pop("_resolution")
     for account, entry in plan.items():
         if args.account and account != args.account:
             continue
         panel = entry.get("panel")
         entry["capture"] = (lambda ev, p=panel, a=account,
-                            h=entry.get("identity_hint"):
+                            h=entry.get("identity_hint"),
+                            sw=entry.get("hotswitch"):
                             _capture_ths_views(ev, panel=p, account=a,
-                                               identity_hint=h))
+                                               identity_hint=h,
+                                               hotswitch=sw))
     plan["_resolution"] = resolution
     result = run_export_multi(for_date=for_date, now=now,
                               out_root=Path(args.out_dir) if args.out_dir else None,
                               plan=plan, force=args.force,
-                              known_accounts=list(KNOWN_ACCOUNTS))
+                              known_accounts=[args.account] if args.account
+                              else list(KNOWN_ACCOUNTS))
     result["trade_date"] = for_date.isoformat()
     print(json.dumps(result, ensure_ascii=False, default=str))
     return int(result.get("rc", 0))
