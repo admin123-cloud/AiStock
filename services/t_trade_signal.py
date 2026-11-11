@@ -1680,22 +1680,46 @@ def _single_sided(fill: dict, draft: Optional[dict], qty: int, kind: str) -> dic
 
 # ── R48：教练式复盘 + trades_inferred fills 精确覆盖 ─────────────────────
 
-def fetch_east_day_hl(code: str, for_date: date) -> Optional[dict[str, float]]:
-    """当日日线高低价（klt=101 末根；东财日 K 行 = 日期,开,收,高,低,量,额）。
+EAST_K_DAY_HL_URL = ("http://push2his.eastmoney.com/api/qt/stock/kline/get"
+                     "?secid={secid}&fields1=f1,f2,f3&fields2=f51,f54,f55"
+                     "&klt=101&fqt=1&end=20500101&lmt={lmt}")
 
-    只取 ts 前缀恰为 for_date 的那根；无当日根（未开盘/停牌/源失败）→ None。
+
+def _parse_day_hl_klines(klines: Sequence[str],
+                         want_date: str) -> Optional[dict[str, float]]:
+    """日 K 行（fields2=f51,f54,f55）= 日期,高,低 → 当日 {high, low}。
+
+    注意：EAST_K_URL 的 fields2=f51,f52,f53,f56,f57（日期,开,收,量,额）不含
+    高低价——R48a 修复：曾误用该 URL 把量/额当高低价（473702519.98 量级
+    即暴露），契约核对绝不能吃这种脏值。
     """
-    url = EAST_K_URL.format(secid=east_secid(code), klt=101, lmt=3)
+    for row in klines:
+        parts = str(row).split(",")
+        if len(parts) >= 3 and parts[0].startswith(want_date):
+            try:
+                return {"high": float(parts[1]), "low": float(parts[2])}
+            except ValueError:
+                return None
+    return None
+
+
+def fetch_east_day_hl(code: str, for_date: date) -> Optional[dict[str, float]]:
+    """当日日线高低价（klt=101；fields2=f51,f54,f55=日期,高,低）。
+
+    只取日期恰为 for_date 的那根；无当日根（未开盘/停牌/源失败）→ None。
+    """
+    url = EAST_K_DAY_HL_URL.format(secid=east_secid(code), lmt=3)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     klines = (data.get("data") or {}).get("klines") or []
-    want = for_date.isoformat()
-    for row in klines:
-        parts = row.split(",")
-        if len(parts) >= 5 and parts[0].startswith(want):
-            return {"low": float(parts[4]), "high": float(parts[3])}
-    return None
+    hl = _parse_day_hl_klines(klines, for_date.isoformat())
+    if hl is None:
+        return None
+    # 价格域 sanity（A 股高低价 0<p<10000）：越界=源列漂移，按不可用处理
+    if not (0 < hl["high"] < 10000 and 0 < hl["low"] <= hl["high"]):
+        return None
+    return hl
 
 
 def _coaching_for_reconcile(*, root: Path, for_date: date, fills: list[dict],

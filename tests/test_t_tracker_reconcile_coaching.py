@@ -82,6 +82,22 @@ def _no_day_hl_network(monkeypatch):
                         if code == "002015" else None)
 
 
+def test_day_hl_parser_fields_and_guard():
+    # fields2=f51,f54,f55 = 日期,高,低（R48a：曾把量/额当高低价）
+    assert tts._parse_day_hl_klines(
+        ["2026-11-10,13.84,13.20", "2026-11-11,13.62,13.10"],
+        "2026-11-11") == {"high": 13.62, "low": 13.10}
+    assert tts._parse_day_hl_klines(
+        ["2026-11-11,473702,646351900.0"], "2026-11-11") == {
+        "high": 473702.0, "low": 646351900.0}  # 错源行也会如实返回——
+    # 消费侧 sanity：>1000 的"价格"必然是量/额错列，契约核对按不可用处理
+    hl = tts._parse_day_hl_klines(["2026-11-11,473702,646351900.0"],
+                                  "2026-11-11")
+    sane = hl and 0 < hl["low"] < 10000 and 0 < hl["high"] < 10000
+    assert sane is not True
+    assert tts._parse_day_hl_klines(["2026-11-10,13.84,13.20"], "2026-11-11") is None
+
+
 def test_reconcile_writes_coaching_and_overrides_inferred(tmp_path):
     root = _make_root(tmp_path)
     ttt.reconcile_all_accounts(root=root, for_date=TODAY)
