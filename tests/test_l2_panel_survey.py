@@ -34,6 +34,15 @@ def _repoint_outdir(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(l2ps, "OUT_DIR", out)
     monkeypatch.setattr(l2ps, "PANEL_MAP", out / "panel_map.json")
     monkeypatch.setattr(l2ps, "JOURNAL", out / "journal.md")
+    # 自带面板规则（容器内无 F:\ 真实 ths_panels.json，测试不依赖宿主环境）
+    panels = tmp_path / "ths_panels.json"
+    panels.write_text(json.dumps({
+        "schema": "ths_panels/1",
+        "rules": [
+            {"account": "acct1", "identity_hint": "曾", "hotkey": "1"},
+            {"account": "acct2", "identity_hint": "王", "hotkey": "2"},
+        ]}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(l2ps, "PANELS_JSON", panels)
     return out
 
 
