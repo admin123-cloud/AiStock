@@ -29,7 +29,7 @@ R46 双速制（2026-11-11，任务书 20261111_fast_lane_r46.md）：
 """
 from __future__ import annotations
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 import json
 import logging
@@ -74,6 +74,10 @@ ULIST_CHUNK = 10                # 东财 ulist 单请求码数上限
 SCHEMA_FAST_BEAT = "t_tracker_fast_beat/1"
 
 # ── R34 校准参数（2026-11-10，来源 R34 §3.5；作为回归锚）──────────
+# R54（2026-11-11 Owner 裁决"卖晚一点、买早一点"）只改上升周期两档：
+#   卖侧 65/70 → 阶梯 75 卖半（exit_rsi5_trim_min）→ 80 清余（exit_rsi5_min）；
+#   买侧 ≤30 → ≤35 常规（buy_rsi5_max），≤20 确定性档（conviction_rsi5_max，标注用）。
+# 横盘/下降条目零改动。
 R34_CALIB: dict[str, dict[str, dict[str, Any]]] = {
     "002015": {
         "sideways": {
@@ -81,19 +85,22 @@ R34_CALIB: dict[str, dict[str, dict[str, Any]]] = {
             "sell_band": [13.70, 13.90], "sell_rsi5_min": 70.0,
             "exit_rsi5_min": 70.0, "stop": 12.90,
         },
-        "up": {"buy_rsi5_max": 25.0, "exit_rsi5_min": 65.0, "vwap_dev_buy_max": -0.005},
+        "up": {"buy_rsi5_max": 35.0, "conviction_rsi5_max": 20.0,
+               "vwap_dev_buy_max": -0.005,
+               "exit_rsi5_trim_min": 75.0, "exit_rsi5_min": 80.0},
     },
     "300054": {
         "up": {
-            "buy_band": [59.90, 60.70], "buy_rsi5_max": 30.0,
+            "buy_band": [59.90, 60.70], "buy_rsi5_max": 35.0,
+            "conviction_rsi5_max": 20.0,
             "sell_band": [63.20, 64.50], "sell_rsi5_min": 80.0,
-            "exit_rsi5_min": 80.0, "stop": 59.30,
+            "exit_rsi5_trim_min": 75.0, "exit_rsi5_min": 80.0, "stop": 59.30,
         },
         # sideways 不做校准：R34 §3.5 只校准了上升期；横盘按 §3.2 从 20 日区间派生
     },
 }
-CALIB_SOURCE = "R34-calib-20261110"
-DERIVED_SOURCE = "R34-manual-derived"
+CALIB_SOURCE = "R54-calib-20261111"
+DERIVED_SOURCE = "R54-derived"
 
 # R34 锚值（回归对拍用）：交易日 2026-11-10 的 T-1(=11-09 收盘) 判定。
 # 002015 取自 R34 报告 §1.4 表 11-10 行；300054 取自 §3.5（多头排列已完成）。
@@ -278,9 +285,13 @@ def resolve_params(code: str, regime: str, info: Mapping[str, Any]) -> dict[str,
         return out
     out: dict[str, Any] = {"source": DERIVED_SOURCE}
     if regime == "up":
-        # R34 §3.1：RSI5m ≤35 预备 / ≤25 强触发 + VWAP 乖离 ≤ −0.5%（动态价条）
-        out.update({"buy_rsi5_max": 30.0, "vwap_dev_buy_max": -0.005,
-                    "exit_rsi5_min": 65.0})
+        # R54（Owner 裁决 2026-11-11，仅上升周期）：
+        #   买侧 RSI5m ≤35 常规买；≤20 确定性档（buy_tier=conviction，仅标注+优先级，
+        #   同 T 仓上限；R34 实证 ≤20 全年仅 6-14% 交易日出现，稀缺）；
+        #   卖侧阶梯 RSI5m ≥75 卖 1/2（trim）→ ≥80 清余仓；VWAP 乖离 ≤ −0.5% 不变。
+        out.update({"buy_rsi5_max": 35.0, "conviction_rsi5_max": 20.0,
+                    "vwap_dev_buy_max": -0.005,
+                    "exit_rsi5_trim_min": 75.0, "exit_rsi5_min": 80.0})
     elif regime == "sideways":
         # R34 §3.2：下沿 [lo20, lo20+0.15rng] + RSI5≤30 + RSI15<40；上沿 [hi20−0.15rng, hi20] + RSI5≥70
         hi20, lo20 = float(info["hi20"]), float(info["lo20"])
@@ -763,10 +774,10 @@ def cooldown_ok(side_state: Mapping[str, Any], now: datetime) -> bool:
 
 
 def _regime_side_gate(regime: str, side: str, subtype: str) -> tuple[bool, str]:
-    """周期×方向门：下降禁买侧草案；上升禁新的卖T开仓（正T离场除外）。"""
+    """周期×方向门：下降禁买侧草案；上升禁新的卖T开仓（正T离场/75 档减半除外）。"""
     if regime == "down" and side in (SIDE_BUY,):
         return False, "down_regime_no_buy"
-    if regime == "up" and side == SIDE_SELL and subtype != "exit":
+    if regime == "up" and side == SIDE_SELL and subtype not in ("exit", "trim"):
         return False, "up_regime_no_new_sellT"
     return True, ""
 
@@ -830,6 +841,12 @@ def evaluate_code(
         target = open_t.get("target_band")
         hit_target = bool(target and float(target[0]) <= px <= float(target[1]))
         hit_exit_rsi = rsi5 >= float(params.get("exit_rsi5_min") or 1e9)
+        # R54 阶梯第一档：≥trim_min 且尚未减半 → 卖 1/2（elif 链保证 ≥exit_min 时
+        # 全清优先，绝不出现"该清仓却只卖半"）
+        trim_min = params.get("exit_rsi5_trim_min")
+        hit_trim_rsi = bool(
+            trim_min and not open_t.get("trimmed")
+            and rsi5 >= float(trim_min))
         stop_px = open_t.get("stop")
         hit_stop = bool(stop_px and px <= float(stop_px))
         fallback = now.time() >= FALLBACK_EXIT_AFTER
@@ -839,6 +856,9 @@ def evaluate_code(
         elif hit_target or hit_exit_rsi:
             candidates.append({"side": SIDE_SELL, "subtype": "exit", "priority": 1,
                                "trigger_kind": "target_band" if hit_target else "exit_rsi"})
+        elif hit_trim_rsi:
+            candidates.append({"side": SIDE_SELL, "subtype": "trim", "priority": 2,
+                               "trigger_kind": "exit_rsi"})
         elif fallback:
             candidates.append({"side": SIDE_SELL, "subtype": "fallback_eod", "priority": 2,
                                "trigger_kind": "fallback_eod"})
@@ -853,8 +873,15 @@ def evaluate_code(
             if params.get("buy_rsi15_max") is not None:
                 rsi15_ok = rsi15 < float(params["buy_rsi15_max"])
             if (in_buy_band or (not buy_band and vwap_ok)) and rsi5 <= float(params["buy_rsi5_max"]) and rsi15_ok:
+                # R54 买侧分层：≤conviction_rsi5_max → 确定性档（仅标注+优先提示，
+                # 硬条件与 1x T 仓上限不变）；其余 ≤buy_rsi5_max → 常规档
+                conv_max = params.get("conviction_rsi5_max")
+                tier = None
+                if conv_max is not None:
+                    tier = "conviction" if rsi5 <= float(conv_max) else "normal"
                 candidates.append({"side": SIDE_BUY, "subtype": "entry", "priority": 3,
-                                   "trigger_kind": "buy_band" if buy_band else "vwap_dev"})
+                                   "trigger_kind": "buy_band" if buy_band else "vwap_dev",
+                                   "buy_tier": tier})
         if regime == "sideways":
             sell_band = params.get("sell_band")
             if sell_band and float(sell_band[0]) <= px <= float(sell_band[1]) and rsi5 >= float(params.get("sell_rsi5_min") or 1e9):
@@ -894,9 +921,12 @@ def evaluate_code(
         if not gate_ok:
             suppress(gate_reason, {"side": side, "subtype": subtype})
             continue
-        # 布防组镜像 PM 监控的独立布防语义：买带/上沿卖带/离场/减仓提示各自独立
+        # 布防组镜像 PM 监控的独立布防语义：买带/上沿卖带/离场/减仓提示各自独立；
+        # R54 trim 独立成组——75 档减半的去布防/冷却绝不能拖住 80 档清仓线
         if subtype in ("exit", "stop", "fallback_eod"):
             group = "exit"
+        elif subtype == "trim":
+            group = "trim"
         elif side == SIDE_REDUCE:
             group = "hint"
         elif subtype == "zone":
@@ -935,6 +965,16 @@ def evaluate_code(
             qty = int(open_t.get("qty") or lot)
             target_band = open_t.get("target_band")
             stop = open_t.get("stop")
+        elif subtype == "trim" and open_t:
+            # R54：卖在途 T 的 1/2，向下取整百；不足一手 → fail-closed 拒发
+            full_qty = int(open_t.get("qty") or 0)
+            qty = full_qty // 2 // LOT * LOT
+            if qty < LOT:
+                suppress("trim_lot_below_min",
+                         {"open_qty": full_qty, "half_lot": qty, "lot": LOT})
+                continue
+            target_band = open_t.get("target_band")
+            stop = open_t.get("stop")
         elif side == SIDE_BUY:
             target_band = params.get("sell_band")
         elif subtype == "zone":
@@ -956,7 +996,7 @@ def evaluate_code(
                 "vwap_dev_pct": round(vwap_dev * 100, 2) if vwap_dev is not None else None,
             },
             "qty": qty, "target_band": target_band, "stop": stop,
-            "open_t_ref": open_t["draft_id"] if (open_t and subtype in ("exit", "stop", "fallback_eod")) else None,
+            "open_t_ref": open_t["draft_id"] if (open_t and subtype in ("exit", "stop", "fallback_eod", "trim")) else None,
             "precheck": {
                 "pool": {"shares": base_shares, "lot_cap": lot,
                          "account": str(holding.get("account") or "acct1"),
@@ -966,6 +1006,15 @@ def evaluate_code(
                 "cooldown_group": group,
             },
         }
+        # R54 买侧分层标注（仅上升周期带 conviction_rsi5_max 参数的草案）
+        tier = cand.get("buy_tier")
+        if subtype == "entry" and tier:
+            draft["buy_tier"] = tier
+            if tier == "conviction":
+                draft["conviction"] = True
+                draft["buy_tier_note"] = (
+                    "conviction_buy：RSI5≤20 确定性档（优先级最高，同 1x T 仓上限）；"
+                    "R34 实证 ≤20 全年仅 6-14% 交易日出现，稀缺")
         st["armed"] = False
         st["last_fire"] = fmt_ts(now)
         if subtype == "entry":
@@ -974,6 +1023,11 @@ def evaluate_code(
                 "target_band": params.get("sell_band"), "stop": params.get("stop"),
                 "ts": fmt_ts(now),
             })
+        elif subtype == "trim":
+            # R54 阶梯第一档成交入草案：在途 T 减半续存（trimmed 防二次减半）
+            remaining = int(open_t["qty"]) - qty
+            state.set_open_t(code, {**open_t, "qty": remaining, "trimmed": True,
+                                    "trim_ts": fmt_ts(now), "trim_ref": draft_id})
         elif subtype in ("exit", "stop", "fallback_eod"):
             state.set_open_t(code, None)
         result["draft"] = draft
@@ -1017,6 +1071,12 @@ def _groups_still_hot(code, regime, params, px, rsi5, rsi15, vwap_dev, open_t, n
         regime == "sideways" and sell_band
         and float(sell_band[0]) <= px <= float(sell_band[1])
         and rsi5 >= float(params.get("sell_rsi5_min") or 1e9))
+    # R54 trim 组独立布防：在途 T 未减半且 RSI 仍 ≥75 档 = 条件成立（防重布防重复减半；
+    # trimmed 标志是第二道闸）
+    trim_min = params.get("exit_rsi5_trim_min")
+    hot["trim"] = bool(
+        open_t and not open_t.get("trimmed") and trim_min
+        and rsi5 >= float(trim_min))
     hot["hint"] = bool(
         regime == "down" and params.get("reduce_rsi5_min")
         and rsi5 >= float(params["reduce_rsi5_min"]))

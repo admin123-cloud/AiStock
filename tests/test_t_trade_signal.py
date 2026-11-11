@@ -65,6 +65,22 @@ def up_series(n, end, step=0.01):
     return [round(end - step * i, 3) for i in range(n - 1, -1, -1)]
 
 
+def series_for_rsi(target, base=13.0, n_up=7, up=0.02, n_dn=7):
+    """构造 15 根收盘使 rsi_wilder == target（精确，无平滑段：恰 14 个差分）。
+
+    首 n_up 根涨 up、后 n_dn 根跌 dn（dn 由 target 反解），末端收低利于 VWAP 下乖离。
+    RSI = 100·(n_up·up)/(n_up·up + n_dn·dn) = target（代数恒等）。
+    """
+    ratio = target / (100.0 - target)
+    dn = (n_up * up) / (n_dn * ratio)
+    closes = [float(base)]
+    for _ in range(n_up):
+        closes.append(closes[-1] + up)
+    for _ in range(n_dn):
+        closes.append(closes[-1] - dn)
+    return closes
+
+
 HOLDING_002015 = {"code": "002015", "name": "协鑫能科", "shares": 2000}
 HOLDING_300054 = {"code": "300054", "name": "鼎龙股份", "shares": 100}
 FAKE_HOLDINGS = {"holdings": [HOLDING_002015, HOLDING_300054],
@@ -156,21 +172,44 @@ class TestParams:
         assert p["buy_band"] == [13.00, 13.20] and p["buy_rsi5_max"] == 35.0
         assert p["sell_band"] == [13.70, 13.90] and p["sell_rsi5_min"] == 70.0
         assert p["stop"] == 12.90 and p["source"] == tts.CALIB_SOURCE
+        # R54：横盘校准带不受影响——无 trim/conviction 键
+        assert "exit_rsi5_trim_min" not in p and "conviction_rsi5_max" not in p
+        assert p["exit_rsi5_min"] == 70.0
         p2 = tts.resolve_params("300054", "up", {})
-        assert p2["buy_band"] == [59.90, 60.70] and p2["buy_rsi5_max"] == 30.0
+        assert p2["buy_band"] == [59.90, 60.70] and p2["buy_rsi5_max"] == 35.0
         assert p2["stop"] == 59.30
+        # R54 上升周期新阶梯：买 35 / conviction 20 / trim 75 / 清余 80
+        assert p2["conviction_rsi5_max"] == 20.0
+        assert p2["exit_rsi5_trim_min"] == 75.0 and p2["exit_rsi5_min"] == 80.0
+        assert p2["sell_band"] == [63.20, 64.50] and p2["sell_rsi5_min"] == 80.0
+
+    def test_calib_002015_up_r54_ladder(self):
+        up = tts.resolve_params("002015", "up", {})
+        assert up["source"] == tts.CALIB_SOURCE
+        assert up["buy_rsi5_max"] == 35.0 and up["conviction_rsi5_max"] == 20.0
+        assert up["exit_rsi5_trim_min"] == 75.0 and up["exit_rsi5_min"] == 80.0
+        assert up["vwap_dev_buy_max"] == -0.005
 
     def test_derived_sideways_from_20d_range(self):
         p = tts.resolve_params("600000", "sideways", {"hi20": 14.0, "lo20": 12.0})
         assert p["source"] == tts.DERIVED_SOURCE
         assert p["buy_band"] == [12.0, 12.3] and p["sell_band"] == [13.7, 14.0]
         assert p["buy_rsi5_max"] == 30.0 and p["buy_rsi15_max"] == 40.0
+        # R54：横盘派生参数不动（买 30 / 卖 70 / exit 70，无阶梯键）
+        assert p["sell_rsi5_min"] == 70.0 and p["exit_rsi5_min"] == 70.0
+        assert "exit_rsi5_trim_min" not in p and "conviction_rsi5_max" not in p
 
     def test_derived_up_and_down(self):
         up = tts.resolve_params("600000", "up", {})
-        assert up["buy_rsi5_max"] == 30.0 and up["vwap_dev_buy_max"] == -0.005
+        assert up["buy_rsi5_max"] == 35.0 and up["vwap_dev_buy_max"] == -0.005
+        assert up["conviction_rsi5_max"] == 20.0
+        assert up["exit_rsi5_trim_min"] == 75.0 and up["exit_rsi5_min"] == 80.0
         down = tts.resolve_params("600000", "down", {})
         assert down["reduce_rsi5_min"] == 65.0 and down["reduce_vwap_dev_min"] == 0.015
+        assert "exit_rsi5_trim_min" not in down and "conviction_rsi5_max" not in down
+
+    def test_engine_version_r54(self):
+        assert tts.__version__ == "1.3.0"
 
 
 # ── 纯函数 ──────────────────────────────────────────────────────
@@ -274,9 +313,10 @@ class TestEvaluate:
 
     def test_up_regime_rejects_new_sell_t(self):
         # 周期×方向门（fail-closed 纵深防御，独立单元断言）：
-        # 上升禁新卖T开仓（正T离场除外）；下降禁买侧草案
+        # 上升禁新卖T开仓（正T离场/75 档减半除外）；下降禁买侧草案
         assert tts._regime_side_gate("up", tts.SIDE_SELL, "zone") == (False, "up_regime_no_new_sellT")
         assert tts._regime_side_gate("up", tts.SIDE_SELL, "exit") == (True, "")
+        assert tts._regime_side_gate("up", tts.SIDE_SELL, "trim") == (True, "")
         assert tts._regime_side_gate("down", tts.SIDE_BUY, "entry") == (False, "down_regime_no_buy")
         assert tts._regime_side_gate("up", tts.SIDE_BUY, "entry") == (True, "")
         assert tts._regime_side_gate("sideways", tts.SIDE_SELL, "zone") == (True, "")
@@ -417,6 +457,261 @@ class TestEvaluate:
         env2["state"] = state
         res = tts.evaluate_code(**env2)
         assert res["draft"]["subtype"] == "fallback_eod"
+
+
+# ── R54：上升周期卖侧 75/80 阶梯（≥75 卖半 → ≥80 清余）─────────
+
+class TestUpSellLadder:
+    """边界 75/80：trim 与全清的先后、互斥与状态推进（002015 up 校准参数）。"""
+
+    def _up_env(self, state=None, **kw):
+        env = self._env(regime="up", **kw)          # _env 源自 TestEvaluate
+        if state is not None:
+            env["state"] = state
+        return env
+
+    # 复用 TestEvaluate._env 的构造器（合成网格 + up 校准参数）
+    def _env(self, *, now="10:01", px=13.10, series5=None, series15=None,
+             code="002015", shares=2000, stop=12.90, regime="up"):
+        now_dt = datetime.combine(DAY, datetime.strptime(now, "%H:%M").time())
+        closes5 = series5 if series5 is not None else down_series(20, px)
+        closes15 = series15 if series15 is not None else down_series(20, px)
+        n = len(closes5)
+        last_ts = now_dt - timedelta(minutes=1)
+        first_ts = last_ts - timedelta(minutes=5 * (n - 1))
+        bars5 = [{"ts": (first_ts + timedelta(minutes=5 * i)).strftime("%Y-%m-%d %H:%M"),
+                  "close": c, "volume": 1000.0, "amount": c * 100000.0}
+                 for i, c in enumerate(closes5)]
+        bars15 = [{"ts": b["ts"], "close": c, "volume": 1000.0, "amount": c * 100000.0}
+                  for b, c in zip(bars5, closes15)]
+        info = info_with_params(code, regime)
+        if stop is not None:
+            info["params"]["stop"] = stop
+        return {
+            "code": code, "name": "协鑫能科", "regime_info": info,
+            "params": info["params"], "bars5": bars5, "bars15": bars15,
+            "px": px, "px_source": "test", "now": now_dt, "state": tts.SignalState(),
+            "drafts_today": [], "holding": {"code": code, "name": "协鑫能科", "shares": shares},
+            "holdings_updated_at": "2026-11-11 09:00:00",
+        }
+
+    def _entered(self, **kw):
+        """先入场建立 open_t（RSI=0 conviction 买），返回 (state, entry_draft)。"""
+        env = self._env(**kw)
+        entry = tts.evaluate_code(**env)["draft"]
+        assert entry and entry["subtype"] == "entry"
+        return env["state"], entry
+
+    @staticmethod
+    def _rsi(env):
+        return tts.rsi_wilder([float(b["close"]) for b in env["bars5"]])
+
+    def test_trim_fires_at_75_boundary_inclusive(self):
+        # RSI 75.001 ≥ 75 → trim；74.999 < 75 → 无草案（边界含等号，参数字面 75.0）
+        for target, fires in ((75.001, True), (74.999, False)):
+            state, _ = self._entered()
+            env = self._env(now="10:40", series5=series_for_rsi(target),
+                            series15=series_for_rsi(target))
+            env["state"] = state
+            res = tts.evaluate_code(**env)
+            assert abs(self._rsi(env) - target) < 1e-6
+            if fires:
+                d = res["draft"]
+                assert d["subtype"] == "trim" and d["side"] == tts.SIDE_SELL
+                assert d["trigger"]["kind"] == "exit_rsi"
+                assert d["qty"] == 300                    # 600 的一半，整百
+                ot = state.open_t("002015")
+                assert ot["qty"] == 300 and ot["trimmed"] is True
+                assert ot["trim_ref"] == d["id"]
+            else:
+                assert res["draft"] is None and res["suppressed"] is None
+
+    def test_trim_half_rounds_down_to_lot(self):
+        # open_t 300 股 → 半仓 150 → 向下取整百 = 100，余 200
+        state, entry = self._entered()
+        ot = state.open_t("002015")
+        state.set_open_t("002015", {**ot, "qty": 300})
+        env = self._env(now="10:40", series5=series_for_rsi(76.0),
+                        series15=series_for_rsi(76.0))
+        env["state"] = state
+        d = tts.evaluate_code(**env)["draft"]
+        assert d["subtype"] == "trim" and d["qty"] == 100
+        assert state.open_t("002015")["qty"] == 200
+
+    def test_trim_infeasible_below_lot_fail_closed(self):
+        # open_t 100 股：半仓取整百 = 0 → fail-closed 拒发 trim（清仓仍走 80 档）
+        state, _ = self._entered()
+        ot = state.open_t("002015")
+        state.set_open_t("002015", {**ot, "qty": 100})
+        env = self._env(now="10:40", series5=series_for_rsi(76.0),
+                        series15=series_for_rsi(76.0))
+        env["state"] = state
+        res = tts.evaluate_code(**env)
+        assert res["draft"] is None
+        assert res["suppressed"]["reason"] == "trim_lot_below_min"
+
+    def test_full_clear_at_80_wins_over_trim(self):
+        # RSI ≥ 80（80.001）→ 全清优先，绝不减半；open_t 清空
+        state, entry = self._entered()
+        env = self._env(now="10:40", series5=series_for_rsi(80.001),
+                        series15=series_for_rsi(80.001))
+        env["state"] = state
+        d = tts.evaluate_code(**env)["draft"]
+        assert d["subtype"] == "exit" and d["qty"] == 600
+        assert d["open_t_ref"] == entry["id"]
+        assert state.open_t("002015") is None
+
+    def test_trim_then_immediate_clear_at_80_no_cooldown_block(self):
+        # 75 档减半后 1 分钟内冲 80 → 清余必须立即可发（trim 独立布防组，
+        # 不得让 30min 冷却拖住清仓线）
+        state, _ = self._entered()
+        env1 = self._env(now="10:40", series5=series_for_rsi(76.0),
+                         series15=series_for_rsi(76.0))
+        env1["state"] = state
+        d1 = tts.evaluate_code(**env1)["draft"]
+        assert d1["subtype"] == "trim"
+        env2 = self._env(now="10:41", series5=series_for_rsi(85.0),
+                         series15=series_for_rsi(85.0))
+        env2["state"] = state
+        d2 = tts.evaluate_code(**env2)["draft"]
+        assert d2 and d2["subtype"] == "exit" and d2["qty"] == 300
+        assert state.open_t("002015") is None
+
+    def test_no_double_trim_while_hot(self):
+        # 已 trim：RSI 持续 ≥75 不再二次减半（trimmed 标志 + 独立布防）
+        state, _ = self._entered()
+        env1 = self._env(now="10:40", series5=series_for_rsi(76.0),
+                         series15=series_for_rsi(76.0))
+        env1["state"] = state
+        assert tts.evaluate_code(**env1)["draft"]["subtype"] == "trim"
+        for t in ("10:41", "11:20", "13:10"):
+            env = self._env(now=t, series5=series_for_rsi(76.0),
+                            series15=series_for_rsi(76.0))
+            env["state"] = state
+            res = tts.evaluate_code(**env)
+            assert res["draft"] is None
+        assert state.open_t("002015")["qty"] == 300
+
+    def test_stop_and_target_unchanged_by_ladder(self):
+        # 阶梯不碰既有出场语义：
+        # ① up+stop 候选维持"周期×方向门"既有拦截（R49b 基线同判，非 R54 改动面）；
+        # ② up 目标带命中仍一次全清（非减半）。
+        state, _ = self._entered()
+        ot = state.open_t("002015")
+        state.set_open_t("002015", {**ot, "target_band": [13.30, 13.40]})
+        env = self._env(now="10:40", px=12.85, series5=down_series(20, 12.85),
+                        series15=down_series(20, 12.85))
+        env["state"] = state
+        res = tts.evaluate_code(**env)
+        assert res["draft"] is None
+        assert res["suppressed"]["reason"] == "up_regime_no_new_sellT"
+        assert state.open_t("002015")["qty"] == 600    # 在途 T 未被动
+        state2, _ = self._entered()
+        ot2 = state2.open_t("002015")
+        state2.set_open_t("002015", {**ot2, "target_band": [13.30, 13.40]})
+        env2 = self._env(now="11:20", px=13.35, series5=series_for_rsi(76.0),
+                         series15=series_for_rsi(76.0))
+        env2["state"] = state2
+        d = tts.evaluate_code(**env2)["draft"]
+        assert d["subtype"] == "exit" and d["qty"] == 600   # 目标带 → 全清
+
+    def test_sideways_exit_rsi_untouched_full_clear(self):
+        # 回归：横盘 exit_rsi5_min=70 不变——RSI 100 且不在目标带 → 一次全清 600，无 trim
+        env = self._env(now="10:01", regime="sideways", px=13.10)
+        entry = tts.evaluate_code(**env)["draft"]
+        assert entry["subtype"] == "entry"
+        state = env["state"]
+        ot = state.open_t("002015")
+        state.set_open_t("002015", {**ot, "target_band": [14.50, 14.60]})
+        env2 = self._env(now="10:40", regime="sideways", px=13.40,
+                         series5=up_series(20, 13.40), series15=up_series(20, 13.40))
+        env2["state"] = state
+        d = tts.evaluate_code(**env2)["draft"]
+        assert d["subtype"] == "exit" and d["trigger"]["kind"] == "exit_rsi"
+        assert d["qty"] == 600 and state.open_t("002015") is None
+
+
+# ── R54：上升周期买侧分层（≤35 常规 / ≤20 conviction）──────────
+
+class TestUpBuyTier:
+    """边界 35/30/20：buy_tier 标签、conviction 显著标注、横盘无标签回归。"""
+
+    def _env(self, now="10:01", series5=None, series15=None, px=None,
+             code="002015", shares=2000, regime="up", stop=12.90):
+        closes5 = series5 if series5 is not None else down_series(20, 13.10)
+        closes15 = series15 if series15 is not None else closes5
+        px = px if px is not None else closes5[-1]
+        now_dt = datetime.combine(DAY, datetime.strptime(now, "%H:%M").time())
+        n = len(closes5)
+        last_ts = now_dt - timedelta(minutes=1)
+        first_ts = last_ts - timedelta(minutes=5 * (n - 1))
+        bars5 = [{"ts": (first_ts + timedelta(minutes=5 * i)).strftime("%Y-%m-%d %H:%M"),
+                  "close": c, "volume": 1000.0, "amount": c * 100000.0}
+                 for i, c in enumerate(closes5)]
+        bars15 = [{"ts": b["ts"], "close": c, "volume": 1000.0, "amount": c * 100000.0}
+                  for b, c in zip(bars5, closes15)]
+        info = info_with_params(code, regime)
+        if stop is not None:
+            info["params"]["stop"] = stop
+        return {
+            "code": code, "name": "协鑫能科", "regime_info": info,
+            "params": info["params"], "bars5": bars5, "bars15": bars15,
+            "px": px, "px_source": "test", "now": now_dt, "state": tts.SignalState(),
+            "drafts_today": [], "holding": {"code": code, "name": "协鑫能科", "shares": shares},
+            "holdings_updated_at": "2026-11-11 09:00:00",
+        }
+
+    @staticmethod
+    def _rsi(series):
+        return tts.rsi_wilder(series)
+
+    def test_conviction_label_at_and_below_20(self):
+        # RSI 0（深跌）与 19.999 → conviction；显著标注 + 同 T 仓上限
+        for series in (down_series(20, 13.10), series_for_rsi(19.999)):
+            env = self._env(series5=series, series15=series)
+            res = tts.evaluate_code(**env)
+            d = res["draft"]
+            assert d and d["subtype"] == "entry"
+            assert d["buy_tier"] == "conviction"
+            assert d["conviction"] is True and "6-14%" in d["buy_tier_note"]
+            assert d["qty"] == 600                       # 同 1x T 仓上限
+            assert env["state"].open_t("002015")["draft_id"] == d["id"]
+
+    def test_normal_tier_just_above_20(self):
+        env = self._env(series5=series_for_rsi(20.001), series15=series_for_rsi(20.001))
+        d = tts.evaluate_code(**env)["draft"]
+        assert d["buy_tier"] == "normal" and "conviction" not in d
+        assert "buy_tier_note" not in d
+
+    def test_buy_boundary_35_inclusive(self):
+        # 34.999 ≤ 35 → 常规买；(30,35] 新增触发带实证；35.001 > 35 → 无候选
+        for target, fires in ((30.0, True), (34.999, True), (35.001, False)):
+            series = series_for_rsi(target)
+            env = self._env(series5=series, series15=series)
+            res = tts.evaluate_code(**env)
+            assert abs(self._rsi(series) - target) < 1e-6
+            if fires:
+                assert res["draft"]["subtype"] == "entry"
+                assert res["draft"]["buy_tier"] == "normal"
+            else:
+                assert res["draft"] is None and res["suppressed"] is None
+
+    def test_calib_300054_band_buy_tier(self):
+        # 300054 up 买带路径：带内低 RSI → conviction 标签（快慢车道同源草案）
+        series = down_series(20, 60.20)
+        env = self._env(series5=series, series15=series, px=60.20,
+                        code="300054", shares=9000, stop=59.30)
+        d = tts.evaluate_code(**env)["draft"]
+        assert d and d["subtype"] == "entry" and d["trigger"]["kind"] == "buy_band"
+        assert d["buy_tier"] == "conviction" and d["qty"] == 3000
+
+    def test_sideways_buy_has_no_tier_label(self):
+        # 回归：横盘买草案不带 buy_tier（R54 只动上升周期）
+        env = self._env(series5=down_series(20, 13.10), series15=down_series(20, 13.10),
+                        px=13.10, regime="sideways")
+        d = tts.evaluate_code(**env)["draft"]
+        assert d and d["subtype"] == "entry"
+        assert "buy_tier" not in d and "conviction" not in d
 
 
 # ── 节拍端到端（临时目录，零网络零 DB）─────────────────────────

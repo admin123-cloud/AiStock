@@ -318,6 +318,77 @@ class TestFastTriggers:
         d3 = rep3["codes"]["002015"]["draft"]
         assert d3["trigger"]["kind"] == "fast_stop_break" and d3["subtype"] == "stop"
 
+    def test_fast_up_buy_carries_r54_tier_and_settle_spec(self, tmp_path):
+        """R54 快车道 intrabar 同步：300054 up 买带 30→35 后 fast 草案带 buy_tier，
+        收线结算判据 rsi5_max=35.0（快慢车道共用 resolve_params）。"""
+        closes = down_series(120, 60.20)                  # rsi=0 → conviction 档
+        bars5 = minute_bars(closes, END_1000) + [
+            {"ts": "2026-11-11 10:05", "close": 60.20, "volume": 500.0,
+             "amount": 500.0 * 60.2 * 100}]
+        quotes = {"300054": {"price": 60.15, "ts": "2026-11-11 10:03:20"}}
+        holdings = {"holdings": [{"code": "300054", "name": "鼎龙股份", "shares": 9000}],
+                    "updated_at": "2026-11-11 09:00:00", "holding_source": "test"}
+        env = fast_env(tmp_path, {"300054": info_300054_up()},
+                       {"300054": bars5}, {"300054": bars15_neutral(end=60.0)},
+                       quotes, holdings=holdings, sub="r54a")
+        rep = tts.run_fast_tick(now=datetime(2026, 11, 11, 10, 3, 23), **env)
+        d = rep["codes"]["300054"]["draft"]
+        assert d["trigger"]["kind"] == "fast_buy_band"
+        assert d["buy_tier"] == "conviction" and d["conviction"] is True
+        assert d["fast_settle_check"]["rsi5_max"] == 35.0
+        # 结算判据实证：34.999 收线成立、35.001 瓦解（R54 新边界）
+        assert tts._fast_settle_holds(d["fast_settle_check"], 60.15, 34.999, None)[0] is True
+        assert tts._fast_settle_holds(d["fast_settle_check"], 60.15, 35.001, None)[0] is False
+
+    def test_fast_up_buy_normal_tier_between_20_and_35(self, tmp_path):
+        """R54：intrabar RSI 落 (20,35] → normal 档标签（不分层漏标）。
+        15 根闭合 bar 精确构造 RSI=30（7 涨/7 跌），形成中 bar 差分=0 不改 RSI。"""
+        tail = [60.50]
+        for _ in range(7):
+            tail.append(tail[-1] + 0.02)
+        dn = 0.02 / (30.0 / 70.0)
+        for _ in range(7):
+            tail.append(tail[-1] - dn)
+        px = tail[-1]                                      # ≈60.31，带内
+        bars5 = minute_bars(tail, END_1000) + [
+            {"ts": "2026-11-11 10:05", "close": px, "volume": 500.0,
+             "amount": 500.0 * px * 100}]
+        quotes = {"300054": {"price": px, "ts": "2026-11-11 10:03:20"}}
+        holdings = {"holdings": [{"code": "300054", "name": "鼎龙股份", "shares": 9000}],
+                    "updated_at": "2026-11-11 09:00:00", "holding_source": "test"}
+        env = fast_env(tmp_path, {"300054": info_300054_up()},
+                       {"300054": bars5}, {"300054": bars15_neutral(end=60.0)},
+                       quotes, holdings=holdings, sub="r54b")
+        rep = tts.run_fast_tick(now=datetime(2026, 11, 11, 10, 3, 23), **env)
+        d = rep["codes"]["300054"]["draft"]
+        assert d and d["trigger"]["kind"] == "fast_buy_band"
+        assert abs(d["intrabar_rsi5"] - 30.0) < 0.1
+        assert d["buy_tier"] == "normal" and "conviction" not in d
+
+    def test_fast_lane_still_excludes_rsi_class_trim(self, tmp_path):
+        """R54 回归：trim/exit_rsi 仍属 RSI 类 → 不进快车道（R46 语义不动）。
+        open_t 未 trim、RSI=100（≥75 trim 档）、px 不在任何带 → 无 fast 草案。"""
+        now = datetime(2026, 11, 11, 10, 3, 23)
+        closes = up_series(120, 60.90)                    # rsi=100；px 60.90 在买带外
+        bars5 = minute_bars(closes, END_1000) + [
+            {"ts": "2026-11-11 10:05", "close": 60.90, "volume": 500.0,
+             "amount": 500.0 * 60.9 * 100}]
+        quotes = {"300054": {"price": 60.90, "ts": "2026-11-11 10:03:20"}}
+        holdings = {"holdings": [{"code": "300054", "name": "鼎龙股份", "shares": 9000}],
+                    "updated_at": "2026-11-11 09:00:00", "holding_source": "test"}
+        env = fast_env(tmp_path, {"300054": info_300054_up()},
+                       {"300054": bars5}, {"300054": bars15_neutral(end=60.0)},
+                       quotes, holdings=holdings, sub="r54c")
+        root = tts.tracker_dir(env["out_dir"])
+        state = tts.SignalState({})
+        state.set_open_t("300054", {"draft_id": "T_r54", "entry_px": 60.2, "qty": 3000,
+                                    "target_band": [63.2, 64.5], "stop": 59.3,
+                                    "ts": "2026-11-11 09:40:00"})
+        tts.save_state(root, DAY, state)
+        rep = tts.run_fast_tick(now=now, **env)
+        assert rep["codes"]["300054"]["draft"] is None
+        assert "trim" not in tts.FAST_TRIGGER_KINDS and "exit_rsi" not in tts.FAST_TRIGGER_KINDS
+
     def test_fast_precheck_gates_identical(self, tmp_path):
         """预检门与慢车道一致：时段窗外/日 2 次/1/3 整百。"""
         info = info_002015_sideways()
