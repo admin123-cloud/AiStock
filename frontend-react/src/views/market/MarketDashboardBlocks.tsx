@@ -181,7 +181,7 @@ function LimitUpCard({ stats }: { stats: any | null }) {
           {stats?.mode === 'intraday' ? `盘中 ${stats.as_of || ''}` : `收盘 ${stats?.date || ''}`}
         </div>
       </div>
-      {stats?.error || (stats && typeof stats.limit_up_count !== 'number') ? (
+      {!stats || stats.error || typeof stats.limit_up_count !== 'number' ? (
         <EmptyState className="py-8" text="涨停生态数据不可用" />
       ) : (
         <>
