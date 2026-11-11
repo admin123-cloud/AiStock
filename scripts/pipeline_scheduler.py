@@ -50,7 +50,7 @@
 """
 from __future__ import annotations
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 import argparse
 import json
@@ -85,6 +85,17 @@ INTRADAY_WINDOW_START = dt_time(9, 35)
 INTRADAY_WINDOW_END = dt_time(15, 5)
 # 连续失败 ≥3 轮置 alarm（任务书：失败退避重试，连续失败告警字段）
 INTRADAY_ALARM_THRESHOLD = 3
+
+# R55（2026-11-11）：涨停生态聚合（市场看板三件套③）——
+#   intraday 追加：快照采集成功后同节拍 subprocess market_mood_update.py
+#     --intraday（realtime 键，独立异常面：mood 失败不计入快照失败）；
+#   finalize：工作日 16:40（盘后 16:15 管道后）subprocess --finalize
+#     （final 键=kline_daily 收盘封板终算，覆盖盘中值；窗口 16:30~23:50 兜迟到）。
+MARKET_MOOD_SCRIPT = "market_mood_update.py"
+MARKET_MOOD_FINALIZE_JOB_ID = "market_mood_finalize"
+MARKET_MOOD_FINALIZE_CRON_TIME = dt_time(16, 40)
+MARKET_MOOD_FINALIZE_WINDOW_START = dt_time(16, 30)
+MARKET_MOOD_FINALIZE_WINDOW_END = dt_time(23, 50)
 
 # R37（2026-11-10）：L1 半自动做T三任务（产物 runtime/t_tracker，零交易零 formal 写）。
 TTRACKER_REGIME_JOB_ID = "t_trade_regime"        # 工作日 09:25 盘前周期判定
@@ -578,7 +589,11 @@ def run_intraday_snapshot_beat(
         state["last_success_ts"] = datetime.now(BEIJING_TZ).isoformat()
         state["last_failure_reason"] = None
         status = "success"
+        # R55：快照采集成功后追加涨停生态聚合（独立异常面：mood 失败不拖垮
+        # 快照 success 状态，只记录 mood_rc）
+        mood_rc = _run_market_mood_intraday(run, log)
     else:
+        mood_rc = None
         state["consecutive_failures"] += 1
         state["alarm"] = state["consecutive_failures"] >= INTRADAY_ALARM_THRESHOLD
         state["last_failure_ts"] = datetime.now(BEIJING_TZ).isoformat()
@@ -597,9 +612,30 @@ def run_intraday_snapshot_beat(
         **base,
         "status": status,
         "rc": rc,
+        "mood_rc": mood_rc,
         "consecutive_failures": state["consecutive_failures"],
         "alarm": state["alarm"],
     }
+
+
+def _run_market_mood_intraday(
+    runner: Callable[[Sequence[str]], Mapping[str, Any]],
+    log: logging.Logger,
+) -> Optional[int]:
+    """R55：盘中涨停生态聚合追加计算（subprocess，独立异常面）。"""
+    cmd = [sys.executable, str(SCRIPTS_DIR / MARKET_MOOD_SCRIPT), "--intraday"]
+    try:
+        result = runner(cmd) or {}
+        try:
+            mood_rc = int(result.get("returncode", -1))
+        except (TypeError, ValueError):
+            mood_rc = -1
+        if mood_rc != 0:
+            log.warning("[intraday] market_mood 追加计算 rc=%s（不影响快照状态）", mood_rc)
+        return mood_rc
+    except Exception as exc:  # noqa: BLE001 - mood 独立异常面
+        log.warning("[intraday] market_mood 追加计算异常：%s", exc)
+        return None
 
 
 def build_intraday_cron_trigger():
@@ -623,12 +659,104 @@ def register_intraday_job(scheduler, job_func: Optional[Callable[[], Any]] = Non
         job_func,
         trigger=build_intraday_cron_trigger(),
         id=INTRADAY_JOB_ID,
-        name="盘中东财实时快照采集（R28，09:35~15:05 每 5min）",
+        name="盘中东财实时快照采集（R28，09:35~15:05 每 5min；R55 尾挂涨停生态聚合）",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
     )
     return scheduler.get_job(INTRADAY_JOB_ID)
+
+
+# ---------------------------------------------------------------------------
+# R55（2026-11-11）：涨停生态 finalize（盘后日线终算）
+# ---------------------------------------------------------------------------
+
+def in_market_mood_finalize_window(now_bj: datetime) -> bool:
+    """窗口守卫：16:30 ≤ 北京钟 ≤ 23:50（cron 16:40 单发，窗口兜迟到重放）。"""
+    current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
+    return MARKET_MOOD_FINALIZE_WINDOW_START <= current <= MARKET_MOOD_FINALIZE_WINDOW_END
+
+
+def run_market_mood_finalize_beat(
+    *,
+    mode: str = "scheduled",
+    out_root: Optional[Path] = None,
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """R55 涨停生态终算节拍：窗口/交易日守卫 → subprocess --finalize。
+
+    status: success | failure | no_op_window | no_op_non_trading | failure_calendar。
+    幂等：finalize 重算同日 final 键（读侧取最新），重复跑无副作用。
+    """
+    log = logger_ or logger
+    now_bj = cn_now(now_fn)
+    base = {
+        "schema": "market_mood_finalize_beat/1",
+        "mode": mode,
+        "beat_at_beijing": now_bj.isoformat(),
+    }
+
+    if not in_market_mood_finalize_window(now_bj):
+        log.info("[market_mood] 终算窗口外（%s 北京），跳过", now_bj.strftime("%H:%M"))
+        return {**base, "status": "no_op_window"}
+
+    check = is_trading_day or _default_is_trading_day
+    try:
+        trading = bool(check(now_bj.date()))
+    except Exception as exc:  # noqa: BLE001
+        log.error("[market_mood] 交易日判断失败：%s", exc)
+        return {**base, "status": "failure_calendar", "error": str(exc)}
+    if not trading:
+        return {**base, "status": "no_op_non_trading"}
+
+    run = runner or _default_runner
+    cmd = [
+        sys.executable, str(SCRIPTS_DIR / MARKET_MOOD_SCRIPT),
+        "--finalize", "--date", now_bj.date().isoformat(),
+    ]
+    try:
+        result = run(cmd) or {}
+        rc = int(result.get("returncode", -1))
+    except Exception as exc:  # noqa: BLE001
+        log.error("[market_mood] 终算执行异常：%s", exc)
+        return {**base, "status": "failure", "error": str(exc)}
+    if rc != 0:
+        log.error("[market_mood] 终算失败 rc=%s", rc)
+        return {**base, "status": "failure", "rc": rc}
+    log.info("[market_mood] 终算完成 rc=0")
+    return {**base, "status": "success", "rc": rc}
+
+
+def build_market_mood_finalize_trigger():
+    """交易日面 cron：mon-fri 16:40 单发（窗口由节拍函数收口）。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    return CronTrigger(
+        day_of_week=CRON_DAY_OF_WEEK,
+        hour=MARKET_MOOD_FINALIZE_CRON_TIME.hour,
+        minute=MARKET_MOOD_FINALIZE_CRON_TIME.minute,
+        timezone=BEIJING_TZ,
+    )
+
+
+def register_market_mood_finalize_job(scheduler, job_func: Optional[Callable[[], Any]] = None):
+    """向 scheduler 注册涨停生态终算 cron 任务；返回该 job。"""
+    if job_func is None:
+        def job_func() -> dict:  # type: ignore[misc]
+            return run_market_mood_finalize_beat(mode="scheduled")
+    scheduler.add_job(
+        job_func,
+        trigger=build_market_mood_finalize_trigger(),
+        id=MARKET_MOOD_FINALIZE_JOB_ID,
+        name="涨停生态终算（R55，工作日 16:40，kline_daily 收盘封板）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler.get_job(MARKET_MOOD_FINALIZE_JOB_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -1066,6 +1194,7 @@ def serve(
     register_intraday_job(scheduler)
     register_t_tracker_jobs(scheduler)
     register_holding_tick_alert_job(scheduler)
+    register_market_mood_finalize_job(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -1112,6 +1241,16 @@ def serve(
         "Asia/Shanghai",
         HOLDING_TICK_ALERT_WINDOW_START.strftime("%H:%M"), HOLDING_TICK_ALERT_WINDOW_END.strftime("%H:%M"),
         holding_next.isoformat() if holding_next else "pending",
+    )
+    mood_job = scheduler.get_job(MARKET_MOOD_FINALIZE_JOB_ID)
+    mood_next = getattr(mood_job, "next_run_time", None) if mood_job else None
+    logger.info(
+        "调度注册：R55 %s cron=[day_of_week=%s %s %s] 窗口=%s~%s（涨停生态终算）next_run=%s",
+        MARKET_MOOD_FINALIZE_JOB_ID, CRON_DAY_OF_WEEK,
+        MARKET_MOOD_FINALIZE_CRON_TIME.strftime("%H:%M"), "Asia/Shanghai",
+        MARKET_MOOD_FINALIZE_WINDOW_START.strftime("%H:%M"),
+        MARKET_MOOD_FINALIZE_WINDOW_END.strftime("%H:%M"),
+        mood_next.isoformat() if mood_next else "pending",
     )
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown

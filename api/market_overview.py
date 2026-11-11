@@ -2311,6 +2311,34 @@ def _compute_limit_up_ladder(
 _EMOTION_TREND_MAX_DAYS = 250
 
 
+# R55（2026-11-11）：市场看板 P0 三件套——市场宽度 / 涨跌分布直方图 / 涨停生态。
+# 全部零新外部接口：宽度与分布=kline_daily 聚合，盘中分布/涨停生态附加 R28
+# 东财快照；涨停生态读 runtime/market_mood（盘中任务追加计算 + 盘后终算）。
+# 同步 def（R44 教训：零 await 的 GET handler 不得 async def 阻塞事件循环）。
+@router.get("/breadth")
+def get_market_breadth(date: Optional[str] = None):
+    """市场宽度：MA5/20/60 站上占比 + 60日新高/新低 + 高低比（历史任一日可查）。"""
+    from services.market_breadth import market_breadth
+
+    return market_breadth(date)
+
+
+@router.get("/advance-decline-distribution")
+def get_advance_decline_distribution(date: Optional[str] = None):
+    """涨跌分布直方图：13 分桶 + 平均/中位（盘中快照 / 盘后日线双模式）。"""
+    from services.market_breadth import advance_decline_distribution
+
+    return advance_decline_distribution(date)
+
+
+@router.get("/limit-up-stats")
+def get_limit_up_stats(date: Optional[str] = None):
+    """涨停生态聚合：涨停/跌停数、封板率、炸板数、最高连板、梯队表。"""
+    from services.market_mood import limit_up_stats
+
+    return limit_up_stats(date)
+
+
 @router.get("/emotion-trend")
 def get_emotion_trend(days: int = 30, granularity: str = "daily"):
     """获取情绪周期趋势数据。

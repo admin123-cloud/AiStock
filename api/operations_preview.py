@@ -103,6 +103,10 @@ def health_check():
 # 写端点 2 条 POST（holding-t/watchlist-upsert、holding-t/watchlist-sync-ths）——
 # 只写 holding_tick_watchlist.json（原子+备份，AST 守卫），见下方
 # _SCOPED_WRITE_PREVIEW_PATHS；其余一切 POST/PUT/DELETE 仍封禁。
+# R55（2026-11-11，任务书 20261111_market_breadth_r55.md）：市场看板 P0 三件套
+# 3 条只读 GET（market/breadth、market/advance-decline-distribution、
+# market/limit-up-stats）入列：153 → 156 条（GET 只读：kline_daily/快照聚合 +
+# runtime/market_mood JSON 读；零写零外呼）。
 _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/backtest/progress/{task_id}',
     '/api/backtest/result/{task_id}',
@@ -183,10 +187,13 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/kline-check/repair-results/{task_id}',
     '/api/kline-check/results-all/{task_id}',
     '/api/kline-check/results/{task_id}',
+    '/api/market/advance-decline-distribution',
+    '/api/market/breadth',
     '/api/market/emotion-trend',
     '/api/market/indices',
     '/api/market/indices-legacy',
     '/api/market/limit-up-ladder',
+    '/api/market/limit-up-stats',
     '/api/market/margin-sentiment',
     '/api/market/sentiment',
     '/api/market/sentiment-legacy',

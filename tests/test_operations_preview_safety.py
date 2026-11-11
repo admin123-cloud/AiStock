@@ -124,8 +124,11 @@ _PROJECT_NAMESPACES = ('api', 'services', 'strategies', 'utils')
 # 唯一放行写端点 2 条 POST（holding-t/watchlist-upsert、holding-t/watchlist-sync-ths，
 # 只写 holding_tick_watchlist.json 原子+备份；AST 守卫 tests/test_r45_holding_t_watchlist.py）：
 # 151 → 153 路径。
-# 完整 (METHOD, path) 矩阵：151 条 GET 路径各自的 GET 与 HEAD 共 302 对 + 2 条 scoped-write
-# POST 共 304 对，一个不多、一个不少；任何 OPTIONS、其他方法、未识别路由类型或额外路径都是
+# R55（2026-11-11，任务书 20261111_market_breadth_r55.md）：市场看板三件套 3 条只读
+# GET（market/breadth、market/advance-decline-distribution、market/limit-up-stats）：
+# 153 → 156 路径。
+# 完整 (METHOD, path) 矩阵：154 条 GET 路径各自的 GET 与 HEAD 共 308 对 + 2 条 scoped-write
+# POST 共 310 对，一个不多、一个不少；任何 OPTIONS、其他方法、未识别路由类型或额外路径都是
 # 违规。路径模板取自各 router 文件的实际装饰器（含 /api/stocks/ 尾斜杠与参数名）。
 ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('GET', '/api/backtest/progress/{task_id}'),
@@ -211,10 +214,13 @@ ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('GET', '/api/kline-check/repair-results/{task_id}'),
     ('GET', '/api/kline-check/results-all/{task_id}'),
     ('GET', '/api/kline-check/results/{task_id}'),
+    ('GET', '/api/market/advance-decline-distribution'),
+    ('GET', '/api/market/breadth'),
     ('GET', '/api/market/emotion-trend'),
     ('GET', '/api/market/indices'),
     ('GET', '/api/market/indices-legacy'),
     ('GET', '/api/market/limit-up-ladder'),
+    ('GET', '/api/market/limit-up-stats'),
     ('GET', '/api/market/margin-sentiment'),
     ('GET', '/api/market/sentiment'),
     ('GET', '/api/market/sentiment-legacy'),
@@ -359,10 +365,13 @@ ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('HEAD', '/api/kline-check/repair-results/{task_id}'),
     ('HEAD', '/api/kline-check/results-all/{task_id}'),
     ('HEAD', '/api/kline-check/results/{task_id}'),
+    ('HEAD', '/api/market/advance-decline-distribution'),
+    ('HEAD', '/api/market/breadth'),
     ('HEAD', '/api/market/emotion-trend'),
     ('HEAD', '/api/market/indices'),
     ('HEAD', '/api/market/indices-legacy'),
     ('HEAD', '/api/market/limit-up-ladder'),
+    ('HEAD', '/api/market/limit-up-stats'),
     ('HEAD', '/api/market/margin-sentiment'),
     ('HEAD', '/api/market/sentiment'),
     ('HEAD', '/api/market/sentiment-legacy'),
@@ -910,7 +919,7 @@ def test_business_http_routes_exactly_match_allowlist(tmp_path, monkeypatch):
         f'缺失 (method, path): {missing}\n'
         '注：OPTIONS 与任何未识别路由类型都不得从矩阵中滤掉；当前 '
         'api.operations_preview 按 R30 全站只读面挂载 12 router 并后置过滤为 '
-        '151 GET 路径 × {GET, HEAD} + R45 scoped-write 2 条 POST（路径+方法双重白名单； '
+        '154 GET 路径 × {GET, HEAD} + R45 scoped-write 2 条 POST（路径+方法双重白名单； '
         '仍封 3 条 sync-ths GET + 全部其余 POST/PUT/DELETE）。'
     )
 

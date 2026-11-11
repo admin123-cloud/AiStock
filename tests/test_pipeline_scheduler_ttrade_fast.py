@@ -133,4 +133,5 @@ class TestFastJobRegistration:
         assert ps.in_t_tracker_fast_window(nxt2) is True
 
     def test_scheduler_version_bumped(self):
-        assert ps.__version__ == "1.4.0"
+        # R46 快车道 1.4.0 → R55 涨停生态 1.5.0（2026-11-11）
+        assert ps.__version__ == "1.5.0"

@@ -658,6 +658,33 @@ def load_t_pool(*, watchlist_store: Optional[Path] = None) -> dict[str, Any]:
 # 09:25 周期判定任务
 # ---------------------------------------------------------------------------
 
+def _regime_breadth_annotation(
+    codes: dict,
+    breadth_loader: Optional[Callable[[], Optional[dict]]],
+    log: logging.Logger,
+) -> dict:
+    """R55（2026-11-11）：regime json 增 breadth 水位确认因子（观察期）。
+
+    只标注 divergence 提示，不改判定式；宽度不可用/计算失败 → status=
+    unavailable（fail-closed，绝不阻断周期判定本身）。
+    """
+    unavailable = {"status": "unavailable",
+                   "note": "宽度不可用（fail-closed），未标注；观察期，不改判定式"}
+    try:
+        from services.market_breadth import breadth_water_annotation, market_breadth
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[regime] breadth 模块不可用：%s", exc)
+        return unavailable
+    loader = breadth_loader or market_breadth
+    try:
+        breadth = loader() or None
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[regime] breadth 计算失败：%s", exc)
+        breadth = None
+    regimes = {code: str(info.get("regime") or "") for code, info in codes.items()}
+    return breadth_water_annotation(breadth, regimes)
+
+
 def run_regime(
     *,
     for_date: date,
@@ -665,6 +692,7 @@ def run_regime(
     out_dir: Optional[Path] = None,
     holdings_loader: Optional[Callable[[], dict]] = None,
     daily_bars_loader: Optional[Callable[[str, date], list[dict]]] = None,
+    breadth_loader: Optional[Callable[[], Optional[dict]]] = None,
     log: Optional[logging.Logger] = None,
 ) -> dict:
     """盘前周期判定：T-1 日线 → regime_<date>.json（含解析后的触发参数）。"""
@@ -695,7 +723,9 @@ def run_regime(
             log.error("[regime] %s 判定失败：%s", code, errors[code])
     if not codes and errors:
         return {"schema": SCHEMA_REGIME, "date": for_date.isoformat(),
-                "status": "failure", "errors": errors}
+                "status": "failure", "errors": errors,
+                # R55：失败路径同样带 breadth 键（schema 稳定；fail-safe）
+                "breadth": _regime_breadth_annotation({}, breadth_loader, log)}
     payload = {
         "schema": SCHEMA_REGIME, "version": __version__,
         "date": for_date.isoformat(), "generated_at": fmt_ts(now),
@@ -705,6 +735,8 @@ def run_regime(
                  "holding_source": pool.get("holding_source"), "path": pool.get("path")},
         "codes": codes, "errors": errors,
     }
+    # R55：breadth 水位确认因子（观察期，只标注 divergence 不改判定式；fail-safe）
+    payload["breadth"] = _regime_breadth_annotation(codes, breadth_loader, log)
     _atomic_write_json(regime_file_path(root, for_date), payload)
     log.info("[regime] %s 完成：%s", for_date,
              {c: v["regime"] for c, v in codes.items()})

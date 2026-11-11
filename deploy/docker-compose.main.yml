@@ -49,6 +49,9 @@ services:
       # R40：只读嵌套挂载真实 runtime/t_tracker（影子做T台账 shadow/ 所在；
       # holding-t/shadow-review 纯读该目录，无回写，只读挂载零回归风险）
       - F:/Aistock/data/data/runtime/t_tracker:/aistock/data/runtime/t_tracker:ro
+      # R55：只读嵌套挂载真实 runtime/market_mood（涨停生态聚合 JSON 所在；
+      # market/limit-up-stats 纯读该目录，无回写；写方=pipeline-runner 容器）
+      - F:/Aistock/data/data/runtime/market_mood:/aistock/data/runtime/market_mood:ro
       - observation_logs:/aistock/logs
       - observation_reports:/aistock/reports
       - observation_artifacts:/aistock/artifacts
