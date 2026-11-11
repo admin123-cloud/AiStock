@@ -459,6 +459,61 @@ def should_attempt_account(*, full_state: Mapping[str, Any],
     return isinstance(accounts, Mapping) and isinstance(accounts.get(account), dict)
 
 
+def iter_account_states(full_state: Mapping[str, Any]) -> list[tuple[str, dict]]:
+    """[(account, slice)]，acct1 在前（顶层镜像权威），其余按 accounts 键序。
+    仅返回有 holdings 列表的账号切片。"""
+    out: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+    acct1 = extract_account_state(full_state, "acct1")
+    if isinstance(acct1.get("holdings"), list):
+        out.append(("acct1", acct1))
+        seen.add("acct1")
+    accounts = full_state.get(ACCOUNTS_KEY) if isinstance(full_state, Mapping) else None
+    if isinstance(accounts, Mapping):
+        for account in sorted(accounts):
+            if account in seen:
+                continue
+            slice_ = extract_account_state(full_state, account)
+            if isinstance(slice_.get("holdings"), list):
+                out.append((account, slice_))
+    return out
+
+
+def union_holdings(full_state: Mapping[str, Any]) -> list[dict]:
+    """多账号持仓并集（引擎票池/观察名单合并共用口径）。
+
+    每码一行：shares=各账号之和（仅>0），name 取首个非空；附 account_detail
+    {acct: shares} 与 accounts 持有账号列表。legacy 单账号=原行透传（加默认
+    account_detail）。"""
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for account, slice_ in iter_account_states(full_state):
+        for row in slice_.get("holdings") or []:
+            if not isinstance(row, Mapping):
+                continue
+            code = str(row.get("code") or "").strip()
+            shares = int(row.get("shares") or 0)
+            if not code or shares <= 0:
+                continue
+            if code not in merged:
+                merged[code] = {
+                    "code": code, "name": str(row.get("name") or "").strip(),
+                    "shares": 0, "account_detail": {},
+                    "current_price": row.get("current_price"),
+                    "cost_price": row.get("cost_price"),
+                }
+                order.append(code)
+            entry = merged[code]
+            entry["shares"] += shares
+            entry["account_detail"][account] = shares
+            if not entry["name"] and row.get("name"):
+                entry["name"] = str(row["name"]).strip()
+    for code in order:
+        entry = merged[code]
+        entry["accounts"] = sorted(entry["account_detail"])
+    return [merged[c] for c in order]
+
+
 def _backup(state_file: Path, now: datetime) -> Path:
     bak = state_file.with_name(
         "{}.bak_r38c_{}".format(state_file.name, now.strftime("%Y%m%d_%H%M%S")))

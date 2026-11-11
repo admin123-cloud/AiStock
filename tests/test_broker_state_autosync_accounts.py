@@ -209,3 +209,44 @@ def test_acct1_always_attempted(tmp_path):
         full_state=json.loads(state_file.read_text(encoding="utf-8")),
         fills_file=tmp_path / f"{STAMP}.json", account="acct1")
     assert decision is True
+
+
+# ── 持仓并集（票池/观察名单共用口径）───────────────────────────
+
+def test_union_holdings_legacy_passthrough():
+    rows = bsa.union_holdings(LEGACY_STATE)
+    codes = [r["code"] for r in rows]
+    assert codes == ["002015"]
+    assert rows[0]["shares"] == 4000
+    assert rows[0]["account_detail"] == {"acct1": 4000}
+    assert rows[0]["accounts"] == ["acct1"]
+
+
+def test_union_holdings_dual_account_same_code():
+    full = {
+        "holdings": [{"code": "002015", "name": "协鑫能科", "shares": 4000}],
+        "accounts": {
+            "acct1": {"holdings": [{"code": "002015", "name": "协鑫能科", "shares": 4000}]},
+            "acct2": {"holdings": [
+                {"code": "002015", "name": "协鑫能科", "shares": 1000},
+                {"code": "603881", "name": "数据港", "shares": 3000},
+            ]},
+        },
+    }
+    rows = bsa.union_holdings(full)
+    by_code = {r["code"]: r for r in rows}
+    assert by_code["002015"]["shares"] == 5000  # 同码两账号分别计
+    assert by_code["002015"]["account_detail"] == {"acct1": 4000, "acct2": 1000}
+    assert by_code["603881"]["shares"] == 3000  # 603881 qty 来自 acct2
+    assert by_code["603881"]["account_detail"] == {"acct2": 3000}
+
+
+def test_union_holdings_skips_zero_and_bad_rows():
+    full = {
+        "holdings": [{"code": "002015", "shares": 0},
+                     {"code": "", "shares": 100},
+                     {"shares": 100}],
+        "accounts": {},
+    }
+    rows = bsa.union_holdings(full)
+    assert rows == []  # 零股/空码/坏行不进并集
