@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
                  "home_account": registry.home_account()}
     try:
         from services.ths_account_bridge import enumerate_trade_panels
-        live = enumerate_trade_panels()
+        live = enumerate_trade_panels(include_minimized=True)
         resolved = registry.resolve(live)
         out["live_panels"] = live
         out["resolution"] = {

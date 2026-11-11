@@ -578,7 +578,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         from services.ths_account_bridge import enumerate_trade_panels
-        live_panels = enumerate_trade_panels()
+        # include_minimized：15:05 面板常最小化——解析须见窗（导出既有语义
+        # 会恢复→导出→复最小化），否则 acct2 永远 panel_absent。
+        live_panels = enumerate_trade_panels(include_minimized=True)
     except Exception:  # 非 host/无窗口环境 → 空面板表，acct1 走默认 connect
         live_panels = []
     plan = build_capture_plan(live_panels, load_panel_registry(),

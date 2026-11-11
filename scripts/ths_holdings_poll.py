@@ -50,7 +50,9 @@ def _build_plan(account_filter: Optional[str]) -> dict[str, dict[str, Any]]:
 
     try:
         from services.ths_account_bridge import enumerate_trade_panels
-        live_panels = enumerate_trade_panels()
+        # include_minimized：最小化面板也入解析（capture 仍 skipped_minimized
+        # 让位零交互铁律；状态可辨 panel vs absent）
+        live_panels = enumerate_trade_panels(include_minimized=True)
     except Exception:  # 非 host 环境 → 空面板表
         live_panels = []
     return build_hotswitch_plan(load_panel_registry(), live_panels,

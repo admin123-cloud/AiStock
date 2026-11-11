@@ -317,6 +317,23 @@ def test_registry_legacy_rules_unaffected(tmp_path):
     assert resolved.hotswitch_groups == {}
 
 
+def test_minimized_panel_resolves_for_hotswitch(tmp_path):
+    """最小化面板（rect=-32000 哨兵）：默认枚举滤除；include_minimized=True
+    时可解析（fills 导出/绑定需见窗，巡读 capture 仍 skipped_minimized）。"""
+    minimized = {"pid": 101, "process": "xiadan.exe",
+                 "title": "网上股票交易系统5.0", "hwnd": "0x1", "iconic": True,
+                 "rect": [-32000, -32000, -31100, -31850]}
+    assert bridge.filter_trade_panels([minimized]) == []
+    assert [p["pid"] for p in
+            bridge.filter_trade_panels([minimized], include_minimized=True)] == [101]
+    reg = _bind_registry(tmp_path)
+    resolved = reg.resolve([minimized])
+    # R49 实况：午后面板常最小化——热切换组仍应解析到同一物理窗口
+    assert resolved.by_account["acct1"]["pid"] == 101
+    assert resolved.by_account["acct2"]["pid"] == 101
+    assert resolved.hotswitch_groups == {101: ["acct1", "acct2"]}
+
+
 def test_plan_builder_orders_home_first_with_restore_on_last():
     from scripts.ths_holdings_poll import build_hotswitch_plan
 

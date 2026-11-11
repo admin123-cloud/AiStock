@@ -1174,15 +1174,25 @@ def _panel_lock_name(panel: str | None) -> str:
 HOTSWITCH_LOCK_NAME = "ths_window.lock"
 
 
-def filter_trade_panels(panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def filter_trade_panels(panels: list[dict[str, Any]],
+                        include_minimized: bool = False) -> list[dict[str, Any]]:
     """候选窗口 → 交易面板：标题含交易系统令牌（进程名不限，第二券商面板
-    进程名可能不同；GPU/辅助进程无交易标题自然被滤掉）。"""
+    进程名可能不同；GPU/辅助进程无交易标题自然被滤掉）。
+
+    include_minimized=True：保留最小化窗口（rect 为 -32000 哨兵值不可用作
+    尺寸判定）——仅供面板解析（fills 导出会按既有语义恢复/复最小化）；
+    巡读 capture 对最小化面板仍 skipped_minimized（零交互铁律不变）。"""
     out: list[dict[str, Any]] = []
     for p in panels or []:
         title = str(p.get("title") or "")
         if not title:
             continue
         if not any(tok in title for tok in TRADE_WINDOW_TITLE_TOKENS):
+            continue
+        if p.get("iconic"):
+            if not include_minimized:
+                continue
+            out.append(dict(p))
             continue
         rect = p.get("rect") or [0, 0, 0, 0]
         try:
@@ -1196,7 +1206,7 @@ def filter_trade_panels(panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def enumerate_trade_panels() -> list[dict[str, Any]]:
+def enumerate_trade_panels(include_minimized: bool = False) -> list[dict[str, Any]]:
     """真机枚举（只读 EnumWindows，零点击）：全部带标题可见顶层窗口 → 过滤。"""
     import ctypes
     from ctypes import wintypes
@@ -1206,7 +1216,10 @@ def enumerate_trade_panels() -> list[dict[str, Any]]:
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def _cb(hwnd: int, _lparam: int) -> bool:
-        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        iconic = bool(user32.IsIconic(hwnd))
+        if iconic and not include_minimized:
             return True
         n = user32.GetWindowTextLengthW(hwnd)
         if n <= 0:
@@ -1222,6 +1235,7 @@ def enumerate_trade_panels() -> list[dict[str, Any]]:
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         raw.append({
             "hwnd": hex(hwnd), "pid": pid.value, "title": title,
+            "iconic": iconic,
             "rect": [rect.left, rect.top, rect.right, rect.bottom],
         })
         return True

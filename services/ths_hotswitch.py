@@ -93,6 +93,20 @@ def _switch_and_verify(window: Any, hotkey: str, expect_hint: str) -> dict[str, 
 # 状态机（ensure / restore；返回 None=通过，dict=终态结果）
 # --------------------------------------------------------------------------- #
 
+def _ensure_restored(window: Any) -> None:
+    """最小化窗口先恢复（PrintWindow 对 iconic 窗口渲染空白）。
+
+    仅 fills 导出路径会带最小化窗到达此处（巡读 capture 在此之前已
+    skipped_minimized 让位零交互铁律）；复最小化由调用方按 was_minimized
+    既有语义处理。"""
+    try:
+        if bool(window.is_minimized()):
+            window.restore()
+            time.sleep(0.3)
+    except Exception:  # noqa: BLE001 - 假窗/已销毁：交给后续身份读取失败兜底
+        pass
+
+
 def ensure_target_account(window: Any, cfg: dict[str, Any]) -> Optional[dict[str, Any]]:
     """确保面板显示目标账号；不在则热切换并自证。
 
@@ -100,6 +114,7 @@ def ensure_target_account(window: Any, cfg: dict[str, Any]) -> Optional[dict[str
     返回 None=已在目标/切换自证通过；dict=fail-closed 终态
     （identity_mismatch / switch_failed），调用方原样上报、零采集。
     """
+    _ensure_restored(window)
     label, png = read_window_identity(window)
     target = str(cfg.get("target_hint") or "")
     if target and target in label:
@@ -125,6 +140,7 @@ def restore_home_account(window: Any, cfg: dict[str, Any]) -> Optional[dict[str,
         return {"status": STATUS_SWITCHBACK_FAILED, "reason": "home_no_hotkey",
                 "note": "常态位账号未绑定热键，无法切回（保留现场）"}
     try:
+        _ensure_restored(window)
         label, _png = read_window_identity(window)
         if home in label:
             return None
