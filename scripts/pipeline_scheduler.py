@@ -19,7 +19,12 @@
      评估（services/t_trade_shadow.py，独立异常面，失败不影响真节拍），产物
      runtime/t_tracker/shadow/，绝不进 pending_push；t_trade_shadow_finalize
      工作日 15:16 日终固化 + 4 周滚动统计。零交易零 formal 表写不变；
-  5. R42（2026-11-10）：QMT Tick 可用性告警任务 holding_tick_qmt_alert——
+  5. R46（2026-11-11）：做T 1 分钟快车道 t_trade_signal_fast——东财 ulist 实时价
+     + 5m 末根实时刷新重估 intrabar（R34 价带类触发），fast 草案 bar_status=open，
+     慢车道收线复核升级 confirmed_bar / 瓦解 expired_unconfirmed；交易日 09:31~
+     14:59 每分钟（cron 秒错峰 23s），票池=broker_state ∪ watchlist；影子同步
+     快车道（--fast-tick 内嵌，独立异常面）。零交易零 formal 写不变；
+  6. R42（2026-11-10）：QMT Tick 可用性告警任务 holding_tick_qmt_alert——
      GET /gen3-state-alpha/holding-tick-analysis 净化为纯读后，SMTP 告警外呼
      与告警状态写的通知通道。subprocess 调 scripts/holding_tick_qmt_alert.py
      --once；cron 工作日 09:00~15:50 每 10min，窗口守卫收口 09:25~15:10，
@@ -45,7 +50,7 @@
 """
 from __future__ import annotations
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 import argparse
 import json
@@ -89,6 +94,15 @@ TTRACKER_SCRIPT = "t_trade_tracker.py"
 TTRACKER_BROKER_SYNC_JOB_ID = "broker_state_sync"   # 工作日 15:15 fills→broker_state（R38c）
 TTRACKER_BROKER_SYNC_SCRIPT = "broker_state_sync.py"
 TTRACKER_SHADOW_FINALIZE_JOB_ID = "t_trade_shadow_finalize"  # 工作日 15:16 影子做T日终固化（R40）
+# R46（2026-11-11）：做T 1 分钟快车道——交易日 09:31~14:59 每分钟（cron 触发面
+# 09:00~14:59，窗口守卫收口）；秒级错峰 23s（快照=分*/5 秒0、慢 beat=分1-56/5 秒0、
+# PM watcher=分偶数 2min），与快照/慢 beat 均衡不撞线。
+TTRACKER_FAST_JOB_ID = "t_trade_signal_fast"
+TTRACKER_FAST_CRON_HOURS = "9-14"
+TTRACKER_FAST_CRON_MINUTE = "*"
+TTRACKER_FAST_CRON_SECOND = 23
+TTRACKER_FAST_WINDOW_START = dt_time(9, 31)
+TTRACKER_FAST_WINDOW_END = dt_time(14, 59)
 
 # R42（2026-11-10，任务书 20261110_purify_holding_tick_analysis_r42.md）：
 # QMT Tick 可用性告警任务——GET /gen3-state-alpha/holding-tick-analysis 净化为纯读后，
@@ -627,6 +641,12 @@ def in_t_tracker_beat_window(now_bj: datetime) -> bool:
     return TTRACKER_BEAT_WINDOW_START <= current <= TTRACKER_BEAT_WINDOW_END
 
 
+def in_t_tracker_fast_window(now_bj: datetime) -> bool:
+    """R46 快车道窗口守卫：09:31 ≤ 北京钟 ≤ 14:59（cron 触发面 09:00~14:59 由它收口）。"""
+    current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
+    return TTRACKER_FAST_WINDOW_START <= current <= TTRACKER_FAST_WINDOW_END
+
+
 def _run_t_tracker_step(
     step: str,
     cli_flag: str,
@@ -692,6 +712,21 @@ def run_t_tracker_beat(
         "beat", "--beat", mode=mode, now_bj=cn_now(now_fn),
         is_trading_day=is_trading_day, runner=runner,
         window_guard=in_t_tracker_beat_window, logger_=logger_,
+    )
+
+
+def run_t_tracker_fast_tick(
+    *, mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """R46 快车道 1 分钟拍：实时价 intrabar 重估 → fast 草案（价带类触发）。"""
+    return _run_t_tracker_step(
+        "fast_tick", "--fast-tick", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner,
+        window_guard=in_t_tracker_fast_window, logger_=logger_,
     )
 
 
@@ -778,6 +813,20 @@ def build_t_tracker_beat_cron_trigger():
     )
 
 
+def build_t_tracker_fast_cron_trigger():
+    """R46 快车道 cron：mon-fri 09:00~14:59 每分钟，秒错峰 23s（窗口函数再收口
+    09:31~14:59；秒 23 与快照（分*/5 秒0）/慢 beat（分1-56/5 秒0）不撞线）。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    return CronTrigger(
+        day_of_week=CRON_DAY_OF_WEEK,
+        hour=TTRACKER_FAST_CRON_HOURS,
+        minute=TTRACKER_FAST_CRON_MINUTE,
+        second=TTRACKER_FAST_CRON_SECOND,
+        timezone=BEIJING_TZ,
+    )
+
+
 def register_t_tracker_jobs(scheduler) -> list:
     """注册做T三任务（regime/beat/reconcile）；返回 job 列表。"""
     from apscheduler.triggers.cron import CronTrigger
@@ -801,6 +850,15 @@ def register_t_tracker_jobs(scheduler) -> list:
         trigger=build_t_tracker_beat_cron_trigger(),
         id=TTRACKER_BEAT_JOB_ID,
         name="L1做T·盘中信号节拍（R37，09:36~14:56 每 5min 错峰快照 1min）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_t_tracker_fast_tick,
+        trigger=build_t_tracker_fast_cron_trigger(),
+        id=TTRACKER_FAST_JOB_ID,
+        name="L1做T·1分钟快车道（R46，交易日 09:31~14:59 每分钟，秒错峰23）",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
@@ -848,7 +906,8 @@ def register_t_tracker_jobs(scheduler) -> list:
         replace_existing=True,
     )
     return [scheduler.get_job(jid) for jid in
-            (TTRACKER_REGIME_JOB_ID, TTRACKER_BEAT_JOB_ID, TTRACKER_RECONCILE_JOB_ID,
+            (TTRACKER_REGIME_JOB_ID, TTRACKER_BEAT_JOB_ID, TTRACKER_FAST_JOB_ID,
+             TTRACKER_RECONCILE_JOB_ID,
              TTRACKER_BROKER_SYNC_JOB_ID, TTRACKER_SHADOW_FINALIZE_JOB_ID)]
 
 

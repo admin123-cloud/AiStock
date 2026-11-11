@@ -14,14 +14,27 @@
 周期判定与触发参数逐条对应 R34 手册（F:/Aistock/research/R34-做T方法论-三周期手册-2026-11-10.md
 §3.0-§3.5）；两票校准带以 R34 §3.5 为锚（R34_CALIB），其余组合按手册通用式派生。
 RSI 口径 = Wilder RSI14（镜像 runtime/t_tracker/monitor_rsi.py 权威实现）。
+
+R46 双速制（2026-11-11，任务书 20261111_fast_lane_r46.md）：
+  - 快车道 run_fast_tick（1 分钟）：东财 ulist 实时价 + 5m 序列末根（形成中 bar）
+    以实时价刷新重估 intrabar RSI5；价带类触发（买带/卖带/目标带/止损线）即产
+    fast 草案（trigger_kind 前缀 fast_，bar_status=open，intrabar_rsi5 实值）；
+    预检门/布防/冷却与慢车道共用同一 SignalState（完全一致，30min 冷却照旧）；
+  - 慢车道 run_beat（5 分钟收线，语义不动）：bar 收线后复核 open 的 fast 草案
+    ——成立 → 升级 confirmed_bar；瓦解 → expired_unconfirmed 如实留档；同波
+    (code,side,band) 去重并入（不另发）；日终对账汇总 fast 命中率；
+  - T 票池 = broker_state 持仓 ∪ holding_t watchlist(manual+ths)（R46）；
+  - 东财限频：ulist 票池一次请求（≤10 码/次）；分时K同码同周期 ≤1 次/分钟
+    （cached_east_klines TTL 缓存）。
 """
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import json
 import logging
 import os
+import time
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -46,6 +59,19 @@ FALLBACK_EXIT_AFTER = dt_time(14, 50)  # 14:50 仍未达目标 → 兜底离场�
 SIDE_BUY = "buy-T"
 SIDE_SELL = "sell-T"
 SIDE_REDUCE = "reduce-hint"
+
+# ── R46 快车道常量 ──────────────────────────────────────────────
+FAST_LANE = "fast"
+BAR_STATUS_OPEN = "open"
+BAR_STATUS_CONFIRMED = "confirmed_bar"
+BAR_STATUS_EXPIRED = "expired_unconfirmed"
+# 价带类触发（1 分钟粒度判定）：买带 / 横盘上沿卖带 / 在途T目标带 / 止损线；
+# exit_rsi（RSI 类）与 fallback_eod（时间类）留在慢车道。
+FAST_TRIGGER_KINDS = frozenset({"buy_band", "sell_band", "target_band", "stop_break"})
+MERGE_WAVE_SEC = 390            # 同波判定窗：fast→slow ≤6.5min（一个 5m bar 波段）
+KLT_CACHE_TTL_SEC = 60.0        # 东财分时K限频：同码同周期 ≤1 次/分钟
+ULIST_CHUNK = 10                # 东财 ulist 单请求码数上限
+SCHEMA_FAST_BEAT = "t_tracker_fast_beat/1"
 
 # ── R34 校准参数（2026-11-10，来源 R34 §3.5；作为回归锚）──────────
 R34_CALIB: dict[str, dict[str, dict[str, Any]]] = {
@@ -350,6 +376,120 @@ def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
     return out
 
 
+# ── R46：东财 ulist 实时价（票池一次请求）+ 分时K TTL 限频缓存 ─────────
+
+EAST_ULIST_URL = ("http://push2.eastmoney.com/api/qt/ulist.np/get"
+                  "?secids={secids}&fields=f2,f12,f13,f124&fltt=2")
+
+
+def fetch_east_ulist_quotes(
+    codes: Sequence[str],
+    *,
+    timeout: float = 10.0,
+    url_open: Optional[Callable] = None,
+) -> dict[str, dict[str, Any]]:
+    """东财 ulist 实时价：{code6: {price, ts(北京时间)}}。
+
+    单次请求 ≤ULIST_CHUNK 码（R46 限频：票池一次请求）；f2 停牌/'-' 跳过；
+    f124 = 行情更新 unix 秒 → 北京时间字符串。全部失败由调用方降级链兜底。
+    """
+    out: dict[str, dict[str, Any]] = {}
+    codes6 = [str(c).split(".")[0] for c in codes if c]
+    if not codes6:
+        return out
+    open_ = url_open or urllib.request.urlopen
+    for i in range(0, len(codes6), ULIST_CHUNK):
+        chunk = codes6[i:i + ULIST_CHUNK]
+        secids = ",".join(east_secid(c) for c in chunk)
+        req = urllib.request.Request(
+            EAST_ULIST_URL.format(secids=secids),
+            headers={"User-Agent": "Mozilla/5.0"})
+        with open_(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        for it in (data.get("data") or {}).get("diff") or []:
+            code6 = str(it.get("f12") or "")
+            raw_px = it.get("f2")
+            if not code6 or raw_px in (None, "", "-"):
+                continue
+            ts = None
+            if it.get("f124"):
+                try:
+                    ts = fmt_ts(datetime.fromtimestamp(
+                        int(it["f124"]), BEIJING_TZ).replace(tzinfo=None))
+                except (ValueError, OSError, OverflowError):
+                    ts = None
+            out[code6] = {"price": float(raw_px), "ts": ts}
+    return out
+
+
+_klt_cache: dict[tuple[str, int], tuple[float, list[dict]]] = {}
+
+
+def cached_east_klines(
+    code: str,
+    klt: int,
+    *,
+    now_ts: Optional[float] = None,
+    ttl: float = KLT_CACHE_TTL_SEC,
+    fetch: Optional[Callable[[str, int], list[dict]]] = None,
+) -> list[dict]:
+    """东财分时K TTL 缓存（R46 限频：同码同周期 ≤1 次/分钟）。
+
+    缓存命中返回缓存值（不再请求）；未命中拉取并写缓存。拉取失败异常上抛
+    （不回传陈旧缓存——fail-closed，由调用方按票记录失败）。
+    """
+    key = (str(code), int(klt))
+    now_ts = time.time() if now_ts is None else float(now_ts)
+    hit = _klt_cache.get(key)
+    if hit is not None and now_ts - hit[0] < ttl:
+        return hit[1]
+    bars = (fetch or fetch_east_klines)(str(code), int(klt))
+    _klt_cache[key] = (now_ts, bars)
+    return bars
+
+
+def reset_klt_cache() -> None:
+    """清空分时K TTL 缓存（测试用）。"""
+    _klt_cache.clear()
+
+
+EAST_TRENDS_URL = ("http://push2his.eastmoney.com/api/qt/stock/trends2/get"
+                   "?secid={secid}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"
+                   "&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays={ndays}&iscr=0")
+
+
+def fetch_east_trends_1m(code: str, ndays: int = 2, *,
+                         url_open: Optional[Callable] = None,
+                         timeout: float = 15.0) -> list[dict]:
+    """东财 trends2 分时（1m，近 ndays 日）：[{ts, open, close, volume(手), amount(元)}]。
+
+    R46 回放用——kline/get klt=1 实证只回当日（beg/end/lmt 均不生效），跨日
+    1m 须走 trends2；量额口径与 fetch_east_klines 一致（手/元）。
+    """
+    open_ = url_open or urllib.request.urlopen
+    url = EAST_TRENDS_URL.format(secid=east_secid(code), ndays=ndays)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with open_(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    out: list[dict] = []
+    for row in (data.get("data") or {}).get("trends") or []:
+        parts = row.split(",")
+        if len(parts) < 7:
+            continue
+        try:
+            open_px = float(parts[1]) if parts[1] and float(parts[1]) > 0 else float(parts[2])
+            out.append({
+                "ts": parts[0],
+                "open": open_px,
+                "close": float(parts[2]) if parts[2] else 0.0,
+                "volume": float(parts[5]) if parts[5] else 0.0,
+                "amount": float(parts[6]) if parts[6] else 0.0,
+            })
+        except ValueError:
+            continue
+    return out
+
+
 def _ch_client():
     import sys
     proj = Path(__file__).resolve().parents[1]
@@ -420,6 +560,68 @@ def load_broker_holdings() -> dict[str, Any]:
     }
 
 
+def _default_watchlist_paths() -> tuple[Path, Path]:
+    import sys
+    proj = Path(__file__).resolve().parents[1]
+    if str(proj) not in sys.path:
+        sys.path.insert(0, str(proj))
+    from utils.paths import runtime_path
+    store = runtime_path("gen3_state_alpha", "holding_t_watchlist",
+                         "holding_tick_watchlist.json")
+    legacy = runtime_path("gen3_state_alpha", "holding_tick_watchlist.json")
+    return Path(store), Path(legacy)
+
+
+def load_t_pool(*, watchlist_store: Optional[Path] = None) -> dict[str, Any]:
+    """T 票池（R46）= broker_state 持仓 ∪ holding_t watchlist(manual+ths)。
+
+    broker_state 不可读 → 抛异常（fail-closed 同现行：不猜持仓）；watchlist
+    缺件/不可读 → 降级仅持仓（辅助源，不阻断）。watchlist 独有码 shares=qty
+    （未填=0：观察票——照常参与判定与预检门，底仓 0 → t_lot_below_min 拒发
+    草案，绝不猜底仓）。持仓已有的码以 broker_state 为准（watchlist ths 同步
+    项与其重复时去重）。
+    """
+    pool = load_broker_holdings()
+    try:
+        store, legacy = (watchlist_store, None) if watchlist_store is not None \
+            else _default_watchlist_paths()
+        items: list[dict[str, Any]] = []
+        if store.exists():
+            import sys
+            proj = Path(__file__).resolve().parents[1]
+            if str(proj) not in sys.path:
+                sys.path.insert(0, str(proj))
+            from services.holding_t_watchlist import read_watchlist
+            items = list(read_watchlist(store, legacy_path=legacy).get("items") or [])
+    except Exception as exc:  # noqa: BLE001 - watchlist 为辅助源：降级仅持仓
+        logger.warning("[pool] watchlist 读取失败，降级仅持仓：%s", exc)
+        items = []
+    if not items:
+        return pool
+    held = {str(h.get("code") or "").split(".")[0]: h for h in pool["holdings"]}
+    merged = list(pool["holdings"])
+    added: list[str] = []
+    for it in items:
+        code6 = str(it.get("code") or "").split(".")[0]
+        if not code6 or code6 in held:
+            continue
+        try:
+            shares = int(it.get("qty") or 0)
+        except (TypeError, ValueError):
+            shares = 0
+        merged.append({"code": code6, "name": str(it.get("name") or ""),
+                       "shares": shares,
+                       "source": f"watchlist:{it.get('source') or 'manual'}"})
+        added.append(code6)
+    if not added:
+        return pool
+    out = dict(pool)
+    out["holdings"] = merged
+    out["pool_source"] = "broker_state+watchlist"
+    out["watchlist_added"] = added
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 09:25 周期判定任务
 # ---------------------------------------------------------------------------
@@ -436,7 +638,7 @@ def run_regime(
     """盘前周期判定：T-1 日线 → regime_<date>.json（含解析后的触发参数）。"""
     log = log or logger
     root = tracker_dir(out_dir)
-    load_holdings = holdings_loader or load_broker_holdings
+    load_holdings = holdings_loader or load_t_pool   # R46：T 票池并集
     load_bars = daily_bars_loader or ch_daily_bars
 
     pool = load_holdings()
@@ -466,7 +668,8 @@ def run_regime(
         "schema": SCHEMA_REGIME, "version": __version__,
         "date": for_date.isoformat(), "generated_at": fmt_ts(now),
         "status": "ok" if not errors else "partial",
-        "pool": {"source": "broker_state", "updated_at": pool.get("updated_at"),
+        "pool": {"source": pool.get("pool_source") or "broker_state",
+                 "updated_at": pool.get("updated_at"),
                  "holding_source": pool.get("holding_source"), "path": pool.get("path")},
         "codes": codes, "errors": errors,
     }
@@ -562,8 +765,13 @@ def evaluate_code(
     drafts_today: Sequence[Mapping[str, Any]],
     holding: Mapping[str, Any],
     holdings_updated_at: str = "",
+    allowed_trigger_kinds: Optional[frozenset] = None,
 ) -> dict[str, Any]:
-    """单票一拍：触发判定 + 预检门 → 草案（或抑制原因）。纯逻辑、零 IO。"""
+    """单票一拍：触发判定 + 预检门 → 草案（或抑制原因）。纯逻辑、零 IO。
+
+    allowed_trigger_kinds（R46 快车道用）：非 None 时只保留指定 trigger_kind 的
+    候选（价带类）；None = 不过滤（慢车道现行语义，不动）。
+    """
     regime = str(regime_info["regime"])
     closes5 = [float(b["close"]) for b in bars5]
     closes15 = [float(b["close"]) for b in bars15]
@@ -638,6 +846,10 @@ def evaluate_code(
                 candidates.append({"side": SIDE_REDUCE, "subtype": "hint", "priority": 5,
                                    "trigger_kind": "rebound_reduce"})
     candidates.sort(key=lambda c: c["priority"])
+    # R46 快车道：只保留价带类候选（None = 慢车道不过滤，语义不动）
+    if allowed_trigger_kinds is not None:
+        candidates = [c for c in candidates
+                      if c["trigger_kind"] in allowed_trigger_kinds]
 
     # 条件离开 → 重布防（镜像 PM 监控离场重布防语义）：
     # 各布防组（open/exit/hint）的触发条件当前不再成立时恢复 armed。
@@ -800,13 +1012,32 @@ def run_beat(
     write_pending_push: bool = True,
     log: Optional[logging.Logger] = None,
 ) -> dict:
-    """盘中一拍：加载 regime/持仓/行情 → 逐票评估 → 草案落盘 + 节拍记录。"""
+    """盘中一拍：加载 regime/持仓/行情 → 逐票评估 → 草案落盘 + 节拍记录。
+
+    R46 增量（慢车道判定语义不动）：票池默认并集（broker_state ∪ watchlist）；
+    开拍先结算 open 的 fast 草案（收线复核）；慢车道新草案与近窗 open 的
+    fast 草案同 (code,side,band) 时并入升级（同波去重，不另发）。
+    """
     log = log or logger
     root = tracker_dir(out_dir)
     day = now.date()
-    load_holdings = holdings_loader or load_broker_holdings
-    load_bars5 = bars5_loader or (lambda code: fetch_east_klines(code, 5))
-    load_bars15 = bars15_loader or (lambda code: fetch_east_klines(code, 15))
+    load_holdings = holdings_loader or load_t_pool
+    _fetch5 = bars5_loader or (lambda code: fetch_east_klines(code, 5))
+    _fetch15 = bars15_loader or (lambda code: fetch_east_klines(code, 15))
+    # 请求内 memo：收线结算与逐票评估共用一次装载（纯缓存，不改判定语义）
+    memo5: dict[str, list[dict]] = {}
+    memo15: dict[str, list[dict]] = {}
+
+    def load_bars5(code: str) -> list[dict]:
+        if code not in memo5:
+            memo5[code] = _fetch5(code)
+        return memo5[code]
+
+    def load_bars15(code: str) -> list[dict]:
+        if code not in memo15:
+            memo15[code] = _fetch15(code)
+        return memo15[code]
+
     load_snapshot = snapshot_loader or ch_snapshot_price
 
     def _default_regime_loader(d: date) -> Optional[dict]:
@@ -829,6 +1060,11 @@ def run_beat(
     state = load_state(root, day)
     drafts_file = drafts_path(root, day)
     drafts_today = read_jsonl(drafts_file)
+    # R46 收线复核：bar_status=open 的 fast 草案，其形成中 bar 已收 → 结算
+    settled_fast = settle_open_fast_drafts(now=now, drafts=drafts_today,
+                                           load_bars5=load_bars5,
+                                           load_bars15=load_bars15, log=log)
+    merged_fast: list[dict] = []
     results: dict[str, Any] = {}
     new_drafts: list[dict] = []
 
@@ -865,21 +1101,407 @@ def run_beat(
             )
             results[code] = res
             if res.get("draft"):
-                new_drafts.append(res["draft"])
+                # R46 同波去重：慢车道草案与近窗 open 的 fast 草案同
+                # (code,side,band) → 并入升级该 fast 草案，不另发。
+                fast = _mergeable_fast_draft(res["draft"], drafts_today, now)
+                if fast is not None:
+                    fast["bar_status"] = BAR_STATUS_CONFIRMED
+                    fast["confirmed_at"] = fmt_ts(now)
+                    fast["confirm_source"] = "slow_beat_merge"
+                    fast["closed_rsi5"] = res["draft"]["trigger"]["rsi5"]
+                    if res["draft"].get("subtype") == "entry":
+                        state.set_open_t(code, {
+                            "draft_id": fast["id"], "entry_px": fast.get("px"),
+                            "qty": int(fast.get("qty") or 0),
+                            "target_band": fast.get("target_band"),
+                            "stop": fast.get("stop"), "ts": fmt_ts(now)})
+                    res["draft"] = None
+                    res["merged_into"] = fast["id"]
+                    merged_fast.append(fast)
+                else:
+                    new_drafts.append(res["draft"])
         except Exception as exc:  # noqa: BLE001 - 单票数据失败 fail-closed 该票
             results[code] = {"code": code, "suppressed": {"reason": f"evaluate_error: {type(exc).__name__}: {exc}"}}
             log.error("[beat] %s 评估失败：%s", code, exc)
 
+    if settled_fast or merged_fast:
+        # 结算/并入原位重写：草案 jsonl 保持既有行序、id 不变；pending_push
+        # 中尚未消费的同名文件同步重写（升级标注直达 PM watcher）。
+        _rewrite_jsonl(drafts_file, drafts_today)
+        for d in settled_fast + merged_fast:
+            pp = root / "pending_push" / f"{d['id']}.json"
+            if write_pending_push and pp.is_file():
+                _atomic_write_json(pp, d)
     for draft in new_drafts:
         _append_jsonl(drafts_file, draft)
         if write_pending_push:
             _atomic_write_json(root / "pending_push" / f"{draft['id']}.json", draft)
     save_state(root, day, state)
     beat_record = {**base, "status": "ok", "codes": results,
-                   "new_draft_ids": [d["id"] for d in new_drafts]}
+                   "new_draft_ids": [d["id"] for d in new_drafts],
+                   "fast_settled": [d["id"] for d in settled_fast],
+                   "fast_merged": [d["id"] for d in merged_fast]}
     _append_jsonl(root / "beats" / f"{day.strftime('%Y%m%d')}.jsonl", beat_record)
     if new_drafts:
         log.info("[beat] %s 草案 %s", fmt_ts(now), [d["id"] for d in new_drafts])
+    return beat_record
+
+
+# ---------------------------------------------------------------------------
+# R46 快车道（1 分钟）：实时价 + intrabar 重估 + fast 草案；慢车道收线结算
+# ---------------------------------------------------------------------------
+
+def _rewrite_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """整体原位重写 jsonl（结算/并入用；行序与行数不变，原子替换）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        "".join(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows),
+        encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def build_intrabar_bars5(raw_bars5: Sequence[Mapping[str, Any]], px: float,
+                         now: datetime) -> tuple[list[dict], Optional[str]]:
+    """5m 序列末根（形成中 bar）以实时价刷新（R46 intrabar 口径）。
+
+    返回 (bars5_fast, forming_ts)。形成中 bar = 第一根 ts > now 的 5m bar
+    （东财口径 ts=周期结束时刻）；其 close 以实时价覆盖，volume/amount 维持
+    东财 partial 值（VWAP 口径不变）。无形成中 bar（收线瞬间/午休边界）→
+    仅已收序列（intrabar 退化为收线值）。
+    """
+    bars = closed_bars(raw_bars5, now)
+    forming_ts: Optional[str] = None
+    for b in raw_bars5:
+        ts = parse_ts(str(b["ts"]))
+        if ts is not None and ts > now:
+            fb = dict(b)
+            fb["close"] = float(px)
+            forming_ts = str(b["ts"])
+            bars.append(fb)
+            break
+    return bars, forming_ts
+
+
+def synthetic_fast_view(bars5_full: Sequence[Mapping[str, Any]],
+                        bars1_full: Sequence[Mapping[str, Any]],
+                        now: datetime) -> tuple[list[dict], Optional[str], Optional[dict]]:
+    """回放用合成视图：全日 5m+1m 缓存 → (bars5_raw, forming_ts, quote)。
+
+    quote = 已收最后一根 1m bar 的收盘（分钟级实时价代理，ts=该 bar 时刻）；
+    形成中 5m bar = 缓存中 start(F) < now < end(F) 的那根，volume/amount 用
+    区间内已收 1m bar 聚合（close 将被 run_fast_tick 以 quote 实时价覆盖）。
+    """
+    closed5 = closed_bars(bars5_full, now)
+    m1 = closed_bars(bars1_full, now)
+    quote: Optional[dict] = None
+    if m1:
+        quote = {"price": float(m1[-1]["close"]), "ts": str(m1[-1]["ts"])}
+    forming: Optional[dict] = None
+    for b in bars5_full:
+        ts = parse_ts(str(b["ts"]))
+        if ts is None:
+            continue
+        start = ts - timedelta(minutes=5)
+        if start < now < ts:
+            inner = [x for x in m1
+                     if (parse_ts(str(x["ts"])) or now) > start]
+            forming = {
+                "ts": str(b["ts"]),
+                "open": float(b.get("open") or 0.0),
+                "close": float(b["close"]),
+                "volume": round(sum(float(x.get("volume") or 0.0) for x in inner), 2),
+                "amount": round(sum(float(x.get("amount") or 0.0) for x in inner), 2),
+            }
+            break
+    bars = list(closed5)
+    forming_ts = None
+    if forming is not None:
+        forming_ts = forming["ts"]
+        if quote is not None:
+            forming["close"] = quote["price"]
+        bars.append(forming)
+    return bars, forming_ts, quote
+
+
+def _fast_settle_spec(draft: Mapping[str, Any],
+                      params: Mapping[str, Any]) -> dict[str, Any]:
+    """从 fast 草案反推收线结算判据（fire 时未显式存亦可确定性重建）。"""
+    kind = str((draft.get("trigger") or {}).get("kind") or "")
+    base = kind[5:] if kind.startswith("fast_") else kind
+    subtype = draft.get("subtype")
+    spec: dict[str, Any] = {"kind": base}
+    if subtype == "entry":
+        spec["band"] = params.get("buy_band")
+        spec["rsi5_max"] = params.get("buy_rsi5_max")
+        spec["rsi15_max"] = params.get("buy_rsi15_max")
+    elif subtype == "zone":
+        spec["band"] = params.get("sell_band")
+        spec["rsi5_min"] = params.get("sell_rsi5_min")
+    elif subtype == "exit":
+        spec["band"] = (draft.get("trigger") or {}).get("band") or draft.get("target_band")
+    elif subtype == "stop":
+        spec["stop"] = draft.get("stop")
+    return spec
+
+
+def _fast_settle_holds(spec: Mapping[str, Any], px_c: float,
+                       rsi5: Optional[float], rsi15: Optional[float],
+                       ) -> tuple[bool, str]:
+    kind = spec.get("kind")
+    if kind == "buy_band":
+        band = spec.get("band")
+        if not band or not (float(band[0]) <= px_c <= float(band[1])):
+            return False, "px_out_of_band"
+        if spec.get("rsi5_max") is not None and not (
+                rsi5 is not None and rsi5 <= float(spec["rsi5_max"])):
+            return False, "rsi5_above_max"
+        if spec.get("rsi15_max") is not None and not (
+                rsi15 is not None and rsi15 < float(spec["rsi15_max"])):
+            return False, "rsi15_above_max"
+        return True, ""
+    if kind == "sell_band":
+        band = spec.get("band")
+        if not band or not (float(band[0]) <= px_c <= float(band[1])):
+            return False, "px_out_of_band"
+        if spec.get("rsi5_min") is not None and not (
+                rsi5 is not None and rsi5 >= float(spec["rsi5_min"])):
+            return False, "rsi5_below_min"
+        return True, ""
+    if kind == "target_band":
+        band = spec.get("band")
+        if band and float(band[0]) <= px_c <= float(band[1]):
+            return True, ""
+        return False, "px_out_of_target_band"
+    if kind == "stop_break":
+        stop = spec.get("stop")
+        if stop is not None and px_c <= float(stop):
+            return True, ""
+        return False, "px_above_stop"
+    return False, "unknown_kind"
+
+
+def settle_open_fast_drafts(
+    *,
+    now: datetime,
+    drafts: list[dict],
+    load_bars5: Callable[[str], list[dict]],
+    load_bars15: Callable[[str], list[dict]],
+    params_by_code: Optional[Callable[[str], dict]] = None,
+    log: Optional[logging.Logger] = None,
+) -> list[dict]:
+    """慢车道收线复核（R46）：bar_status=open 的 fast 草案 → 结算。
+
+    原 forming_bar_ts 的 bar 已出现在已收序列 → 以该 bar 收线值复核价带条件：
+    成立 → confirmed_bar；瓦解 → expired_unconfirmed（留档不删除）。
+    bar 尚未收/数据未到 → 保持 open 等下一拍。返回本拍结算的草案（已原地改写）。
+    """
+    log = log or logger
+    settled: list[dict] = []
+    for d in drafts:
+        if d.get("lane") != FAST_LANE or d.get("bar_status") != BAR_STATUS_OPEN:
+            continue
+        code = str(d.get("code") or "")
+        forming_ts = parse_ts(str(d.get("forming_bar_ts") or ""))
+        if not code or forming_ts is None or now < forming_ts:
+            continue
+        try:
+            bars5_closed = closed_bars(load_bars5(code), now)
+            bars15_closed = closed_bars(load_bars15(code), now)
+        except Exception as exc:  # noqa: BLE001 - 行情失败保留 open 等下一拍
+            log.error("[fast-settle] %s 行情加载失败，保留 open：%s", d.get("id"), exc)
+            continue
+        settled_bar = next((b for b in bars5_closed
+                            if (parse_ts(str(b["ts"])) or now) >= forming_ts), None)
+        if settled_bar is None:
+            continue  # 原 forming bar 尚未进入已收序列（数据延迟），等下一拍
+        px_c = float(settled_bar["close"])
+        closes = [float(b["close"]) for b in bars5_closed
+                  if (parse_ts(str(b["ts"])) or now) <= parse_ts(str(settled_bar["ts"]))]
+        rsi5 = rsi_wilder(closes)
+        rsi15 = rsi_wilder([float(b["close"]) for b in bars15_closed]) if bars15_closed else None
+        params = (params_by_code or (lambda _c: {}))(code)
+        spec = d.get("fast_settle_check") or _fast_settle_spec(d, params)
+        holds, reason = _fast_settle_holds(spec, px_c, rsi5, rsi15)
+        detail = {"bar_ts": str(settled_bar["ts"]), "close": px_c,
+                  "rsi5": round(rsi5, 1) if rsi5 is not None else None}
+        if holds:
+            d["bar_status"] = BAR_STATUS_CONFIRMED
+            d["confirmed_at"] = fmt_ts(now)
+            d["confirm_source"] = "slow_beat_settle"
+            d.update({f"confirm_{k}": v for k, v in detail.items()})
+        else:
+            d["bar_status"] = BAR_STATUS_EXPIRED
+            d["expired_at"] = fmt_ts(now)
+            d["expire_reason"] = reason
+            d.update({f"expire_{k}": v for k, v in detail.items()})
+        settled.append(d)
+        log.info("[fast-settle] %s → %s（%s）", d.get("id"), d["bar_status"],
+                 detail["bar_ts"])
+    return settled
+
+
+def _mergeable_fast_draft(new_draft: Mapping[str, Any],
+                          drafts_today: Sequence[Mapping[str, Any]],
+                          now: datetime) -> Optional[dict]:
+    """同波可并入的 open fast 草案：同 (code,side,band) 且 ≤MERGE_WAVE_SEC。"""
+    band_new = (new_draft.get("trigger") or {}).get("band")
+    if band_new is None:
+        return None
+    for d in drafts_today:
+        if d.get("lane") != FAST_LANE or d.get("bar_status") != BAR_STATUS_OPEN:
+            continue
+        if d.get("code") != new_draft.get("code") or d.get("side") != new_draft.get("side"):
+            continue
+        if (d.get("trigger") or {}).get("band") != band_new:
+            continue
+        d_ts = parse_ts(str(d.get("ts") or ""))
+        if d_ts is None or (now - d_ts).total_seconds() > MERGE_WAVE_SEC:
+            continue
+        return d
+    return None
+
+
+def run_fast_tick(
+    *,
+    now: datetime,
+    out_dir: Optional[Path] = None,
+    holdings_loader: Optional[Callable[[], dict]] = None,
+    regime_loader: Optional[Callable[[date], Optional[dict]]] = None,
+    bars5_loader: Optional[Callable[[str], list[dict]]] = None,
+    bars15_loader: Optional[Callable[[str], list[dict]]] = None,
+    quotes_loader: Optional[Callable[[Sequence[str]], dict]] = None,
+    snapshot_loader: Optional[Callable[[str], Optional[dict]]] = None,
+    write_pending_push: bool = True,
+    log: Optional[logging.Logger] = None,
+) -> dict:
+    """快车道一拍（R46，1 分钟粒度）：实时价重估 intrabar → fast 草案。
+
+    预检门/布防/冷却与慢车道完全一致（共用 SignalState 与草案台账）；
+    价带类触发即产 fast 草案（trigger_kind 前缀 fast_、bar_status=open、
+    intrabar_rsi5 实值），落 drafts + pending_push（协议不变）；
+    收线确认/瓦解由慢车道 run_beat 结算（settle_open_fast_drafts）。
+    """
+    log = log or logger
+    root = tracker_dir(out_dir)
+    day = now.date()
+    load_pool = holdings_loader or load_t_pool
+    load_bars5 = bars5_loader or (lambda code: cached_east_klines(code, 5))
+    load_bars15 = bars15_loader or (lambda code: cached_east_klines(code, 15))
+    load_quotes = quotes_loader or fetch_east_ulist_quotes
+    load_snapshot = snapshot_loader or ch_snapshot_price
+
+    def _default_regime_loader(d: date) -> Optional[dict]:
+        return _load_json(regime_file_path(root, d))
+
+    load_regime = regime_loader or _default_regime_loader
+    base = {"schema": SCHEMA_FAST_BEAT, "version": __version__, "ts": fmt_ts(now)}
+
+    try:
+        holdings = load_pool()
+    except Exception as exc:  # noqa: BLE001 - 持仓不可读 → 全票 fail-closed
+        log.error("[fast] 持仓加载失败：%s", exc)
+        return {**base, "status": "failure", "reason": f"holdings_unreadable: {exc}", "codes": {}}
+    regime = load_regime(day)
+    if not regime or not isinstance(regime.get("codes"), dict):
+        log.error("[fast] %s 周期文件缺失/不可读，全票 fail-closed", day)
+        return {**base, "status": "failure", "reason": "regime_file_missing", "codes": {}}
+
+    state = load_state(root, day)
+    drafts_file = drafts_path(root, day)
+    drafts_today = read_jsonl(drafts_file)
+
+    pool_codes = [str(h.get("code") or "").split(".")[0] for h in holdings["holdings"]]
+    try:
+        quotes = load_quotes(pool_codes) or {}
+    except Exception as exc:  # noqa: BLE001 - ulist 失败降级逐票快照/5m 收价
+        log.warning("[fast] ulist 实时价失败，降级：%s", exc)
+        quotes = {}
+
+    results: dict[str, Any] = {}
+    new_drafts: list[dict] = []
+    for holding in holdings["holdings"]:
+        code = str(holding["code"]).split(".")[0]
+        info = regime["codes"].get(code)
+        if not info:
+            results[code] = {"code": code, "lane": FAST_LANE,
+                             "suppressed": {"reason": "no_regime_info"}}
+            continue
+        try:
+            bars15 = closed_bars(load_bars15(code), now)
+            raw5 = load_bars5(code)
+            bars5_closed = closed_bars(raw5, now)
+            if not raw5 or not bars15 or not bars5_closed:
+                results[code] = {"code": code, "lane": FAST_LANE,
+                                 "suppressed": {"reason": "empty_minute_data"}}
+                continue
+            # 实时价链：ulist → CH 快照（≤10min）→ 5m 收价（fail-soft，标注来源）
+            px: Optional[float] = None
+            px_source, quote_ts = "east_ulist", None
+            q = quotes.get(code)
+            if q and q.get("price"):
+                px, quote_ts = float(q["price"]), q.get("ts")
+            else:
+                try:
+                    snap = load_snapshot(code)
+                except Exception:  # noqa: BLE001
+                    snap = None
+                if snap and snap.get("price"):
+                    snap_ts = parse_ts(snap["snapshot_ts"])
+                    if snap_ts is not None and (now - snap_ts).total_seconds() <= 600:
+                        px = float(snap["price"])
+                        px_source = "intraday_snapshot"
+            if px is None:
+                px = float(bars5_closed[-1]["close"])
+                px_source = "m5_close"
+            bars5_fast, forming_ts = build_intrabar_bars5(raw5, px, now)
+            res = evaluate_code(
+                code=code, name=info.get("name") or holding.get("name") or "",
+                regime_info=info, params=info.get("params") or {},
+                bars5=bars5_fast, bars15=bars15, px=px, px_source=px_source, now=now,
+                state=state, drafts_today=drafts_today + new_drafts, holding=holding,
+                holdings_updated_at=str(holdings.get("updated_at") or ""),
+                allowed_trigger_kinds=FAST_TRIGGER_KINDS,
+            )
+            res["lane"] = FAST_LANE
+            # 结算锚 = 触发时的末根 bar（形成中 bar 优先；无形成中 bar 的退化
+            # 路径回退到触发已收 bar——否则草案永不结算滞留 open）
+            settle_bar_ts = str(bars5_fast[-1]["ts"]) if bars5_fast else None
+            res["forming_bar_ts"] = settle_bar_ts
+            res["quote_ts"] = quote_ts
+            if res.get("draft"):
+                d = res["draft"]
+                kind = str(d["trigger"]["kind"])
+                d["trigger"]["kind"] = f"fast_{kind}"
+                d["lane"] = FAST_LANE
+                d["bar_status"] = BAR_STATUS_OPEN
+                d["intrabar_rsi5"] = d["trigger"]["rsi5"]
+                d["forming_bar_ts"] = settle_bar_ts
+                d["quote_ts"] = quote_ts
+                d["fast_settle_check"] = _fast_settle_spec(
+                    {**d, "trigger": {"kind": kind, "band": d["trigger"].get("band")}},
+                    info.get("params") or {})
+                new_drafts.append(d)
+            results[code] = res
+        except Exception as exc:  # noqa: BLE001 - 单票数据失败 fail-closed 该票
+            results[code] = {"code": code, "lane": FAST_LANE,
+                             "suppressed": {"reason": f"evaluate_error: {type(exc).__name__}: {exc}"}}
+            log.error("[fast] %s 评估失败：%s", code, exc)
+
+    for draft in new_drafts:
+        _append_jsonl(drafts_file, draft)
+        if write_pending_push:
+            _atomic_write_json(root / "pending_push" / f"{draft['id']}.json", draft)
+    save_state(root, day, state)
+    beat_record = {**base, "status": "ok",
+                   "pool": {"codes": pool_codes,
+                            "source": holdings.get("pool_source") or "broker_state",
+                            "watchlist_added": holdings.get("watchlist_added") or []},
+                   "codes": results,
+                   "new_draft_ids": [d["id"] for d in new_drafts]}
+    _append_jsonl(root / "beats" / f"fast_{day.strftime('%Y%m%d')}.jsonl", beat_record)
+    if new_drafts:
+        log.info("[fast] %s fast 草案 %s", fmt_ts(now), [d["id"] for d in new_drafts])
     return beat_record
 
 
@@ -1082,6 +1704,22 @@ def run_reconcile(
     gross = round(sum(r["gross_pnl"] or 0.0 for r in trips), 2)
     fees = round(sum(r["fees"] or 0.0 for r in today_rounds), 2)
 
+    # R46 fast 命中率统计（草案台账口径：confirmed / expired / open 未决）
+    fast_all = [d for d in drafts if d.get("lane") == FAST_LANE]
+    fast_confirmed = [d for d in fast_all if d.get("bar_status") == BAR_STATUS_CONFIRMED]
+    fast_expired = [d for d in fast_all if d.get("bar_status") == BAR_STATUS_EXPIRED]
+    fast_open = [d for d in fast_all if d.get("bar_status") == BAR_STATUS_OPEN]
+    fast_settled_n = len(fast_confirmed) + len(fast_expired)
+    fast_lane_stats = {
+        "drafts": len(fast_all),
+        "confirmed_bar": len(fast_confirmed),
+        "expired_unconfirmed": len(fast_expired),
+        "open_unresolved": len(fast_open),
+        "merged_from_slow": sum(1 for d in fast_confirmed
+                                if d.get("confirm_source") == "slow_beat_merge"),
+        "hit_rate": round(len(fast_confirmed) / fast_settled_n, 4) if fast_settled_n else None,
+    }
+
     summary = {
         "schema": "t_tracker_summary/1", "version": __version__, "date": day_prefix,
         "generated_at": fmt_ts(now), "fills_source": source_label,
@@ -1093,6 +1731,7 @@ def run_reconcile(
         "matched_draft_ids": sorted(used),
         "unmatched_draft_ids": sorted({d.get("id") for d in drafts} - used),
         "rounds": len(today_rounds),
+        "fast_lane": fast_lane_stats,
     }
     ledger_file = ledger_dir / f"{stamp}.jsonl"
     ledger_file.parent.mkdir(parents=True, exist_ok=True)

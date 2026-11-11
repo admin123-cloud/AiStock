@@ -19,6 +19,14 @@
     绝不微信推送、绝不影响真草案；
   - t_trade_tracker.py --beat 内嵌调用但独立 try/except：影子失败不影响真节拍。
 
+R46（2026-11-11）影子同步 1 分钟快车道（observe_only 不变）：
+  - shadow_fast_tick：实时价刷新 5m 末根重估 intrabar 特征 → fast_vertical_ramp_
+    distribution 信号（bar_status=open、intrabar_rsi5 实值），同 armed/30min 冷却
+    （与慢车道 shadow_beat 共用同一日台账 meta）；
+  - shadow_beat 收线复核：open 的 fast 信号以原形成中 bar 收线特征复核——成立
+    → confirmed_bar（虚拟成交/结局跟踪照常），瓦解 → expired_unconfirmed（留档
+    统计，不虚拟成交不进判定）；同波去重并入（不另发新信号）。
+
 虚拟成交与结局跟踪：
   - 成交价 = 信号 bar 下一根已收 bar 的开盘价；量 = 底仓 1/3 向下取整百
     （t_lot_cap；<300 股 → 0，改用纯比率口径并标记）；
@@ -30,7 +38,7 @@
 """
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import logging
 import re
@@ -192,6 +200,8 @@ def _advance_signal(sig: dict[str, Any], bars5: Sequence[Mapping[str, Any]],
     """用当前已收 bar 推进信号：虚拟成交 → 各时限结局 → 终结判定。"""
     if sig["status"] == "finalized":
         return sig
+    if sig.get("status") == "expired_unconfirmed":
+        return sig   # R46：瓦解的 fast 信号不虚拟成交、不进结局跟踪
     today_str = today.isoformat()
     today_bars = [b for b in bars5 if str(b["ts"]).startswith(today_str)]
     day_done = any(str(b["ts"]).endswith(DAY_CLOSE_TS_SUFFIX) or str(b["ts"]) >= f"{today_str} 15:00"
@@ -309,13 +319,26 @@ def shadow_beat(
     new_ids: list[str] = []
     eval_log: list[dict] = doc.setdefault("eval_log", [])
 
+    # R46：请求内 memo（评估/结算/结局推进共用一次装载）
+    memo5: dict[str, list[dict]] = {}
+
+    def _bars5_closed(code: str) -> list[dict]:
+        if code not in memo5:
+            memo5[code] = tts.closed_bars(load_bars5(code), now)
+        return memo5[code]
+
+    # R46 收线复核：open 的 fast 信号以原形成中 bar 收线特征结算
+    settled_ids = _settle_open_fast_signals(
+        signals=signals, regime=regime, now=now, day=day, bars5_loader=_bars5_closed,
+        eval_log=eval_log, log=log)
+
     for holding in holdings["holdings"]:
         code = str(holding["code"]).split(".")[0]
         info = regime["codes"].get(code)
         if not info:
             continue
         try:
-            bars5 = tts.closed_bars(load_bars5(code), now)
+            bars5 = _bars5_closed(code)
             feats = compute_features(bars5, day)
             if feats is None:
                 eval_log.append({"ts": tts.fmt_ts(now), "code": code, "decision": "skip",
@@ -342,6 +365,19 @@ def shadow_beat(
                     continue
             base_shares = int(holding.get("shares") or 0)
             qty = tts.t_lot_cap(base_shares)
+            # R46 同波去重：近窗 open 的 fast 信号 → 并入升级，不另发
+            fast_sig = _mergeable_fast_signal(signals, code, now)
+            if fast_sig is not None:
+                fast_sig["bar_status"] = "confirmed_bar"
+                fast_sig["confirmed_at"] = tts.fmt_ts(now)
+                fast_sig["confirm_source"] = "shadow_beat_merge"
+                fast_sig["closed_rsi5"] = feats["rsi5"]
+                eval_log.append({"ts": tts.fmt_ts(now), "code": code,
+                                 "decision": "merged_into_fast",
+                                 "signal_id": fast_sig["id"]})
+                m["armed"] = False
+                m["last_fire"] = tts.fmt_ts(now)
+                continue
             sig_id = _make_signal_id(now, code, signals)
             signals.append({
                 "schema": SCHEMA_SHADOW_SIGNAL, "id": sig_id,
@@ -368,7 +404,7 @@ def shadow_beat(
     # 结局推进（含本拍新信号：若下一根 bar 已收则同拍成交）
     for sig in signals:
         try:
-            bars5 = tts.closed_bars(load_bars5(sig["code"]), now)
+            bars5 = _bars5_closed(str(sig["code"]))
             _advance_signal(sig, bars5, day)
         except Exception as exc:  # noqa: BLE001
             log.error("[shadow] %s 结局推进失败：%s", sig.get("id"), exc)
@@ -377,7 +413,8 @@ def shadow_beat(
     eval_log[:] = eval_log[-400:]
     return {**base, "status": "ok", "new_signal_ids": new_ids,
             "signals_total": len(signals),
-            "finalized": sum(1 for s in signals if s["status"] == "finalized")}
+            "finalized": sum(1 for s in signals if s["status"] == "finalized"),
+            "fast_settled": settled_ids}
 
 
 def _make_signal_id(now: datetime, code: str, signals: Sequence[Mapping[str, Any]]) -> str:
@@ -387,6 +424,208 @@ def _make_signal_id(now: datetime, code: str, signals: Sequence[Mapping[str, Any
         seq += 1
         sid = f"S{now.strftime('%Y%m%d')}_{code}_vrd_{seq:02d}"
     return sid
+
+
+# ---------------------------------------------------------------------------
+# R46 影子快车道（1 分钟，observe_only；与 shadow_beat 共用台账/meta/冷却）
+# ---------------------------------------------------------------------------
+
+def _settle_open_fast_signals(
+    *,
+    signals: list[dict],
+    regime: Mapping[str, Any],
+    now: datetime,
+    day: date,
+    bars5_loader: Callable[[str], list[dict]],
+    eval_log: list[dict],
+    log: Optional[logging.Logger] = None,
+) -> list[str]:
+    """收线复核：open 的 fast 信号以原形成中 bar 收线特征结算（原地改写）。
+
+    成立 → confirmed_bar（虚拟成交/结局跟踪照常推进）；瓦解 →
+    expired_unconfirmed（status 同步标记，_advance_signal 跳过：不虚拟成交、
+    不进 4 周判定统计，只留档）。bar 尚未收/数据未到 → 保持 open。
+    """
+    log = log or logger
+    settled: list[str] = []
+    for sig in signals:
+        if sig.get("lane") != "fast" or sig.get("bar_status") != "open":
+            continue
+        code = str(sig.get("code") or "")
+        forming_ts = tts.parse_ts(str(sig.get("forming_bar_ts") or ""))
+        info = (regime.get("codes") or {}).get(code)
+        if forming_ts is None or info is None or now < forming_ts:
+            continue
+        try:
+            bars5_closed = bars5_loader(code)
+        except Exception as exc:  # noqa: BLE001 - 行情失败保留 open 等下一拍
+            log.error("[shadow-fast-settle] %s 行情失败，保留 open：%s", sig.get("id"), exc)
+            continue
+        settled_bar = next((b for b in bars5_closed
+                            if (tts.parse_ts(str(b["ts"])) or now) >= forming_ts), None)
+        if settled_bar is None:
+            continue
+        end_ts = tts.parse_ts(str(settled_bar["ts"]))
+        closes_up_to = [b for b in bars5_closed
+                        if (tts.parse_ts(str(b["ts"])) or now) <= end_ts]
+        feats = compute_features(closes_up_to, day)
+        if feats is None:
+            ok, reasons = False, ["insufficient_bars"]
+        else:
+            ok, reasons = evaluate_gate(info, feats)
+        if ok:
+            sig["bar_status"] = "confirmed_bar"
+            sig["confirmed_at"] = tts.fmt_ts(now)
+            sig["confirm_source"] = "shadow_beat_settle"
+            sig["closed_rsi5"] = feats["rsi5"]
+            sig["confirm_bar_ts"] = feats["signal_bar_ts"]
+        else:
+            sig["bar_status"] = "expired_unconfirmed"
+            sig["status"] = "expired_unconfirmed"
+            sig["expired_at"] = tts.fmt_ts(now)
+            sig["expire_reasons"] = reasons
+            sig["expire_bar_ts"] = feats["signal_bar_ts"] if feats else None
+        settled.append(str(sig.get("id")))
+        log.info("[shadow-fast-settle] %s → %s", sig.get("id"), sig["bar_status"])
+    return settled
+
+
+def _mergeable_fast_signal(signals: Sequence[Mapping[str, Any]], code: str,
+                           now: datetime) -> Optional[dict]:
+    """同波可并入的 open fast 信号：同码、同卖侧、近窗 ≤MERGE_WAVE_SEC。"""
+    for s in signals:
+        if s.get("lane") != "fast" or s.get("bar_status") != "open":
+            continue
+        if str(s.get("code")) != code or s.get("side") != SIDE_SELL:
+            continue
+        s_ts = tts.parse_ts(str(s.get("signal_ts") or ""))
+        if s_ts is None or (now - s_ts).total_seconds() > tts.MERGE_WAVE_SEC:
+            continue
+        return s  # type: ignore[return-value]
+    return None
+
+
+def shadow_fast_tick(
+    *,
+    now: datetime,
+    out_dir: Optional[Path] = None,
+    holdings_loader: Optional[Callable[[], dict]] = None,
+    regime_loader: Optional[Callable[[date], Optional[dict]]] = None,
+    bars5_loader: Optional[Callable[[str], list[dict]]] = None,
+    quotes_loader: Optional[Callable[[Sequence[str]], dict]] = None,
+    log: Optional[logging.Logger] = None,
+) -> dict:
+    """影子快车道一拍（R46，1 分钟）：intrabar 特征重估 → fast 影子信号。
+
+    与 shadow_beat 同判别式/同台账/同 armed+30min 冷却（共用 day doc meta）；
+    实时价刷新 5m 末根（forming bar）重估四特征。物理隔离不变：只写 shadow/，
+    零 drafts/pending_push 触碰。收线确认/瓦解由 shadow_beat 结算。
+    """
+    log = log or logger
+    root = tts.tracker_dir(out_dir)
+    day = now.date()
+    load_pool = holdings_loader or tts.load_t_pool
+    load_bars5 = bars5_loader or (lambda code: tts.cached_east_klines(code, 5))
+    load_quotes = quotes_loader or tts.fetch_east_ulist_quotes
+
+    def _default_regime_loader(d: date) -> Optional[dict]:
+        return tts._load_json(tts.regime_file_path(root, d))
+
+    load_regime = regime_loader or _default_regime_loader
+    base = {"schema": "t_tracker_shadow_fast_beat/1", "version": __version__,
+            "ts": tts.fmt_ts(now)}
+
+    try:
+        pool = load_pool()
+    except Exception as exc:  # noqa: BLE001 - fail-closed：持仓不可读 → 本拍放弃
+        log.error("[shadow-fast] 持仓加载失败：%s", exc)
+        return {**base, "status": "failure", "reason": f"holdings_unreadable: {exc}"}
+    regime = load_regime(day)
+    if not regime or not isinstance(regime.get("codes"), dict):
+        log.error("[shadow-fast] %s 周期文件缺失/不可读，本拍 fail-closed", day)
+        return {**base, "status": "failure", "reason": "regime_file_missing"}
+
+    doc = load_day_doc(root, day)
+    signals: list[dict] = doc["signals"]
+    meta = doc["meta"]
+    new_ids: list[str] = []
+    eval_log: list[dict] = doc.setdefault("eval_log", [])
+
+    pool_codes = [str(h.get("code") or "").split(".")[0] for h in pool["holdings"]]
+    try:
+        quotes = load_quotes(pool_codes) or {}
+    except Exception as exc:  # noqa: BLE001 - 实时价失败 → 本拍降级收线特征
+        log.warning("[shadow-fast] ulist 失败，本拍退化为收线特征：%s", exc)
+        quotes = {}
+
+    for holding in pool["holdings"]:
+        code = str(holding["code"]).split(".")[0]
+        info = regime["codes"].get(code)
+        if not info:
+            continue
+        try:
+            raw5 = load_bars5(code)
+            bars5_closed = tts.closed_bars(raw5, now)
+            px = None
+            q = quotes.get(code)
+            if q and q.get("price"):
+                px = float(q["price"])
+            elif bars5_closed:
+                px = float(bars5_closed[-1]["close"])
+            if px is None:
+                eval_log.append({"ts": tts.fmt_ts(now), "code": code,
+                                 "decision": "skip", "reason": "no_price"})
+                continue
+            bars5_fast, forming_ts = tts.build_intrabar_bars5(raw5, px, now)
+            feats = compute_features(bars5_fast, day)
+            if feats is None:
+                eval_log.append({"ts": tts.fmt_ts(now), "code": code,
+                                 "decision": "skip", "reason": "insufficient_bars"})
+                continue
+            ok, reasons = evaluate_gate(info, feats)
+            m = meta.setdefault(code, {"armed": True, "last_fire": None})
+            if not ok:
+                m["armed"] = True   # 条件离开 → 重布防（镜像真引擎语义）
+                continue
+            if not m["armed"]:
+                continue
+            if m.get("last_fire"):
+                last = tts.parse_ts(str(m["last_fire"]))
+                if last and (now - last).total_seconds() < SHADOW_COOLDOWN_SEC:
+                    continue
+            base_shares = int(holding.get("shares") or 0)
+            qty = tts.t_lot_cap(base_shares)
+            sig_id = _make_signal_id(now, code, signals)
+            # 结算锚 = 触发时的末根 bar（形成中优先；退化路径回退触发已收 bar）
+            settle_bar_ts = forming_ts or str(bars5_fast[-1]["ts"])
+            signals.append({
+                "schema": SCHEMA_SHADOW_SIGNAL, "id": sig_id,
+                "signal_ts": tts.fmt_ts(now), "signal_bar_ts": settle_bar_ts,
+                "code": code, "name": info.get("name") or holding.get("name") or "",
+                "side": SIDE_SELL, "trigger_kind": f"fast_{TRIGGER_KIND}",
+                "observe_only": True, "lane": "fast", "bar_status": "open",
+                "intrabar_rsi5": feats["rsi5"], "forming_bar_ts": settle_bar_ts,
+                "regime": str(info.get("regime") or ""), "pos20": info.get("pos20"),
+                "base_shares": base_shares, "virtual_qty": qty,
+                "features": {k: feats[k] for k in
+                             ("px", "gain30_pct", "down30", "rsi5", "vwap", "vwap_dev_pct")},
+                "virtual_fill": None, "outcomes": {}, "judged": None,
+                "status": "awaiting_fill", "updated_at": tts.fmt_ts(now),
+            })
+            new_ids.append(sig_id)
+            m["armed"] = False
+            m["last_fire"] = tts.fmt_ts(now)
+            log.info("[shadow-fast] %s %s fast 影子卖T信号（observe_only，零推送）",
+                     tts.fmt_ts(now), code)
+        except Exception as exc:  # noqa: BLE001 - 单票失败如实记录
+            eval_log.append({"ts": tts.fmt_ts(now), "code": code, "decision": "skip",
+                             "reason": f"error:{type(exc).__name__}: {exc}"})
+            log.error("[shadow-fast] %s 评估失败：%s", code, exc)
+
+    save_day_doc(root, day, doc, now)
+    eval_log[:] = eval_log[-400:]
+    return {**base, "status": "ok", "new_signal_ids": new_ids,
+            "signals_total": len(signals)}
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +717,17 @@ def finalize_shadow_day(
     judged = judged_records(signals)
     close_only = [s for s in signals
                   if (s.get("judged") or {}).get("basis") == "close_fallback"]
+    # R46 影子快车道统计（expired 不虚拟成交不进判定，单列留档）
+    fast_lane = {
+        "signals": sum(1 for s in signals if s.get("lane") == "fast"),
+        "confirmed_bar": sum(1 for s in signals if s.get("bar_status") == "confirmed_bar"),
+        "expired_unconfirmed": sum(1 for s in signals if s.get("bar_status") == "expired_unconfirmed"),
+        "open_unresolved": sum(1 for s in signals
+                               if s.get("lane") == "fast" and s.get("bar_status") == "open"),
+    }
+    fast_settled_n = fast_lane["confirmed_bar"] + fast_lane["expired_unconfirmed"]
+    fast_lane["hit_rate"] = (round(fast_lane["confirmed_bar"] / fast_settled_n, 4)
+                             if fast_settled_n else None)
     summary = {
         "schema": SCHEMA_SHADOW_SUMMARY, "version": __version__,
         "date": for_date.isoformat(), "generated_at": tts.fmt_ts(now),
@@ -488,6 +738,7 @@ def finalize_shadow_day(
         "judged_stats": _stats(judged),
         "close_fallback_count": len(close_only),
         "judged_basis": "h120_net_pct(close_fallback_when_unreachable)",
+        "fast_lane": fast_lane,
         "params": shadow_params_snapshot(),
         "rolling_4w": rolling_4w(root, for_date),
         "signal_ids": [s.get("id") for s in signals],
