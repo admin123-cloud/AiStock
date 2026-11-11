@@ -170,3 +170,82 @@ def test_not_target_account_no_hotswitch_rc4(monkeypatch, tmp_path):
     assert l2ps.main([]) == 4
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "not_target_account_no_hotswitch"
+
+
+# ── 4) 热切换成功路径（回归 2026-11-11 23:05 实机崩溃） ────────────
+
+class _ContractWindow:
+    """生产窗口契约替身：fills_export/poll 传入 hotswitch 的 pywinauto
+    包装窗调用面。回归点：_WinHandle 只有 handle，缺焦点/恢复方法。"""
+
+    def __init__(self, hwnd: int):
+        self.handle = hwnd
+        self.calls: list[str] = []
+
+    def set_focus(self) -> None:
+        self.calls.append("set_focus")
+
+    def is_minimized(self) -> bool:
+        return False
+
+    def restore(self) -> None:
+        self.calls.append("restore")
+
+
+class _FakeShot:
+    def save(self, path) -> None:  # noqa: ANN001 - 与 PIL.Image.save 同面
+        Path(path).write_bytes(b"png")
+
+
+class _FakeReader:
+    def element_from_handle(self, hwnd):  # noqa: ANN001, ANN202
+        return object()
+
+    def walk_tree(self, root, raw=False, max_nodes=0, progress_cb=None):
+        tree = {"name": "网上股票交易系统5.0", "children": [
+            _btn("买入[B100]"),
+            {"name": "证券代码", "localized_type": "编辑",
+             "patterns": {"value": {"read_only": False}}, "children": []},
+        ]}
+        return tree, 3
+
+
+def test_hotswitch_to_target_then_survey_ok_rc0(monkeypatch, tmp_path):
+    """面板在王*美 + --allow-hotswitch：生产窗口契约热切换自证后测绘 rc=0。
+
+    2026-11-11 23:05 实机：survey 传 _WinHandle（仅 handle）给
+    ensure_target_account，真实服务调窗口焦点方法即 AttributeError。
+    """
+    out = _repoint_outdir(monkeypatch, tmp_path)
+    panel = _fake_panel(0xC111E4, pid=32520)
+    win = _ContractWindow(0xC111E4)
+    monkeypatch.setattr(l2ps.bridge, "enumerate_trade_panels",
+                        lambda include_minimized=False: [panel])
+    monkeypatch.setattr(l2ps.bridge, "_ths_window_operation_lock",
+                        lambda **kw: contextlib.nullcontext())
+    monkeypatch.setattr(l2ps.bridge, "_find_window_for_panel", lambda p: win)
+    monkeypatch.setattr(l2ps.poll, "_is_foreground", lambda hwnd: False)
+    monkeypatch.setattr(l2ps, "_is_iconic", lambda hwnd: False)
+    ident = iter([("广发证券-王*美", None), ("广发证券-曾*", None)])
+    monkeypatch.setattr(l2ps.hotswitch, "read_window_identity",
+                        lambda w, save_png=None: next(ident))
+
+    def _ensure(window, cfg):
+        window.set_focus()   # 真实服务第一步（23:05 崩溃点），契约不满足即炸
+        assert cfg["target_hint"] == "曾" and cfg["target_hotkey"] == "1"
+        return None          # Alt 切换 + OCR 自证通过
+    monkeypatch.setattr(l2ps.hotswitch, "ensure_target_account", _ensure)
+    monkeypatch.setattr(l2ps.poll, "print_window_image",
+                        lambda hwnd: _FakeShot())
+    monkeypatch.setattr(l2ps, "enumerate_sibling_dialogs",
+                        lambda pid, main_hwnd: [])
+    monkeypatch.setattr(l2ps, "UiaReader", lambda: _FakeReader())
+
+    assert l2ps.main(["--allow-hotswitch"]) == 0
+    assert win.calls == ["set_focus"]
+    data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
+    assert data["status"] == "ok"
+    assert data["identity_label"] == "广发证券-曾*"
+    assert data["iron_law"]["zero_invoke"] is True
+    assert data["submit_buttons"] and all(
+        s["invoke_forbidden_phase1"] for s in data["submit_buttons"])

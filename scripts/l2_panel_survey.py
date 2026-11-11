@@ -19,7 +19,7 @@
 
 用法（host F:/python/python3.10）：
   python scripts/l2_panel_survey.py                    # 测绘当前面板（须已登录目标账号）
-  python scripts/l2_panel_survey.py --ensure-acct1     # 若在王*美→Alt+1 切曾*再测绘
+  python scripts/l2_panel_survey.py --allow-hotswitch  # 若在王*美→Alt+1 切曾*再测绘
   python scripts/l2_panel_survey.py --walker raw       # RawView 全量树（默认 ControlView）
 
 退出码：0=测绘完成  2=panel_absent  3=skipped_foreground  4=identity_failclosed
@@ -413,7 +413,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                 cfg = {"target_hint": target_hint,
                        "target_hotkey": target_rule.get("hotkey"),
                        "known_hints": known_hints}
-                res = hotswitch.ensure_target_account(_WinHandle(hwnd), cfg)
+                try:
+                    # 生产窗口契约（fills_export/poll 同源）：pywinauto uia 包装
+                    # 窗满足 hotswitch 服务的完整调用面（焦点/最小化/恢复）；
+                    # 按键只出自受控 hotswitch 模块，本文件自审计仍零输入原语。
+                    win = bridge._find_window_for_panel(panel)
+                    res = hotswitch.ensure_target_account(win, cfg)
+                except Exception as exc:  # noqa: BLE001 - 窗口消失/连接失败
+                    journal(f"hotswitch_window_error {type(exc).__name__}: {exc}")
+                    res = {"status": "switch_failed",
+                           "note": "窗口连接/热切换异常，fail-closed 零采集"}
                 if res is not None:
                     status_identity = res.get("status", "switch_failed")
                 else:
