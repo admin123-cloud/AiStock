@@ -231,9 +231,11 @@ def test_hotswitch_to_target_then_survey_ok_rc0(monkeypatch, tmp_path):
                         lambda w, save_png=None: next(ident))
 
     def _ensure(window, cfg):
-        window.set_focus()   # 真实服务第一步（23:05 崩溃点），契约不满足即炸
-        assert cfg["target_hint"] == "曾" and cfg["target_hotkey"] == "1"
-        return None          # Alt 切换 + OCR 自证通过
+        window.is_minimized()  # 真实服务第一步（_ensure_restored 触窗口面）
+        assert cfg["target_hint"] == "曾"          # R49c：无热键字段
+        assert "target_hotkey" not in cfg
+        assert window.set_focus is not None        # 契约面仍在（不再首触）
+        return None      # ComboBox 选择 + OCR 自证通过
     monkeypatch.setattr(l2ps.hotswitch, "ensure_target_account", _ensure)
     monkeypatch.setattr(l2ps.poll, "print_window_image",
                         lambda hwnd: _FakeShot())
@@ -242,7 +244,7 @@ def test_hotswitch_to_target_then_survey_ok_rc0(monkeypatch, tmp_path):
     monkeypatch.setattr(l2ps, "UiaReader", lambda: _FakeReader())
 
     assert l2ps.main(["--allow-hotswitch"]) == 0
-    assert win.calls == ["set_focus"]
+    assert win.calls == []   # R49c：不再 set_focus（零抢焦点，仅零交互查询）
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "ok"
     assert data["identity_label"] == "广发证券-曾*"

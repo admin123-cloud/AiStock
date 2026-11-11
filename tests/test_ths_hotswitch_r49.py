@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
-"""R49 acct2 绑定 + Alt 热切换双账号读取单测。
+"""R49/R49c acct2 绑定 + 双账号热切换读取单测。
 
-覆盖任务书第 4 项：热切换状态机各分支（前台/切换失败/身份不符/切回失败）、
-双账号巡读调度（home 在前、末位切回）、acct2 绑定幂等、
-broker_state 首次接入当日无成交仍落基线。
+R49c 机制修正（2026-11-11 深夜微切片）：Alt+N 判死（12 轮自证恒另一
+账号）→ 账号切换器 ComboBox(aid=2322) SelectionItem 选择路径。覆盖：
+切换状态机各分支（已在目标/身份不符/选择失败各 reason/自证失败/切回
+失败）、下拉文本匹配纯函数（找不到项/文本不匹配/歧义）、双账号巡读
+调度（home 在前、末位切回）、acct2 绑定幂等、broker_state 首次接入
+当日无成交仍落基线。
 
-全部合成 fixture（fake window / monkeypatch OCR 与热键发送），零 THS 依赖。
+全部合成 fixture（fake window / monkeypatch OCR 与 UIA 选择层），
+零 THS 依赖、零 comtypes 依赖（真机 UIA 路径由实机验证）。
 """
 from __future__ import annotations
 
@@ -38,86 +42,188 @@ class FakeWindow:
 
 
 def _cfg(**over):
-    """acct1(曾,Alt+1 home) / acct2(王,Alt+2) 共享面板的热切换配置。"""
+    """acct1(曾,home常态位) / acct2(王) 共享面板的热切换配置（R49c：
+    ComboBox aid=2322 SelectionItem 选择，无热键字段）。"""
     cfg = {
-        "target_hint": "曾", "target_hotkey": "1",
+        "target_hint": "曾",
         "known_hints": [("曾", "acct1"), ("王", "acct2")],
-        "home_hint": "曾", "home_hotkey": "1",
+        "home_hint": "曾",
         "restore_after": False,
+        "switch_mode": "combobox_selection",
         "lock_name": "ths_window.lock",
     }
     cfg.update(over)
     return cfg
 
 
-# ── 1) 状态机纯逻辑（ensure/restore，注入身份读取与热键层）──────────
+# ── 1) 状态机纯逻辑（ensure/restore，注入身份读取与 UIA 选择层）────
 
 def test_ensure_noop_when_already_on_target(monkeypatch):
     calls = []
     monkeypatch.setattr(hs, "read_window_identity",
                         lambda w, save_png=None: ("广发证券-曾*", None))
-    monkeypatch.setattr(hs, "_switch_and_verify",
-                        lambda w, hotkey, hint: calls.append(hotkey) or {"ok": True})
+    monkeypatch.setattr(hs, "_select_account_and_verify",
+                        lambda w, hint: calls.append(hint) or {"ok": True})
     assert hs.ensure_target_account(FakeWindow(), _cfg()) is None
-    assert calls == []  # 已在目标账号：零切换零按键
+    assert calls == []  # 已在目标账号：零切换零交互
 
 
 def test_ensure_switches_when_other_known_account(monkeypatch):
     calls = []
     monkeypatch.setattr(hs, "read_window_identity",
                         lambda w, save_png=None: ("广发证券-王*美", None))
-    monkeypatch.setattr(hs, "_switch_and_verify",
-                        lambda w, hotkey, hint: calls.append((hotkey, hint))
+    monkeypatch.setattr(hs, "_select_account_and_verify",
+                        lambda w, hint: calls.append(hint)
                         or {"ok": True, "identity_label": "广发证券-曾*"})
     assert hs.ensure_target_account(FakeWindow(), _cfg()) is None
-    assert calls == [("1", "曾")]
+    assert calls == ["曾"]  # 经账号切换器选曾（无热键）
 
 
 def test_ensure_failclosed_unknown_identity(monkeypatch):
     sent = []
     monkeypatch.setattr(hs, "read_window_identity",
                         lambda w, save_png=None: ("广发证券-李四", None))
-    monkeypatch.setattr(hs, "_switch_and_verify",
-                        lambda w, hotkey, hint: sent.append(hotkey) or {"ok": True})
+    monkeypatch.setattr(hs, "_select_account_and_verify",
+                        lambda w, hint: sent.append(hint) or {"ok": True})
     out = hs.ensure_target_account(FakeWindow(), _cfg())
     assert out["status"] == "identity_mismatch"
-    assert sent == []  # 未知身份：绝不按键
+    assert sent == []  # 未知身份：绝不触切换器
 
 
-def test_ensure_switch_failed_failclosed(monkeypatch):
+@pytest.mark.parametrize("reason", [
+    "combobox_absent",    # aid=2322 不在树中（结构变了）
+    "expand_failed",      # 下拉展不开
+    "no_items",           # 展开后列表项没出现
+    "item_not_found",     # 列表项在，但无一项含目标令牌（文本不匹配）
+    "ambiguous_match",    # 多项含目标令牌（歧义，绝不任选）
+    "select_error",       # SelectionItem.Select() 异常
+    "uia_error",          # comtypes/COM 层异常
+])
+def test_ensure_switch_failed_reasons_failclosed(monkeypatch, reason):
     monkeypatch.setattr(hs, "read_window_identity",
                         lambda w, save_png=None: ("广发证券-王*美", None))
-    monkeypatch.setattr(hs, "_switch_and_verify",
-                        lambda w, hotkey, hint: {"ok": False,
-                                                 "identity_label": "广发证券-王*美",
-                                                 "attempts": 12})
+    monkeypatch.setattr(hs, "_select_account_and_verify",
+                        lambda w, hint: {"ok": False, "reason": reason,
+                                         "identity_label": "广发证券-王*美"})
     out = hs.ensure_target_account(FakeWindow(), _cfg())
     assert out["status"] == "switch_failed"
-    assert out["identity_label"] == "广发证券-王*美"
+    assert out["reason"] == reason       # reason 原样上报（排障面）
+    assert "fail-closed" in out["note"]
 
+
+def test_select_and_verify_ok_then_label_flips(monkeypatch):
+    """Select 发出 → OCR 轮询读到目标令牌才算数。"""
+    labels = iter(["广发证券-王*美", "广发证券-曾*"])
+    monkeypatch.setattr(hs, "_uia_select_account",
+                        lambda hwnd, hint: {"ok": True, "matched": "广发证券-曾*",
+                                            "items": ["广发证券-曾*", "广发证券-王*美"]})
+    monkeypatch.setattr(hs, "read_window_identity",
+                        lambda w, save_png=None: (next(labels), None))
+    res = hs._select_account_and_verify(FakeWindow(), "曾")
+    assert res["ok"] is True
+    assert res["identity_label"] == "广发证券-曾*"
+    assert res["selected_item"] == "广发证券-曾*"
+
+
+def test_select_and_verify_uia_not_ok_short_circuits(monkeypatch):
+    """UIA 选择未通过（找不到项/文本不匹配等）→ 不进 OCR 轮询直接 fail。"""
+    ocr = []
+    monkeypatch.setattr(hs, "_uia_select_account",
+                        lambda hwnd, hint: {"ok": False, "reason": "item_not_found",
+                                            "items": ["广发证券-王*美"]})
+    monkeypatch.setattr(hs, "read_window_identity",
+                        lambda w, save_png=None: ocr.append(1) or ("广发证券-王*美", None))
+    res = hs._select_account_and_verify(FakeWindow(), "曾")
+    assert res["ok"] is False
+    assert res["reason"] == "item_not_found"
+    assert res["detail"]["items"] == ["广发证券-王*美"]
+    assert ocr == []  # 选择未过：绝不做身份轮询（也绝无"碰巧读到"通道）
+
+
+def test_select_and_verify_uia_exception_wrapped(monkeypatch):
+    def boom(hwnd, hint):
+        raise OSError("comtypes unavailable")
+    monkeypatch.setattr(hs, "_uia_select_account", boom)
+    res = hs._select_account_and_verify(FakeWindow(), "曾")
+    assert res["ok"] is False
+    assert res["reason"] == "uia_error"
+    assert "OSError" in res["error"]
+
+
+def test_select_and_verify_post_switch_identity_fail(monkeypatch):
+    """切换后自证失败：Select 已发出但 OCR 恒读旧账号 → fail-closed。"""
+    monkeypatch.setattr(hs, "_uia_select_account",
+                        lambda hwnd, hint: {"ok": True, "matched": "广发证券-曾*"})
+    monkeypatch.setattr(hs, "read_window_identity",
+                        lambda w, save_png=None: ("广发证券-王*美", None))
+    monkeypatch.setattr(hs, "SWITCH_WAIT_ATTEMPTS", 2)
+    monkeypatch.setattr(hs, "SWITCH_WAIT_SLEEP_S", 0)
+    res = hs._select_account_and_verify(FakeWindow(), "曾")
+    assert res["ok"] is False
+    assert res["reason"] == "verify_failed"
+    assert res["identity_label"] == "广发证券-王*美"
+
+
+# ── 1b) 下拉文本匹配纯函数（找不到项/文本不匹配/歧义）──────────────
+
+def test_match_names_unique_hit():
+    idx, reason = hs.match_account_item_names(
+        ["广发证券-曾*", "广发证券-王*美"], "曾")
+    assert (idx, reason) == (0, "")
+
+
+def test_match_names_no_items():
+    assert hs.match_account_item_names([], "曾") == (None, "no_items")
+    assert hs.match_account_item_names(["", "  "], "曾") == (None, "no_items")
+
+
+def test_match_names_text_mismatch_item_not_found():
+    """文本不匹配：列表项存在但无一项含目标令牌。"""
+    assert hs.match_account_item_names(
+        ["广发证券-王*美", "广发证券-李四"], "曾") == (None, "item_not_found")
+
+
+def test_match_names_ambiguous():
+    assert hs.match_account_item_names(
+        ["广发证券-王*美", "广发证券-王*二"], "王") == (None, "ambiguous_match")
+
+
+def test_match_names_empty_hint():
+    assert hs.match_account_item_names(["广发证券-曾*"], "") == (None, "no_hint")
+
+
+# ── 1c) 切回常态位 ──────────────────────────────────────────────────
 
 def test_restore_home_ok_and_failed(monkeypatch):
     monkeypatch.setattr(hs, "read_window_identity",
                         lambda w, save_png=None: ("广发证券-王*美", None))
-    monkeypatch.setattr(hs, "_switch_and_verify",
-                        lambda w, hotkey, hint: {"ok": True,
-                                                 "identity_label": "广发证券-曾*"})
+    monkeypatch.setattr(hs, "_select_account_and_verify",
+                        lambda w, hint: {"ok": True,
+                                         "identity_label": "广发证券-曾*"})
     assert hs.restore_home_account(FakeWindow(), _cfg()) is None
 
-    monkeypatch.setattr(hs, "_switch_and_verify",
-                        lambda w, hotkey, hint: {"ok": False, "attempts": 12})
+    monkeypatch.setattr(hs, "_select_account_and_verify",
+                        lambda w, hint: {"ok": False, "reason": "verify_failed",
+                                         "attempts": 12})
     out = hs.restore_home_account(FakeWindow(), _cfg())
     assert out["status"] == "switchback_failed"
+    assert out["reason"] == "verify_failed"
 
 
 def test_restore_home_noop_when_already_home(monkeypatch):
     sent = []
     monkeypatch.setattr(hs, "read_window_identity",
                         lambda w, save_png=None: ("广发证券-曾*", None))
-    monkeypatch.setattr(hs, "_switch_and_verify",
-                        lambda w, hotkey, hint: sent.append(hotkey) or {"ok": True})
+    monkeypatch.setattr(hs, "_select_account_and_verify",
+                        lambda w, hint: sent.append(hint) or {"ok": True})
     assert hs.restore_home_account(FakeWindow(), _cfg()) is None
     assert sent == []
+
+
+def test_restore_home_no_hint_failclosed(monkeypatch):
+    out = hs.restore_home_account(FakeWindow(), _cfg(home_hint=""))
+    assert out["status"] == "switchback_failed"
+    assert out["reason"] == "home_no_hint"
 
 
 # ── 2) capture_panel_zero_touch 集成分支 ────────────────────────────
@@ -154,21 +260,23 @@ def _patch_capture_env(monkeypatch, *, label, holdings=None, switch_ok=True,
     monkeypatch.setattr(hs, "read_window_identity",
                         lambda w, save_png=None: (state["label"], None))
 
-    def fake_switch(w, hotkey, hint):
-        log.append(("switch", hotkey, hint))
+    def fake_select(w, hint):
+        log.append(("select", hint))
         if switch_ok:
             state["label"] = f"广发证券-{'曾*' if hint == '曾' else '王*美'}"
             return {"ok": True, "identity_label": state["label"]}
-        return {"ok": False, "identity_label": state["label"], "attempts": 12}
+        return {"ok": False, "reason": "item_not_found",
+                "identity_label": state["label"], "attempts": 12}
 
-    monkeypatch.setattr(hs, "_switch_and_verify", fake_switch)
+    monkeypatch.setattr(hs, "_select_account_and_verify", fake_select)
 
     def fake_restore(w, cfg):
-        log.append(("restore", cfg["home_hotkey"]))
+        log.append(("restore", cfg["home_hint"]))
         if restore_ok:
             state["label"] = f"广发证券-{'曾*' if cfg['home_hint'] == '曾' else '王*美'}"
             return None
-        return {"status": "switchback_failed", "attempts": 12}
+        return {"status": "switchback_failed", "reason": "verify_failed",
+                "attempts": 12}
 
     monkeypatch.setattr(hs, "restore_home_account", fake_restore)
     return panel
@@ -204,7 +312,8 @@ def test_capture_switch_failed_branch(monkeypatch):
         "acct1", panel, identity_hint="曾", hotswitch=_cfg())
     assert cap["status"] == "switch_failed"
     assert cap["status"] in poll.SKIP_STATUSES  # 记 skipped 非 error
-    assert log == [("switch", "1", "曾")]
+    assert cap["reason"] == "item_not_found"    # reason 原样透传（排障面）
+    assert log == [("select", "曾")]
     assert cap.get("holdings") is None  # 绝不带出他账号数据
 
 
@@ -224,12 +333,12 @@ def test_capture_switch_read_ok_then_restore(monkeypatch, tmp_path):
     cap = poll.capture_panel_zero_touch(
         "acct2", panel, identity_hint="王",
         evidence_dir=tmp_path, hotswitch=_cfg(
-            target_hint="王", target_hotkey="2", restore_after=True))
+            target_hint="王", restore_after=True))
     assert cap["status"] == "ok"
     assert cap["holdings"][0]["code"] == "603881"
     assert cap["identity_label"] == "广发证券-王*美"
-    assert ("switch", "2", "王") in log
-    assert ("restore", "1") in log  # 读毕切回曾（常态位）
+    assert ("select", "王") in log
+    assert ("restore", "曾") in log  # 读毕切回曾（常态位）
     assert cap.get("switchback_failed") is None
 
 
@@ -240,7 +349,7 @@ def test_capture_switchback_failed_flag(monkeypatch, tmp_path):
     cap = poll.capture_panel_zero_touch(
         "acct2", panel, identity_hint="王",
         evidence_dir=tmp_path, hotswitch=_cfg(
-            target_hint="王", target_hotkey="2", restore_after=True))
+            target_hint="王", restore_after=True))
     assert cap["status"] == "ok"              # 数据有效已读
     assert cap.get("switchback_failed") is True  # 但常态位未恢复 → 留痕
 
@@ -345,6 +454,11 @@ def test_plan_builder_orders_home_first_with_restore_on_last():
     assert plan["acct1"]["hotswitch"]["restore_after"] is False
     assert plan["acct2"]["hotswitch"]["restore_after"] is True  # 末位读毕切回
     assert plan["acct1"]["hotswitch"]["lock_name"] == "ths_window.lock"
+    # R49c：ComboBox SelectionItem 机制标注；热键字段已除名（Alt+N 判死）
+    for entry in plan.values():
+        sw = entry.get("hotswitch") or {}
+        assert sw.get("switch_mode") == "combobox_selection"
+        assert "target_hotkey" not in sw and "home_hotkey" not in sw
 
 
 def _type_stub_registry():
@@ -377,7 +491,7 @@ def test_run_poll_round_dual_accounts(monkeypatch, tmp_path):
         "acct1": {"panel": {"pid": 101}, "identity_hint": "曾",
                   "hotswitch": _cfg(restore_after=False)},
         "acct2": {"panel": {"pid": 101}, "identity_hint": "王",
-                  "hotswitch": _cfg(target_hint="王", target_hotkey="2",
+                  "hotswitch": _cfg(target_hint="王",
                                     restore_after=True)},
     }
     report = poll.run_poll_round(

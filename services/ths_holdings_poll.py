@@ -51,7 +51,7 @@ SKIP_STATUSES = (
     "view_not_holdings",    # 面板不在持仓视图——不点菜单切换（零交互）
     "panel_absent",         # 无已登录面板（如 acct2 现状）——非失败
     "identity_mismatch",    # 面板登录身份≠账号绑定（换登）——fail-closed 拒绝
-    "switch_failed",        # R49 热切换后未读到目标账号身份令牌——fail-closed
+    "switch_failed",        # R49c 账号切换器选择/自证失败——fail-closed
 )
 
 
@@ -429,8 +429,9 @@ def capture_panel_zero_touch(account: str, panel: Optional[dict[str, Any]],
       2. 窗口在前台 → skipped_foreground（绝不抢焦点）；
       3. 窗口锁忙（timeout=2s）→ skipped_lock；
       4. 窗口最小化 → skipped_minimized（绝不恢复）；
-      5. R49 hotswitch：目标账号≠当前面板账号 → 前置校验已过（前台无人）
-         → Alt+N 切换 → OCR 身份自证（读不到目标令牌=switch_failed 拒采）；
+      5. R49c hotswitch：目标账号≠当前面板账号 → 前置校验已过（前台无人）
+         → 账号切换器 ComboBox(aid=2322) SelectionItem 选择 → OCR 身份自证
+         （选不到/读不到目标令牌=switch_failed 拒采）；
          restore_after（组末位）读毕切回常态位，失败记 switchback_failed；
       6. PrintWindow 截图（capture_as_image，不吃焦点/不点菜单）→ RapidOCR
          → 持仓表头在 → 解析；否则 view_not_holdings（绝不点菜单切换视图）。
