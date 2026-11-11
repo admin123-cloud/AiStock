@@ -534,10 +534,19 @@ def ch_snapshot_price(code: str) -> Optional[dict]:
     return {"price": float(price), "snapshot_ts": str(ts).replace("T", " ")[:16]}
 
 
+def _res_key(code: str, holding: Mapping[str, Any]) -> str:
+    """beat 报告键：acct1/空=legacy 纯码键；其他账号=码:账号（同码双账号不互相覆盖）。"""
+    account = str((holding or {}).get("account") or "acct1")
+    return code if account in ("", "acct1") else f"{code}:{account}"
+
+
 def load_broker_holdings() -> dict[str, Any]:
     """票池 = broker_state（THS 持仓，holding_source=ths_account_bridge）。
 
-    返回 {holdings: [{code,name,shares,...}], updated_at, holding_source, path}；
+    R47 多账号：accounts.<acctN> 在场时按账号展开——同码两账号=两行
+    （shares=该账号份额、account=acctN），1/3 底仓限额天然分账号。
+    单账号 legacy 形态=原行透传+account="acct1"（数量口径零变化）。
+    返回 {holdings: [...], updated_at, holding_source, path}；
     文件缺失/不可解析 → 抛异常（fail-closed，不猜持仓）。
     """
     import sys
@@ -549,11 +558,23 @@ def load_broker_holdings() -> dict[str, Any]:
     data = _load_json(Path(path))
     if not data or not isinstance(data.get("holdings"), list):
         raise RuntimeError(f"broker_state unreadable: {path}")
-    holdings = [h for h in data["holdings"] if h.get("code") and int(h.get("shares") or 0) > 0]
-    if not holdings:
+    from services.broker_state_autosync import union_holdings
+
+    rows: list[dict[str, Any]] = []
+    for row in union_holdings(data):
+        if not row.get("code") or int(row.get("shares") or 0) <= 0:
+            continue
+        detail = row.get("account_detail") if isinstance(row.get("account_detail"), dict) else {}
+        if detail:
+            for acct in sorted(detail):
+                if int(detail[acct] or 0) > 0:
+                    rows.append({**row, "shares": int(detail[acct]), "account": acct})
+        else:
+            rows.append({**row, "account": "acct1"})
+    if not rows:
         raise RuntimeError(f"broker_state holdings empty: {path}")
     return {
-        "holdings": holdings,
+        "holdings": rows,
         "updated_at": str(data.get("updated_at") or ""),
         "holding_source": str(data.get("holding_source") or ""),
         "path": str(path),
@@ -923,6 +944,7 @@ def evaluate_code(
         draft = {
             "schema": SCHEMA_BEAT, "id": draft_id, "ts": fmt_ts(now),
             "code": code, "name": name, "side": side, "subtype": subtype,
+            "account": str(holding.get("account") or "acct1"),  # R47：同码分账号草案
             "regime": regime, "params_source": params.get("source"),
             "px": px, "px_source": px_source,
             "trigger": {
@@ -937,6 +959,7 @@ def evaluate_code(
             "open_t_ref": open_t["draft_id"] if (open_t and subtype in ("exit", "stop", "fallback_eod")) else None,
             "precheck": {
                 "pool": {"shares": base_shares, "lot_cap": lot,
+                         "account": str(holding.get("account") or "acct1"),
                          "holdings_updated_at": holdings_updated_at},
                 "daily_count_before": count_today, "cap": DAILY_T_CAP,
                 "time_window": fmt_t(now.time()), "freshness_sec": round(freshness_sec or 0, 1),
@@ -1070,15 +1093,16 @@ def run_beat(
 
     for holding in holdings["holdings"]:
         code = str(holding["code"]).split(".")[0]
+        res_key = _res_key(code, holding)
         info = regime["codes"].get(code)
         if not info:
-            results[code] = {"code": code, "suppressed": {"reason": "no_regime_info"}}
+            results[res_key] = {"code": code, "suppressed": {"reason": "no_regime_info"}}
             continue
         try:
             bars5 = closed_bars(load_bars5(code), now)
             bars15 = closed_bars(load_bars15(code), now)
             if not bars5 or not bars15:
-                results[code] = {"code": code, "suppressed": {"reason": "empty_minute_data"}}
+                results[res_key] = {"code": code, "suppressed": {"reason": "empty_minute_data"}}
                 continue
             snap = None
             try:
@@ -1099,7 +1123,7 @@ def run_beat(
                 state=state, drafts_today=drafts_today + new_drafts, holding=holding,
                 holdings_updated_at=str(holdings.get("updated_at") or ""),
             )
-            results[code] = res
+            results[res_key] = res
             if res.get("draft"):
                 # R46 同波去重：慢车道草案与近窗 open 的 fast 草案同
                 # (code,side,band) → 并入升级该 fast 草案，不另发。
@@ -1121,7 +1145,7 @@ def run_beat(
                 else:
                     new_drafts.append(res["draft"])
         except Exception as exc:  # noqa: BLE001 - 单票数据失败 fail-closed 该票
-            results[code] = {"code": code, "suppressed": {"reason": f"evaluate_error: {type(exc).__name__}: {exc}"}}
+            results[res_key] = {"code": code, "suppressed": {"reason": f"evaluate_error: {type(exc).__name__}: {exc}"}}
             log.error("[beat] %s 评估失败：%s", code, exc)
 
     if settled_fast or merged_fast:
@@ -1422,9 +1446,10 @@ def run_fast_tick(
     new_drafts: list[dict] = []
     for holding in holdings["holdings"]:
         code = str(holding["code"]).split(".")[0]
+        res_key = _res_key(code, holding)
         info = regime["codes"].get(code)
         if not info:
-            results[code] = {"code": code, "lane": FAST_LANE,
+            results[res_key] = {"code": code, "lane": FAST_LANE,
                              "suppressed": {"reason": "no_regime_info"}}
             continue
         try:
@@ -1432,7 +1457,7 @@ def run_fast_tick(
             raw5 = load_bars5(code)
             bars5_closed = closed_bars(raw5, now)
             if not raw5 or not bars15 or not bars5_closed:
-                results[code] = {"code": code, "lane": FAST_LANE,
+                results[res_key] = {"code": code, "lane": FAST_LANE,
                                  "suppressed": {"reason": "empty_minute_data"}}
                 continue
             # 实时价链：ulist → CH 快照（≤10min）→ 5m 收价（fail-soft，标注来源）
@@ -1482,9 +1507,9 @@ def run_fast_tick(
                     {**d, "trigger": {"kind": kind, "band": d["trigger"].get("band")}},
                     info.get("params") or {})
                 new_drafts.append(d)
-            results[code] = res
+            results[res_key] = res
         except Exception as exc:  # noqa: BLE001 - 单票数据失败 fail-closed 该票
-            results[code] = {"code": code, "lane": FAST_LANE,
+            results[res_key] = {"code": code, "lane": FAST_LANE,
                              "suppressed": {"reason": f"evaluate_error: {type(exc).__name__}: {exc}"}}
             log.error("[fast] %s 评估失败：%s", code, exc)
 
