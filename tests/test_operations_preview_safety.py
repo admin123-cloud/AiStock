@@ -120,9 +120,13 @@ _PROJECT_NAMESPACES = ('api', 'services', 'strategies', 'utils')
 # R42（2026-11-10，任务书 20261110_purify_holding_tick_analysis_r42.md）：R30 审计表
 # #14 /gen3-state-alpha/holding-tick-analysis 净化（GET 链剥离 SMTP 外呼与修复写，
 # AST 守卫锁定零 smtp/文件写/子进程）后放行：115 → 116。
-# 完整 (METHOD, path) 矩阵：151 条路径各自的 GET 与 HEAD 共 302 对，一个不多、一个不少；
-# 任何 OPTIONS、其他方法、未识别路由类型或额外路径都是违规。路径模板取自各 router 文件
-# 的实际装饰器（含 /api/stocks/ 尾斜杠与参数名）。
+# R45（2026-11-11，任务书 20261110_ttrade_watchlist_r45.md）：Owner 批复 scoped-write
+# 唯一放行写端点 2 条 POST（holding-t/watchlist-upsert、holding-t/watchlist-sync-ths，
+# 只写 holding_tick_watchlist.json 原子+备份；AST 守卫 tests/test_r45_holding_t_watchlist.py）：
+# 151 → 153 路径。
+# 完整 (METHOD, path) 矩阵：151 条 GET 路径各自的 GET 与 HEAD 共 302 对 + 2 条 scoped-write
+# POST 共 304 对，一个不多、一个不少；任何 OPTIONS、其他方法、未识别路由类型或额外路径都是
+# 违规。路径模板取自各 router 文件的实际装饰器（含 /api/stocks/ 尾斜杠与参数名）。
 ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('GET', '/api/backtest/progress/{task_id}'),
     ('GET', '/api/backtest/result/{task_id}'),
@@ -158,6 +162,9 @@ ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
     ('HEAD', '/api/gen3-state-alpha/holding-t/review'),
     ('GET', '/api/gen3-state-alpha/holding-t/shadow-review'),
     ('HEAD', '/api/gen3-state-alpha/holding-t/shadow-review'),
+    # R45 scoped-write：唯一放行写端点（POST-only；同路径 GET/HEAD 不得出现 → 405）
+    ('POST', '/api/gen3-state-alpha/holding-t/watchlist-sync-ths'),
+    ('POST', '/api/gen3-state-alpha/holding-t/watchlist-upsert'),
     ('GET', '/api/gen3-state-alpha/holding-tick-analysis'),
     ('HEAD', '/api/gen3-state-alpha/holding-tick-analysis'),
     ('GET', '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}'),
@@ -903,8 +910,8 @@ def test_business_http_routes_exactly_match_allowlist(tmp_path, monkeypatch):
         f'缺失 (method, path): {missing}\n'
         '注：OPTIONS 与任何未识别路由类型都不得从矩阵中滤掉；当前 '
         'api.operations_preview 按 R30 全站只读面挂载 12 router 并后置过滤为 '
-        '149 路径 × {GET, HEAD}（路径+方法双重白名单；R43 后仍封 4 条 GET（R42 #14+⑤类3）+ 全部写方法 '
-        'GET 与全部 POST/PUT/DELETE 封禁）。'
+        '151 GET 路径 × {GET, HEAD} + R45 scoped-write 2 条 POST（路径+方法双重白名单； '
+        '仍封 3 条 sync-ths GET + 全部其余 POST/PUT/DELETE）。'
     )
 
 
@@ -1290,9 +1297,35 @@ def _inner_test_r30_same_path_write_siblings_not_exposed(tmp_path, monkeypatch):
             assert (method, path) not in surface['pairs'], (
                 f'同路径写方法 {method} {path} 不得暴露'
             )
-    # 整体收紧：路由面只允许 GET/HEAD 两种方法（POST/PUT/DELETE/OPTIONS 全无）。
-    rogue = sorted(m for m, _ in surface['pairs'] if m not in ('GET', 'HEAD'))
-    assert not rogue, f'路由面出现 GET/HEAD 之外的方法: {rogue}'
+    # 整体收紧：路由面只允许 GET/HEAD 两种方法——R45 唯一例外为 2 条 scoped-write
+    # POST（holding-t/watchlist-upsert、watchlist-sync-ths），其余一律违规。
+    _R45_SCOPED_WRITE_POSTS = {
+        ('POST', '/api/gen3-state-alpha/holding-t/watchlist-upsert'),
+        ('POST', '/api/gen3-state-alpha/holding-t/watchlist-sync-ths'),
+    }
+    rogue = sorted(set(m for m, _ in surface['pairs'] if m not in ('GET', 'HEAD')) - {'POST'})
+    assert not rogue, f'路由面出现 GET/HEAD/ scoped-POST 之外的方法: {rogue}'
+    exposed_posts = {(m, p) for m, p in surface['pairs'] if m == 'POST'}
+    assert exposed_posts == _R45_SCOPED_WRITE_POSTS, (
+        f'POST 面必须恰好等于 R45 scoped-write 白名单: {sorted(exposed_posts)}')
+
+
+def _inner_test_r45_scoped_write_post_only(tmp_path, monkeypatch):
+    """R45：scoped-write 两端点 POST-only——同路径 GET/HEAD/OPTIONS 不得暴露（405）；
+    旧 PUT /holding-tick-watchlist 兄弟保持封禁（404）。"""
+    surface = _inspect_preview_route_surface(tmp_path, monkeypatch)
+    for path in (
+        '/api/gen3-state-alpha/holding-t/watchlist-upsert',
+        '/api/gen3-state-alpha/holding-t/watchlist-sync-ths',
+    ):
+        assert ('POST', path) in surface['pairs'], f'scoped-write POST 缺失: {path}'
+        for method in ('GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE', 'PATCH'):
+            assert (method, path) not in surface['pairs'], (
+                f'scoped-write 路径不得暴露 {method}: {path}'
+            )
+    put_path = '/api/gen3-state-alpha/holding-tick-watchlist'
+    assert ('PUT', put_path) not in surface['pairs'], '旧 PUT 保持封禁'
+    assert ('GET', put_path) in surface['pairs'], '旧 GET 读端不受影响'
 
 
 def _r30_subprocess_clean_run(test_name):
@@ -1442,6 +1475,12 @@ def test_r30_same_path_write_siblings_not_exposed(tmp_path, monkeypatch):
         _inner_test_r30_same_path_write_siblings_not_exposed(tmp_path, monkeypatch)
         return
     _r30_subprocess_clean_run('test_r30_same_path_write_siblings_not_exposed')
+
+def test_r45_scoped_write_post_only(tmp_path, monkeypatch):
+    if os.environ.get('AISTOCK_R30_SUBTEST') == '1':
+        _inner_test_r45_scoped_write_post_only(tmp_path, monkeypatch)
+        return
+    _r30_subprocess_clean_run('test_r45_scoped_write_post_only')
 
 def test_r30_watchlist_ensure_table_guard_skips_ddl_in_preview(tmp_path, monkeypatch):
     if os.environ.get('AISTOCK_R30_SUBTEST') == '1':

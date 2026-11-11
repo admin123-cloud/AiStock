@@ -665,7 +665,14 @@ def _update_shadow_attribution(
 
 
 def _watchlist_codes(path: Path) -> set[str] | None:
-    payload = _load_json(path, {})
+    # R45：观察名单已迁移到 store(v2) 路径（holding_t_watchlist/ 子目录，scoped-write
+    # 唯一写通道）；store 缺件回退旧路径，保证盯盘覆盖面与页面持仓股始终同源。
+    from services import holding_t_watchlist as htw_store
+
+    store_path = path.parent / "holding_t_watchlist" / path.name
+    payload = htw_store.read_watchlist(store_path, legacy_path=path)
+    if payload.get("source") == "empty":
+        return None
     raw_codes = payload.get("codes")
     if not isinstance(raw_codes, list):
         return None

@@ -15,6 +15,7 @@ import {
 import { useToast } from '@/components/toast'
 import { Card, ChangeValue, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import { getGen3HoldingTReview, getGen3HoldingTShadowReview, recordGen3HoldingTManualExecution } from '@/api/trading'
+import { getStockDetail } from '@/api/stock'
 
 type Row = Record<string, any>
 
@@ -52,6 +53,7 @@ export default function Gen3HoldingTReview() {
   const [shadow, setShadow] = useState<Row>({})
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [stockNames, setStockNames] = useState<Record<string, string>>({})
   const [form, setForm] = useState({
     code: '',
     side: 'sell',
@@ -110,6 +112,34 @@ export default function Gen3HoldingTReview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // R45：做T列表补名称——复盘 stocks/影子信号 codes-only 行按需拉详情名（缓存去重）
+  const nameCodes = [...new Set([
+    ...stocks.map((row) => String(row.code || '')),
+    ...shadowSignals.map((row) => String(row.code || '')),
+  ].filter(Boolean))]
+  useEffect(() => {
+    const missing = nameCodes.filter((code) => !(code in stockNames))
+    if (!missing.length) return
+    let cancelled = false
+    ;(async () => {
+      const fetched: Record<string, string> = {}
+      await Promise.all(missing.map(async (code) => {
+        try {
+          const payload: any = await getStockDetail(code)
+          const name = String(payload?.name || '').trim()
+          fetched[code] = name && name !== code ? name : ''
+        } catch {
+          fetched[code] = ''
+        }
+      }))
+      if (!cancelled) setStockNames((prev) => ({ ...prev, ...fetched }))
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nameCodes.join(',')])
+
   return (
     <div className="flex flex-col">
       <PageHeader
@@ -158,7 +188,7 @@ export default function Gen3HoldingTReview() {
               <Select value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })}>
                 <option value="">选择标的</option>
                 {stocks.map((row: Row) => (
-                  <option key={row.code} value={row.code}>{row.code}</option>
+                  <option key={row.code} value={row.code}>{row.code} {row.name || stockNames[row.code] || ''}</option>
                 ))}
               </Select>
             </div>
@@ -196,7 +226,7 @@ export default function Gen3HoldingTReview() {
 
       {stocks.map((stock: Row) => (
         <Card key={stock.code} className="mt-4">
-          <SectionTitle title={stock.code} actions={<Badge color={statusColor(stock.review_status)}>{reviewStatus(stock.review_status)}</Badge>} />
+          <SectionTitle title={`${stock.code} ${stock.name || stockNames[stock.code] || ''}`.trim()} actions={<Badge color={statusColor(stock.review_status)}>{reviewStatus(stock.review_status)}</Badge>} />
           <p className="text-sm text-zinc-500 dark:text-zinc-400">复盘状态：{reviewStatus(stock.review_status)} · 快照 {stock.snapshot_count} 条</p>
           <div className="my-3.5 flex flex-wrap gap-x-6 gap-y-2 text-sm text-zinc-500 dark:text-zinc-400">
             <span>开/收：<strong className="tabular-nums text-zinc-800 dark:text-zinc-200">{price(stock.market_path?.first_price)} / {price(stock.market_path?.last_price)}</strong></span>
@@ -320,7 +350,7 @@ export default function Gen3HoldingTReview() {
               {shadowSignals.map((row: Row) => (
                 <TableRow key={row.id}>
                   <TableCell className="whitespace-nowrap">{row.signal_bar_ts || '--'}</TableCell>
-                  <TableCell className="whitespace-nowrap">{row.code} {row.name}</TableCell>
+                  <TableCell className="whitespace-nowrap">{row.code} {row.name || stockNames[row.code] || ''}</TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums text-zinc-600 dark:text-zinc-300">
                     gain30 +{row.features?.gain30_pct}% · down{row.features?.down30} · RSI5 {row.features?.rsi5} · 乖离 +{row.features?.vwap_dev_pct}%
                   </TableCell>

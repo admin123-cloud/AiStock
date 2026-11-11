@@ -4,7 +4,9 @@ R30（2026-11-10 Owner 裁定修复范围升级，任务书 20261110_full_readfa
 kline_check/system/trading/watchlist 补挂，连同既有 operations/market_overview/stocks/sectors/
 cls_news 共 13 个 include），对 162 条 GET 处理器逐条副作用审计后放行 114 条只读路径
 （含本文件自有的 2 条 health）；39 条"伪读实写/任务触发/调度器变更/外呼"GET 封禁；全部
-127 条 POST/PUT/DELETE 一律封禁（开放写动作须 Owner 另批）。
+127 条 POST/PUT/DELETE 一律封禁（开放写动作须 Owner 另批）。R45（20261110_ttrade_watchlist_
+r45.md）Owner 批复唯一例外：2 条 scoped-write POST（holding-t/watchlist-upsert、
+holding-t/watchlist-sync-ths）只写 holding_tick_watchlist.json（原子+备份），其余写方法仍全封。
 
 绝对禁区（Owner 明令）：任何被放行端点的处理器链不得读取
 runtime/gen3_state_alpha/qmtmini_broker_snapshot_sync.log 及其所在子树；审计证据（grep 全
@@ -97,6 +99,10 @@ def health_check():
 # R42（2026-11-10，任务书 20261110_purify_holding_tick_analysis_r42.md）：审计表 #14
 # /api/gen3-state-alpha/holding-tick-analysis 净化（GET 链剥离 SMTP 外呼与修复写，
 # AST 守卫测试锁定零 smtp/文件写/子进程）后放行：114 → 115 条。
+# R45（2026-11-11，任务书 20261110_ttrade_watchlist_r45.md）：scoped-write 唯一放行
+# 写端点 2 条 POST（holding-t/watchlist-upsert、holding-t/watchlist-sync-ths）——
+# 只写 holding_tick_watchlist.json（原子+备份，AST 守卫），见下方
+# _SCOPED_WRITE_PREVIEW_PATHS；其余一切 POST/PUT/DELETE 仍封禁。
 _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/backtest/progress/{task_id}',
     '/api/backtest/result/{task_id}',
@@ -130,6 +136,8 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/gen3-state-alpha/holding-t/portfolio-state',
     '/api/gen3-state-alpha/holding-t/review',
     '/api/gen3-state-alpha/holding-t/shadow-review',
+    '/api/gen3-state-alpha/holding-t/watchlist-sync-ths',
+    '/api/gen3-state-alpha/holding-t/watchlist-upsert',
     '/api/gen3-state-alpha/holding-tick-analysis',
     '/api/gen3-state-alpha/holding-tick-analysis/chart/{code}',
     '/api/gen3-state-alpha/holding-tick-watchlist',
@@ -251,11 +259,26 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/watchlist/groups',
 })
 
+# R45 scoped-write 白名单：唯一放行的写端点（其余 POST/PUT/DELETE 一律封禁）。
+# 这两条 POST 只写 holding_tick_watchlist.json（services/holding_t_watchlist 原子
+# 写+备份；AST 守卫 tests/test_r45_holding_t_watchlist.py 锁定链上零其他文件写/
+# 零 formal 表写/零调度器）。compose 侧仅嵌套 rw 挂载 holding_t_watchlist 子目录，
+# gen3_state_alpha 其余文件（broker_state.json 等）保持只读。
+_SCOPED_WRITE_PREVIEW_PATHS = frozenset({
+    '/api/gen3-state-alpha/holding-t/watchlist-upsert',
+    '/api/gen3-state-alpha/holding-t/watchlist-sync-ths',
+})
+
 # 后置过滤：只保留 allowlist 内且「原本就以 GET 注册」的路由对象；随后统一置
 # methods 为 GET/HEAD（Starlette 依 methods 集合分派，HEAD 命中同一 handler；
-# 原注册参数原样保留，零行为漂移）。
+# 原注册参数原样保留，零行为漂移）。R45 例外：_SCOPED_WRITE_PREVIEW_PATHS 内
+# 「原本就以 POST 注册」的 scoped-write 路由按原方法保留（绝不参与 GET/HEAD
+# 归一；同路径 GET/PUT 兄弟仍被丢弃——PUT 处理器保持封禁）。
 app.router.routes[:] = [route for route in app.router.routes
-                        if getattr(route, 'path', None) in _ALLOWED_PREVIEW_PATHS
-                        and (getattr(route, 'methods', None) or set()) <= {'GET', 'HEAD'}]
+                        if (getattr(route, 'path', None) in _ALLOWED_PREVIEW_PATHS
+                            and (getattr(route, 'methods', None) or set()) <= {'GET', 'HEAD'})
+                        or (getattr(route, 'path', None) in _SCOPED_WRITE_PREVIEW_PATHS
+                            and (getattr(route, 'methods', None) or set()) == {'POST'})]
 for route in app.router.routes:
-    route.methods = {'GET', 'HEAD'}
+    if getattr(route, 'path', None) not in _SCOPED_WRITE_PREVIEW_PATHS:
+        route.methods = {'GET', 'HEAD'}

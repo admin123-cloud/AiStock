@@ -24,7 +24,8 @@ import {
   getGen3StateAlphaHoldingTickChart,
   getGen3StateAlphaHoldingTickWatchlist,
   saveGen3HoldingTPortfolioState,
-  saveGen3StateAlphaHoldingTickWatchlist,
+  syncGen3HoldingTWatchlistThs,
+  upsertGen3HoldingTWatchlist,
 } from '@/api/trading'
 
 type Row = Record<string, any>
@@ -206,7 +207,12 @@ export default function Gen3StateAlphaHoldingTicks() {
   const [warnings, setWarnings] = useState<string[]>([])
   const [source, setSource] = useState<Row>({})
   const [brokerUpdatedAt, setBrokerUpdatedAt] = useState('')
-  const [savedCodes, setSavedCodes] = useState<string[]>([])
+  const [watchItems, setWatchItems] = useState<Row[]>([])
+  const [watchSync, setWatchSync] = useState<Row | null>(null)
+  const [watchBusy, setWatchBusy] = useState(false)
+  const [addCode, setAddCode] = useState('')
+  const [addQty, setAddQty] = useState('')
+  const [simNames, setSimNames] = useState<Record<string, string>>({})
   const [trackedCodes, setTrackedCodes] = useState<string[]>([])
   const [actionStates, setActionStates] = useState<Record<string, Row>>({})
   const [portfolioState, setPortfolioState] = useState<Row>({ positions: {} })
@@ -291,22 +297,14 @@ export default function Gen3StateAlphaHoldingTicks() {
     return { ...stable, detail: `${stable.detail} ${realtimeDetail}` }
   }
 
-  const load = useCallback(async (overrideCodes: string = '', options: { persistInput?: boolean } = {}) => {
-    const { persistInput = true } = options
+  const load = useCallback(async (overrideCodes: string = '') => {
     loadingRef.current = true
     setLoading(true)
     try {
       const explicitCodes = typeof overrideCodes === 'string' ? overrideCodes.trim() : ''
       const inputCodes = parseCodes(explicitCodes || codes)
-      if (persistInput && inputCodes.length) {
-        try {
-          const payload: any = await saveGen3StateAlphaHoldingTickWatchlist(inputCodes)
-          if (!payload?.ok) throw new Error(payload?.message || 'Failed to save holding Tick watchlist')
-          setSavedCodes(parseCodes((payload.codes || []).join(',')))
-        } catch (error: any) {
-          setWarnings([error?.message || 'Holding Tick watchlist save failed; analysis will continue'])
-        }
-      }
+      // R45：分析不再自动写入持仓股观察名单（写通道收敛为持仓股卡片的显式
+      // 增删与同花顺同步；旧 PUT 每次分析隐式保存的行为已移除）。
       const requestCodes = [...new Set([...trackedCodesRef.current, ...inputCodes])].join(',')
       const response: any = await getGen3StateAlphaHoldingTickAnalysis(requestCodes ? { codes: requestCodes } : {})
       const responseItems = response.items || []
@@ -333,7 +331,7 @@ export default function Gen3StateAlphaHoldingTicks() {
     ;(window as any).__g3TickTimer = null
     if (!trackedCodesRef.current.length) return
     ;(window as any).__g3TickTimer = window.setInterval(() => {
-      if (!loadingRef.current) loadRef.current(trackedCodesRef.current.join(','), { persistInput: false })
+      if (!loadingRef.current) loadRef.current(trackedCodesRef.current.join(','))
     }, 5000)
   }, [])
 
@@ -353,7 +351,7 @@ export default function Gen3StateAlphaHoldingTicks() {
     trackedCodesRef.current = next
     persistTrackedCodes(next)
     resetTrackingTimer()
-    await load(next.join(','), { persistInput: false })
+    await load(next.join(','))
   }
 
   function stopTracking(code: any) {
@@ -378,7 +376,7 @@ export default function Gen3StateAlphaHoldingTicks() {
     trackedCodesRef.current = next
     persistTrackedCodes(next)
     resetTrackingTimer()
-    await load(next.join(','), { persistInput: false })
+    await load(next.join(','))
   }
 
   function stopAllTracking() {
@@ -440,6 +438,98 @@ export default function Gen3StateAlphaHoldingTicks() {
       setPortfolioState(payload?.state || { positions: {} })
     } catch {
       setPortfolioState({ positions: {} })
+    }
+  }
+
+  // ---------------- R45 持仓股（做T标的池）管理：唯一受控写通道 ----------------
+
+  function mergeWatchItems(payload: any) {
+    const nextItems: Row[] = Array.isArray(payload?.items) ? payload.items : []
+    setWatchItems(nextItems)
+    // 持仓股名单变化后同步本地持续跟踪集合（新增码自动进入 5 秒轮询盯盘）
+    const watchCodes = parseCodes((payload?.codes || []).join(','))
+    const merged = [...new Set([...trackedCodesRef.current, ...watchCodes])]
+    setTrackedCodes(merged)
+    trackedCodesRef.current = merged
+    persistTrackedCodes(merged)
+    resetTrackingTimer()
+    return nextItems
+  }
+
+  async function loadWatchlist() {
+    try {
+      const payload: any = await getGen3StateAlphaHoldingTickWatchlist()
+      if (payload?.ok) {
+        setWatchItems(Array.isArray(payload.items) ? payload.items : [])
+        const saved = parseCodes((payload.codes || []).join(','))
+        const merged = [...new Set([...trackedCodesRef.current, ...saved])]
+        setTrackedCodes(merged)
+        trackedCodesRef.current = merged
+        persistTrackedCodes(merged)
+        setCodes((prev) => prev || (saved.length ? saved.join(',') : ''))
+      }
+    } catch (error: any) {
+      setWarnings([error?.message || '持仓股观察名单读取失败'])
+    }
+  }
+
+  async function addToWatchlist() {
+    const normalized = normalizeCode(addCode)
+    if (!normalized) {
+      toast.error('请输入 6 位股票代码')
+      return
+    }
+    const qty = Number(addQty)
+    setWatchBusy(true)
+    try {
+      const payload: any = await upsertGen3HoldingTWatchlist({
+        add: [{ code: normalized, qty: addQty.trim() === '' ? null : Number.isFinite(qty) && qty > 0 ? Math.round(qty) : null }],
+      })
+      if (!payload?.ok) throw new Error(payload?.message || '保存失败')
+      mergeWatchItems(payload)
+      setAddCode('')
+      setAddQty('')
+      const name = payload.items?.find((row: Row) => normalizeCode(row.code) === normalized)?.name
+      toast.success(`已添加持仓股 ${normalized}${name ? ` ${name}` : ''}，并开始持续跟踪`)
+    } catch (error: any) {
+      toast.error(error?.message || '添加失败')
+    } finally {
+      setWatchBusy(false)
+    }
+  }
+
+  async function removeFromWatchlist(code: any) {
+    const normalized = normalizeCode(code)
+    if (!normalized) return
+    setWatchBusy(true)
+    try {
+      const payload: any = await upsertGen3HoldingTWatchlist({ remove: [normalized] })
+      if (!payload?.ok) throw new Error(payload?.message || '删除失败')
+      setWatchItems(Array.isArray(payload.items) ? payload.items : [])
+      toast.success(`已删除 ${normalized}`)
+    } catch (error: any) {
+      toast.error(error?.message || '删除失败')
+    } finally {
+      setWatchBusy(false)
+    }
+  }
+
+  async function syncFromThs() {
+    setWatchBusy(true)
+    try {
+      const payload: any = await syncGen3HoldingTWatchlistThs()
+      if (!payload?.ok) throw new Error(payload?.message || '同步失败')
+      mergeWatchItems(payload)
+      setWatchSync({
+        synced_at: payload.synced_at,
+        summary: payload.summary,
+        diff: payload.diff,
+      })
+      toast.success(`同花顺持仓合并完成：${payload.summary}（数据时点 ${payload.synced_at}）`)
+    } catch (error: any) {
+      toast.error(error?.message || '同步失败')
+    } finally {
+      setWatchBusy(false)
     }
   }
 
@@ -520,23 +610,11 @@ export default function Gen3StateAlphaHoldingTicks() {
       } catch {
         window.localStorage.removeItem(ACTION_STATES_STORAGE_KEY)
       }
-      try {
-        const payload: any = await getGen3StateAlphaHoldingTickWatchlist()
-        if (!cancelled && payload?.ok) {
-          const saved = parseCodes((payload.codes || []).join(','))
-          setSavedCodes(saved)
-          const merged = [...new Set([...trackedCodesRef.current, ...saved])]
-          setTrackedCodes(merged)
-          trackedCodesRef.current = merged
-          persistTrackedCodes(merged)
-          setCodes((prev) => prev || (saved.length ? saved.join(',') : ''))
-        }
-      } catch (error: any) {
-        if (!cancelled) setWarnings([error?.message || 'Saved holding Tick watchlist load failed'])
-      }
+      // R45：持仓股观察名单（服务端持久化，双形状 codes+items）
+      if (!cancelled) await loadWatchlist()
       if (cancelled) return
       resetTrackingTimer()
-      loadRef.current(codes || trackedCodesRef.current.join(','), { persistInput: false })
+      loadRef.current(codes || trackedCodesRef.current.join(','))
     })()
     return () => {
       cancelled = true
@@ -556,6 +634,33 @@ export default function Gen3StateAlphaHoldingTicks() {
 
   const positions: Row = portfolioState.positions || {}
   const events: Row[] = portfolioState.events || []
+
+  // R45：模拟做T记录补名称（codes-only 行按需拉取详情名，缓存去重）
+  useEffect(() => {
+    const missing = [...new Set(events
+      .map((row) => normalizeCode(row.code))
+      .filter((code) => code && !(code in simNames)))]
+    if (!missing.length) return
+    let cancelled = false
+    ;(async () => {
+      const fetched: Record<string, string> = {}
+      await Promise.all(missing.map(async (code) => {
+        try {
+          const payload: any = await getStockDetail(code)
+          const name = String(payload?.name || '').trim()
+          if (name && !isCodeLikeName(name, code)) fetched[code] = name
+          else fetched[code] = ''
+        } catch {
+          fetched[code] = ''
+        }
+      }))
+      if (!cancelled) setSimNames((prev) => ({ ...prev, ...fetched }))
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events])
 
   return (
     <div className="flex flex-col">
@@ -579,6 +684,86 @@ export default function Gen3StateAlphaHoldingTicks() {
       <Alert color="zinc" className="mb-4 text-sm">
         常态建议需同一方向连续 3 次 Tick（约15秒）才切换；实时信号可变化，但不能单独推翻常态判断。仍须核实5分钟、30分钟结构、板块状态及可用仓位；页面不自动下单。
       </Alert>
+
+      <Card className="mb-4">
+        <SectionTitle
+          title="持仓股（做T标的池）"
+          actions={
+            <Button color="blue" disabled={watchBusy} onClick={syncFromThs}>
+              {watchBusy ? '处理中…' : '从同花顺同步'}
+            </Button>
+          }
+        />
+        <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
+          做T盯盘与信号覆盖的持仓股名单（服务端持久化）。手动添加=manual；「从同花顺同步」按合并语义更新——
+          THS 有的更新数量、THS 没有的<strong className="text-zinc-700 dark:text-zinc-200">保留不删</strong>（降标 manual）、THS 新出现的追加。
+        </p>
+        <div className="mb-3 flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-sm text-zinc-600 dark:text-zinc-300">
+            代码
+            <div className="w-36">
+              <Input
+                value={addCode}
+                onChange={(e) => setAddCode(e.target.value)}
+                placeholder="如 002015"
+                onKeyDown={(e) => { if (e.key === 'Enter') addToWatchlist() }}
+              />
+            </div>
+          </label>
+          <label className="flex flex-col gap-1 text-sm text-zinc-600 dark:text-zinc-300">
+            数量（股，可空）
+            <div className="w-32">
+              <Input
+                type="number"
+                min={1}
+                step={100}
+                value={addQty}
+                onChange={(e) => setAddQty(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addToWatchlist() }}
+              />
+            </div>
+          </label>
+          <Button outline disabled={watchBusy} onClick={addToWatchlist}>添加</Button>
+          {watchSync && (
+            <span className="text-sm text-zinc-500 dark:text-zinc-400">
+              最近同步 {watchSync.synced_at || '--'} · {watchSync.summary}
+              （新增 {watchSync.diff?.added?.length ?? 0} / 更新 {watchSync.diff?.updated?.length ?? 0} / 保留 {watchSync.diff?.kept?.length ?? 0}）
+            </span>
+          )}
+        </div>
+        <Table dense striped>
+          <TableHead>
+            <TableRow>
+              {['代码', '名称', '数量（股）', '来源', '更新时间', '操作'].map((h) => <TableHeader key={h}>{h}</TableHeader>)}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {watchItems.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-zinc-500 dark:text-zinc-400">
+                  暂无持仓股；添加代码或点击「从同花顺同步」导入最新持仓。
+                </TableCell>
+              </TableRow>
+            )}
+            {watchItems.map((row) => (
+              <TableRow key={row.code}>
+                <TableCell className="font-medium text-zinc-900 dark:text-white">{row.code}</TableCell>
+                <TableCell>{row.name || '--'}</TableCell>
+                <TableCell className="tabular-nums">{row.qty ?? '--'}</TableCell>
+                <TableCell>
+                  <Badge color={row.source === 'ths' ? 'emerald' : 'zinc'}>
+                    {row.source === 'ths' ? 'THS' : '手动'}
+                  </Badge>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-zinc-500 dark:text-zinc-400">{row.updated_at || '--'}</TableCell>
+                <TableCell>
+                  <Button plain disabled={watchBusy} onClick={() => removeFromWatchlist(row.code)}>删除</Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
 
       <Card className="mb-4">
         <SectionTitle title="手动仓位确认" />
@@ -757,7 +942,10 @@ export default function Gen3StateAlphaHoldingTicks() {
               return (
                 <TableRow key={`${row.at}-${index}`}>
                   <TableCell>{row.at}</TableCell>
-                  <TableCell>{row.code}</TableCell>
+                  <TableCell>
+                    <strong className="block text-zinc-900 dark:text-white">{row.code}</strong>
+                    <small className="block text-zinc-500 dark:text-zinc-400">{simNames[normalizeCode(row.code)] || ''}</small>
+                  </TableCell>
                   <TableCell>{row.side}</TableCell>
                   <TableCell className="tabular-nums">{row.weight_pct}%</TableCell>
                   <TableCell>

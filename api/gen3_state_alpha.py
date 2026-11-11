@@ -131,6 +131,10 @@ STRATEGY_TUNING_TASK_REVIEWS_PATH = STATE_ALPHA_RUNTIME_DIR / "strategy_tuning_t
 BROKER_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_state.json"
 BROKER_SYNC_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "broker_sync_state.json"
 HOLDING_TICK_WATCHLIST_PATH = STATE_ALPHA_RUNTIME_DIR / "holding_tick_watchlist.json"
+# R45 scoped-write：做T持仓股观察名单唯一受控写通道的 store 路径（v2 结构，
+# 原子写+备份）。独立子目录使观察栈可仅对此子树开写（compose 嵌套 rw 挂载），
+# broker_state.json 等其余 gen3_state_alpha 文件保持只读。旧路径仅作读回退。
+HOLDING_T_WATCHLIST_STORE_PATH = STATE_ALPHA_RUNTIME_DIR / "holding_t_watchlist" / "holding_tick_watchlist.json"
 HOLDING_TICK_ALERT_STATE_PATH = STATE_ALPHA_RUNTIME_DIR / "holding_tick_alert_state.json"
 PRETRADE_SMOKE_DIR = report_path("gen3_pretrade_smoke_test_v1")
 PRETRADE_SMOKE_PATH = PRETRADE_SMOKE_DIR / "latest_pretrade_smoke.json"
@@ -14980,13 +14984,20 @@ def _holding_tick_display_name(code: str, holding: dict[str, Any], stock_names: 
 
 
 def _read_holding_tick_watchlist() -> dict[str, Any]:
-    """Return the user-entered holding Tick watchlist kept outside the repository."""
-    payload = _read_json(HOLDING_TICK_WATCHLIST_PATH)
-    codes = payload.get("codes") if isinstance(payload, dict) else []
-    normalized = list(dict.fromkeys(_normalize_tick_code(code) for code in codes if _normalize_tick_code(code))) if isinstance(codes, list) else []
+    """Return the user-entered holding Tick watchlist kept outside the repository.
+
+    R45：双形状读端兼容——codes 数组保留（旧前端与 holding-tick-analysis 告警链
+    继续消费），新增 items（{code,name,qty,source:manual|ths,added_at,updated_at}）。
+    store(v2) 优先，缺件回退旧 {codes:[...]} 结构（合成 manual items）。
+    """
+    from services import holding_t_watchlist as htw_store
+
+    payload = htw_store.read_watchlist(HOLDING_T_WATCHLIST_STORE_PATH, legacy_path=HOLDING_TICK_WATCHLIST_PATH)
     return {
-        "codes": normalized,
-        "updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
+        "codes": payload["codes"],
+        "items": payload["items"],
+        "updated_at": payload["updated_at"],
+        "source": payload["source"],
     }
 
 
@@ -15184,6 +15195,70 @@ async def put_gen3_state_alpha_holding_tick_watchlist(
     except ValueError as exc:
         return _wrap_guardrails({"ok": False, "message": str(exc), "order_path_enabled": False})
     return _wrap_guardrails({"ok": True, **saved, "order_path_enabled": False})
+
+
+def _upsert_holding_t_watchlist_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """R45 scoped-write 适配器：body {add:[{code,qty?}|code], remove:[code]}。"""
+    from services import holding_t_watchlist as htw_store
+
+    add = payload.get("add")
+    remove = payload.get("remove")
+    return htw_store.upsert_watchlist(
+        HOLDING_T_WATCHLIST_STORE_PATH,
+        [] if add is None else add,
+        [] if remove is None else remove,
+        name_lookup=_load_stock_names,
+        legacy_path=HOLDING_TICK_WATCHLIST_PATH,
+    )
+
+
+@router.post("/holding-t/watchlist-upsert")
+def post_gen3_holding_t_watchlist_upsert(
+    payload: dict[str, Any] = Body(..., description="R45 scoped-write：做T持仓股观察名单增删（只写 holding_tick_watchlist.json，原子+备份）"),
+) -> dict[str, Any]:
+    """R45：做T持仓股唯一受控写通道（手动增删；预览栈 scoped-write 白名单端点）。
+
+    只写 runtime/gen3_state_alpha/holding_t_watchlist/holding_tick_watchlist.json；
+    链上零其他文件写/零 formal 表写/零调度器（AST 守卫：tests/test_r45_holding_t_watchlist.py）。
+    """
+    try:
+        result = _upsert_holding_t_watchlist_payload(payload)
+    except ValueError as exc:
+        return _wrap_guardrails({"ok": False, "message": str(exc), "order_path_enabled": False})
+    return _wrap_guardrails({"ok": True, **result, "order_path_enabled": False})
+
+
+def _sync_holding_t_watchlist_from_broker_state() -> dict[str, Any]:
+    """R45：读 broker_state.json（THS 15:15 自动同步值）合并进观察名单。
+
+    合并语义（Owner 1.3，绝不删除）：THS 有→更新 qty/name/source=ths；THS 无而
+    列表有→保留（原 ths 条目降标 manual）；THS 新→追加。broker_state 缺
+    updated_at（从未同步过）→ fail-closed 零写。
+    """
+    from services import holding_t_watchlist as htw_store
+
+    state = _load_broker_state()
+    synced_at = state.get("updated_at")
+    if not isinstance(synced_at, str) or not synced_at.strip():
+        return {"ok": False, "synced_at": None,
+                "message": "broker_state 无 updated_at（THS 持仓尚未同步过），fail-closed 不写"}
+    holdings = state.get("holdings") if isinstance(state.get("holdings"), list) else []
+    return htw_store.sync_watchlist_from_ths(
+        HOLDING_T_WATCHLIST_STORE_PATH,
+        holdings,
+        synced_at=synced_at,
+        legacy_path=HOLDING_TICK_WATCHLIST_PATH,
+    )
+
+
+@router.post("/holding-t/watchlist-sync-ths")
+def post_gen3_holding_t_watchlist_sync_ths() -> dict[str, Any]:
+    """R45：从同花顺持仓（broker_state 最新同步值）合并做T持仓股；响应带 synced_at 与 diff。"""
+    try:
+        result = _sync_holding_t_watchlist_from_broker_state()
+    except ValueError as exc:
+        return _wrap_guardrails({"ok": False, "message": str(exc), "order_path_enabled": False})
+    return _wrap_guardrails({**result, "order_path_enabled": False})
 
 
 @router.get("/holding-tick-analysis")

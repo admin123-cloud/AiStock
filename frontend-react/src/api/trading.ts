@@ -310,11 +310,24 @@ export function getGen3StateAlphaHoldingTickWatchlist() {
   })
 }
 
-export function saveGen3StateAlphaHoldingTickWatchlist(codes) {
+// R45 scoped-write：做T持仓股观察名单唯一受控写通道（预览栈白名单 POST；
+// 旧 PUT /holding-tick-watchlist 保持封禁，不再调用）。
+export function upsertGen3HoldingTWatchlist(data: {
+  add?: Array<{ code: string; qty?: number | null } | string>
+  remove?: string[]
+}) {
   return request({
-    url: '/gen3-state-alpha/holding-tick-watchlist',
-    method: 'put',
-    data: { codes }
+    url: '/gen3-state-alpha/holding-t/watchlist-upsert',
+    method: 'post',
+    data
+  })
+}
+
+export function syncGen3HoldingTWatchlistThs() {
+  return request({
+    url: '/gen3-state-alpha/holding-t/watchlist-sync-ths',
+    method: 'post',
+    timeout: 30000
   })
 }
 
