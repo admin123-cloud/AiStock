@@ -29,7 +29,7 @@ R46 双速制（2026-11-11，任务书 20261111_fast_lane_r46.md）：
 """
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 import json
 import logging
@@ -1678,6 +1678,84 @@ def _single_sided(fill: dict, draft: Optional[dict], qty: int, kind: str) -> dic
     }
 
 
+# ── R48：教练式复盘 + trades_inferred fills 精确覆盖 ─────────────────────
+
+def fetch_east_day_hl(code: str, for_date: date) -> Optional[dict[str, float]]:
+    """当日日线高低价（klt=101 末根；东财日 K 行 = 日期,开,收,高,低,量,额）。
+
+    只取 ts 前缀恰为 for_date 的那根；无当日根（未开盘/停牌/源失败）→ None。
+    """
+    url = EAST_K_URL.format(secid=east_secid(code), klt=101, lmt=3)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    klines = (data.get("data") or {}).get("klines") or []
+    want = for_date.isoformat()
+    for row in klines:
+        parts = row.split(",")
+        if len(parts) >= 5 and parts[0].startswith(want):
+            return {"low": float(parts[4]), "high": float(parts[3])}
+    return None
+
+
+def _coaching_for_reconcile(*, root: Path, for_date: date, fills: list[dict],
+                            matches: dict[int, Optional[dict]], drafts: list[dict],
+                            today_rounds: list[dict],
+                            account: str) -> dict[str, Any]:
+    """R48 reconcile 内嵌链：① trades_inferred 本账号行以真实 fills 覆盖
+    （±10min 同码同向，文件原子回写，幂等）；② 教练式复盘（含契约核对，
+    日内高低价东财日线；缺源如实 not_scored）。"""
+    from services import t_trade_coaching as coach
+    from services.ths_holdings_poll import inferred_path, read_jsonl as read_inferred
+
+    inf_file = inferred_path(root, for_date)
+    rows_all = read_inferred(inf_file)
+    mine = [r for r in rows_all
+            if str(r.get("account") or "acct1") == account]
+    mine_over = coach.override_inferred_with_fills(mine, fills,
+                                                   default_account=account)
+    def _key(r: dict) -> tuple:
+        return (str(r.get("account") or "acct1"), str(r.get("code")),
+                str(r.get("ts")))
+    over_by_key = {_key(r): r for r in mine_over}
+    rows_new = [over_by_key.get(_key(r), r) for r in rows_all]
+    if rows_new != rows_all:
+        inf_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = inf_file.with_suffix(inf_file.suffix + ".tmp")
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False, default=str)
+                               + "\n" for r in rows_new), encoding="utf-8")
+        os.replace(tmp, inf_file)
+
+    day_prefix = for_date.isoformat()
+    today_idx = [i for i, f in enumerate(fills)
+                 if str(f.get("ts", "")).startswith(day_prefix)]
+    fills_today_c = [{"ts": fills[i]["ts_dt"], "code": fills[i]["code"],
+                      "side": fills[i]["side"], "shares": fills[i]["shares"],
+                      "price": fills[i]["price"]} for i in today_idx]
+    matches_today = {n: matches[i] for n, i in enumerate(today_idx)}
+
+    regime_doc = _load_json(regime_file_path(root, for_date)) or {}
+    contract_doc = _load_json(root / "contract_stop.json") or {}
+    knife_prior = coach.weekly_knife_count(root, for_date)
+
+    day_hl: dict[str, Any] = {}
+    for rule in contract_doc.get("rules") or []:
+        code = str(rule.get("code") or "")
+        if not code:
+            continue
+        try:
+            hl = fetch_east_day_hl(code, for_date)
+        except Exception:  # noqa: BLE001 - 行情缺 → 契约核对 not_scored，不猜
+            hl = None
+        day_hl[code] = hl or {"low": None, "high": None}
+
+    return coach.build_coaching(
+        for_date=for_date, fills_today=fills_today_c, matches=matches_today,
+        drafts=drafts, rounds_today=today_rounds, regime_doc=regime_doc,
+        contract_doc=contract_doc, knife_week_prior=knife_prior,
+        day_hl=day_hl, inferred_rows=mine_over)
+
+
 def run_reconcile(
     *,
     for_date: date,
@@ -1685,12 +1763,15 @@ def run_reconcile(
     out_dir: Optional[Path] = None,
     fills_loader: Optional[Callable[[date], tuple[list[dict], str]]] = None,
     drafts_rows: Optional[list[dict]] = None,
+    account: str = "acct1",
     log: Optional[logging.Logger] = None,
 ) -> dict:
     """15:10 对账：成交 ↔ 草案匹配 → ledger/YYYYMMDD.jsonl + summary。
 
     fills_loader 返回 (fills, source_label)；默认链：--fills-file 语义由 CLI 注入 →
     runtime/t_tracker/fills/<date>.json → bridge 导出文件解析。无源 → fills_source=unavailable。
+    R48：account 标注本次对账账号；coaching 复盘 + trades_inferred fills 精确覆盖
+    （±10min 同码同向）随对账落盘，summary 增 `coaching` 字段（PM 15:12 直推面）。
     """
     log = log or logger
     root = tracker_dir(out_dir)
@@ -1699,7 +1780,8 @@ def run_reconcile(
     drafts = drafts_rows if drafts_rows is not None else read_jsonl(drafts_path(root, for_date))
 
     if fills_loader is None:
-        fills_loader = _default_fills_loader
+        # R48：root 感知（out_dir 注入时读该根的 fills；生产行为不变）
+        fills_loader = lambda d: _default_fills_loader(d, root=root)  # noqa: E731
     try:
         fills_raw, source_label = fills_loader(for_date)
     except Exception as exc:  # noqa: BLE001 - 成交源失败如实记录，不造数
@@ -1757,7 +1839,25 @@ def run_reconcile(
         "unmatched_draft_ids": sorted({d.get("id") for d in drafts} - used),
         "rounds": len(today_rounds),
         "fast_lane": fast_lane_stats,
+        "account": account,
     }
+
+    # R48 教练式复盘 + trades_inferred 精确覆盖（±10min 同码同向同窗）
+    try:
+        from services import t_trade_coaching as _coach  # 延迟 import 防环
+        coaching = _coaching_for_reconcile(
+            root=root, for_date=for_date, fills=fills, matches=matches,
+            drafts=drafts, today_rounds=today_rounds, account=account)
+        _coach.attach_to_summary(summary, coaching)
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(ledger_dir / f"{stamp}_coaching.json", coaching)
+        log.info("[reconcile] coaching：评分=%s 跟单率=%s 违反=%d",
+                 coaching["daily"]["纪律评分"], coaching["daily"]["跟单率"],
+                 coaching["violations_total"])
+    except Exception as exc:  # noqa: BLE001 - 复盘失败不影响台账主体，如实标注
+        log.error("[reconcile] coaching 失败：%s", exc)
+        summary["coaching_error"] = f"{type(exc).__name__}: {exc}"
+
     ledger_file = ledger_dir / f"{stamp}.jsonl"
     ledger_file.parent.mkdir(parents=True, exist_ok=True)
     ledger_file.write_text(
@@ -1777,9 +1877,13 @@ def _round_day(round_: Mapping[str, Any]) -> str:
     return ""
 
 
-def _default_fills_loader(for_date: date) -> tuple[list[dict], str]:
-    """成交源链：runtime/t_tracker/fills/<date>.json → bridge 历史成交导出文件。"""
-    root = tracker_dir()
+def _default_fills_loader(for_date: date,
+                          root: Optional[Path] = None) -> tuple[list[dict], str]:
+    """成交源链：runtime/t_tracker/fills/<date>.json → bridge 历史成交导出文件。
+
+    R48：root 参数让注入 out_dir 的调用（测试/分账号）读对应根；缺省=生产根。
+    """
+    root = root if root is not None else tracker_dir()
     fills_file = root / "fills" / f"{for_date.strftime('%Y%m%d')}.json"
     if fills_file.is_file():
         data = _load_json(fills_file) or {}

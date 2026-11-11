@@ -357,15 +357,33 @@ def run_export(*, for_date: date, now: datetime, out_root: Optional[Path] = None
             "prior_day_fills": prior, "window_state": captured.get("window_state") or {}}
 
 
+def assert_panel_identity(today_lines: list[str], identity_hint: Optional[str],
+                          account: str = "acct1") -> Optional[str]:
+    """R48 身份门禁（纯函数可测）：hint 未配置 → None 放行；配置且顶栏
+    「券商-姓名」OCR 标签不含 hint → 抛 PANEL_IDENTITY_MISMATCH。"""
+    if not identity_hint:
+        return None
+    from services.ths_account_bridge import identity_matches, parse_identity_label
+    label = parse_identity_label(today_lines)
+    if identity_matches(label, identity_hint) is False:
+        raise RuntimeError(f"PANEL_IDENTITY_MISMATCH: label={label!r} "
+                           f"expect~{identity_hint!r} account={account}")
+    return label
+
+
 def _capture_ths_views(evidence_dir: Optional[Path] = None,
                        panel: Optional[dict[str, Any]] = None,
-                       account: str = "acct1") -> dict[str, Any]:
+                       account: str = "acct1",
+                       identity_hint: Optional[str] = None) -> dict[str, Any]:
     """真机采集（仅 host / F:\\python\\python3.10）：锁内依次导出当日/历史成交视图。
 
     R47：panel 指定目标面板（panel_scope 内 _find_xiadan_window 连到该面板 pid），
     锁按账号分把（acct1=legacy ths_window.lock 与旧部署互斥，其他=分把锁）。
     只触 `_click_query_menu_item` 查询子项（查询菜单），绝不打开下单界面；
     窗口若原为最小化，采集后还原为最小化。两视图截图与 OCR 行归档 evidence_dir。
+    R48 身份门禁：首个视图 OCR 后校验顶栏「券商-姓名」含 identity_hint；
+    不符（窗口换登他人账号）→ 抛 PANEL_IDENTITY_MISMATCH → run_export 落
+    unavailable 标记（fail-closed，绝不把账号2成交写成 acct1）。
     """
     import shutil
 
@@ -398,6 +416,8 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
         _click_query_menu_item("today_trades")
         _today_items, today_lines, shot_today = _ocr_xiadan_window()
         kept_today = _keep(shot_today, "today_view.png")
+        if identity_hint:  # R48 身份门禁（换登 fail-closed，见 assert_panel_identity）
+            assert_panel_identity(today_lines, identity_hint, account)
         _click_query_menu_item("history_trades")
         history_items, history_lines, shot_history = _ocr_xiadan_window()
         kept_history = _keep(shot_history, "history_view.png")
@@ -449,10 +469,14 @@ def build_capture_plan(live_panels: list[dict[str, Any]],
     """
     resolved = registry.resolve(live_panels)
     plan: dict[str, dict[str, Any]] = {}
+    hint_by_account = {str(r.get("account")): r.get("identity_hint")
+                       for r in resolved.rules if isinstance(r, dict)}
     for account in sorted(resolved.by_account):
-        plan[account] = {"panel": resolved.by_account[account]}
+        plan[account] = {"panel": resolved.by_account[account],
+                         "identity_hint": hint_by_account.get(account)}
     if "acct1" not in plan:
-        plan["acct1"] = {"panel": None}
+        plan["acct1"] = {"panel": None,
+                         "identity_hint": hint_by_account.get("acct1")}
     plan["_resolution"] = {  # 上报面（不参与采集）
         "unbound_panels": resolved.unbound,
         "ambiguous_accounts": resolved.ambiguous_accounts,
@@ -517,8 +541,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.account and account != args.account:
             continue
         panel = entry.get("panel")
-        entry["capture"] = (lambda ev, p=panel, a=account:
-                            _capture_ths_views(ev, panel=p, account=a))
+        entry["capture"] = (lambda ev, p=panel, a=account,
+                            h=entry.get("identity_hint"):
+                            _capture_ths_views(ev, panel=p, account=a,
+                                               identity_hint=h))
     plan["_resolution"] = resolution
     result = run_export_multi(for_date=for_date, now=now,
                               out_root=Path(args.out_dir) if args.out_dir else None,

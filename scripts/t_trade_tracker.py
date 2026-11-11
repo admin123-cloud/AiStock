@@ -168,7 +168,8 @@ def reconcile_extra_accounts(*, root: Path, for_date: date,
         tmp_root = root / "fills" / f".tmp_reconcile_{account}_{stamp}"
         summary = tts.run_reconcile(
             for_date=for_date, now=now, out_dir=tmp_root,
-            fills_loader=_account_fills_loader(fills_file, account))
+            fills_loader=_account_fills_loader(fills_file, account),
+            account=account)
         ledger.mkdir(parents=True, exist_ok=True)
         for src, dst in (
             (tmp_root / "ledger" / f"{stamp}.jsonl", ledger / f"{stamp}_{account}.jsonl"),

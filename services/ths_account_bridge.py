@@ -1092,10 +1092,37 @@ PANELS_SCHEMA = "ths_panels/1"
 PANELS_FILENAME = "ths_panels.json"
 
 # 默认规则：acct1 = xiadan.exe + 网上股票交易系统（广发实锚 2026-11-11）
+# R48 identity_hint：面板顶栏「券商-姓名」OCR 标签的期望子串（R47 取证
+# acct1=广发-曾* 8890729932）。巡读/fills 导出用它做身份门禁——同一
+# xiadan.exe 窗口午间换登另一账号（2026-11-11 实况：曾*→王*美/603881）时
+# fail-closed 拒绝错标，绝不把账号2数据写成 acct1。
 DEFAULT_PANEL_RULES: list[dict[str, Any]] = [
     {"account": "acct1", "process": "xiadan.exe",
-     "title_contains": "网上股票交易系统", "broker_hint": "广发证券"},
+     "title_contains": "网上股票交易系统", "broker_hint": "广发证券",
+     "identity_hint": "曾"},
 ]
+
+# 面板顶栏身份标签：如「广发证券-王*美」（hexin 2026.9.22.14 实拍格式）
+
+def parse_identity_label(lines: list[str]) -> str:
+    """从 OCR 行提取面板登录身份标签（券商-姓名）。找不到返回空串。"""
+    import re
+
+    pattern = re.compile(r"([\u4e00-\u9fa5]{2,6}(?:证券|证券股份有限公司))-"
+                         r"([\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z*]{0,7})")
+    for line in lines[:12]:
+        found = pattern.search(str(line))
+        if found:
+            return f"{found.group(1)}-{found.group(2)}"
+    return ""
+
+
+def identity_matches(label: str, hint: str | None) -> bool | None:
+    """身份门禁三值逻辑：hint 未配置 → None（不门禁）；配置且标签含 hint
+    → True；配置但标签不含（或标签缺失）→ False（fail-closed 拒绝）。"""
+    if not hint:
+        return None
+    return bool(label) and hint in label
 
 _ACTIVE_PANEL: dict[str, Any] | None = None
 
