@@ -209,10 +209,12 @@ def merge_fills(today_rows: list[dict[str, Any]], history_rows: list[dict[str, A
 
 
 def build_payload(rows: list[dict[str, Any]], *, status: str, trade_date: date,
-                  captured_at: str, history_rows: int = 0) -> dict[str, Any]:
+                  captured_at: str, history_rows: int = 0,
+                  account: str = "acct1") -> dict[str, Any]:
     return {
         "schema": SCHEMA,
         "status": status,  # ok | zero_trades
+        "account": account,  # R47：行级 account 字段同步冗余在顶层
         "trade_date": trade_date.isoformat(),
         "captured_at": captured_at,
         "sources": {"today": SOURCE_TODAY, "history": SOURCE_HISTORY},
@@ -258,24 +260,45 @@ def _tracker_root(out_dir: Optional[Path]) -> Path:
 
 
 def _write_unavailable(root: Path, for_date: date, now: datetime,
-                       reason: str, detail: Any = None) -> dict[str, Any]:
+                       reason: str, detail: Any = None,
+                       account: str = "acct1") -> dict[str, Any]:
+    stamp = for_date.strftime("%Y%m%d")
+    suffix = "" if account == "acct1" else f"_{account}"
     marker = {
         "schema": SCHEMA_UNAVAILABLE, "status": "unavailable",
+        "account": account,
         "trade_date": for_date.isoformat(), "captured_at": now.isoformat(sep=" ", timespec="seconds"),
         "reason": reason, "detail": detail,
     }
-    _atomic_write_json(root / "fills" / f"{for_date.strftime('%Y%m%d')}.unavailable.json", marker)
+    _atomic_write_json(root / "fills" / f"{stamp}{suffix}.unavailable.json", marker)
     return marker
 
 
+def _fills_paths(root: Path, stamp: str, account: str) -> dict[str, Path]:
+    """账号 → fills 文件名。acct1=legacy 无后缀（既有消费者零改动），
+    其他账号=YYYYMMDD_acctN.json（R47 协议）。"""
+    suffix = "" if account == "acct1" else f"_{account}"
+    fills_file = root / "fills" / f"{stamp}{suffix}.json"
+    return {
+        "fills": fills_file,
+        "evidence": root / "fills" / f"evidence_{stamp}{suffix}",
+        "acct_copy": (root / "fills" / f"{stamp}_acct1.json") if account == "acct1" else fills_file,
+    }
+
+
 def run_export(*, for_date: date, now: datetime, out_root: Optional[Path] = None,
-               force: bool = False,
+               force: bool = False, account: str = "acct1",
                capture: Callable[[Optional[Path]], dict[str, Any]]) -> dict[str, Any]:
-    """单次导出（--once）。capture 注入真机采集（测试注入合成视图）。"""
+    """单账号导出（--once）。capture 注入真机采集（测试注入合成视图）。
+
+    R47：account="acct1" 写 legacy YYYYMMDD.json + YYYYMMDD_acct1.json 镜像；
+    其他账号写 YYYYMMDD_<account>.json。
+    """
     root = _tracker_root(out_root)
     stamp = for_date.strftime("%Y%m%d")
-    fills_file = root / "fills" / f"{stamp}.json"
-    evidence_dir = root / "fills" / f"evidence_{stamp}"
+    paths = _fills_paths(root, stamp, account)
+    fills_file = paths["fills"]
+    evidence_dir = paths["evidence"]
 
     if not force and fills_file.is_file():
         try:
@@ -283,50 +306,64 @@ def run_export(*, for_date: date, now: datetime, out_root: Optional[Path] = None
         except Exception:
             existing = None
         if should_skip_existing(existing, for_date, now):
-            return {"action": "skip", "status": "skip", "existing_captured_at":
+            return {"action": "skip", "status": "skip", "account": account,
+                    "existing_captured_at":
                     (existing or {}).get("captured_at"), "fills_file": str(fills_file)}
 
     try:
         captured = capture(evidence_dir)
     except Exception as exc:  # noqa: BLE001 - THS 不可达如实标记，不造数
-        marker = _write_unavailable(root, for_date, now, f"{type(exc).__name__}: {exc}")
-        return {"action": "unavailable", "status": "unavailable",
+        marker = _write_unavailable(root, for_date, now, f"{type(exc).__name__}: {exc}",
+                                    account=account)
+        return {"action": "unavailable", "status": "unavailable", "account": account,
                 "reason": marker["reason"], "marker": marker["captured_at"]}
 
     today = parse_today_trades_lines(list(captured.get("today_lines") or []), for_date)
     if not today["header_seen"]:
         marker = _write_unavailable(root, for_date, now, "today_view_header_not_found",
-                                    {"preview": list(captured.get("today_lines") or [])[:16]})
-        return {"action": "unavailable", "status": "unavailable", "reason": "today_view_header_not_found",
+                                    {"preview": list(captured.get("today_lines") or [])[:16]},
+                                    account=account)
+        return {"action": "unavailable", "status": "unavailable", "account": account,
+                "reason": "today_view_header_not_found",
                 "marker": marker["captured_at"]}
     if today["skipped_count"]:
         marker = _write_unavailable(root, for_date, now,
                                     f"partial_today_rows: {today['skipped_count']}",
-                                    {"skipped": today["skipped"]})
-        return {"action": "unavailable", "status": "unavailable",
+                                    {"skipped": today["skipped"]}, account=account)
+        return {"action": "unavailable", "status": "unavailable", "account": account,
                 "reason": f"partial_today_rows: {today['skipped_count']}",
                 "marker": marker["captured_at"]}
     if not captured.get("history_header_seen"):
-        marker = _write_unavailable(root, for_date, now, "history_view_header_not_found")
-        return {"action": "unavailable", "status": "unavailable",
+        marker = _write_unavailable(root, for_date, now, "history_view_header_not_found",
+                                    account=account)
+        return {"action": "unavailable", "status": "unavailable", "account": account,
                 "reason": "history_view_header_not_found", "marker": marker["captured_at"]}
 
     history_rows = list(captured.get("history_rows") or [])
     merged = merge_fills(today["rows"], history_rows, for_date)
+    for row in merged:
+        row.setdefault("account", account)
     prior = sum(1 for r in merged if r["trade_time"][:10] < for_date.isoformat())
     status = "ok" if today["rows"] else "zero_trades"
     payload = build_payload(merged, status=status, trade_date=for_date,
                             captured_at=now.isoformat(sep=" ", timespec="seconds"),
-                            history_rows=prior)
+                            history_rows=prior, account=account)
     _atomic_write_json(fills_file, payload)
-    return {"action": "write", "status": status, "fills_file": str(fills_file),
+    if account == "acct1":
+        _atomic_write_json(paths["acct_copy"], payload)  # legacy 名镜像已写，_acct1 副本同步
+    return {"action": "write", "status": status, "account": account,
+            "fills_file": str(fills_file),
             "fills_total": len(merged), "fills_today": len(today["rows"]),
             "prior_day_fills": prior, "window_state": captured.get("window_state") or {}}
 
 
-def _capture_ths_views(evidence_dir: Optional[Path] = None) -> dict[str, Any]:
+def _capture_ths_views(evidence_dir: Optional[Path] = None,
+                       panel: Optional[dict[str, Any]] = None,
+                       account: str = "acct1") -> dict[str, Any]:
     """真机采集（仅 host / F:\\python\\python3.10）：锁内依次导出当日/历史成交视图。
 
+    R47：panel 指定目标面板（panel_scope 内 _find_xiadan_window 连到该面板 pid），
+    锁按账号分把（acct1=legacy ths_window.lock 与旧部署互斥，其他=分把锁）。
     只触 `_click_query_menu_item` 查询子项（查询菜单），绝不打开下单界面；
     窗口若原为最小化，采集后还原为最小化。两视图截图与 OCR 行归档 evidence_dir。
     """
@@ -338,6 +375,7 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None) -> dict[str, Any]:
         _ocr_xiadan_window,
         _parse_trades_from_ocr_items,
         _ths_window_operation_lock,
+        panel_scope,
     )
 
     def _keep(shot: str, name: str) -> Optional[str]:
@@ -351,7 +389,7 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None) -> dict[str, Any]:
         except Exception:
             return None
 
-    with _ths_window_operation_lock():
+    with panel_scope(panel), _ths_window_operation_lock(panel=account):
         window = _find_xiadan_window()
         try:
             was_minimized = bool(window.is_minimized())
@@ -397,9 +435,61 @@ def _parse_for_date(text: Optional[str]) -> date:
     return date.fromisoformat(text)
 
 
+# ── R47 多账号：采集计划 + 账号循环 ───────────────────────────
+
+KNOWN_ACCOUNTS = ("acct1", "acct2")
+
+
+def build_capture_plan(live_panels: list[dict[str, Any]],
+                       registry: Any) -> dict[str, dict[str, Any]]:
+    """live 面板 × 注册表规则 → 采集计划 {account: {"panel": ...}}。
+
+    acct1 无绑定面板时仍入计划（panel=None → 默认 connect 路径，legacy 行为）；
+    其他账号仅有绑定面板才入计划（fail-closed：未绑定面板绝采集）。
+    """
+    resolved = registry.resolve(live_panels)
+    plan: dict[str, dict[str, Any]] = {}
+    for account in sorted(resolved.by_account):
+        plan[account] = {"panel": resolved.by_account[account]}
+    if "acct1" not in plan:
+        plan["acct1"] = {"panel": None}
+    plan["_resolution"] = {  # 上报面（不参与采集）
+        "unbound_panels": resolved.unbound,
+        "ambiguous_accounts": resolved.ambiguous_accounts,
+    }
+    return plan
+
+
+def run_export_multi(*, for_date: date, now: datetime, out_root: Optional[Path] = None,
+                     plan: dict[str, Any], force: bool = False,
+                     known_accounts: Optional[list[str]] = None) -> dict[str, Any]:
+    """多账号导出：逐账号 run_export（锁/文件名按账号隔离）。
+
+    rc 语义：在场账号 unavailable → rc=2（acct1 沿用 PM watcher 语义）；
+    已配置但无面板的账号 → panel_absent 跳过（非失败，当前 acct2 实况）。
+    """
+    resolution = plan.pop("_resolution", {}) or {}
+    accounts: dict[str, Any] = {}
+    rc = 0
+    for account in KNOWN_ACCOUNTS:
+        entry = plan.get(account)
+        if entry is None:
+            if known_accounts and account in known_accounts:
+                accounts[account] = {"status": "panel_absent"}
+            continue
+        result = run_export(for_date=for_date, now=now, out_root=out_root,
+                            force=force, account=account, capture=entry["capture"])
+        accounts[account] = result
+        if result.get("status") == "unavailable":
+            rc = 2
+    plan["_resolution"] = resolution  # 幂等：不消费调用方的 plan
+    return {"schema": "ths_fills_export_multi/1", "trade_date": for_date.isoformat(),
+            "accounts": accounts, "resolution": resolution, "rc": rc}
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="R37b THS 当日成交导出器（host 侧，15:05 填充 t_tracker fills 源）")
+        description="R37b/R47 THS 当日成交导出器（host 侧，15:05 填充 t_tracker fills 源，多账号）")
     parser.add_argument("--once", action="store_true", default=True,
                         help="单次导出（默认模式，幂等）")
     parser.add_argument("--date", help="YYYY-MM-DD（默认今天）")
@@ -408,15 +498,35 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--history-window-days", type=int,
                         default=DEFAULT_HISTORY_WINDOW_DAYS,
                         help="历史成交配对窗口天数（默认 10）")
+    parser.add_argument("--account", help="只导出指定账号（默认全部绑定账号循环）")
     args = parser.parse_args(argv)
 
     for_date = _parse_for_date(args.date)
     now = datetime.now()
-    result = run_export(for_date=for_date, now=now, out_root=Path(args.out_dir) if args.out_dir else None,
-                        force=args.force, capture=_capture_ths_views)
+
+    from services.ths_account_bridge import load_panel_registry
+
+    try:
+        from services.ths_account_bridge import enumerate_trade_panels
+        live_panels = enumerate_trade_panels()
+    except Exception:  # 非 host/无窗口环境 → 空面板表，acct1 走默认 connect
+        live_panels = []
+    plan = build_capture_plan(live_panels, load_panel_registry())
+    resolution = plan.pop("_resolution")
+    for account, entry in plan.items():
+        if args.account and account != args.account:
+            continue
+        panel = entry.get("panel")
+        entry["capture"] = (lambda ev, p=panel, a=account:
+                            _capture_ths_views(ev, panel=p, account=a))
+    plan["_resolution"] = resolution
+    result = run_export_multi(for_date=for_date, now=now,
+                              out_root=Path(args.out_dir) if args.out_dir else None,
+                              plan=plan, force=args.force,
+                              known_accounts=list(KNOWN_ACCOUNTS))
     result["trade_date"] = for_date.isoformat()
-    print(json.dumps(result, ensure_ascii=False))
-    return 2 if result.get("action") == "unavailable" else 0
+    print(json.dumps(result, ensure_ascii=False, default=str))
+    return int(result.get("rc", 0))
 
 
 if __name__ == "__main__":

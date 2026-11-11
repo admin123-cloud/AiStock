@@ -374,6 +374,91 @@ def _read_state(state_file: Path) -> dict:
     return state
 
 
+# ── R47 多账号：accounts 包裹 + legacy 顶层镜像 ───────────────
+
+ACCOUNTS_KEY = "accounts"
+ACTIVE_VIEW_SCHEMA = "broker_state_accounts/1"
+
+
+def read_full_state(state_file: Path, account: str = "acct1") -> dict:
+    """读整份 broker_state（允许多账号包裹形态）。缺失：acct1=拒绝（legacy 语义），
+    其他账号={}（未接入，由调用方决定跳过）。"""
+    if not state_file.is_file():
+        if account == "acct1":
+            raise SyncRefusal("broker_state_unreadable",
+                              {"state_file": str(state_file), "error": "missing"})
+        return {}
+    try:
+        full = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SyncRefusal("broker_state_unreadable",
+                          {"state_file": str(state_file), "error": str(exc)}) from exc
+    return full if isinstance(full, dict) else {}
+
+
+def extract_account_state(full: Mapping[str, Any], account: str = "acct1") -> dict:
+    """整份 state → 指定账号切片。
+
+    acct1 权威=顶层镜像（legacy 手工编辑/漂移检测语义原样保留）；
+    accounts.acct1 只是结构对称副本（每次写入时刷新，消费者一律走本函数）。
+    其他账号=accounts.<acctN>。legacy（无 accounts 键）acct1=整份。
+    """
+    if not isinstance(full, Mapping):
+        return {}
+    if account == "acct1":
+        if isinstance(full.get("holdings"), list):
+            return {k: v for k, v in full.items()
+                    if k not in {ACCOUNTS_KEY, "active_view"}}
+        accounts = full.get(ACCOUNTS_KEY)
+        if isinstance(accounts, Mapping) and isinstance(accounts.get("acct1"), dict):
+            return dict(accounts["acct1"])
+        return {}
+    accounts = full.get(ACCOUNTS_KEY)
+    if isinstance(accounts, Mapping) and isinstance(accounts.get(account), dict):
+        return dict(accounts[account])
+    return {}
+
+
+def compose_account_state(full: Mapping[str, Any], account_state: Mapping[str, Any],
+                          account: str, now: Optional[datetime] = None) -> dict:
+    """账号切片 → 整份 state。acct1=顶层镜像（legacy 消费者零改动）；
+    其他账号=accounts.<acctN> 原位更新，顶层不动。附 active_view 合并视图。"""
+    full = dict(full or {})
+    accounts = {k: v for k, v in (full.get(ACCOUNTS_KEY) or {}).items()
+                if isinstance(v, dict)}
+    accounts[account] = dict(account_state)
+    if account == "acct1":
+        merged = dict(account_state)
+        merged[ACCOUNTS_KEY] = accounts
+    else:
+        if ACCOUNTS_KEY not in full and isinstance(full.get("holdings"), list):
+            accounts.setdefault(
+                "acct1", {k: v for k, v in full.items()
+                          if k not in {ACCOUNTS_KEY, "active_view"}})
+        merged = dict(full)
+        merged[ACCOUNTS_KEY] = accounts
+    merged["active_view"] = {
+        "schema": ACTIVE_VIEW_SCHEMA,
+        "accounts": sorted(accounts),
+        "generated_at": fmt_ts(now) if now is not None
+        else str(account_state.get("updated_at") or ""),
+        "note": "顶层字段=acct1 镜像（legacy 兼容）；各账号完整态见 accounts.<acctN>",
+    }
+    return merged
+
+
+def should_attempt_account(*, full_state: Mapping[str, Any],
+                           fills_file: Optional[Path], account: str) -> bool:
+    """是否对该账号执行同步。acct1 恒真；其他账号=fills 在场或已有历史切片
+    （已接入账号缺 fills 必须 fail-closed 走拒绝，不能静默跳过）。"""
+    if account == "acct1":
+        return True
+    if fills_file is not None and fills_file.is_file():
+        return True
+    accounts = full_state.get(ACCOUNTS_KEY) if isinstance(full_state, Mapping) else None
+    return isinstance(accounts, Mapping) and isinstance(accounts.get(account), dict)
+
+
 def _backup(state_file: Path, now: datetime) -> Path:
     bak = state_file.with_name(
         "{}.bak_r38c_{}".format(state_file.name, now.strftime("%Y%m%d_%H%M%S")))
@@ -384,19 +469,24 @@ def _backup(state_file: Path, now: datetime) -> Path:
 def run_sync(*, state_file: Path, fills_file: Optional[Path], alerts_file: Path,
              report_file: Path, history_file: Path, for_date: date, now: datetime,
              init_base: Optional[Mapping[str, Any]] = None,
-             dry_run: bool = False) -> dict:
-    """一次同步：返回 {"rc", "action", ...}。拒绝 → rc=1 + 告警 + 零改动。"""
+             dry_run: bool = False, account: str = "acct1") -> dict:
+    """一次同步（单账号）：返回 {"rc", "action", ...}。拒绝 → rc=1 + 告警 + 零改动。
+
+    R47：account 切片语义——state 文件可为多账号包裹（accounts.<acctN>）；
+    acct1 写顶层镜像（legacy 消费者零改动），其他账号只动 accounts.<acctN>。
+    """
     fills_name = fills_file.name if fills_file else None
     result: dict = {"schema": REPORT_SCHEMA, "at": fmt_ts(now),
-                    "date": for_date.isoformat(), "state_file": str(state_file)}
+                    "date": for_date.isoformat(), "account": account,
+                    "state_file": str(state_file)}
     try:
         # 1) fills 文件（缺失/unavailable/坏 JSON/坏行 → 拒绝）
         if fills_file is None:
             raise SyncRefusal("fills_missing", {})
         fills = normalize_fills_rows(load_fills_payload(fills_file)["fills"])
 
-        # 2) broker_state
-        state = _read_state(state_file)
+        # 2) broker_state（账号切片）
+        state = extract_account_state(read_full_state(state_file, account), account)
 
         # 3) 锚点：已有 fills_sync 用之；否则必须 --init-base（且不与现存冲突）
         sync = state.get("fills_sync")
@@ -476,10 +566,12 @@ def run_sync(*, state_file: Path, fills_file: Optional[Path], alerts_file: Path,
             _write_report(report_file, history_file, result)
             return result
 
-        # 6) 备份 → 原子写 → 回读校验（不一致则回滚备份）
+        # 6) 备份 → 账号切片包裹 → 原子写 → 回读校验（不一致则回滚备份）
+        full_state = read_full_state(state_file, account)
+        composed = compose_account_state(full_state, new_state, account, now)
         bak = _backup(state_file, now)
-        _atomic_write_json(state_file, new_state)
-        reread = _read_state(state_file)
+        _atomic_write_json(state_file, composed)
+        reread = extract_account_state(read_full_state(state_file, account), account)
         if (reread.get("fills_sync", {}).get("last_sync", {}).get("at")
                 != fmt_ts(now) or reread.get("holdings") != new_state.get("holdings")):
             shutil.copyfile(bak, state_file)

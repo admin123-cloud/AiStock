@@ -119,8 +119,90 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         loader = lambda _d: (rows, f"file:{Path(args.fills_file).name}")  # noqa: E731
     report = tts.run_reconcile(for_date=for_date, now=now, out_dir=args.out_dir,
                                fills_loader=loader)
+    # R47：其余账号（fills/<stamp>_acctN.json 在场时）分账号台账 + 合并日报
+    extra = reconcile_extra_accounts(
+        root=tts.tracker_dir(Path(args.out_dir) if args.out_dir else None),
+        for_date=for_date, now=now)
+    report["accounts"] = extra["accounts"]
     print(json.dumps(report, ensure_ascii=False))
     return 0
+
+
+# ── R47 多账号对账（CLI 层；t_trade_signal.run_reconcile 保持单账号可注入）──
+
+MULTI_ACCOUNTS = ("acct1", "acct2")
+MERGED_SUMMARY_SCHEMA = "t_tracker_summary_accounts/1"
+
+
+def reconcile_all_accounts(*, root: Path, for_date: date,
+                           now: Optional[datetime] = None) -> dict:
+    """acct1 legacy 链（默认 fills loader）+ 其余账号分账对账。CLI 与测试共用。"""
+    now = now or datetime.now(BEIJING_TZ).replace(tzinfo=None)
+    tts.run_reconcile(for_date=for_date, now=now, out_dir=root)
+    return reconcile_extra_accounts(root=root, for_date=for_date, now=now)
+
+
+def _account_fills_loader(fills_file: Path, account: str) -> Callable[[date], tuple[list[dict], str]]:
+    def loader(_d: date) -> tuple[list[dict], str]:
+        data = json.loads(fills_file.read_text(encoding="utf-8"))
+        rows = data.get("fills") if isinstance(data, dict) else []
+        return list(rows or []), f"fills_file_{account}:{fills_file.name}"
+    return loader
+
+
+def reconcile_extra_accounts(*, root: Path, for_date: date,
+                             now: Optional[datetime] = None) -> dict:
+    """acct1 由 legacy 调用链产出后：其余账号逐个 run_reconcile（临时 out_dir，
+    注入分账号 fills loader）→ 台账/摘要落 ledger/<stamp>_<acct>.*；多账号在场
+    时写 <stamp>_merged_summary.json 合并日报。acct1 输出零变化。"""
+    import shutil
+
+    now = now or datetime.now(BEIJING_TZ).replace(tzinfo=None)
+    stamp = for_date.strftime("%Y%m%d")
+    ledger = root / "ledger"
+    summaries: dict[str, dict] = {}
+    for account in MULTI_ACCOUNTS[1:]:
+        fills_file = root / "fills" / f"{stamp}_{account}.json"
+        if not fills_file.is_file():
+            continue
+        tmp_root = root / "fills" / f".tmp_reconcile_{account}_{stamp}"
+        summary = tts.run_reconcile(
+            for_date=for_date, now=now, out_dir=tmp_root,
+            fills_loader=_account_fills_loader(fills_file, account))
+        ledger.mkdir(parents=True, exist_ok=True)
+        for src, dst in (
+            (tmp_root / "ledger" / f"{stamp}.jsonl", ledger / f"{stamp}_{account}.jsonl"),
+            (tmp_root / "ledger" / f"{stamp}_summary.json",
+             ledger / f"{stamp}_{account}_summary.json"),
+        ):
+            if src.is_file():
+                src.replace(dst)
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        summaries[account] = summary
+
+    if summaries:
+        base: dict = {}
+        base_file = ledger / f"{stamp}_summary.json"
+        if base_file.is_file():
+            base = json.loads(base_file.read_text(encoding="utf-8"))
+        accounts_payload: dict[str, dict] = {"acct1": base, **summaries}
+        merged = {
+            "schema": MERGED_SUMMARY_SCHEMA, "date": for_date.isoformat(),
+            "generated_at": fmt_ts(now),
+            "accounts": accounts_payload,
+            "merged": {
+                key: (round(sum(float(a.get(key) or 0.0)
+                                for a in accounts_payload.values()), 2)
+                      if isinstance(base.get(key), (int, float)) or key == "net_pnl"
+                      else sum(int(a.get(key) or 0) for a in accounts_payload.values()))
+                for key in ("t_round_trips", "net_pnl", "gross_pnl", "fees",
+                            "off_plan_count", "rounds")
+            },
+            "note": "acct1=顶层 legacy 台账；分账号明细见 <stamp>_acctN.jsonl",
+        }
+        (ledger / f"{stamp}_merged_summary.json").write_text(
+            json.dumps(merged, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"accounts": ["acct1", *summaries.keys()]}
 
 
 def _replay_beat_times(day: date) -> list[datetime]:

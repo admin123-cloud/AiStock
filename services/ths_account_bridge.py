@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import re
 import subprocess
@@ -8,7 +9,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 
 try:
     from utils.paths import runtime_path
@@ -27,8 +28,10 @@ def _runtime_export_dir() -> Path:
 
 
 @contextmanager
-def _ths_window_operation_lock(timeout_seconds: int = 120):
-    lock_path = _runtime_export_dir() / "ths_window.lock"
+def _ths_window_operation_lock(timeout_seconds: int = 120, panel: str | None = None):
+    """窗口操作锁。panel=None/"acct1" → legacy ths_window.lock（与旧代码互斥）；
+    其他账号 → 分把锁 ths_window.<panel>.lock（R47 双面板防互踩）。"""
+    lock_path = _runtime_export_dir() / _panel_lock_name(panel)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fh = lock_path.open("a+b")
     locked = False
@@ -908,6 +911,13 @@ def _get_clipboard_text(timeout: int = 5) -> str:
 
 
 def _find_xiadan_window():
+    panel = _active_panel()
+    if panel is not None:
+        return _find_window_for_panel(panel)
+    return _find_window_for_default()
+
+
+def _find_window_for_default():
     from pywinauto import Application
 
     app = Application(backend="uia").connect(path="xiadan.exe", timeout=4)
@@ -1069,3 +1079,234 @@ def read_ths_capital_holdings() -> dict[str, Any]:
         "message": "实时读取同花顺资金持仓失败: " + "; ".join([*errors, "clipboard=disabled_to_avoid_ths_copy_protection"]),
         "updated_at": _now_text(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# R47 多账号面板层（2026-11-11）
+# 取证锚点：xiadan-plus.exe 是 xiadan.exe 的 GPU 子进程（NVOpenGLPbuffer，
+# 无交易 UI），不是独立面板；面板=可见带标题的交易系统窗口（进程名不限）。
+# ═══════════════════════════════════════════════════════════════
+
+TRADE_WINDOW_TITLE_TOKENS: tuple[str, ...] = ("网上股票交易", "交易系统")
+PANELS_SCHEMA = "ths_panels/1"
+PANELS_FILENAME = "ths_panels.json"
+
+# 默认规则：acct1 = xiadan.exe + 网上股票交易系统（广发实锚 2026-11-11）
+DEFAULT_PANEL_RULES: list[dict[str, Any]] = [
+    {"account": "acct1", "process": "xiadan.exe",
+     "title_contains": "网上股票交易系统", "broker_hint": "广发证券"},
+]
+
+_ACTIVE_PANEL: dict[str, Any] | None = None
+
+
+def _active_panel() -> dict[str, Any] | None:
+    return _ACTIVE_PANEL
+
+
+@contextmanager
+def panel_scope(panel: dict[str, Any] | None):
+    """面板作用域：作用域内 _find_xiadan_window 连到指定面板（按 pid），
+    _ths_window_operation_lock 默认取该面板的分把锁。"""
+    global _ACTIVE_PANEL
+    prev = _ACTIVE_PANEL
+    _ACTIVE_PANEL = panel
+    try:
+        yield
+    finally:
+        _ACTIVE_PANEL = prev
+
+
+def _find_window_for_panel(panel: dict[str, Any]):
+    from pywinauto import Application
+
+    pid = int(panel.get("pid") or 0)
+    if pid <= 0:
+        raise RuntimeError(f"PANEL_PID_INVALID: {panel!r}")
+    app = Application(backend="uia").connect(process=pid, timeout=4)
+    for win in app.windows():
+        try:
+            title = str(win.window_text() or "").strip()
+        except Exception:
+            title = ""
+        if any(tok in title for tok in TRADE_WINDOW_TITLE_TOKENS):
+            return win
+    raise RuntimeError(f"NO_PANEL_WINDOW: pid={pid} title={panel.get('title')!r}")
+
+
+def _panel_lock_name(panel: str | None) -> str:
+    """acct1/None 保持 legacy 锁名（与旧部署互斥）；其他账号分把。"""
+    if not panel or panel == "acct1":
+        return "ths_window.lock"
+    return f"ths_window.{panel}.lock"
+
+
+def filter_trade_panels(panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """候选窗口 → 交易面板：标题含交易系统令牌（进程名不限，第二券商面板
+    进程名可能不同；GPU/辅助进程无交易标题自然被滤掉）。"""
+    out: list[dict[str, Any]] = []
+    for p in panels or []:
+        title = str(p.get("title") or "")
+        if not title:
+            continue
+        if not any(tok in title for tok in TRADE_WINDOW_TITLE_TOKENS):
+            continue
+        rect = p.get("rect") or [0, 0, 0, 0]
+        try:
+            w = int(rect[2]) - int(rect[0])
+            h = int(rect[3]) - int(rect[1])
+        except Exception:
+            w = h = 0
+        if w < 200 or h < 150:
+            continue  # 阴影/托盘/残影窗口
+        out.append(dict(p))
+    return out
+
+
+def enumerate_trade_panels() -> list[dict[str, Any]]:
+    """真机枚举（只读 EnumWindows，零点击）：全部带标题可见顶层窗口 → 过滤。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    raw: list[dict[str, Any]] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _cb(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+            return True
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(n + 2)
+        user32.GetWindowTextW(hwnd, buf, n + 2)
+        title = buf.value.strip()
+        if not title:
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        raw.append({
+            "hwnd": hex(hwnd), "pid": pid.value, "title": title,
+            "rect": [rect.left, rect.top, rect.right, rect.bottom],
+        })
+        return True
+
+    user32.EnumWindows(_cb, 0)
+    # 进程名补全（单次 CIM 查询）
+    procs: dict[int, str] = {}
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath} | "
+             "Select-Object ProcessId,Name | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        data = json.loads(out.stdout or "[]")
+        if isinstance(data, dict):
+            data = [data]
+        for row in data:
+            try:
+                procs[int(row["ProcessId"])] = str(row.get("Name") or "")
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return [
+        {"pid": int(p["pid"]), "process": procs.get(int(p["pid"]), ""),
+         "title": p["title"], "hwnd": p["hwnd"], "rect": p["rect"]}
+        for p in filter_trade_panels(raw)
+    ]
+
+
+def _panel_matches(panel: dict[str, Any], rule: dict[str, Any]) -> bool:
+    if rule.get("process") and str(panel.get("process") or "").lower() != str(rule["process"]).lower():
+        return False
+    token = str(rule.get("title_contains") or "")
+    if token and token not in str(panel.get("title") or ""):
+        return False
+    return True
+
+
+class PanelResolution(NamedTuple):
+    by_account: dict[str, dict[str, Any]]
+    unbound: list[dict[str, Any]]
+    ambiguous_accounts: list[str]
+    rules: list[dict[str, Any]]
+
+
+class PanelRegistry:
+    """面板指纹 → 账号 绑定（runtime/gen3_state_alpha/ths_panels.json）。
+
+    fail-closed：未绑定/歧义面板只上报（unbound/ambiguous_accounts），绝不映射。
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+
+    def _load(self) -> dict[str, Any]:
+        if not self.path.is_file():
+            return {"schema": PANELS_SCHEMA, "rules": []}
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"schema": PANELS_SCHEMA, "rules": []}
+        if not isinstance(data, dict):
+            return {"schema": PANELS_SCHEMA, "rules": []}
+        return data
+
+    def bind(self, *, rule: dict[str, Any], account: str, broker_hint: str = "") -> None:
+        data = self._load()
+        rules = [r for r in data.get("rules") or [] if r.get("account") != account]
+        rules.append({
+            "account": account, "process": rule.get("process") or "",
+            "title_contains": rule.get("title_contains") or "",
+            "broker_hint": broker_hint,
+            "bound_at": _now_text(),
+        })
+        payload = {"schema": PANELS_SCHEMA, "rules": rules}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, self.path)
+
+    def _all_rules(self) -> list[dict[str, Any]]:
+        customs = [r for r in (self._load().get("rules") or []) if isinstance(r, dict)]
+        merged: dict[str, dict[str, Any]] = {}
+        for rule in [*DEFAULT_PANEL_RULES, *customs]:
+            merged[str(rule.get("account"))] = rule  # 自定义规则覆盖同账号默认
+        # 解析顺序：自定义规则（更特异）先认领面板，默认规则兜底剩余窗口
+        custom_accounts = {str(r.get("account")) for r in customs}
+        ordered = [merged[a] for a in merged if a in custom_accounts]
+        ordered += [merged[a] for a in merged if a not in custom_accounts]
+        return ordered
+
+    def resolve(self, live_panels: list[dict[str, Any]]) -> dict[str, Any]:
+        rules = self._all_rules()
+        by_account: dict[str, dict[str, Any]] = {}
+        ambiguous: list[str] = []
+        claimed: set[int] = set()
+        for rule in rules:
+            account = str(rule.get("account"))
+            hits = [p for p in live_panels if _panel_matches(p, rule) and p["pid"] not in claimed]
+            if len(hits) > 1:
+                ambiguous.append(account)  # 多窗同规则：fail-closed 不绑定
+                continue
+            if len(hits) == 1:
+                by_account[account] = hits[0]
+                claimed.add(int(hits[0]["pid"]))
+        bound_pids = {int(p["pid"]) for p in by_account.values()}
+        unbound = [p for p in live_panels if int(p["pid"]) not in bound_pids]
+        return PanelResolution(
+            by_account=by_account,
+            unbound=unbound,
+            ambiguous_accounts=sorted(ambiguous),
+            rules=rules,
+        )
+
+
+def load_panel_registry() -> PanelRegistry:
+    if callable(runtime_path):
+        return PanelRegistry(runtime_path("gen3_state_alpha", PANELS_FILENAME))
+    return PanelRegistry(Path(r"F:\AiStock\data\data\runtime\gen3_state_alpha") / PANELS_FILENAME)
