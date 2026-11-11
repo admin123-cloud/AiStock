@@ -15242,7 +15242,11 @@ def _sync_holding_t_watchlist_from_broker_state() -> dict[str, Any]:
     if not isinstance(synced_at, str) or not synced_at.strip():
         return {"ok": False, "synced_at": None,
                 "message": "broker_state 无 updated_at（THS 持仓尚未同步过），fail-closed 不写"}
-    holdings = state.get("holdings") if isinstance(state.get("holdings"), list) else []
+    # R47：多账号并集（accounts.<acctN> 在场时取并集，qty=各账号之和；
+    # 单账号 legacy 形态并集=原 holdings 透传，合并语义不变）
+    from services.broker_state_autosync import union_holdings
+
+    holdings = union_holdings(state)
     return htw_store.sync_watchlist_from_ths(
         HOLDING_T_WATCHLIST_STORE_PATH,
         holdings,
