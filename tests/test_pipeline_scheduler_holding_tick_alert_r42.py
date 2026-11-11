@@ -151,4 +151,5 @@ def test_serve_registers_holding_tick_alert_job(monkeypatch):
 
 def test_version_bumped():
     # R42=1.3.0 → R46 快车道 1.4.0（t_trade_signal_fast 任务，2026-11-11）
-    assert ps.__version__ == "1.4.0"
+    # → R55 涨停生态 1.5.0（intraday 尾挂 mood + finalize 16:40，2026-11-11）
+    assert ps.__version__ == "1.5.0"
