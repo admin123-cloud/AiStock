@@ -1501,6 +1501,7 @@ def serve(
     register_holding_tick_alert_job(scheduler)
     register_market_mood_finalize_job(scheduler)
     register_t_trade_monitor_job(scheduler)
+    _register_intraday_kline_upsert(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -1563,6 +1564,44 @@ def serve(
     except (KeyboardInterrupt, SystemExit):
         logger.info("主循环退出，调度器收尾")
     return 0
+
+
+# ── R57 盘中 5min K 线落盘（2026-11-12） ─────────────────────────
+
+INTRADAY_KLINE_UPSERT_JOB_ID = "intraday_kline_upsert"
+INTRADAY_KLINE_UPSERT_CRON_HOURS = "9-14"
+INTRADAY_KLINE_UPSERT_CRON_MINUTE = "35-59/5"  # 09:35~14:55 每 5min
+INTRADAY_KLINE_UPSERT_WINDOW_START = dt_time(9, 35)
+INTRADAY_KLINE_UPSERT_WINDOW_END = dt_time(14, 55)
+
+
+def _register_intraday_kline_upsert(scheduler):
+    """注册 R57 盘中 5min K 线落盘任务（每 5min 聚合写入 CH）。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    def _run_upsert():
+        from scripts.intraday_kline_upsert import run_upsert
+        logger.info("[kline_upsert] 执行 5min K 落盘")
+        result = run_upsert()
+        n_ok = sum(1 for r in result.values() if r.get("status") == "ok")
+        n_tot = len(result)
+        logger.info("[kline_upsert] %d/%d 票写入完成", n_ok, n_tot)
+
+    scheduler.add_job(
+        _run_upsert,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=INTRADAY_KLINE_UPSERT_CRON_HOURS,
+            minute=INTRADAY_KLINE_UPSERT_CRON_MINUTE,
+            timezone=BEIJING_TZ,
+        ),
+        id=INTRADAY_KLINE_UPSERT_JOB_ID,
+        name="R57 盘中5min K线落盘（持仓票，腾讯分钟接口聚合后写入CH）",
+        max_instances=1,
+        misfire_grace_time=120,
+        coalesce=True,
+        replace_existing=True,
+    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
