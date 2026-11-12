@@ -1158,14 +1158,24 @@ def _l2_rsi_candidates(
     sell_st = state.side_state(code, "rsi_sell")
     buy_st = state.side_state(code, "rsi_buy")
 
+    # ── 5min MA5 计算（取最近5根close均线） ──
+    ma5 = None
+    if bars5 and len(bars5) >= 5:
+        closes5 = [float(b.get("close", 0)) for b in bars5[-5:]]
+        ma5 = sum(closes5) / 5
+
     # ── 卖出拐点（15min RSI≥65 后） ──
     is_rsi15_warn = rsi15 is not None and rsi15 >= 65.0
     sold = False
     if sell_st.get("armed"):
-        # ① 5min RSI 跌破 65（原80→65，与警戒阈值对齐）
-        if not sold and rsi5 is not None and rsi5 < 65.0:
+        # ① 5min RSI 从警戒后峰值回落 ≥ 10
+        rsi5_peak = sell_st.get("rsi5_peak") or 0.0
+        if rsi5 is not None:
+            if rsi5 > rsi5_peak:
+                rsi5_peak = rsi5
+        if not sold and rsi5 is not None and rsi5_peak >= 70.0 and rsi5_peak - rsi5 >= 10.0:
             cands.append({"side": "sell", "subtype": "exit", "priority": 2,
-                          "trigger_kind": "l2_rsi15_80"})
+                          "trigger_kind": "l2_rsi5_rollback"})
             sold = True
         # ② 5min 3K 见顶形态
         if not sold and bars5 and len(bars5) >= 3:
@@ -1173,20 +1183,31 @@ def _l2_rsi_candidates(
                 cands.append({"side": "sell", "subtype": "exit", "priority": 2,
                               "trigger_kind": "l2_3k_top"})
                 sold = True
-        # ③ 15min RSI 跌破 80
-        if not sold and rsi15 is not None and rsi15 < 80.0:
-            cands.append({"side": "sell", "subtype": "exit", "priority": 2,
-                          "trigger_kind": "l2_rsi15_break_80"})
-            sold = True
+        # ③ 5min 收盘价跌破 MA5
+        if not sold and ma5 is not None and bars5:
+            close5 = float(bars5[-1].get("close", 0))
+            if close5 < ma5:
+                cands.append({"side": "sell", "subtype": "exit", "priority": 2,
+                              "trigger_kind": "l2_price_break_ma5"})
+                sold = True
+    # 持续追踪峰值
+    if rsi5 is not None and sell_st.get("armed") and not sold:
+        old_peak = sell_st.get("rsi5_peak") or 0.0
+        if rsi5 > old_peak:
+            sell_st["rsi5_peak"] = rsi5
 
     # ── 买入拐点（15min RSI≤30 后） ──
     is_rsi15_cold = rsi15 is not None and rsi15 <= 30.0
     bought = False
     if buy_st.get("armed"):
-        # ① 5min RSI 升破 30
-        if not bought and rsi5 is not None and rsi5 > 30.0:
+        # ① 5min RSI 从警戒后谷底回升 ≥ 10
+        rsi5_trough = buy_st.get("rsi5_trough") or 999.0
+        if rsi5 is not None:
+            if rsi5 < rsi5_trough:
+                rsi5_trough = rsi5
+        if not bought and rsi5 is not None and rsi5_trough <= 30.0 and rsi5 - rsi5_trough >= 10.0:
             cands.append({"side": "buy", "subtype": "entry", "priority": 2,
-                          "trigger_kind": "l2_rsi15_20"})
+                          "trigger_kind": "l2_rsi5_rollup"})
             bought = True
         # ② 5min 3K 见底形态
         if not bought and bars5 and len(bars5) >= 3:
@@ -1194,11 +1215,18 @@ def _l2_rsi_candidates(
                 cands.append({"side": "buy", "subtype": "entry", "priority": 2,
                               "trigger_kind": "l2_3k_bottom"})
                 bought = True
-        # ③ 15min RSI 升破 30
-        if not bought and rsi15 is not None and rsi15 > 30.0:
-            cands.append({"side": "buy", "subtype": "entry", "priority": 2,
-                          "trigger_kind": "l2_rsi15_break_20"})
-            bought = True
+        # ③ 5min 收盘价升破 MA5
+        if not bought and ma5 is not None and bars5:
+            close5 = float(bars5[-1].get("close", 0))
+            if close5 > ma5:
+                cands.append({"side": "buy", "subtype": "entry", "priority": 2,
+                              "trigger_kind": "l2_price_rise_ma5"})
+                bought = True
+    # 持续追踪谷底
+    if rsi5 is not None and buy_st.get("armed") and not bought:
+        old_trough = buy_st.get("rsi5_trough") or 999.0
+        if rsi5 < old_trough:
+            buy_st["rsi5_trough"] = rsi5
 
     return cands
 
