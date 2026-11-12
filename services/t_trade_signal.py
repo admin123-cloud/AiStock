@@ -1134,9 +1134,9 @@ def _groups_still_hot(code, regime, params, px, rsi5, rsi15, vwap_dev, open_t, n
         regime == "down" and params.get("reduce_rsi5_min")
         and rsi5 >= float(params["reduce_rsi5_min"]))
     # L2: 15min RSI 警戒 —— ≥80时 warm，跌破80→冷（可触发卖出）
-    hot["rsi_sell"] = bool(rsi15 is not None and rsi15 >= 80.0)
-    # L2: 15min RSI ≤20 时 cold_warn，升破20→暖（可触发买入）
-    hot["rsi_buy"] = bool(rsi15 is not None and rsi15 <= 20.0)
+    hot["rsi_sell"] = bool(rsi15 is not None and rsi15 >= 65.0)
+    # L2: 15min RSI ≤30 时 cold_warn，升破30→暖（可触发买入）
+    hot["rsi_buy"] = bool(rsi15 is not None and rsi15 <= 30.0)
     return hot
 
 
@@ -1158,12 +1158,12 @@ def _l2_rsi_candidates(
     sell_st = state.side_state(code, "rsi_sell")
     buy_st = state.side_state(code, "rsi_buy")
 
-    # ── 卖出拐点（15min RSI≥80 后） ──
-    is_rsi15_warn = rsi15 is not None and rsi15 >= 80.0
+    # ── 卖出拐点（15min RSI≥65 后） ──
+    is_rsi15_warn = rsi15 is not None and rsi15 >= 65.0
     sold = False
     if sell_st.get("armed"):
-        # ① 5min RSI 跌破 80
-        if not sold and rsi5 is not None and rsi5 < 80.0:
+        # ① 5min RSI 跌破 65（原80→65，与警戒阈值对齐）
+        if not sold and rsi5 is not None and rsi5 < 65.0:
             cands.append({"side": "sell", "subtype": "exit", "priority": 2,
                           "trigger_kind": "l2_rsi15_80"})
             sold = True
@@ -1179,12 +1179,12 @@ def _l2_rsi_candidates(
                           "trigger_kind": "l2_rsi15_break_80"})
             sold = True
 
-    # ── 买入拐点（15min RSI≤20 后） ──
-    is_rsi15_cold = rsi15 is not None and rsi15 <= 20.0
+    # ── 买入拐点（15min RSI≤30 后） ──
+    is_rsi15_cold = rsi15 is not None and rsi15 <= 30.0
     bought = False
     if buy_st.get("armed"):
-        # ① 5min RSI 升破 20
-        if not bought and rsi5 is not None and rsi5 > 20.0:
+        # ① 5min RSI 升破 30
+        if not bought and rsi5 is not None and rsi5 > 30.0:
             cands.append({"side": "buy", "subtype": "entry", "priority": 2,
                           "trigger_kind": "l2_rsi15_20"})
             bought = True
@@ -1194,8 +1194,8 @@ def _l2_rsi_candidates(
                 cands.append({"side": "buy", "subtype": "entry", "priority": 2,
                               "trigger_kind": "l2_3k_bottom"})
                 bought = True
-        # ③ 15min RSI 升破 20
-        if not bought and rsi15 is not None and rsi15 > 20.0:
+        # ③ 15min RSI 升破 30
+        if not bought and rsi15 is not None and rsi15 > 30.0:
             cands.append({"side": "buy", "subtype": "entry", "priority": 2,
                           "trigger_kind": "l2_rsi15_break_20"})
             bought = True
