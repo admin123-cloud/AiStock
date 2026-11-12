@@ -201,6 +201,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/market/sector-heat/{code}/stocks',
     '/api/market/auction-anomaly',
     '/api/market/sentiment-radar',
+    '/api/market/sentiment',
     '/api/market/sentiment-legacy',
     '/api/news/cls/event/{event_id}',
     '/api/news/cls/event/{event_id}/candidates',
