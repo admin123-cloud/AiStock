@@ -46,6 +46,22 @@ BASE_TABLES = {
     "30m": "kline_minute_30",
     "60m": "kline_minute_60",
 }
+
+# R59: 只写 A 股 + 10 个维护指数
+_MAINTAINED_INDICES = frozenset({
+    '000001.SH','399001.SZ','399006.SZ','399106.SZ',
+    '000680.SH','000300.SH','000016.SH','000905.SH',
+    '000852.SH','000688.SH',
+})
+
+def _is_a_share_stock(code: str) -> bool:
+    base = code.upper().split('.')[0]
+    mkt = code.upper().split('.')[1] if '.' in code else ''
+    if len(base) != 6 or not base.isdigit():
+        return False
+    return (mkt == 'SZ' and base.startswith(('000','001','002','003','300','301'))
+            or mkt == 'SH' and base.startswith(('600','601','603','605','688','689'))
+            or mkt == 'BJ' and base.startswith('92'))
 COLUMNS = ["code", "datetime", "open", "high", "low", "close", "volume", "amount", "created_at", "id"]
 PERIOD_MINUTES = {"5m": 5, "15m": 15, "30m": 30, "60m": 60}
 A_SHARE_5M_ENDPOINTS = {
@@ -155,7 +171,11 @@ def _full_code_from_path(path: Path) -> Optional[str]:
     suffix = MARKET_SUFFIX.get(market)
     raw = path.stem[2:]
     if suffix and raw.isdigit() and len(raw) == 6:
-        return f"{raw}.{suffix}"
+        code = f"{raw}.{suffix}"
+        # R59: 只写 A 股 + 10 个维护指数
+        if not _is_a_share_stock(code) and code not in _MAINTAINED_INDICES:
+            return None
+        return code
     return None
 
 
