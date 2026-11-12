@@ -79,14 +79,14 @@ export default function SectorHeatPanel({ boardType, compact }: SectorHeatProps)
       {!boardType && (
         <div className="flex gap-1 border-b border-zinc-700 pb-1">
           <Button
-            outline={tab !== 'concept' as any}
+            outline={true}
             onClick={() => setTab('concept')}
             className={`px-3 py-1 text-xs ${tab === 'concept' ? '' : 'opacity-60'}`}
           >
             概念
           </Button>
           <Button
-            outline={tab !== 'industry' as any}
+            outline={true}
             onClick={() => setTab('industry')}
             className={`px-3 py-1 text-xs ${tab === 'industry' ? '' : 'opacity-60'}`}
           >
