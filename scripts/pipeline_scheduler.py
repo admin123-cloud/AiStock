@@ -1502,6 +1502,7 @@ def serve(
     register_market_mood_finalize_job(scheduler)
     register_t_trade_monitor_job(scheduler)
     _register_intraday_kline_upsert(scheduler)
+    _register_tdx_postclose_minutes(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -1599,6 +1600,83 @@ def _register_intraday_kline_upsert(scheduler):
         name="R57 盘中5min K线落盘（持仓票，腾讯分钟接口聚合后写入CH）",
         max_instances=1,
         misfire_grace_time=120,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+
+# ── R59 盘后分钟K线全量写入（TDX lc5，2026-11-12） ─────────────
+
+TDX_POSTCLOSE_JOB_ID = "tdx_postclose_minutes"
+TDX_POSTCLOSE_CRON_HOUR = 16
+TDX_POSTCLOSE_CRON_MINUTE = 15
+
+
+def _register_tdx_postclose_minutes(scheduler):
+    """注册盘后分钟K线写入（16:15 从 TDX lc5 读取 + 聚合 15/30/60min）。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    def _run_tdx_postclose():
+        logger.info("[tdx_postclose] 开始执行 TDX lc5 盘后分钟写入")
+        try:
+            import subprocess
+            import sys as _sys
+
+            base = _sys.executable
+            script = str(Path(__file__).parent / "build_tdx_minute_periods.py")
+            today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
+
+            # Step 1: 5min 写入（sh/sz/bj 三个市场）
+            for market in ("sh", "sz", "bj"):
+                cmd = [
+                    base, script,
+                    "--tdx-root", "D:/TDX/vipdoc",
+                    "--markets", market,
+                    "--periods", "5m",
+                    "--start-date", today, "--end-date", today,
+                    "--adjust", "none",
+                    "--delete-range",
+                ]
+                log.info("[tdx_postclose] 运行: %s %s", market, " ".join(cmd[-8:]))
+                ret = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if ret.returncode != 0:
+                    log.warning("[tdx_postclose] %s rc=%d stderr=%s", market, ret.returncode, ret.stderr[-200:])
+                else:
+                    log.info("[tdx_postclose] %s 完成", market)
+
+            # Step 2: 聚合 15/30/60min（只跑 sh 市场一个批次，因为数据在 CH 里已全）
+            cmd = [
+                base, script,
+                "--tdx-root", "D:/TDX/vipdoc",
+                "--markets", "sh",
+                "--periods", "15m,30m,60m",
+                "--start-date", today, "--end-date", today,
+                "--adjust", "none",
+                "--delete-range",
+            ]
+            log.info("[tdx_postclose] 聚合 15/30/60m...")
+            ret = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if ret.returncode != 0:
+                log.warning("[tdx_postclose] 聚合 rc=%d stderr=%s", ret.returncode, ret.stderr[-200:])
+            else:
+                log.info("[tdx_postclose] 聚合完成")
+
+            logger.info("[tdx_postclose] TDX lc5 盘后分钟写入完成")
+        except Exception as e:
+            logger.exception("[tdx_postclose] 失败: %s", e)
+
+    scheduler.add_job(
+        _run_tdx_postclose,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=TDX_POSTCLOSE_CRON_HOUR,
+            minute=TDX_POSTCLOSE_CRON_MINUTE,
+            timezone=BEIJING_TZ,
+        ),
+        id=TDX_POSTCLOSE_JOB_ID,
+        name="R59 盘后分钟K线全量写入（TDX lc5 + 15/30/60min聚合）",
+        max_instances=1,
+        misfire_grace_time=600,
         coalesce=True,
         replace_existing=True,
     )
