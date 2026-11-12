@@ -69,10 +69,6 @@ app.include_router(gen3_state_alpha_router, prefix='/api')
 app.include_router(gen3_shadow_router, prefix='/api')
 app.include_router(kline_check_router, prefix='/api', tags=['kline-check'])
 app.include_router(market_board_router)
-# 强制：将 market_board 的路由直接注入 app（include_router 在某些加载条件下被跳过）
-for _r in market_board_router.routes:
-    if _r.path not in {rr.path for rr in app.routes if hasattr(rr, 'path')}:
-        app.routes.append(_r)
 app.include_router(market_overview_router, prefix='/api')
 app.include_router(sectors_router, prefix='/api')
 app.include_router(stocks_router, prefix='/api')
@@ -201,7 +197,10 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/market/limit-up-ladder',
     '/api/market/limit-up-stats',
     '/api/market/margin-sentiment',
-    '/api/market/sentiment',
+    '/api/market/sector-heat',
+    '/api/market/sector-heat/{code}/stocks',
+    '/api/market/auction-anomaly',
+    '/api/market/sentiment-radar',
     '/api/market/sentiment-legacy',
     '/api/news/cls/event/{event_id}',
     '/api/news/cls/event/{event_id}/candidates',
