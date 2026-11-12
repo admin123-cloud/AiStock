@@ -13,7 +13,7 @@ dirty=$(git -C "$APP" status --porcelain=v1 | wc -l)
 if [ "$dirty" -gt 0 ]; then echo "提示：main 有 $dirty 项未提交改动（不参与构建）："; git -C "$APP" status --porcelain=v1 | head -5; fi
 SRC="F:/Aistock/data/builds/$SHA-src"; rm -rf "$SRC"; mkdir -p "$SRC"
 git -C "$APP" archive --format=tar "$SHA" | tar -x -C "$SRC"
-test -f "$SRC/Dockerfile.backend" && test -f "$SRC/frontend-react/Dockerfile.release" && test -f "$SRC/scripts/pipeline_scheduler.py"
+test -f "$SRC/Dockerfile.backend" && test -f "$SRC/frontend-react/Dockerfile.release" && test -f "$SRC/scripts/pipeline_scheduler.py" && test -f "$SRC/services/intraday_price_feed.py" && test -f "$SRC/scripts/alert_local.py"
 echo '== 构建后端/前端镜像 =='
 "$DOCK" build -t "aistock-core-backend:$SHA" -f "$SRC/Dockerfile.backend" "$SRC" 2>&1 | tail -2
 "$DOCK" build -t "aistock-core-frontend:$SHA" -f "$SRC/frontend-react/Dockerfile.release" "$SRC/frontend-react" 2>&1 | tail -2

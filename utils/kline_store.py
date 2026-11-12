@@ -295,6 +295,18 @@ def insert_kline_dataframe(
     if df.empty:
         return 0
 
+    from utils.security_market_policy import assert_no_neeq_codes
+
+    if "code" not in df.columns:
+        raise ValueError("blocked K-line insert: code column is required")
+    assert_no_neeq_codes(df["code"].tolist(), context=f"{period} K-line insert")
+
+    from utils.kline_history_policy import filter_kline_history_rows
+
+    df = filter_kline_history_rows(period, df)
+    if df.empty:
+        return 0
+
     table = _get_table_name(period)
     client = None
     if table == "kline_daily":

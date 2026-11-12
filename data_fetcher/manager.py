@@ -8,9 +8,6 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from .base_fetcher import BaseDataSource
-from .sources import (
-    QmtMiniDataSource,
-)
 from core.base import Singleton
 from utils.exceptions import DataSourceException
 from utils.logger import get_logger
@@ -31,9 +28,7 @@ class DataSourceManager(metaclass=Singleton):
     """
     
     # 数据源类注册表
-    SOURCE_CLASSES: Dict[str, Any] = {
-        "qmt_xtquant": QmtMiniDataSource,
-    }
+    SOURCE_CLASSES: Dict[str, Any] = {}
     
     def __init__(self):
         """初始化数据源管理器"""
@@ -80,8 +75,6 @@ class DataSourceManager(metaclass=Singleton):
             数据源实例
         """
         self._ensure_initialized()
-        if name in {"qmt", "qmtmini", "xtquant"}:
-            name = "qmt_xtquant"
         return self._sources.get(name)
     
     def get_available_sources(self) -> List[BaseDataSource]:
@@ -259,7 +252,7 @@ class DataSourceManager(metaclass=Singleton):
             所有股票列表
         """
         # 使用tdxquant数据源获取所有股票
-        preferred = str(config.get("data_sync.preferred_source", "qmt_xtquant") or "qmt_xtquant").strip().lower()
+        preferred = str(config.get("data_sync.preferred_source", "") or "").strip().lower()
         source = self.get_source(source_name or preferred)
         if source and hasattr(source, "get_all_stocks"):
             return source.get_all_stocks()
@@ -288,7 +281,7 @@ class DataSourceManager(metaclass=Singleton):
             所有指数列表
         """
         # 使用tdxquant数据源获取所有指数
-        preferred = str(config.get("data_sync.preferred_source", "qmt_xtquant") or "qmt_xtquant").strip().lower()
+        preferred = str(config.get("data_sync.preferred_source", "") or "").strip().lower()
         source = self.get_source(source_name or preferred)
         if source and hasattr(source, "get_all_indices"):
             return source.get_all_indices()

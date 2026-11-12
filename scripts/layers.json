@@ -5,8 +5,9 @@
   "counts": {
     "research_g3": 87,
     "research_cross_strategy": 119,
-    "runtime_maintenance": 188,
-    "research_g2": 45
+    "runtime_maintenance": 178,
+    "research_g2": 45,
+    "total": 429
   },
   "rows": [
     {
@@ -31,14 +32,6 @@
       "classification_basis": "research_name_marker",
       "referenced_by_active_tests": false,
       "planned_root": "research/cross_strategy",
-      "status": "registered_only"
-    },
-    {
-      "path": "scripts/apply_pre2010_envelope_a_closeout_20260923.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
       "status": "registered_only"
     },
     {
@@ -674,14 +667,6 @@
       "status": "registered_only"
     },
     {
-      "path": "scripts/build_pre2010_15m_production_candidate.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
       "path": "scripts/build_pre2010_repair_candidate.py",
       "layer": "runtime_maintenance",
       "classification_basis": "default_pending_review",
@@ -934,14 +919,6 @@
       "layer": "runtime_maintenance",
       "classification_basis": "test_or_runtime_reference",
       "referenced_by_active_tests": true,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
-      "path": "scripts/fetch_akshare_daily_qfq_to_clickhouse.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
       "planned_root": "scripts",
       "status": "registered_only"
     },
@@ -2122,14 +2099,6 @@
       "status": "registered_only"
     },
     {
-      "path": "scripts/materialize_pre2010_daily_source_snapshot.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
       "path": "scripts/materialize_pre2010_index_daily_from_stage.py",
       "layer": "runtime_maintenance",
       "classification_basis": "default_pending_review",
@@ -2314,14 +2283,6 @@
       "status": "registered_only"
     },
     {
-      "path": "scripts/promote_baostock_2010_missing_daily_20260922.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
       "path": "scripts/promote_pre2010_30m_b_confirmed_20260922.py",
       "layer": "runtime_maintenance",
       "classification_basis": "default_pending_review",
@@ -2362,14 +2323,6 @@
       "status": "registered_only"
     },
     {
-      "path": "scripts/promote_pre2010_daily_purchase_volume_diff_20260922.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
       "path": "scripts/promote_pre2010_formal5m_a_candidates_20260922.py",
       "layer": "runtime_maintenance",
       "classification_basis": "default_pending_review",
@@ -2379,14 +2332,6 @@
     },
     {
       "path": "scripts/promote_pre2010_harry_2006_5m_missing_20260922.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
-      "path": "scripts/promote_pre2010_legacy_fallback_highvol_v2.py",
       "layer": "runtime_maintenance",
       "classification_basis": "default_pending_review",
       "referenced_by_active_tests": false,
@@ -2746,14 +2691,6 @@
       "status": "registered_only"
     },
     {
-      "path": "scripts/repair_kline_daily_units_from_tdx.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
       "path": "scripts/repair_pre2010_2006_purchase_gaps_from_harry_20260922.py",
       "layer": "runtime_maintenance",
       "classification_basis": "default_pending_review",
@@ -2779,14 +2716,6 @@
     },
     {
       "path": "scripts/repair_purchased_15m_from_harry_5m_20260921.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
-      "status": "registered_only"
-    },
-    {
-      "path": "scripts/repair_purchased_daily_zero_ohlc.py",
       "layer": "runtime_maintenance",
       "classification_basis": "default_pending_review",
       "referenced_by_active_tests": false,
@@ -2831,14 +2760,6 @@
       "classification_basis": "research_name_marker",
       "referenced_by_active_tests": false,
       "planned_root": "research/cross_strategy",
-      "status": "registered_only"
-    },
-    {
-      "path": "scripts/resolve_purchased_daily_2010_missing_ohlc.py",
-      "layer": "runtime_maintenance",
-      "classification_basis": "default_pending_review",
-      "referenced_by_active_tests": false,
-      "planned_root": "scripts",
       "status": "registered_only"
     },
     {

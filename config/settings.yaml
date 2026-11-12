@@ -86,15 +86,12 @@ strategy_daily_runner:
   minute: 0
   weekdays_only: true
 data_sync:
-  preferred_source: qmt_xtquant
-  external_fallback_enabled: true
-  external_fallback_periods:
-  - 1d
-  external_fallback_providers:
-  - akshare
-  - tushare
+  preferred_source: ''
+  external_fallback_enabled: false
+  external_fallback_periods: []
+  external_fallback_providers: []
   qmt_xtquant:
-    enabled: true
+    enabled: false
     qmt_root: D:\国金QMT\国金证券QMT交易端
     quote_host: 127.0.0.1
     quote_port: 58610

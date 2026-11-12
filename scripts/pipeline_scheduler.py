@@ -138,6 +138,17 @@ TTRACKER_RECONCILE_CRON_TIME = dt_time(15, 10)
 TTRACKER_BROKER_SYNC_CRON_TIME = dt_time(15, 15)   # R38c：reconcile 后 5min
 TTRACKER_SHADOW_FINALIZE_CRON_TIME = dt_time(15, 16)  # R40：15:15 后收盘已定，影子日终固化
 
+# ── L2 t_trade_monitor（2026-11-12，任务书 20261112_l2_integration.md）────
+# 工作日 09:25-15:00 每 30s 心跳（APScheduler cron 触发面 09:25~15:00 每分钟，
+# 函数内二次守卫收口 09:25~15:00；cron 每分钟执行一次，函数内 30s 自循环）。
+TTRADE_MONITOR_JOB_ID = "t_trade_monitor"
+TTRADE_MONITOR_CRON_HOURS = "9-15"
+TTRADE_MONITOR_CRON_MINUTE = "25-59"  # 09:25~15:59 每分钟触发
+TTRADE_MONITOR_WINDOW_START = dt_time(9, 25)
+TTRADE_MONITOR_WINDOW_END = dt_time(15, 0)
+TTRADE_MONITOR_HEARTBEAT_SEC = 30       # 每 30s 一次心跳
+TTRADE_MONITOR_SUBLOOP_SEC = 30         # 自循环间隔（APScheduler 触发的函数内循环次数）
+
 STAGE_INTRADAY = "intraday_snapshot"
 
 STAGE_DAILY = "daily_kline"
@@ -1065,6 +1076,295 @@ def register_holding_tick_alert_job(scheduler):
 
 
 # ---------------------------------------------------------------------------
+# L2 t_trade_monitor（2026-11-12，任务书 20261112_l2_integration.md）
+# 工作日 09:25-15:00 每 30s 心跳：price_feed → RSI → 信号 → 弹窗 → 下单
+# ---------------------------------------------------------------------------
+
+_L2_LAST_SIGNAL: dict[str, datetime] = {}  # code:account → last signal time
+
+
+def _is_trading_day_simple(d: date) -> bool:
+    """交易日粗略判定（周一到周五，不含假期）。"""
+    return d.weekday() < 5
+
+
+def _run_l2_heartbeat(now_bj: datetime, log: logging.Logger) -> dict[str, Any]:
+    """L2 单次心跳：行情采集 → RSI → 信号判定 → 弹窗。"""
+    try:
+        from services import intraday_price_feed as feed
+        from services import t_trade_signal as sig
+        from scripts import alert_local as alert
+    except ImportError as exc:
+        log.error("[t_trade_monitor] 模块导入失败: %s", exc)
+        return {"status": "import_error", "error": str(exc)}
+
+    report: dict[str, Any] = {
+        "ts": now_bj.strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "ok",
+        "codes": {},
+        "signals": [],
+        "errors": [],
+    }
+
+    # 1. 加载持仓
+    try:
+        holdings = sig.load_t_pool()
+        codes = [str(h.get("code") or "").split(".")[0] for h in holdings.get("holdings") or []]
+    except Exception as exc:
+        log.error("[t_trade_monitor] 持仓加载失败: %s", exc)
+        report["status"] = "holdings_failed"
+        report["errors"].append(str(exc))
+        return report
+
+    if not codes:
+        return {**report, "status": "no_holdings"}
+
+    # 2. 刷新行情缓存
+    try:
+        feed.refresh(codes)
+    except Exception as exc:
+        log.warning("[t_trade_monitor] 行情刷新失败: %s", exc)
+
+    # 3. 逐票评估
+    for holding in holdings.get("holdings") or []:
+        code = str(holding.get("code") or "").split(".")[0]
+        name = holding.get("name") or ""
+        shares = int(holding.get("shares") or 0)
+        account = str(holding.get("account") or "acct1")
+
+        # 价格
+        price = feed.get_latest_price(code)
+        px_source = "price_cache"
+        if price is None:
+            try:
+                bars5 = sig.fetch_east_klines(code, 5)
+                live = [b for b in bars5 if (sig.parse_ts(str(b["ts"])) or now_bj) <= now_bj]
+                if live:
+                    price = float(live[-1]["close"])
+                    px_source = "m5_close"
+            except Exception:
+                pass
+
+        if price is None or price <= 0:
+            report["codes"][code] = {"price": None, "error": "no_price"}
+            continue
+
+        # RSI 计算
+        rsi15, rsi5 = None, None
+        try:
+            cls15 = [float(b["close"]) for b in sig.fetch_east_klines(code, 15)]
+            cls5 = [float(b["close"]) for b in sig.fetch_east_klines(code, 5)]
+            rsi15 = sig.rsi_wilder(cls15, 14) if len(cls15) > 14 else None
+            rsi5 = sig.rsi_wilder(cls5, 14) if len(cls5) > 14 else None
+        except Exception as exc:
+            log.debug("[t_trade_monitor] %s RSI 计算失败: %s", code, exc)
+
+        # L2 信号判定
+        last_l2_time = _L2_LAST_SIGNAL.get(f"{code}:{account}")
+        sig_result = sig.evaluate_l2_signal(
+            code=code, name=name,
+            price=price, price_source=px_source,
+            shares=shares,
+            rsi15=rsi15, rsi5=rsi5,
+            now=now_bj,
+            last_l2_time=last_l2_time,
+        )
+
+        code_report: dict[str, Any] = {
+            "price": price, "px_source": px_source,
+            "rsi15": rsi15, "rsi5": rsi5, "shares": shares,
+        }
+
+        if sig_result.get("signal"):
+            signal = sig_result["signal"]
+            draft = sig_result.get("draft")
+            code_report["signal"] = signal
+            if draft:
+                code_report["draft_id"] = draft["id"]
+
+            # 草案落盘
+            try:
+                sig.run_l2_beat(
+                    code=code, name=name,
+                    price=price, price_source=px_source,
+                    shares=shares,
+                    rsi15=rsi15, rsi5=rsi5,
+                    now=now_bj,
+                    last_l2_time=last_l2_time,
+                    write_draft=True,
+                )
+            except Exception as exc:
+                code_report["draft_error"] = str(exc)
+
+            # 弹窗
+            try:
+                tier = draft.get("tier") if draft else None
+                qty = draft.get("qty", 0) if draft else 0
+                alert.show_trade_alert(
+                    code=code, name=name,
+                    side=signal, price=price, qty=qty,
+                    tier=tier,
+                    rsi15=rsi15, rsi5=rsi5,
+                    extra=f"账号: {account}",
+                )
+                code_report["alert"] = True
+            except Exception as exc:
+                log.warning("[t_trade_monitor] %s 弹窗失败: %s", code, exc)
+                code_report["alert_error"] = str(exc)
+
+            # 冷却更新
+            _L2_LAST_SIGNAL[f"{code}:{account}"] = now_bj
+            report["signals"].append({
+                "code": code, "account": account,
+                "signal": signal, "draft_id": draft.get("id") if draft else None,
+            })
+        elif sig_result.get("suppressed"):
+            code_report["suppressed"] = sig_result["suppressed"]["reason"]
+
+        report["codes"][code] = code_report
+
+    return report
+
+
+def _run_l2_eod_report(now_bj: datetime) -> dict[str, Any]:
+    """L2 日终报告：汇总当日 draft。"""
+    try:
+        from services import t_trade_signal as sig
+    except ImportError:
+        return {"status": "import_error"}
+    report: dict[str, Any] = {
+        "schema": "t_tracker_eod/1",
+        "date": now_bj.date().isoformat(),
+        "generated_at": now_bj.strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "ok",
+    }
+    root = sig.tracker_dir()
+    drafts_file = root / "drafts" / f"{now_bj.strftime('%Y%m%d')}.jsonl"
+    try:
+        drafts = sig.read_jsonl(drafts_file)
+        l2 = [d for d in drafts if d.get("schema") == "t_tracker_l2_draft/1"]
+        report["l2_drafts_total"] = len(l2)
+        report["l2_signals"] = [{
+            "id": d["id"], "code": d.get("code"), "side": d.get("side"),
+            "tier": d.get("tier"), "ts": d.get("ts"),
+        } for d in l2]
+        report["all_drafts_total"] = len(drafts)
+    except Exception as exc:
+        report["error"] = str(exc)
+
+    from utils.paths import runtime_path
+    eod_path = runtime_path("t_tracker", "eod", f"{now_bj.strftime('%Y%m%d')}.json")
+    eod_path.parent.mkdir(parents=True, exist_ok=True)
+    import json, os
+    tmp = eod_path.with_name(eod_path.name + ".tmp")
+    tmp.write_text(
+        json.dumps(report, ensure_ascii=False, indent=1, default=str) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, eod_path)
+    return report
+
+
+def run_t_trade_monitor(
+    *,
+    mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """L2 盘中监控节拍。APScheduler cron 每分钟触发一次。
+
+    函数内做 30s 自循环心跳（09:25~15:00 窗口内持续监控）。
+    15:00 整生成日终报告后退出本拍。
+    """
+    log = logger_ or logging.getLogger("t_trade_monitor")
+    now_bj = cn_now(now_fn)
+    base = {
+        "schema": "t_tracker_monitor_beat/1",
+        "mode": mode,
+        "beat_at_beijing": now_bj.isoformat(),
+    }
+
+    # 窗口守卫
+    current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
+    if current < TTRADE_MONITOR_WINDOW_START or current > TTRADE_MONITOR_WINDOW_END:
+        return {**base, "status": "no_op_window"}
+
+    # 交易日守卫
+    check = is_trading_day or _is_trading_day_simple
+    try:
+        trading = bool(check(now_bj.date()))
+    except Exception as exc:
+        log.error("[t_trade_monitor] 交易日判断失败：%s", exc)
+        return {**base, "status": "failure", "reason": f"trading_day_check_failed: {exc}"}
+    if not trading:
+        return {**base, "status": "no_op_non_trading"}
+
+    # 主心跳循环
+    subloop_count = 0
+    signals_fired = 0
+    while True:
+        now = cn_now(now_fn) if now_fn else datetime.now(BEIJING_TZ)
+        t = now.timetz().replace(tzinfo=None) if now.tzinfo else now.time()
+
+        # 窗口退出
+        if t < TTRADE_MONITOR_WINDOW_START or t > TTRADE_MONITOR_WINDOW_END:
+            log.debug("[t_trade_monitor] 窗口退出（%s）", t.strftime("%H:%M:%S") if hasattr(t, 'strftime') else str(t))
+            break
+
+        # 15:00 整日终报告
+        if t.hour == 15 and t.minute == 0:
+            if t.second <= 30:
+                eod = _run_l2_eod_report(now)
+                log.info("[t_trade_monitor] 日终报告: l2_drafts=%d", eod.get("l2_drafts_total", 0))
+
+        # 心跳
+        report = _run_l2_heartbeat(now, log)
+        new_signals = len(report.get("signals", []))
+        if new_signals:
+            signals_fired += new_signals
+            log.info("[t_trade_monitor] 信号触发: %s",
+                     ", ".join(s["code"] for s in report["signals"]))
+
+        subloop_count += 1
+        # 自循环 30s 间隔
+        import time
+        time.sleep(TTRADE_MONITOR_HEARTBEAT_SEC)
+
+        # 电池保护：最多 60 次循环（≈30min）后退出，让 APScheduler 重触发
+        if subloop_count >= 60:
+            break
+
+    return {
+        **base,
+        "status": "ok",
+        "subloop_count": subloop_count,
+        "signals_fired": signals_fired,
+    }
+
+
+def register_t_trade_monitor_job(scheduler):
+    """向 scheduler 注册 L2 盘中监控 cron 任务。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler.add_job(
+        run_t_trade_monitor,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=TTRADE_MONITOR_CRON_HOURS,
+            minute=TTRADE_MONITOR_CRON_MINUTE,
+            timezone=BEIJING_TZ,
+        ),
+        id=TTRADE_MONITOR_JOB_ID,
+        name="L2做T·盘中监控（R50-L2，工作日 09:25~15:00 每 30s 心跳，自循环）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler.get_job(TTRADE_MONITOR_JOB_ID)
+
+
+# ---------------------------------------------------------------------------
 # 调度器装配
 # ---------------------------------------------------------------------------
 
@@ -1195,6 +1495,7 @@ def serve(
     register_t_tracker_jobs(scheduler)
     register_holding_tick_alert_job(scheduler)
     register_market_mood_finalize_job(scheduler)
+    register_t_trade_monitor_job(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED

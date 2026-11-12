@@ -1282,11 +1282,6 @@
       "sha256": "d403c21ce5612e8077610f163563287c8b37a250a6cac872e9458a244d4e1414"
     },
     {
-      "old": "scripts/audit_kline_daily_database.py",
-      "new": "research/cross_strategy/audit_kline_daily_database.py",
-      "sha256": "1d2043eba76ea596154ac372843fe7888178b19889991a07141f7e00c78205ee"
-    },
-    {
       "old": "scripts/audit_qmt_new_high_breadth_overlay_v1.py",
       "new": "research/cross_strategy/audit_qmt_new_high_breadth_overlay_v1.py",
       "sha256": "334892949e64320ce508226472ff354b0a67b915ace0bd2fa7d84bbd56528789"

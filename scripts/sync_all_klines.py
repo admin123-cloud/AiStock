@@ -53,18 +53,22 @@ class KlineSyncer:
         self.config_manager = ConfigManager()
 
         sync_settings = self.config_manager.get("data_sync", {}, config_file="settings.yaml") or {}
-        self.preferred_source = str(sync_settings.get("preferred_source", "qmt_xtquant")).strip().lower()
-        self.external_fallback_enabled = bool(sync_settings.get("external_fallback_enabled", True))
-        self.external_fallback_periods = set(sync_settings.get("external_fallback_periods", ["1d"]) or ["1d"])
+        self.preferred_source = str(sync_settings.get("preferred_source") or "").strip().lower()
+        self.external_fallback_enabled = bool(sync_settings.get("external_fallback_enabled", False))
+        self.external_fallback_periods = set(sync_settings.get("external_fallback_periods", []) or [])
         self.external_fallback_providers = [
             str(item).strip().lower()
-            for item in (sync_settings.get("external_fallback_providers", ["akshare", "tushare"]) or [])
+            for item in (sync_settings.get("external_fallback_providers", []) or [])
             if str(item).strip()
         ]
         self.tushare_token = (
-            os.getenv("TUSHARE_TOKEN")
-            or str(sync_settings.get("tushare_token", "")).strip()
-            or str((self.config_manager.get_data_sources_config().get("tushare", {}) or {}).get("token", "")).strip()
+            (
+                os.getenv("TUSHARE_TOKEN")
+                or str(sync_settings.get("tushare_token", "")).strip()
+                or str((self.config_manager.get_data_sources_config().get("tushare", {}) or {}).get("token", "")).strip()
+            )
+            if self.external_fallback_enabled
+            else ""
         )
         self._tushare_pro = None
         self._minute_write_lock = threading.Lock()
@@ -889,7 +893,7 @@ class KlineSyncer:
 
             last_err = None
             df = None
-            source_used = self.preferred_source or "qmt_xtquant"
+            source_used = self.preferred_source
             for fetch_code in _candidate_codes(code):
                 try:
                     df = self.market_data_source.get_stock_history(
@@ -904,21 +908,6 @@ class KlineSyncer:
                     last_err = e
                     df = None
             
-            if df is None or df.empty:
-                if period == "1d":
-                    fallback_df, fallback_provider = self._fetch_external_daily(
-                        code=code,
-                        start_date=start_date,
-                        end_date=end_date,
-                    )
-                    if fallback_df is not None and not fallback_df.empty:
-                        df = fallback_df
-                        source_used = f"external:{fallback_provider}"
-                        self.stats["external_fallback_success"] += 1
-                        logger.info(f"{code} {name} {period} fallback source={fallback_provider} rows={len(df)}")
-                    else:
-                        self.stats["external_fallback_failed"] += 1
-
             if df is None or df.empty:
                 same_day_query = bool(start_date and end_date and start_date == end_date)
                 minute_periods = {"1m", "5m", "15m", "30m", "60m", "1h"}
@@ -1237,6 +1226,11 @@ class KlineSyncer:
                 df['datetime'] = df['datetime'].apply(lambda v: _normalize_temporal_value(v, "datetime"))
             if 'created_at' in df.columns:
                 df['created_at'] = df['created_at'].apply(lambda v: _normalize_temporal_value(v, "datetime"))
+
+            from utils.kline_history_policy import filter_kline_history_rows
+            df = filter_kline_history_rows(period, df)
+            if df.empty:
+                return 0
 
             if table_name.startswith('kline_minute') and 'datetime' in df.columns:
                 before_rows = len(df)

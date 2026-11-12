@@ -19,6 +19,8 @@ from utils.daily_date_universe import (
     normalize_code,
     normalize_trade_date,
 )
+from utils.security_market_policy import assert_no_neeq_codes
+from utils.kline_history_policy import KLINE_HISTORY_START_DATE
 
 
 CORE_DAILY_INDEX_CODES = frozenset(
@@ -227,6 +229,7 @@ def validate_daily_codes(
     if scope is None:
         block_unreviewed_daily_write(operation=operation, source="unknown")
     normalized = [normalize_code(code) for code in codes if normalize_code(code)]
+    assert_no_neeq_codes(normalized, context=f"formal kline_daily {operation}")
     blocked = sorted(set(normalized) - scope.allowed_codes)
     if blocked:
         suffix = "..." if len(blocked) > 20 else ""
@@ -274,7 +277,14 @@ def validate_daily_keys(
         block_unreviewed_daily_write(operation=operation, source="unknown")
     normalized: list[tuple[str, date]] = []
     for code, trade_date in rows:
-        normalized.append((normalize_code(code), normalize_trade_date(trade_date)))
+        normalized_date = normalize_trade_date(trade_date)
+        if normalized_date < KLINE_HISTORY_START_DATE:
+            raise DailyWriteBlockedError(
+                "blocked formal kline_daily "
+                f"{operation} from {scope.source}: date {normalized_date} is before "
+                f"maintenance start {KLINE_HISTORY_START_DATE}"
+            )
+        normalized.append((normalize_code(code), normalized_date))
     validate_daily_codes((code for code, _ in normalized), scope=scope, operation=operation)
     if scope.exact_key_permit is None:
         raise DailyWriteBlockedError(

@@ -72,6 +72,22 @@ MERGE_WAVE_SEC = 390            # 同波判定窗：fast→slow ≤6.5min（一�
 KLT_CACHE_TTL_SEC = 60.0        # 东财分时K限频：同码同周期 ≤1 次/分钟
 ULIST_CHUNK = 10                # 东财 ulist 单请求码数上限
 SCHEMA_FAST_BEAT = "t_tracker_fast_beat/1"
+SCHEMA_L2_DRAFT = "t_tracker_l2_draft/1"
+
+# ── L2 策略常量（2026-11-12，任务书 20261112_l2_integration.md）────
+# 15min RSI(14) 为主导 + 5min RSI(14) 为辅助确认。
+L2_RSI_PERIOD = 14
+L2_COOLDOWN_SEC = 300           # L2 同票同向 5min 去重（30s 心跳快，需缩短）
+# 任务书 §7 策略升级：
+#   15min RSI>=80 + 5min RSI>=70 → 卖出T（减仓 1/4母仓） → sell-T
+#   15min RSI<=20 + 5min RSI<=30 → 买入T（加仓 1/4母仓） → buy-T
+#   卖带 75/80 分批 / 买带不高于 35
+L2_SELL_RSI15_MIN = 80.0
+L2_SELL_RSI5_MIN = 70.0
+L2_BUY_RSI15_MAX = 20.0
+L2_BUY_RSI5_MAX = 30.0
+L2_FRACTION = 4                 # T 仓 ≤ 母仓 1/4（与 L1 的 1/3 不同）
+L2_HEAD_SHOULDER_PLACEHOLDER = "STRUCTURE_PLACEHOLDER"
 
 # ── R34 校准参数（2026-11-10，来源 R34 §3.5；作为回归锚）──────────
 # R54（2026-11-11 Owner 裁决"卖晚一点、买早一点"）只改上升周期两档：
@@ -940,6 +956,11 @@ def evaluate_code(
             st["armed"] = True
 
     if not candidates:
+        # L2: 15min RSI 警戒 → 5min RSI 跌破/升破 触发
+        l2_cands = _l2_rsi_candidates(rsi5, rsi15, state, code, now)
+        if l2_cands:
+            candidates.extend(l2_cands)
+    if not candidates:
         return result
 
     base_shares = int(holding.get("shares") or 0)
@@ -1112,7 +1133,40 @@ def _groups_still_hot(code, regime, params, px, rsi5, rsi15, vwap_dev, open_t, n
     hot["hint"] = bool(
         regime == "down" and params.get("reduce_rsi5_min")
         and rsi5 >= float(params["reduce_rsi5_min"]))
+    # L2: 15min RSI 警戒 —— ≥80时 warm，跌破80→冷（可触发卖出）
+    hot["rsi_sell"] = bool(rsi15 is not None and rsi15 >= 80.0)
+    # L2: 15min RSI ≤20 时 cold_warn，升破20→暖（可触发买入）
+    hot["rsi_buy"] = bool(rsi15 is not None and rsi15 <= 20.0)
     return hot
+
+
+def _l2_rsi_candidates(
+    rsi5: Optional[float],
+    rsi15: Optional[float],
+    state: 'BeatState',
+    code: str,
+    now: datetime,
+) -> list[dict]:
+    """L2 15min RSI 警戒触发：15min≥80→等5min跌破80→卖出，15min≤20→等5min升破20→买入"""
+    from copy import deepcopy
+    cands: list[dict] = []
+    sell_st = state.side_state(code, "rsi_sell")
+    buy_st = state.side_state(code, "rsi_buy")
+    # 卖出：15min≥80 时警戒布防；跌破80时 if armed→触发卖出T
+    rsi15_warn = rsi15 is not None and rsi15 >= 80.0
+    rsi5_exit = rsi5 is not None and rsi5 < 80.0
+    if rsi15_warn and not sell_st.get("armed"):
+        pass  # 已触发，冷却中
+    if rsi5_exit and sell_st.get("armed"):
+        cands.append({"side": "sell", "subtype": "exit", "priority": 2, "trigger_kind": "l2_rsi15_80"})
+    # 买入：15min≤20 时警戒布防；升破20时 if armed→触发买入T
+    rsi15_cold = rsi15 is not None and rsi15 <= 20.0
+    rsi5_enter = rsi5 is not None and rsi5 > 20.0
+    if rsi15_cold and not buy_st.get("armed"):
+        pass  # 已触发，冷却中
+    if rsi5_enter and buy_st.get("armed"):
+        cands.append({"side": "buy", "subtype": "entry", "priority": 2, "trigger_kind": "l2_rsi15_20"})
+    return cands
 
 
 def run_beat(
@@ -2019,3 +2073,215 @@ def _default_fills_loader(for_date: date,
     except Exception:  # noqa: BLE001 - 导出文件不可用 → 下一档
         pass
     return [], "unavailable"
+
+
+# ---------------------------------------------------------------------------
+# L2 策略引擎（2026-11-12，任务书 20261112_l2_integration.md §7）
+# ---------------------------------------------------------------------------
+
+L2Side = str  # "buy-T" | "sell-T"
+
+L2_SIDES = ("buy-T", "sell-T")
+
+
+def evaluate_l2_signal(
+    *,
+    code: str,
+    name: str,
+    price: float,
+    price_source: str,
+    shares: int,           # 母仓股数
+    rsi15: Optional[float],
+    rsi5: Optional[float],
+    now: datetime,
+    last_l2_time: Optional[datetime],  # 本票本向上次 L2 信号时间（冷却用）
+    cooldown_sec: int = L2_COOLDOWN_SEC,
+) -> dict[str, Any]:
+    """L2 策略：15min RSI(14) + 5min RSI(14) 双档判定。
+
+    任务书 §7 策略升级：
+      15min RSI>=80 + 5min RSI>=70 → 卖出T（减仓 1/4母仓）
+      15min RSI<=20 + 5min RSI<=30 → 买入T（加仓 1/4母仓）
+      先到先触发；
+      卖带 75/80 分批（卖出信号标注 tier=trim/full）
+      买带不高于 35（买入信号标注 buy_tier=conviction/normal）
+
+    头肩形态识别 → STRUCTURE_PLACEHOLDER（后续做，不阻塞）。
+
+    返回 {signal, draft, suppressed}。
+    """
+    result: dict[str, Any] = {
+        "code": code, "name": name, "ts": tts_now_str(now),
+        "price": price, "price_source": price_source,
+        "rsi15": round(rsi15, 1) if rsi15 is not None else None,
+        "rsi5": round(rsi5, 1) if rsi5 is not None else None,
+        "shares": shares,
+        "signal": None,
+        "draft": None,
+        "suppressed": None,
+        "head_shoulder": L2_HEAD_SHOULDER_PLACEHOLDER,
+    }
+
+    def suppress(reason: str, **kw: Any) -> None:
+        result["suppressed"] = {"reason": reason, **kw}
+
+    if rsi15 is None or rsi5 is None:
+        suppress("rsi_data_insufficient",
+                 rsi15=rsi15, rsi5=rsi5)
+        return result
+
+    # ── 冷却检查 ──
+    if last_l2_time is not None:
+        elapsed = (now - last_l2_time).total_seconds()
+        if elapsed < cooldown_sec:
+            suppress("cooldown",
+                     last_l2_time=tts_now_str(last_l2_time),
+                     elapsed_sec=round(elapsed, 1),
+                     cooldown_sec=cooldown_sec)
+            # 不阻塞——仅为draft标注，signal仍可返回
+            result["cooldown_active"] = True
+
+    # ── 仓位下限检查 ──
+    lot_size = (shares // L2_FRACTION // 100) * 100
+    if lot_size < 100:
+        suppress("position_too_small",
+                 shares=shares, fraction=L2_FRACTION, lot_size=lot_size)
+        return result
+
+    # ── 卖出信号（15min RSI 过热） ──
+    sell_signal = False
+    sell_tier = None
+    buy_signal = False
+    buy_tier = None
+    position_pct = 1.0 / L2_FRACTION  # 1/4 = 0.25
+
+    if rsi15 >= L2_SELL_RSI15_MIN and rsi5 >= L2_SELL_RSI5_MIN:
+        sell_signal = True
+        # 分批标注：>=80 全清，75-80 减半
+        if rsi15 >= 80.0:
+            sell_tier = "full"
+            position_pct = 1.0 / L2_FRACTION
+        else:
+            sell_tier = "trim"
+            position_pct = 1.0 / (L2_FRACTION * 2)  # 1/8
+        # 头肩形态占位（后续做——5min 头肩→做空确认）
+        _ = L2_HEAD_SHOULDER_PLACEHOLDER
+
+    # ── 买入信号（15min RSI 超卖） ──
+    if rsi15 <= L2_BUY_RSI15_MAX and rsi5 <= L2_BUY_RSI5_MAX:
+        buy_signal = True
+        # 买带分层：≤20 确定性档，≤35 常规（买带不高于35）
+        if rsi15 <= 15.0:
+            buy_tier = "conviction"
+        else:
+            buy_tier = "normal"
+        # 15min RSI<=20 + 5min RSI<=30 → 加仓 1/4母仓
+        # 买带不高于35 → 即使 RSI5>30 也以 35 为上限做常态标注
+        if rsi5 > L2_BUY_RSI5_MAX and rsi5 <= 35.0:
+            buy_tier = "above30_watch"
+
+    # ── 先到先触发（优先卖出） ──
+    if sell_signal:
+        qty = int(lot_size * 100) if sell_tier == "trim" else lot_size
+        draft_id = _l2_draft_id(now, code, "sell-T")
+        draft = {
+            "schema": SCHEMA_L2_DRAFT,
+            "id": draft_id,
+            "ts": tts_now_str(now),
+            "code": code, "name": name,
+            "side": "sell-T",
+            "tier": sell_tier,
+            "qty": qty,
+            "price": price,
+            "price_source": price_source,
+            "signal": {
+                "rsi15": round(rsi15, 1),
+                "rsi5": round(rsi5, 1),
+                "type": "overheat",
+                "position_pct": round(position_pct, 4),
+            },
+        }
+        result["signal"] = "sell-T"
+        result["draft"] = draft
+        result["draft_id"] = draft_id
+        result["lot_qty"] = qty
+        result["position_pct"] = position_pct
+
+    elif buy_signal:
+        qty = max(lot_size, 100)
+        draft_id = _l2_draft_id(now, code, "buy-T")
+        draft = {
+            "schema": SCHEMA_L2_DRAFT,
+            "id": draft_id,
+            "ts": tts_now_str(now),
+            "code": code, "name": name,
+            "side": "buy-T",
+            "tier": buy_tier,
+            "qty": qty,
+            "price": price,
+            "price_source": price_source,
+            "signal": {
+                "rsi15": round(rsi15, 1),
+                "rsi5": round(rsi5, 1),
+                "type": "oversold",
+                "position_pct": round(position_pct, 4),
+            },
+        }
+        result["signal"] = "buy-T"
+        result["draft"] = draft
+        result["draft_id"] = draft_id
+        result["lot_qty"] = qty
+        result["position_pct"] = position_pct
+
+    return result
+
+
+def _l2_draft_id(now: datetime, code: str, side: str) -> str:
+    short = {"buy-T": "buy", "sell-T": "sell"}.get(side, side)
+    return f"L2{now.strftime('%Y%m%d')}_{code}_{short}_{now.strftime('%H%M%S')}"
+
+
+def tts_now_str(dt: Optional[datetime] = None) -> str:
+    return (dt or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def run_l2_beat(
+    *,
+    code: str,
+    name: str,
+    price: float,
+    price_source: str,
+    shares: int,
+    rsi15: Optional[float],
+    rsi5: Optional[float],
+    now: datetime,
+    last_l2_time: Optional[datetime] = None,
+    out_dir: Optional[Path] = None,
+    write_draft: bool = True,
+) -> dict[str, Any]:
+    """L2 策略单票一拍的执行入口：同步 evaluate + 草案落盘。
+
+    供 pipeline_scheduler 的 t_trade_monitor job 调用。
+    """
+    root = tracker_dir(out_dir)
+    result = evaluate_l2_signal(
+        code=code, name=name,
+        price=price, price_source=price_source,
+        shares=shares,
+        rsi15=rsi15, rsi5=rsi5,
+        now=now, last_l2_time=last_l2_time,
+    )
+    if result.get("draft") and write_draft:
+        draft = result["draft"]
+        # 草案落盘（drafts jsonl + pending_push）
+        day = now.date()
+        _append_jsonl(
+            root / "drafts" / f"{day.strftime('%Y%m%d')}.jsonl",
+            draft,
+        )
+        _atomic_write_json(
+            root / "pending_push" / f"{draft['id']}.json",
+            draft,
+        )
+        result["written"] = True
+    return result

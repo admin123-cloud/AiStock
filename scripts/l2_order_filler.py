@@ -482,6 +482,34 @@ def fill_order(
     return result
 
 
+def _confirm_order_dialog(app) -> Optional[str]:
+    """在确认弹窗上自动点确认（Phase 4：Owner 授权监督试运行）。"""
+    import time
+    try:
+        dlg = app.window(title=PANEL_TITLE)
+    except:
+        return "无法获取面板窗口"
+    # 等待弹窗出现（最多5秒）
+    for _ in range(10):
+        try:
+            # 弹窗通常是一个Dialog/Pane子窗口，找"确认/是/确定"按钮
+            buttons = dlg.descendants(control_type="Button")
+            for b in buttons:
+                name = (b.element_info.name or "").strip()
+                if any(kw in name for kw in ["确认", "是", "确定", "Yes", "OK", "确认[Y]"]):
+                    b.set_focus()
+                    time.sleep(0.3)
+                    from pywinauto.keyboard import send_keys
+                    send_keys("{ENTER}")
+                    time.sleep(3)
+                    return None
+            # 没找到确认按钮 → 也许弹窗还在加载
+            time.sleep(0.5)
+        except:
+            time.sleep(0.5)
+    return "未找到确认弹窗/确认按钮（弹窗可能未出现或已被手动操作）"
+
+
 def _click_buy_button(app) -> Optional[str]:
     """点击买入按钮（aid=1006），仅Phase 3使用。返回None=成功。"""
     try:
@@ -560,6 +588,80 @@ def submit_order(
         result["error"] = click_err
         return result
     result["steps"].append("已点击买入按钮，等待确认弹窗")
+    result["success"] = True
+    return result
+
+
+def auto_submit(
+    account: str,
+    code: str,
+    price: float,
+    qty: int,
+    side: str = "buy",
+) -> dict[str, Any]:
+    """Phase 4: 全自动填单+提交+确认（Owner 授权监督试运行）。"""
+    result: dict[str, Any] = {
+        "schema": "l2_auto_submit/1",
+        "success": False,
+        "filled": {},
+        "order_id": None,
+        "error": None,
+        "steps": [],
+        "ts": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    # 1. 风控门
+    try:
+        import sys as _sys, json as _json
+        _sys.path.insert(0, str(Path(r"F:/Aistock/app")))
+        from services.l2_order_gate import check_order, OrderRequest, GateContext
+        from datetime import datetime as _dt
+
+        req = OrderRequest(account=account, code=code, side=side,
+                           price=round(price, 2), qty=qty, ts=_dt.now())
+        ctx = GateContext(now=_dt.now(), kill_switch=False)
+        cfg_path = Path(r"F:/Aistock/data/data/runtime/t_tracker/l2_risk_config.json")
+        if cfg_path.exists():
+            cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+        else:
+            cfg = {"schema": "l2_risk_config/1", "global_breakers": {}}
+        gate = check_order(req, ctx, cfg)
+        if not gate.approved:
+            result["error"] = f"风控拒绝: {gate.rejections}"
+            return result
+    except Exception as e:
+        result["error"] = f"风控门异常: {e}"
+        return result
+    result["steps"].append("风控门通过")
+
+    # 2. 填单
+    fill = fill_order(account, code, price, qty, side)
+    if not fill.get("success"):
+        result["error"] = fill.get("error", "填单失败")
+        result["steps"].extend(fill.get("steps", []))
+        return result
+    result["filled"] = fill.get("filled", {})
+    result["steps"].extend(fill.get("steps", []))
+
+    # 3. 提交
+    app, err = _find_window()
+    if app is None:
+        result["error"] = err or "窗口不可用"
+        return result
+    import time
+    click_err = _click_buy_button(app)
+    if click_err:
+        result["error"] = click_err
+        return result
+    result["steps"].append("已点击买入按钮")
+
+    # 4. 自动确认弹窗
+    time.sleep(1.5)
+    confirm_err = _confirm_order_dialog(app)
+    if confirm_err:
+        result["error"] = confirm_err
+        return result
+    result["steps"].append("自动确认完成")
+
     result["success"] = True
     return result
 

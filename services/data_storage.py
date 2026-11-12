@@ -33,6 +33,8 @@ from utils.daily_write_guard import (
     validate_daily_dataframe,
 )
 from utils.logger import get_logger
+from utils.security_market_policy import assert_no_neeq_codes
+from utils.kline_history_policy import filter_kline_history_rows
 
 logger = get_logger("DataStorageService")
 
@@ -50,6 +52,15 @@ class DataStorageService:
         Returns:
             Number of inserted rows.
         """
+        if not klines:
+            return 0
+
+        assert_no_neeq_codes(
+            (row.get("code") for row in klines),
+            context=f"{period} K-line insert",
+        )
+
+        klines = filter_kline_history_rows(period, pd.DataFrame(klines)).to_dict("records")
         if not klines:
             return 0
 
@@ -357,6 +368,11 @@ class DataStorageService:
         """Batch insert stock metadata."""
         if not stocks:
             return 0
+
+        assert_no_neeq_codes(
+            (row.get("code") for row in stocks),
+            context="stock master insert",
+        )
 
         try:
             with next(get_db()) as session:

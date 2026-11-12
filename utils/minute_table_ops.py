@@ -13,6 +13,7 @@ from typing import Any
 import pandas as pd
 
 from utils.kline_store import filter_trading_day_rows
+from utils.kline_history_policy import filter_kline_history_rows
 from utils.market_warehouse import clickhouse_client
 
 
@@ -34,6 +35,10 @@ def upsert_to_ch(table: str, df: pd.DataFrame, replace: bool = False) -> int:
         return 0
     period = table.replace("kline_minute_", "") + "m"
     before_rows = len(df)
+    df = filter_kline_history_rows(period, df)
+    if df.empty:
+        print(f"{table} write blocked by 2000 history boundary: dropped={before_rows}", flush=True)
+        return 0
     df = filter_trading_day_rows(period, df)
     if df.empty:
         print(f"{table} write blocked by trade_calendar guard: dropped={before_rows}", flush=True)

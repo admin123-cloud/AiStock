@@ -6,6 +6,7 @@ import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Card, ChangeValue, EmptyState, PageHeader, SectionTitle } from '@/components/ui'
 import MarketDashboardBlocks from './MarketDashboardBlocks'
+import R56MarketDashboardBlocks from '@/components/MarketDashboardBlocks'
 
 /* ------------------------------------------------------------------ */
 /* 常量与元数据（保持历史页面行为一致）                              */
@@ -1240,6 +1241,14 @@ export default function Home() {
 
         {/* R55 市场看板三件套：宽度条 / 涨跌分布直方图 / 涨停生态卡（随快照 5min 刷新） */}
         <MarketDashboardBlocks />
+
+        {/* R56 P1 市场看板：情绪雷达 / 板块热度 / 竞价异动 */}
+        <section className="mb-6">
+          <div className="mb-4">
+            <SectionTitle title="盘中监测" />
+          </div>
+          <R56MarketDashboardBlocks />
+        </section>
 
         {/* 融资客情绪 */}
         <section className="mb-6">

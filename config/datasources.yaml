@@ -12,7 +12,7 @@
 
 data_sources:
   qmt_xtquant:
-    enabled: true
+    enabled: false
     priority: 0
     name: "QMT xtquant"
     description: "QMT/MiniQMT xtquant data source"
