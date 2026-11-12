@@ -1644,22 +1644,41 @@ def _register_tdx_postclose_minutes(scheduler):
                 else:
                     log.info("[tdx_postclose] %s 完成", market)
 
-            # Step 2: 聚合 15/30/60min（只跑 sh 市场一个批次，因为数据在 CH 里已全）
-            cmd = [
-                base, script,
-                "--tdx-root", "D:/TDX/vipdoc",
-                "--markets", "sh",
-                "--periods", "15m,30m,60m",
-                "--start-date", today, "--end-date", today,
-                "--adjust", "none",
-                "--delete-range",
-            ]
-            log.info("[tdx_postclose] 聚合 15/30/60m...")
-            ret = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            if ret.returncode != 0:
-                log.warning("[tdx_postclose] 聚合 rc=%d stderr=%s", ret.returncode, ret.stderr[-200:])
-            else:
-                log.info("[tdx_postclose] 聚合完成")
+            # Step 2: 聚合 15/30/60min（从 CH 读取全市场 5min 数据聚合，不依赖 --markets）
+            import urllib.request
+            from collections import defaultdict
+
+            def _q(sql):
+                req = urllib.request.Request("http://127.0.0.1:8123/", data=sql.encode("utf-8"), headers={"Content-Type": "text/plain"})
+                resp = urllib.request.urlopen(req, timeout=600)
+                t = resp.read().decode().strip()
+                return [l.split("\t") for l in t.split("\n")] if t else []
+
+            for tbl, step, label in [("kline_minute_15", 3, "15m"), ("kline_minute_30", 6, "30m"), ("kline_minute_60", 12, "60m")]:
+                _q(f"ALTER TABLE stock.{tbl} DELETE WHERE datetime >= '{today}' AND datetime < '2026-11-13' SETTINGS mutations_sync=1")
+                rows = _q(f"SELECT code, datetime, open, high, low, close, volume FROM stock.kline_minute_5 WHERE datetime >= '{today}' AND datetime < '2026-11-13' ORDER BY code, datetime")
+                buckets = defaultdict(list)
+                for row in rows:
+                    buckets[row[0]].append(row)
+                vals = []
+                for code, bars in buckets.items():
+                    for i in range(0, len(bars), step):
+                        ch = bars[i:i + step]
+                        if len(ch) < 2:
+                            continue
+                        dt = ch[0][1]
+                        o = float(ch[0][2])
+                        h = max(float(r[3]) for r in ch)
+                        l = min(float(r[4]) for r in ch)
+                        c = float(ch[-1][5])
+                        v = sum(int(r[6]) for r in ch if r[6] and r[6].isdigit())
+                        vals.append(f"('{code}','{dt}',{o},{h},{l},{c},{v})")
+                for i in range(0, len(vals), 500):
+                    sql = f"INSERT INTO stock.{tbl}(code,datetime,open,high,low,close,volume) VALUES {','.join(vals[i:i + 500])}"
+                    _q(sql)
+                r = _q(f"SELECT count(), uniqExact(code) FROM stock.{tbl} WHERE datetime >= '{today}' AND datetime < '2026-11-13'")
+                if r:
+                    log.info("[tdx_postclose] 聚合 %s: %s行 %s只", label, r[0][0], r[0][1])
 
             logger.info("[tdx_postclose] TDX lc5 盘后分钟写入完成")
         except Exception as e:
