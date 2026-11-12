@@ -145,8 +145,8 @@ def insert_rows(rows: list[dict], date_str: str) -> tuple[int, str]:
     )
 
     import urllib.parse
-    data = urllib.parse.urlencode({"query": sql}).encode()
-    req = urllib.request.Request(CH_URL, data=data)
+    req = urllib.request.Request(CH_URL, data=sql.encode("utf-8"))
+    req.add_header("Content-Type", "text/plain")
     try:
         urllib.request.urlopen(req, timeout=30)
         return len(rows), "ok"

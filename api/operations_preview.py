@@ -50,6 +50,7 @@ from api.gen3_state_alpha import router as gen3_state_alpha_router
 from api.gen3_shadow import router as gen3_shadow_router
 from api.kline_check import router as kline_check_router
 from api.market_overview import router as market_overview_router
+from api.market_board import router as market_board_router
 from api.sectors import router as sectors_router
 from api.stocks import router as stocks_router
 from api.system_config import router as system_router
@@ -68,6 +69,7 @@ app.include_router(gen3_state_alpha_router, prefix='/api')
 app.include_router(gen3_shadow_router, prefix='/api')
 app.include_router(kline_check_router, prefix='/api', tags=['kline-check'])
 app.include_router(market_overview_router, prefix='/api')
+app.include_router(market_board_router, prefix='/api')
 app.include_router(sectors_router, prefix='/api')
 app.include_router(stocks_router, prefix='/api')
 app.include_router(system_router, prefix='/api', tags=['system'])
