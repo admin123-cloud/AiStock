@@ -30,7 +30,7 @@ from utils.paths import runtime_path
 
 logger = get_logger("market_board")
 
-router = APIRouter(prefix="/market", tags=["市场看板"])
+router = APIRouter(prefix="/api/market", tags=["市场看板"])
 
 BJ_TZ = ZoneInfo("Asia/Shanghai")
 
