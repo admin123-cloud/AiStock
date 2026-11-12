@@ -107,7 +107,7 @@ def _load_valid_trading_days(start_day: date, end_day: date, market: str = "SH")
     calendar = clickhouse_query_df(
         """
         SELECT trade_date
-        FROM trade_calendar
+        FROM stock.trade_calendar
         WHERE market = ?
           AND is_trading = 1
           AND trade_date >= ?
