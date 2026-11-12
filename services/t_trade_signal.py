@@ -1190,11 +1190,23 @@ def _l2_rsi_candidates(
                 cands.append({"side": "sell", "subtype": "exit", "priority": 2,
                               "trigger_kind": "l2_price_break_ma5"})
                 sold = True
-    # 持续追踪峰值
+    # 持续追踪峰值 + 顶背离检测
     if rsi5 is not None and sell_st.get("armed") and not sold:
         old_peak = sell_st.get("rsi5_peak") or 0.0
+        old_peak_price = sell_st.get("price_at_peak") or 0.0
+        if bars5:
+            cur_close = float(bars5[-1].get("close", 0))
+            cur_high = float(bars5[-1].get("high", 0))
+        else:
+            cur_close = cur_high = 0.0
         if rsi5 > old_peak:
             sell_st["rsi5_peak"] = rsi5
+            sell_st["price_at_peak"] = cur_high
+        # ④ 顶背离：价格创新高（超过前峰值价位），但 RSI 未创新高
+        elif not sold and old_peak >= 70.0 and cur_high > old_peak_price > 0 and rsi5 < old_peak:
+            cands.append({"side": "sell", "subtype": "exit", "priority": 2,
+                          "trigger_kind": "l2_top_divergence"})
+            sold = True
 
     # ── 买入拐点（15min RSI≤30 后） ──
     is_rsi15_cold = rsi15 is not None and rsi15 <= 30.0
@@ -1222,11 +1234,23 @@ def _l2_rsi_candidates(
                 cands.append({"side": "buy", "subtype": "entry", "priority": 2,
                               "trigger_kind": "l2_price_rise_ma5"})
                 bought = True
-    # 持续追踪谷底
+    # 持续追踪谷底 + 底背离检测
     if rsi5 is not None and buy_st.get("armed") and not bought:
         old_trough = buy_st.get("rsi5_trough") or 999.0
+        old_trough_price = buy_st.get("price_at_trough") or 1e9
+        if bars5:
+            cur_close = float(bars5[-1].get("close", 0))
+            cur_low = float(bars5[-1].get("low", 0))
+        else:
+            cur_close = cur_low = 1e9
         if rsi5 < old_trough:
             buy_st["rsi5_trough"] = rsi5
+            buy_st["price_at_trough"] = cur_low
+        # ④ 底背离：价格创新低（低于前谷底价位），但 RSI 未创新低
+        elif not bought and old_trough <= 30.0 and cur_low < old_trough_price < 1e9 and rsi5 > old_trough:
+            cands.append({"side": "buy", "subtype": "entry", "priority": 2,
+                          "trigger_kind": "l2_bottom_divergence"})
+            bought = True
 
     return cands
 
