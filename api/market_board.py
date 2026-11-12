@@ -32,6 +32,9 @@ logger = get_logger("market_board")
 
 router = APIRouter(prefix="/api/market", tags=["市场看板"])
 
+# 强制注册别名，供 operations_preview 用
+market_board_routes = router.routes
+
 BJ_TZ = ZoneInfo("Asia/Shanghai")
 
 # ──────────────────────────────────────────────
