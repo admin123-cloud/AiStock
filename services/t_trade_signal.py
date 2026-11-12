@@ -957,7 +957,7 @@ def evaluate_code(
 
     if not candidates:
         # L2: 15min RSI 警戒 → 5min RSI 跌破/升破 触发
-        l2_cands = _l2_rsi_candidates(rsi5, rsi15, state, code, now)
+        l2_cands = _l2_rsi_candidates(rsi5, rsi15, state, code, now, bars5=bars5)
         if l2_cands:
             candidates.extend(l2_cands)
     if not candidates:
@@ -1146,27 +1146,123 @@ def _l2_rsi_candidates(
     state: 'BeatState',
     code: str,
     now: datetime,
+    bars5: Optional[list[dict]] = None,
 ) -> list[dict]:
-    """L2 15min RSI 警戒触发：15min≥80→等5min跌破80→卖出，15min≤20→等5min升破20→买入"""
-    from copy import deepcopy
+    """L2 15min RSI 警戒触发：进入警戒区后，以下拐点信号任一先到即触发:
+    - 5min RSI 跌破 80 / 升破 20
+    - 5min 3K 见顶形态（长上影/阴包阳/黄昏星）
+    - 5min 3K 见底形态（长下影/阳包阴/启明星）
+    - 15min RSI 跌破 80 / 升破 20
+    """
     cands: list[dict] = []
     sell_st = state.side_state(code, "rsi_sell")
     buy_st = state.side_state(code, "rsi_buy")
-    # 卖出：15min≥80 时警戒布防；跌破80时 if armed→触发卖出T
-    rsi15_warn = rsi15 is not None and rsi15 >= 80.0
-    rsi5_exit = rsi5 is not None and rsi5 < 80.0
-    if rsi15_warn and not sell_st.get("armed"):
-        pass  # 已触发，冷却中
-    if rsi5_exit and sell_st.get("armed"):
-        cands.append({"side": "sell", "subtype": "exit", "priority": 2, "trigger_kind": "l2_rsi15_80"})
-    # 买入：15min≤20 时警戒布防；升破20时 if armed→触发买入T
-    rsi15_cold = rsi15 is not None and rsi15 <= 20.0
-    rsi5_enter = rsi5 is not None and rsi5 > 20.0
-    if rsi15_cold and not buy_st.get("armed"):
-        pass  # 已触发，冷却中
-    if rsi5_enter and buy_st.get("armed"):
-        cands.append({"side": "buy", "subtype": "entry", "priority": 2, "trigger_kind": "l2_rsi15_20"})
+
+    # ── 卖出拐点（15min RSI≥80 后） ──
+    is_rsi15_warn = rsi15 is not None and rsi15 >= 80.0
+    sold = False
+    if sell_st.get("armed"):
+        # ① 5min RSI 跌破 80
+        if not sold and rsi5 is not None and rsi5 < 80.0:
+            cands.append({"side": "sell", "subtype": "exit", "priority": 2,
+                          "trigger_kind": "l2_rsi15_80"})
+            sold = True
+        # ② 5min 3K 见顶形态
+        if not sold and bars5 and len(bars5) >= 3:
+            if _three_k_top(bars5[-3:]):
+                cands.append({"side": "sell", "subtype": "exit", "priority": 2,
+                              "trigger_kind": "l2_3k_top"})
+                sold = True
+        # ③ 15min RSI 跌破 80
+        if not sold and rsi15 is not None and rsi15 < 80.0:
+            cands.append({"side": "sell", "subtype": "exit", "priority": 2,
+                          "trigger_kind": "l2_rsi15_break_80"})
+            sold = True
+
+    # ── 买入拐点（15min RSI≤20 后） ──
+    is_rsi15_cold = rsi15 is not None and rsi15 <= 20.0
+    bought = False
+    if buy_st.get("armed"):
+        # ① 5min RSI 升破 20
+        if not bought and rsi5 is not None and rsi5 > 20.0:
+            cands.append({"side": "buy", "subtype": "entry", "priority": 2,
+                          "trigger_kind": "l2_rsi15_20"})
+            bought = True
+        # ② 5min 3K 见底形态
+        if not bought and bars5 and len(bars5) >= 3:
+            if _three_k_bottom(bars5[-3:]):
+                cands.append({"side": "buy", "subtype": "entry", "priority": 2,
+                              "trigger_kind": "l2_3k_bottom"})
+                bought = True
+        # ③ 15min RSI 升破 20
+        if not bought and rsi15 is not None and rsi15 > 20.0:
+            cands.append({"side": "buy", "subtype": "entry", "priority": 2,
+                          "trigger_kind": "l2_rsi15_break_20"})
+            bought = True
+
     return cands
+
+
+def _three_k_top(bars3: list[dict]) -> bool:
+    """5min 3K 见顶形态（任一成立）：
+    A. 上影线见顶：连续3根，每根上影线≥实体2倍，且高点依次降低
+    B. 阴包阳：阳线后阴线完全覆盖阳线实体
+    C. 黄昏星：长阳→小实体→长阴，阴线实体≥阳线实体50%
+    """
+    if len(bars3) < 3:
+        return False
+    def body(bar): return abs(bar.get('close', 0) - bar.get('open', 0))
+    def upper(bar): return bar.get('high', 0) - max(bar.get('close', 0), bar.get('open', 0))
+    def lower(bar): return min(bar.get('close', 0), bar.get('open', 0)) - bar.get('low', 0)
+    def is_up(bar): return bar.get('close', 0) > bar.get('open', 0)
+    def is_down(bar): return bar.get('close', 0) < bar.get('open', 0)
+    b0, b1, b2 = bars3[0], bars3[1], bars3[2]
+    bo0, bo1, bo2 = body(b0), body(b1), body(b2)
+    avg_body = max((bo0 + bo1 + bo2) / 3, 0.01)
+    # A. 上影线见顶
+    if all(upper(b) >= 2 * body(b) for b in bars3)\
+       and bars3[0].get('high', 0) > bars3[1].get('high', 0) > bars3[2].get('high', 0):
+        return True
+    # B. 阴包阳
+    if is_up(b1) and is_down(b2) and bo2 > bo1 and b2.get('close', 0) < b1.get('open', 0):
+        return True
+    # C. 黄昏星
+    if is_up(b0) and bo0 >= 1.5 * avg_body \
+       and bo1 <= 0.3 * avg_body \
+       and is_down(b2) and bo2 >= 0.5 * bo0:
+        return True
+    return False
+
+
+def _three_k_bottom(bars3: list[dict]) -> bool:
+    """5min 3K 见底形态（任一成立）：
+    A. 下影线见底：连续3根，每根下影线≥实体2倍，且低点依次抬高
+    B. 阳包阴：阴线后阳线完全覆盖阴线实体
+    C. 启明星：长阴→小实体→长阳，阳线实体≥阴线实体50%
+    """
+    if len(bars3) < 3:
+        return False
+    def body(bar): return abs(bar.get('close', 0) - bar.get('open', 0))
+    def upper(bar): return bar.get('high', 0) - max(bar.get('close', 0), bar.get('open', 0))
+    def lower(bar): return min(bar.get('close', 0), bar.get('open', 0)) - bar.get('low', 0)
+    def is_up(bar): return bar.get('close', 0) > bar.get('open', 0)
+    def is_down(bar): return bar.get('close', 0) < bar.get('open', 0)
+    b0, b1, b2 = bars3[0], bars3[1], bars3[2]
+    bo0, bo1, bo2 = body(b0), body(b1), body(b2)
+    avg_body = max((bo0 + bo1 + bo2) / 3, 0.01)
+    # A. 下影线见底
+    if all(lower(b) >= 2 * body(b) for b in bars3)\
+       and bars3[0].get('low', 1e9) < bars3[1].get('low', 1e9) < bars3[2].get('low', 1e9):
+        return True
+    # B. 阳包阴
+    if is_down(b1) and is_up(b2) and bo2 > bo1 and b2.get('close', 0) > b1.get('open', 0):
+        return True
+    # C. 启明星
+    if is_down(b0) and bo0 >= 1.5 * avg_body \
+       and bo1 <= 0.3 * avg_body \
+       and is_up(b2) and bo2 >= 0.5 * bo0:
+        return True
+    return False
 
 
 def run_beat(

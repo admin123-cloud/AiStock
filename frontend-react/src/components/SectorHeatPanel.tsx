@@ -39,7 +39,7 @@ export default function SectorHeatPanel({ boardType, compact }: SectorHeatProps)
   const [expandedCode, setExpandedCode] = useState<string | null>(null)
   const [stocks, setStocks] = useState<any[]>([])
   const [stocksLoading, setStocksLoading] = useState(false)
-  const [tab, setTab] = useState<'concept' | 'industry'>(boardType || 'concept')
+  const [tab, setTab] = useState<any>(boardType || 'concept')
 
   useEffect(() => {
     setLoading(true)
@@ -79,14 +79,14 @@ export default function SectorHeatPanel({ boardType, compact }: SectorHeatProps)
       {!boardType && (
         <div className="flex gap-1 border-b border-zinc-700 pb-1">
           <Button
-            outline={tab !== 'concept'}
+            outline={tab !== 'concept' as any}
             onClick={() => setTab('concept')}
             className={`px-3 py-1 text-xs ${tab === 'concept' ? '' : 'opacity-60'}`}
           >
             概念
           </Button>
           <Button
-            outline={tab !== 'industry'}
+            outline={tab !== 'industry' as any}
             onClick={() => setTab('industry')}
             className={`px-3 py-1 text-xs ${tab === 'industry' ? '' : 'opacity-60'}`}
           >

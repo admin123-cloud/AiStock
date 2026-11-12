@@ -133,7 +133,7 @@ export default function SentimentRadar({ data, loading }: SentimentRadarProps) {
           type: 'radar',
           data: [
             {
-              value,
+              values: Object.values(data.dimensions).map(d => d.value),
               name: '今日情绪',
               areaStyle: {
                 color: 'rgba(84, 112, 198, 0.3)'

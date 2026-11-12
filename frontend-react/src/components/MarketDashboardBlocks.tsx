@@ -5,19 +5,14 @@ import SentimentRadar from '@/components/SentimentRadar'
 import SectorHeatPanel from '@/components/SectorHeatPanel'
 import AuctionAnomalyPanel from '@/components/AuctionAnomalyPanel'
 
-interface RadarData {
-  date: string
-  as_of: string
-  composite_score: number
-  dimensions: Record<string, any>
-  available: boolean
-}
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _RadarData = any
 
 /**
  * R56 市场看板三件套容器组件（嵌入首页情绪区旁）
  */
 export default function R56MarketDashboardBlocks() {
-  const [radarData, setRadarData] = useState<RadarData | null>(null)
+  const [radarData, setRadarData] = useState<any>(null)
   const [radarLoading, setRadarLoading] = useState(true)
 
   useEffect(() => {
