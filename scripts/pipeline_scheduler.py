@@ -1319,7 +1319,11 @@ def run_t_trade_monitor(
                 log.info("[t_trade_monitor] 日终报告: l2_drafts=%d", eod.get("l2_drafts_total", 0))
 
         # 心跳
-        report = _run_l2_heartbeat(now, log)
+        try:
+            report = _run_l2_heartbeat(now, log)
+        except Exception as exc:
+            log.error("[t_trade_monitor] 心跳异常: %s", exc, exc_info=True)
+            report = {"signals": []}
         new_signals = len(report.get("signals", []))
         if new_signals:
             signals_fired += new_signals
@@ -1358,6 +1362,7 @@ def register_t_trade_monitor_job(scheduler):
         id=TTRADE_MONITOR_JOB_ID,
         name="L2做T·盘中监控（R50-L2，工作日 09:25~15:00 每 30s 心跳，自循环）",
         max_instances=1,
+        misfire_grace_time=120,
         coalesce=True,
         replace_existing=True,
     )

@@ -100,7 +100,10 @@ def fetch_quotes(
             with open_(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
-            logger.warning("[feed] ulist chunk %s 失败: %s", secids, exc)
+            logger.warning("[feed] eastmoney ulist chunk %s 失败: %s, 切腾讯", secids, exc)
+            # fallback: 腾讯 qt 逐个查
+            qq_out = _fetch_tencent_qt(chunk, url_open=url_open)
+            out.update(qq_out)
             continue
         for it in (data.get("data") or {}).get("diff") or []:
             code6 = str(it.get("f12") or "")
@@ -123,6 +126,71 @@ def fetch_quotes(
                 "change_pct": float(change_pct) if change_pct not in (None, "", "-") else None,
                 "ts": ts or datetime.now(BEIJING_TZ).strftime("%H:%M:%S"),
             }
+    return out
+
+
+def _fetch_tencent_qt(
+    codes6: list[str],
+    *,
+    url_open: Optional[Callable] = None,
+) -> dict[str, dict[str, Any]]:
+    """腾讯 qt 接口逐个查实时行情（东财 fallback）。"""
+    out: dict[str, dict[str, Any]] = {}
+    open_ = url_open or urllib.request.urlopen
+    now_bj = datetime.now(BEIJING_TZ)
+    ts_str = now_bj.strftime("%H:%M:%S")
+
+    # 批量拼接 qt 参数
+    def _tencent_code(c: str) -> str:
+        if c.startswith(("6", "9", "5")):
+            return f"sh{c}"
+        return f"sz{c}"
+
+    batch = ",".join(_tencent_code(c) for c in codes6)
+    url = f"https://qt.gtimg.cn/q={batch}"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with open_(req, timeout=8) as resp:
+            raw = resp.read()
+        try:
+            text = raw.decode("gbk")
+        except UnicodeDecodeError:
+            text = raw.decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("[feed] tencent qt 也失败: %s", exc)
+        return out
+
+    for line in text.strip().split("\n"):
+        # v_sz002015="...~...~..."
+        if "=" not in line or not line.startswith("v_"):
+            continue
+        parts = line.split("=", 1)[1].strip("\";").split("~")
+        if len(parts) < 40:
+            continue
+        code6 = parts[2]
+        try:
+            price = float(parts[3]) if parts[3] not in ("", "-", "0.00") else None
+        except ValueError:
+            price = None
+        if price is None:
+            continue
+        try:
+            chg_pct = float(parts[33]) if parts[33] not in ("", "-") else None
+        except ValueError:
+            chg_pct = None
+        # 成交量是手
+        vol_str = parts[38] if len(parts) > 38 else ""
+        try:
+            volume = float(vol_str) * 100 if vol_str else None
+        except ValueError:
+            volume = None
+        out[code6] = {
+            "price": price,
+            "volume": volume,
+            "change_pct": chg_pct,
+            "ts": ts_str,
+        }
+    logger.info("[feed] tencent qt fallback 成功: %d/%d 码", len(out), len(codes6))
     return out
 
 
