@@ -105,6 +105,12 @@ TTRACKER_SCRIPT = "t_trade_tracker.py"
 TTRACKER_BROKER_SYNC_JOB_ID = "broker_state_sync"   # 工作日 15:15 fills→broker_state（R38c）
 TTRACKER_BROKER_SYNC_SCRIPT = "broker_state_sync.py"
 TTRACKER_SHADOW_FINALIZE_JOB_ID = "t_trade_shadow_finalize"  # 工作日 15:16 影子做T日终固化（R40）
+# 做T信号质量日报（2026-11-13 Owner 要求）：工作日 15:20——收盘后读当日
+# drafts（含 expired 终态）× kline_daily 收盘价，按 trigger_kind 出
+# 触发数/确认率/瓦解率/触发→收盘 bps，产物 runtime/signal_quality/。
+SIGNAL_QUALITY_JOB_ID = "signal_quality_report"
+SIGNAL_QUALITY_SCRIPT = "signal_quality_report.py"
+SIGNAL_QUALITY_CRON_TIME = dt_time(15, 20)
 # R46（2026-11-11）：做T 1 分钟快车道——交易日 09:31~14:59 每分钟（cron 触发面
 # 09:00~14:59，窗口守卫收口）；秒级错峰 23s（快照=分*/5 秒0、慢 beat=分1-56/5 秒0、
 # PM watcher=分偶数 2min），与快照/慢 beat 均衡不撞线。
@@ -944,6 +950,47 @@ def run_t_tracker_shadow_finalize(
     )
 
 
+def run_signal_quality_report(
+    *,
+    mode: str = "scheduled",
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """15:20 信号质量日报（drafts×kline_daily → runtime/signal_quality JSON+MD）。
+
+    脚本自带收盘价回退链（kline_daily→东财实时价）与幂等覆盖；当日无草案
+    也产出零计数报告（rc 0），失败 rc 1 → 本步 failure。
+    """
+    return _run_t_tracker_step(
+        "signal_quality", "--today", mode=mode, now_bj=cn_now(now_fn),
+        is_trading_day=is_trading_day, runner=runner, logger_=logger_,
+        script=SIGNAL_QUALITY_SCRIPT,
+    )
+
+
+def register_signal_quality_job(scheduler):
+    """注册信号质量日报 cron（工作日 15:20，Asia/Shanghai）；返回该 job。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler.add_job(
+        run_signal_quality_report,
+        trigger=CronTrigger(
+            day_of_week=CRON_DAY_OF_WEEK,
+            hour=SIGNAL_QUALITY_CRON_TIME.hour,
+            minute=SIGNAL_QUALITY_CRON_TIME.minute,
+            timezone=BEIJING_TZ,
+        ),
+        id=SIGNAL_QUALITY_JOB_ID,
+        name="做T信号质量日报（工作日 15:20，drafts×kline_daily→runtime/signal_quality）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler.get_job(SIGNAL_QUALITY_JOB_ID)
+
+
 def in_holding_tick_alert_window(now_bj: datetime) -> bool:
     """R42 窗口守卫：09:25 ≤ 北京钟 ≤ 15:10（cron 触发面 09:00~15:50 由它收口）。"""
     current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
@@ -1531,6 +1578,7 @@ def serve(
     register_postclose_job(scheduler, lambda: _log_pipeline_result(pipeline))
     register_intraday_job(scheduler)
     register_t_tracker_jobs(scheduler)
+    register_signal_quality_job(scheduler)
     register_holding_tick_alert_job(scheduler)
     register_market_mood_finalize_job(scheduler)
     register_t_trade_monitor_job(scheduler)
@@ -1576,6 +1624,14 @@ def serve(
     )
     holding_job = scheduler.get_job(HOLDING_TICK_ALERT_JOB_ID)
     holding_next = getattr(holding_job, "next_run_time", None) if holding_job else None
+    quality_job = scheduler.get_job(SIGNAL_QUALITY_JOB_ID)
+    quality_next = getattr(quality_job, "next_run_time", None) if quality_job else None
+    logger.info(
+        "调度注册：%s cron=[day_of_week=%s %s %s] next_run=%s（做T信号质量日报：drafts×kline_daily→runtime/signal_quality）",
+        SIGNAL_QUALITY_JOB_ID, CRON_DAY_OF_WEEK,
+        SIGNAL_QUALITY_CRON_TIME.strftime("%H:%M"), "Asia/Shanghai",
+        quality_next.isoformat() if quality_next else "pending",
+    )
     logger.info(
         "调度注册：R42 %s cron=[day_of_week=%s %s 每10min %s] 窗口=%s~%s（holding-tick GET 净化后的通知通道）next_run=%s",
         HOLDING_TICK_ALERT_JOB_ID, CRON_DAY_OF_WEEK, HOLDING_TICK_ALERT_CRON_HOURS,

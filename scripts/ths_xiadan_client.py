@@ -413,6 +413,27 @@ def _wait_any_window(timeout: float) -> tuple[str, list[dict[str, Any]], Optiona
     return state, windows, main
 
 
+def _find_visible_login_dialog(
+    windows: list[dict[str, Any]],
+) -> Optional[int]:
+    """可见 #32770 中形状=登录框的（密码框 Edit + 「登录」钮）。
+
+    2026-11-13 19:5x 实盘根因：盘后重启后面板停在登录框，标题壳窗
+    「网上股票交易系统5.0」仍在（隐藏/最小化）→ _poll_state 报 main →
+    误判 logged_in → 导出门禁 label=''。登录框可见 = 未登录，壳窗不算数。
+    错误弹窗（确定钮、无密码框）不匹配 → 仍按已登录处理。
+    """
+    for w in windows or []:
+        if w.get("class") != DIALOG_CLASS:
+            continue
+        hwnd = int(w.get("hwnd") or 0)
+        if _find_login_button(hwnd) is None:
+            continue
+        if _password_state(hwnd)["password_edit_found"]:
+            return hwnd
+    return None
+
+
 def _password_state(login_hwnd: int) -> dict[str, Any]:
     """检测「密码框是否非空」：ES_PASSWORD 样式定位密码框（兜底最后一个编辑框），
     只用 WM_GETTEXTLENGTH 取长度位，绝不取文本、不写文本。"""
@@ -474,11 +495,17 @@ def _reach_login_state(*, window_wait: float, login_timeout: float,
         raise ThsXiadanError(
             "no visible xiadan top-level window after launch (NO_XIADAN_WINDOW)"
         )
-    if state == "main":
+    # R51：登录框可见 = 未登录（标题壳窗不算数，2026-11-13 19:5x 实盘根因）
+    visible_login = _find_visible_login_dialog(windows)
+    if state == "main" and visible_login is None:
         return {"login_state": "logged_in", "windows": windows,
                 "main_window": main, "clicks": [], "password_remembered": None}
-
-    login_hwnd = windows[0]["hwnd"]
+    if visible_login is None:
+        # state == dialog 但无登录框形状（遗留/错误弹窗）——维持原契约：
+        # 取首个可见对话框按登录框流程做形状校验（形状不明 fail-closed）
+        login_hwnd = windows[0]["hwnd"]
+    else:
+        login_hwnd = visible_login
     button = _find_login_button(login_hwnd)
     password = _password_state(login_hwnd)
     detail: dict[str, Any] = {

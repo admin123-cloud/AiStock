@@ -1510,6 +1510,25 @@ def _three_k_bottom(bars3: list[dict]) -> bool:
     return False
 
 
+def _alert_beat_suppressions(root: Path, beat_record: Mapping[str, Any],
+                             now: datetime, *, lane: str,
+                             log: Optional[logging.Logger] = None) -> Optional[dict]:
+    """A 方案（2026-11-13）：beat suppressed 异常（evaluate_error 等）微信告警。
+
+    区别于业务闸（t_lot_below_min/not_in_pool/cooldown 等静默）；同异常
+    code+异常类名 10min 去重；产物 runtime/t_tracker/alerts/。告警链路任何
+    失败都不影响节拍本身（此处兜底吞掉，只记日志）。
+    """
+    log = log or logger
+    try:
+        from services import t_tracker_alerts as _tta
+        return _tta.process_beat_suppressions(
+            root=root, beat_record=beat_record, now=now, lane=lane, log=log)
+    except Exception as exc:  # noqa: BLE001 - 告警绝不打断节拍
+        log.error("[%s] suppressed 异常告警失败（不影响节拍）：%s", lane, exc)
+        return None
+
+
 def run_beat(
     *,
     now: datetime,
@@ -1653,6 +1672,7 @@ def run_beat(
                    "fast_settled": [d["id"] for d in settled_fast],
                    "fast_merged": [d["id"] for d in merged_fast]}
     _append_jsonl(root / "beats" / f"{day.strftime('%Y%m%d')}.jsonl", beat_record)
+    _alert_beat_suppressions(root, beat_record, now, lane="slow", log=log)
     if new_drafts:
         log.info("[beat] %s 草案 %s", fmt_ts(now), [d["id"] for d in new_drafts])
     return beat_record
@@ -2012,6 +2032,7 @@ def run_fast_tick(
                    "codes": results,
                    "new_draft_ids": [d["id"] for d in new_drafts]}
     _append_jsonl(root / "beats" / f"fast_{day.strftime('%Y%m%d')}.jsonl", beat_record)
+    _alert_beat_suppressions(root, beat_record, now, lane="fast", log=log)
     if new_drafts:
         log.info("[fast] %s fast 草案 %s", fmt_ts(now), [d["id"] for d in new_drafts])
     return beat_record

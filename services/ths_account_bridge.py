@@ -1126,6 +1126,111 @@ def identity_matches(label: str, hint: str | None) -> bool | None:
         return None
     return bool(label) and hint in label
 
+
+# R51（2026-11-13 实盘根因）：盘后重启后 xiadan 可停在登录框——标题壳窗
+# 「网上股票交易系统5.0」仍在（最小化、骨架渲染：顶栏无「券商-姓名」、
+# 资产栏空值、账号切换器空），实际未挂任何账号会话。此时 OCR/UIA 双锚
+# 读身份恒空 → 误报 PANEL_IDENTITY_MISMATCH label=''。登录框检测把这一态
+# 从「身份不符」里拆出来报真原因（PANEL_LOGIN_DIALOG，仍 fail-closed 不写
+# fills）。零交互：只读窗口/控件元数据，密码框只取长度位绝不取文本。
+
+_LOGIN_BUTTON_TEXTS = {"登录", "登 陆", "登陆"}
+
+
+def _normalize_button_text(text: str) -> str:
+    return " ".join(str(text or "").replace("&", "").split()).strip()
+
+
+def detect_xiadan_login_dialog(window: Any) -> dict[str, Any] | None:
+    """检测 xiadan 进程的可见登录框（#32770 且含 密码框+登录钮）。
+
+    window = bridge._find_xiadan_window() 的 pywinauto 包装（取 process_id），
+    也接受裸 int pid。返回 {dialog_hwnd, account, password_nonempty} 或 None
+    （无可见登录框 = 面板已登录/正常态）。只读，绝不点击/绝不取密码文本。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    pid = 0
+    if isinstance(window, int):
+        pid = window
+    else:
+        try:
+            pid = int(window.process_id())
+        except Exception:
+            pid = 0
+    if pid <= 0:
+        return None
+
+    user32 = ctypes.windll.user32
+
+    def _win_text(hwnd: int, limit: int = 60) -> str:
+        n = int(user32.SendMessageW(hwnd, 0x000E, 0, 0))  # WM_GETTEXTLENGTH
+        if n <= 0 or n > limit:
+            return ""
+        buf = ctypes.create_unicode_buffer(n + 1)
+        # 账号框非凭证：跨进程须 SendMessage 取文本（GetWindowTextW 只读标题缓存恒空）
+        user32.SendMessageW(hwnd, 0x000D, n + 1, buf)  # WM_GETTEXT
+        return buf.value
+
+    def _win_class(hwnd: int) -> str:
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, buf, 256)
+        return buf.value
+
+    def _children(hwnd: int, depth: int = 0) -> list[int]:
+        """递归后代（上限深度/宽度）：账号 Edit 嵌在主板帐户 ComboBox 内
+        （2026-11-13 实测），只走 GW_CHILD 链会漏。"""
+        out: list[int] = []
+        if depth > 3:
+            return out
+        child = user32.GetWindow(hwnd, 5)  # GW_CHILD
+        guard = 0
+        while child and guard < 200:
+            guard += 1
+            out.append(child)
+            out.extend(_children(child, depth + 1))
+            child = user32.GetWindow(child, 2)  # GW_HWNDNEXT
+        return out
+
+    dialogs: list[int] = []
+    EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def _on_top_hwnd(hwnd, _lp):
+        wpid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+        if int(wpid.value) == pid and _win_class(hwnd) == "#32770" \
+                and user32.IsWindowVisible(hwnd):
+            dialogs.append(hwnd)
+        return True
+
+    user32.EnumWindows(EnumProc(_on_top_hwnd), 0)
+
+    for dlg in dialogs:
+        password_hwnd = 0
+        account_text = ""
+        has_login_button = False
+        for child in _children(dlg):
+            if not user32.IsWindowVisible(child):
+                continue
+            cls = _win_class(child)
+            if cls == "Button" and _normalize_button_text(_win_text(child)) \
+                    in _LOGIN_BUTTON_TEXTS:
+                has_login_button = True
+                continue
+            if not cls.lower().endswith("edit"):
+                continue
+            style = int(user32.GetWindowLongW(child, -16))  # GWL_STYLE
+            if style & 0x0020:  # ES_PASSWORD
+                password_hwnd = child
+            elif not account_text:
+                account_text = _win_text(child, 32)  # 主板帐户（非密码框首个 Edit）
+        if password_hwnd and has_login_button:
+            pw_len = int(user32.SendMessageW(password_hwnd, 0x000E, 0, 0))
+            return {"dialog_hwnd": int(dlg), "account": account_text,
+                    "password_nonempty": pw_len > 0}
+    return None
+
 _ACTIVE_PANEL: dict[str, Any] | None = None
 
 

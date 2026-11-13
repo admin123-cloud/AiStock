@@ -371,11 +371,61 @@ def assert_panel_identity(today_lines: list[str], identity_hint: Optional[str],
     return label
 
 
+def gate_identity_decision(ocr_label: str, combo_text: str,
+                           identity_hint: Optional[str], *,
+                           allow_combo_fallback: bool) -> tuple[bool, str, str]:
+    """R51 门禁决策（纯函数可测）：(ok, reason, effective_label)。
+
+    输入双锚读到的身份证据：ocr_label=顶栏 PrintWindow OCR「券商-姓名」
+    主锚；combo_text=账号切换器 ComboBox(aid=2322) 当前项文本备用锚。
+      * hint 未配置 → (True, "no_hint", "")
+      * 主锚可读：含 hint → ok；不含 → mismatch（明确他人身份，任何降级不救）
+      * 主锚空（渲染缺层/OCR 波动）：备用锚可读且 allow_combo_fallback
+        （单账号采集）且含 hint → ok（reason=combo_fallback）；备用锚读到
+        他人身份 → mismatch；其余（双账号 fail-closed / 双锚皆空）→
+        unreadable fail-closed
+    2026-11-13 实盘注：登录框态两锚皆空——决策为 unreadable，但上游
+    detect_xiadan_login_dialog 会先一步报 PANEL_LOGIN_DIALOG 真原因。
+    """
+    if not identity_hint:
+        return True, "no_hint", ""
+    if ocr_label:
+        if identity_hint in ocr_label:
+            return True, "ocr", ocr_label
+        return False, "mismatch", ocr_label
+    if combo_text:
+        if identity_hint in combo_text and allow_combo_fallback:
+            return True, "combo_fallback", combo_text
+        return False, "mismatch" if identity_hint not in combo_text else "dual_account_fail_closed", combo_text
+    return False, "unreadable", ""
+
+
+def assert_panel_identity_robust(ident: dict[str, Any], identity_hint: Optional[str],
+                                 account: str = "acct1", *,
+                                 allow_combo_fallback: bool = False) -> str:
+    """R51 门禁（多锚版）：输入 read_window_identity_robust 产物，决策见
+    gate_identity_decision。不通过抛 PANEL_IDENTITY_MISMATCH（携带双锚证据）。
+    hint 未配置 → 空串放行。"""
+    if not identity_hint:
+        return ""
+    ocr_label = str((ident or {}).get("ocr_label") or "")
+    combo_text = str((ident or {}).get("combo_text") or "")
+    ok, reason, label = gate_identity_decision(
+        ocr_label, combo_text, identity_hint,
+        allow_combo_fallback=allow_combo_fallback)
+    if not ok:
+        raise RuntimeError(
+            f"PANEL_IDENTITY_MISMATCH: label={ocr_label!r} combo={combo_text!r} "
+            f"reason={reason} expect~{identity_hint!r} account={account}")
+    return label
+
+
 def _capture_ths_views(evidence_dir: Optional[Path] = None,
                        panel: Optional[dict[str, Any]] = None,
                        account: str = "acct1",
                        identity_hint: Optional[str] = None,
-                       hotswitch: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                       hotswitch: Optional[dict[str, Any]] = None,
+                       combo_identity_fallback: bool = False) -> dict[str, Any]:
     """真机采集（仅 host / F:\\python\\python3.10）：锁内依次导出当日/历史成交视图。
 
     R47：panel 指定目标面板（panel_scope 内 _find_xiadan_window 连到该面板 pid）。
@@ -388,6 +438,15 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
     R48 身份门禁：首个视图 OCR 后校验顶栏「券商-姓名」含 identity_hint；
     不符（窗口换登他人账号）→ 抛 PANEL_IDENTITY_MISMATCH → run_export 落
     unavailable 标记（fail-closed，绝不把账号2成交写成 acct1）。
+    R51 门禁加固（2026-11-13 实盘根因：盘后重启后面板停在登录框，壳窗
+    骨架渲染、双锚读身份恒空 → 误报 MISMATCH label=''）：
+      ① 导出前先还原/前台化面板再读标签（渲染让位给真实 paint）；
+      ② 身份读取多锚：PrintWindow OCR 主锚 + ComboBox(2322) 当前项备用锚，
+         门禁前置到点菜单之前（失败零交互零采集）；
+      ③ 降级安全：主锚空且单账号采集（combo_identity_fallback=True）时用
+         账号下拉当前项文本验证身份；双账号采集保持 fail-closed；
+      ④ 登录框在（detect_xiadan_login_dialog）→ PANEL_LOGIN_DIALOG 真原因
+         fail-closed（未登录≠身份不符，绝不写 fills）。
     """
     import shutil
 
@@ -397,6 +456,7 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
         _ocr_xiadan_window,
         _parse_trades_from_ocr_items,
         _ths_window_operation_lock,
+        detect_xiadan_login_dialog,
         panel_scope,
     )
 
@@ -419,6 +479,7 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
     history_lines: list[str] = []
     history_rows: list[dict[str, Any]] = []
     kept_today = kept_history = None
+    gate_detail: dict[str, Any] = {}
     with panel_scope(panel), _ths_window_operation_lock(
             panel=account, lock_name=(hotswitch or {}).get("lock_name")):
         on_target = False
@@ -428,6 +489,29 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
                 was_minimized = bool(window.is_minimized())
             except Exception:
                 was_minimized = False
+            # R51 ①：先还原/前台化再读身份（最小化窗 PrintWindow 渲染空白）
+            from services.ths_hotswitch import _ensure_restored
+            _ensure_restored(window)
+            # R51 ④：登录框在 = 面板未登录（壳窗骨架、双锚恒空）→ 真原因
+            login = detect_xiadan_login_dialog(window)
+            if login is not None:
+                raise RuntimeError(
+                    f"PANEL_LOGIN_DIALOG: 面板停在登录框（未登录） "
+                    f"dlg_hwnd={login.get('dialog_hwnd')} "
+                    f"account_field={login.get('account')!r} "
+                    f"password_remembered={login.get('password_nonempty')} "
+                    f"expect~{identity_hint!r} target_account={account}")
+            # R51 ②③：门禁前置（多锚读取 + 纯函数决策），点菜单之前零交互
+            if identity_hint:
+                from services.ths_hotswitch import read_window_identity_robust
+                ident = read_window_identity_robust(
+                    window, save_png=(evidence_dir / "identity_gate.png")
+                    if evidence_dir else None)
+                gate_detail = {"ocr_label": ident["ocr_label"],
+                               "combo_text": ident["combo_text"]}
+                assert_panel_identity_robust(
+                    ident, identity_hint, account,
+                    allow_combo_fallback=combo_identity_fallback)
             if hotswitch:
                 from services import ths_hotswitch as hs
                 pre = hs.ensure_target_account(window, hotswitch)
@@ -447,11 +531,6 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
             history_items, history_lines, shot_history = _ocr_xiadan_window()
             kept_history = _keep(shot_history, "history_view.png")
             history_rows = _parse_trades_from_ocr_items(history_items)
-            if was_minimized:
-                try:
-                    window.minimize()
-                except Exception:
-                    pass
         except Exception as exc:  # noqa: BLE001 - R48：块内捕获，不依赖
             # generator CM 的 throw 传播（2026-11-11 14:46 换登扰动期实证：
             # 经 contextlib 传播会变形为 "generator didn't stop after throw()"）
@@ -467,6 +546,16 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
                           "error": f"{type(exc).__name__}: {exc}"}
                 if rb is not None:
                     switchback = {"switchback_failed": True, "detail": rb}
+            # R51：原为最小化则采集成败均复最小化（此前仅成功路径恢复，
+            # 门禁 fail-closed 会把面板留在还原态）。登录框模态期
+            # pywinauto minimize 可能被吞，用 ShowWindow 直发更可靠。
+            if was_minimized and window is not None:
+                try:
+                    import ctypes
+                    ctypes.windll.user32.ShowWindow(
+                        int(getattr(window, "handle", 0) or 0), 6)  # SW_MINIMIZE
+                except Exception:
+                    pass
     if inner_error is not None:
         raise inner_error  # run_export 落 unavailable 标记（真实原因）
     if evidence_dir:
@@ -482,8 +571,10 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
         ("成交日期" in line or "成交时间" in line) and "代码" in line
         for line in history_lines
     )
-    window_state = {"minimized_before": was_minimized,
-                    "restored_minimized": was_minimized}
+    window_state: dict[str, Any] = {"minimized_before": was_minimized,
+                                    "restored_minimized": was_minimized}
+    if gate_detail:
+        window_state["identity_gate"] = gate_detail
     if switchback:
         window_state.update(switchback)
     return {
@@ -588,16 +679,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     plan = build_capture_plan(live_panels, load_panel_registry(),
                               account_filter=args.account)
     resolution = plan.pop("_resolution")
+    # R51 ③：单账号采集（--account 唯一或计划仅一账号）才允许 ComboBox
+    # 备用锚降级验证身份；双账号（热切换共享面板）保持 fail-closed。
+    to_capture = [a for a in plan
+                  if not args.account or a == args.account]
+    combo_fallback = len(to_capture) == 1
     for account, entry in plan.items():
         if args.account and account != args.account:
             continue
         panel = entry.get("panel")
         entry["capture"] = (lambda ev, p=panel, a=account,
                             h=entry.get("identity_hint"),
-                            sw=entry.get("hotswitch"):
+                            sw=entry.get("hotswitch"),
+                            cf=combo_fallback:
                             _capture_ths_views(ev, panel=p, account=a,
                                                identity_hint=h,
-                                               hotswitch=sw))
+                                               hotswitch=sw,
+                                               combo_identity_fallback=cf))
     plan["_resolution"] = resolution
     result = run_export_multi(for_date=for_date, now=now,
                               out_root=Path(args.out_dir) if args.out_dir else None,

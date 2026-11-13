@@ -87,6 +87,86 @@ def _match_known(label: str, known_hints: list[tuple[str, str]]) -> Optional[str
     return None
 
 
+def read_identity_from_combobox(window: Any) -> str:
+    """R51 备用身份锚：账号切换器 ComboBox(aid=2322) 当前显示文本（只读）。
+
+    2026-11-11 R50 勘察实证：面板已登录时 value='广发证券-王*美'；
+    登录框态/未加载时为空串。零交互（UIA Name/Value 只读，绝不展开下拉）。
+    comtypes/Windows 缺席或任何 COM 异常 → 空串（fail-safe，不阻断主锚）。
+    """
+    try:
+        from comtypes.client import CreateObject, GetModule
+        GetModule("UIAutomationCore.dll")
+        import comtypes.gen.UIAutomationClient as UIAC  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 - 容器/测试环境无 Windows UIA
+        return ""
+
+    try:
+        uia = CreateObject(UIAC.CUIAutomation, interface=UIAC.IUIAutomation)
+        hwnd = int(getattr(window, "handle", 0) or 0)
+        if not hwnd:
+            return ""
+        root = uia.ElementFromHandle(hwnd)
+
+        def _safe(fn, *args):
+            try:
+                return fn(*args)
+            except Exception:  # noqa: BLE001
+                return None
+
+        def _children(elem):
+            out, child, guard = [], _safe(uia.ControlViewWalker.GetFirstChildElement, elem), 0
+            while child is not None and guard < 300:
+                guard += 1
+                out.append(child)
+                child = _safe(uia.ControlViewWalker.GetNextSiblingElement, child)
+            return out
+
+        stack, seen = [(root, 0)], 0
+        while stack and seen < UIA_MAX_NODES:
+            elem, depth = stack.pop()
+            seen += 1
+            try:
+                is_combo = (str(getattr(elem, "CurrentAutomationId", "") or "")
+                            == COMBOBOX_AUTOMATION_ID)
+            except Exception:  # noqa: BLE001
+                is_combo = False
+            if is_combo:
+                name = str(_safe(lambda: elem.CurrentName) or "")
+                value = ""
+                unk = _safe(elem.GetCurrentPattern, UIAC.UIA_ValuePatternId)
+                if unk is not None:
+                    vp = _safe(unk.QueryInterface, UIAC.IUIAutomationValuePattern)
+                    if vp is not None:
+                        value = str(_safe(vp.GetValue) or "")
+                return (name or value or "").strip()
+            if depth >= UIA_MAX_DEPTH:
+                continue
+            for ch in reversed(_children(elem)):
+                stack.append((ch, depth + 1))
+    except Exception:  # noqa: BLE001 - COM 树遍历异常按空锚处理
+        return ""
+    return ""
+
+
+def read_window_identity_robust(window: Any,
+                                save_png: Optional[Path] = None) -> dict[str, Any]:
+    """R51 身份多锚读取：PrintWindow OCR 主锚 → 空时 ComboBox(2322) 备用锚。
+
+    返回 {ocr_label, combo_text, screenshot}；两锚都尽力而为，异常不抛
+    （门禁决策在调用方 gate_identity_decision，纯函数可测）。
+    """
+    try:
+        ocr_label, png = read_window_identity(window, save_png=save_png)
+    except Exception:  # noqa: BLE001 - PrintWindow/OCR 失败按空锚降级
+        ocr_label, png = "", None
+    combo_text = ""
+    if not ocr_label:
+        combo_text = read_identity_from_combobox(window)
+    return {"ocr_label": ocr_label, "combo_text": combo_text,
+            "screenshot": png}
+
+
 # --------------------------------------------------------------------------- #
 # 账号切换（R49c：ComboBox aid=2322 SelectionItem 选择路径）
 # --------------------------------------------------------------------------- #
