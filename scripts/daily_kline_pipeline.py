@@ -51,6 +51,8 @@ from utils.market_sources import tdx_official_package as tdx
 from utils.market_sources import tencent_daily
 from utils.security_market_policy import is_neeq_security_code
 
+from scripts import tdx_lday_loader as lday
+
 __all__ = [
     "PIPELINE_VERSION", "STAGE_TABLE", "STAGE_TABLE_WHITELIST", "KLINE_DAILY_TABLE",
     "FORMAL_WRITE_TABLE_WHITELIST", "FORMAL_COLUMNS", "FORMAL_APPEND_LOCK_SCOPE",
@@ -79,6 +81,14 @@ MAX_BOARD_COUNT_REL_CHANGE = 0.10
 MAX_BOARD_COUNT_ABS_CHANGE = 500
 # 腾讯交叉验证：样本里价值不符即失败；全部样本都取不到数据也视为失败
 CROSSCHECK_SAMPLE_CAP = 100
+
+# ── --source local（Owner 2026-11-13 裁决：日线走 TDX 客户端本地 lday 文件）──
+DEFAULT_TDX_VIPDOC_ROOT = r"D:/TDX/vipdoc"
+# 时序门禁：mtime≥16:00 且含当日记录的 lday 文件数下限（下载完成证据的体量下限；
+# 全市场 universe≈5600，停牌/数据缺失余量后取 5000）
+DEFAULT_MIN_FRESH_LDAY_FILES = 5000
+# 覆盖率门禁：写入后正式表该日行数下限（与官网包口径 5581、lc5 覆盖对齐）
+DEFAULT_COVERAGE_MIN = 5500
 
 GATE_NAMES = (
     "row_count_vs_prev_day",
@@ -398,7 +408,17 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trade-date", default=None,
                         help="交易日（YYYY-MM-DD 或 YYYYMMDD）；省略时用正式表只读+日历解析最近已完成交易日")
-    parser.add_argument("--source", choices=["pkg"], default="pkg", help="主数据源（默认 pkg=通达信盘后包）")
+    parser.add_argument("--source", choices=["pkg", "local"], default="pkg",
+                        help="主数据源：pkg=通达信官网盘后包（默认，保留为回退源）；"
+                             "local=客户端本地 vipdoc lday 文件（Owner 2026-11-13 起主源）")
+    parser.add_argument("--tdx-root", default=DEFAULT_TDX_VIPDOC_ROOT, type=Path,
+                        help=f"local 源的 vipdoc 根目录（默认 {DEFAULT_TDX_VIPDOC_ROOT}）")
+    parser.add_argument("--min-fresh-files", type=_non_negative_int,
+                        default=DEFAULT_MIN_FRESH_LDAY_FILES,
+                        help="local 源时序门禁：mtime≥16:00 且含当日记录的文件数下限")
+    parser.add_argument("--coverage-min", type=_non_negative_int,
+                        default=DEFAULT_COVERAGE_MIN,
+                        help="local 源覆盖率门禁：写入后正式表该日行数下限")
     parser.add_argument("--crosscheck-sample", type=_non_negative_int, default=DEFAULT_CROSSCHECK_SAMPLE,
                         help=f"腾讯交叉验证样本数（默认 {DEFAULT_CROSSCHECK_SAMPLE}，0=关闭）")
     parser.add_argument("--stage-write", action="store_true", default=False,
@@ -641,32 +661,87 @@ def run_pipeline(options: Mapping[str, Any]) -> dict[str, Any]:
         report["trade_date"] = trade_date
         output_path = Path(opts["output"]) if opts.get("output") else default_output_path(trade_date)
 
-        # 1) 拉盘后包（适配层，注入 fetcher 时不联网）
-        fetch_result = tdx.fetch_daily_package(trade_date, fetcher=fetcher)
-        lineage = {
-            "source": "tdx_official_package",
-            "url": fetch_result["url"],
-            "zip_sha256": fetch_result["zip_sha256"],
-            "fetched_at": fetch_result["fetched_at"],
-            "size_bytes": fetch_result["size"],
-            "attempts": fetch_result["attempts"],
-        }
+        source_mode = str(opts.get("source") or "pkg")
+        local_gates: dict[str, Any] = {}
+        if source_mode == "local":
+            # ── Owner 2026-11-13 裁决主源：客户端本地 vipdoc lday（官网包保留为回退）──
+            # local 模式默认接入 DB（只读）：量纲对照/前日对比/重叠一致性门禁需要
+            engage_db()
+            tdx_root = str(opts.get("tdx_root") or DEFAULT_TDX_VIPDOC_ROOT)
+            scan = lday.scan_lday_universe(tdx_root, trade_date)
+            timing = scan["timing"]
+            rows = scan["rows"]
+            fetched_at = datetime.now(timezone.utc).isoformat()
+            lineage = {
+                "source": "tdx_local_lday",
+                "url": f"file://{tdx_root}/{{sh,sz,bj}}/lday/*.day",
+                "zip_sha256": scan["digest"],
+                "fetched_at": fetched_at,
+                "row_count": len(rows),
+                "raw_row_count": int(timing["universe_files"]),
+                "tdx_root": tdx_root,
+                "fresh_deadline": scan["fresh_deadline"],
+            }
+            report["source"] = "local"
+            report["row_counts"] = {
+                "kept": len(rows),
+                "total_rows": int(timing["universe_files"]),
+                "timing": timing,
+                "index_inclusion": {
+                    "frozen_code_count": len(lday._import_universe_rules()[1]),
+                    "kept": sum(1 for r in rows if r.get("is_index")),
+                    "kept_codes": sorted(r["code"] for r in rows if r.get("is_index")),
+                    "zero_volume": int(timing["zero_volume"]),
+                },
+            }
+            # 门禁（fail-closed）A：时序证据——mtime≥16:00 且含当日记录的文件数体量
+            min_fresh = int(opts.get("min_fresh_files") or DEFAULT_MIN_FRESH_LDAY_FILES)
+            fresh = int(timing["fresh"])
+            timing_ok = fresh > 0 and fresh >= min_fresh
+            local_gates["lday_timing"] = {
+                "status": "pass" if timing_ok else "fail",
+                "fresh_files": fresh,
+                "min_fresh_files": min_fresh,
+                "has_today": int(timing["has_today"]),
+                "stale_mtime_excluded": int(timing["stale_mtime_excluded"]),
+                "no_today_record": int(timing["no_today_record"]),
+                "zero_volume": int(timing["zero_volume"]),
+                "read_errors": timing["read_errors"][:20],
+                "fresh_deadline": scan["fresh_deadline"],
+                "reason": None if timing_ok else (
+                    f"lday 盘后下载完成证据不足（fresh={fresh} < {min_fresh}），"
+                    f"fail-closed 拒绝写入并报警——防止拿昨日/盘中文件写今日"),
+            }
+            # 门禁 B：vwap 反推量纲抽样（vol 单位：股÷100→手 / 指数原值）
+            local_gates["lday_vwap_unit"] = lday.vwap_unit_check(rows)
+        else:
+            # 1) 拉盘后包（适配层，注入 fetcher 时不联网）
+            fetch_result = tdx.fetch_daily_package(trade_date, fetcher=fetcher)
+            lineage = {
+                "source": "tdx_official_package",
+                "url": fetch_result["url"],
+                "zip_sha256": fetch_result["zip_sha256"],
+                "fetched_at": fetch_result["fetched_at"],
+                "size_bytes": fetch_result["size"],
+                "attempts": fetch_result["attempts"],
+            }
 
-        # 2) 解析 → 股票池过滤 → 归一化（volume 股→手、amount 元）
-        #    R17：清单内冻结 11 码大盘指数一并纳入（指数 volume 包内原始即手，不 ÷100）
-        parse_kwargs = {} if min_priced is None else {"min_priced": min_priced}
-        raw_rows = tdx.parse_zip_bytes(fetch_result["content"], trade_date, **parse_kwargs)
-        kept, filter_report = tdx.filter_stock_universe(raw_rows)
-        index_raw_rows, index_report = extract_frozen_index_rows(raw_rows)
-        contract = tdx.normalize_to_contract(
-            kept, lineage={"url": fetch_result["url"], "fetched_at": fetch_result["fetched_at"],
-                           "zip_sha256": fetch_result["zip_sha256"]})
-        rows = contract["rows"] + frozen_index_rows_to_contract(index_raw_rows)
-        lineage["row_count"] = len(rows)
-        lineage["raw_row_count"] = contract["lineage"]["raw_row_count"]
-        report["lineage"] = lineage
-        filter_report["index_inclusion"] = index_report
-        report["row_counts"] = filter_report
+            # 2) 解析 → 股票池过滤 → 归一化（volume 股→手、amount 元）
+            #    R17：清单内冻结 11 码大盘指数一并纳入（指数 volume 包内原始即手，不 ÷100）
+            parse_kwargs = {} if min_priced is None else {"min_priced": min_priced}
+            raw_rows = tdx.parse_zip_bytes(fetch_result["content"], trade_date, **parse_kwargs)
+            kept, filter_report = tdx.filter_stock_universe(raw_rows)
+            index_raw_rows, index_report = extract_frozen_index_rows(raw_rows)
+            contract = tdx.normalize_to_contract(
+                kept, lineage={"url": fetch_result["url"], "fetched_at": fetch_result["fetched_at"],
+                               "zip_sha256": fetch_result["zip_sha256"]})
+            rows = contract["rows"] + frozen_index_rows_to_contract(index_raw_rows)
+            lineage["row_count"] = len(rows)
+            lineage["raw_row_count"] = contract["lineage"]["raw_row_count"]
+            report["lineage"] = lineage
+            filter_report["index_inclusion"] = index_report
+            report["row_counts"] = filter_report
+        report["lineage"] = report.get("lineage") or lineage
 
         # 3) 门禁：离线四门禁 + （DB 已接入时的）正式表对比门禁 + 可选腾讯交叉
         # --stage-write / --formal-write 要求全部门禁（含 DB 门禁）通过才允许写 → 先接入 DB
@@ -703,6 +778,28 @@ def run_pipeline(options: Mapping[str, Any]) -> dict[str, Any]:
                 fetch = crosscheck_fetch or _default_crosscheck_fetch
                 gates["tencent_crosscheck"] = check_tencent_crosscheck(rows, sample_codes, fetch, trade_date)
 
+        # local（lday）源附加门禁：时序证据 + vwap 量纲（B3/B5，fail-closed）
+        if local_gates:
+            gates.update(local_gates)
+        # B5 全量对照报告落盘：local 行 vs 正式表该日已有行（官网包对照，价1%/量额3%）
+        if source_mode == "local" and db_engaged:
+            formal_rows_for_stats = _read_formal_overlap_rows(db, trade_date)
+            if formal_rows_for_stats:
+                stats = _local_vs_formal_stats(rows, formal_rows_for_stats, trade_date)
+                stats["formal_overlap_gate"] = gates["formal_overlap_consistency"]["status"]
+                stats["report_path"] = str(_write_lday_runtime_json(
+                    f"local_vs_pkg_{trade_date.replace('-', '')}", stats,
+                    runtime_dir=opts.get("runtime_dir")))
+                report["local_vs_formal"] = {
+                    key: value for key, value in stats.items()
+                    if key not in ("violations", "worst_rel_diff_by_field")}
+                report["local_vs_formal"]["worst_rel_diff_by_field"] = stats["worst_rel_diff_by_field"]
+            else:
+                report["local_vs_formal"] = {
+                    "compared": 0,
+                    "note": "正式表该日尚无行（首写场景），全量对照不适用；量纲由 vwap 门禁裁决",
+                }
+
         report["rejections"] = _collect_rejections(gates)
         failed = [name for name, gate in gates.items() if gate.get("status") == "fail"]
         report["failed_gates"] = failed
@@ -728,6 +825,29 @@ def run_pipeline(options: Mapping[str, Any]) -> dict[str, Any]:
                                                             output_path, opts)
                 if not report["formal_write"].get("performed"):
                     failed = failed + ["formal_write"]
+                    report["failed_gates"] = failed
+        # B4 覆盖率门禁（local 源）：写入后正式表该日行数 ≥ coverage_min，
+        # 与 lc5（fzline）宇宙覆盖缺口一并落 runtime 报告；不足即整体失败报警
+        # （调度器据此回退官网包——exact-key 幂等，回退不会重复写）。
+        if source_mode == "local" and report["db_access"]:
+            coverage = _local_coverage_report(db, rows, trade_date, opts)
+            report["local_coverage"] = coverage
+            if formal_write_requested:
+                coverage_ok = int(coverage["postwrite_row_count"]) >= int(coverage["coverage_min"])
+                gates["postwrite_coverage"] = {
+                    "status": "pass" if coverage_ok else "fail",
+                    "postwrite_row_count": coverage["postwrite_row_count"],
+                    "coverage_min": coverage["coverage_min"],
+                    "lc5_not_in_daily_count": coverage["lc5_not_in_daily_count"],
+                    "report_path": coverage["report_path"],
+                    "reason": None if coverage_ok else (
+                        f"写入后该日行数 {coverage['postwrite_row_count']} < "
+                        f"{coverage['coverage_min']}，覆盖率门禁失败报警"),
+                }
+                if not coverage_ok:
+                    report["rejections"].append({"gate": "postwrite_coverage",
+                                                 "item": gates["postwrite_coverage"]})
+                    failed = failed + ["postwrite_coverage"]
                     report["failed_gates"] = failed
         report["status"] = "failed" if failed else "passed"
 
@@ -1572,6 +1692,97 @@ def _formal_write_flow(client: Any, rows: Sequence[Mapping[str, Any]], trade_dat
                                "error": f"{type(exc).__name__}: {exc}"})
 
 
+# ── local 源（lday）辅助：对照统计 / 覆盖缺口 / runtime 报告落盘 ──────────
+
+def _lday_runtime_dir(runtime_dir: Optional[Path] = None) -> Path:
+    if runtime_dir is not None:
+        return Path(runtime_dir)
+    return _default_data_root() / "runtime" / "tdx_lday_daily"
+
+
+def _write_lday_runtime_json(name: str, payload: Mapping[str, Any],
+                             runtime_dir: Optional[Path] = None) -> Path:
+    directory = _lday_runtime_dir(runtime_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{name}.json"
+    _atomic_json(path, dict(payload))
+    return path
+
+
+def _local_vs_formal_stats(rows: Sequence[Mapping[str, Any]],
+                           formal_rows: Sequence[Mapping[str, Any]],
+                           trade_date: str) -> dict[str, Any]:
+    """B5 全量对照统计：local lday 行 vs 正式表该日行（价 1% / 量额 3% 容差）。
+
+    与 formal_overlap_consistency 门禁同容差；本函数额外产出逐字段最差相对差
+    与超差明细，落盘为对照报告（Owner 2026-11-13 B5：不一致停下报告，不得猜换算）。
+    """
+    formal_by_code = {str(row["code"]): row for row in formal_rows}
+    fields = ("open", "high", "low", "close", "volume", "amount")
+    compared = 0
+    per_field_worst: dict[str, dict[str, Any]] = {}
+    violations: list[dict[str, Any]] = []
+    for row in rows:
+        code = str(row["code"])
+        formal = formal_by_code.get(code)
+        if formal is None:
+            continue
+        compared += 1
+        for field in fields:
+            mine, theirs = float(row[field]), float(formal[field])
+            rel = _rel_diff(mine, theirs)
+            best = per_field_worst.get(field)
+            if best is None or rel > best["rel_diff"]:
+                per_field_worst[field] = {"code": code, "local": mine,
+                                          "formal": theirs, "rel_diff": round(rel, 8)}
+            tolerance = PRICE_TOLERANCE if field in ("open", "high", "low", "close") \
+                else QUANTITY_TOLERANCE
+            if rel > tolerance:
+                violations.append({"code": code, "field": field, "local": mine,
+                                   "formal": theirs, "rel_diff": round(rel, 6),
+                                   "tolerance": tolerance})
+    return {
+        "trade_date": trade_date,
+        "compared": compared,
+        "tolerances": {"price": PRICE_TOLERANCE, "quantity": QUANTITY_TOLERANCE},
+        "violation_count": len(violations),
+        "violations": violations[:200],
+        "worst_rel_diff_by_field": per_field_worst,
+        "verdict": "consistent" if not violations else "INCONSISTENT_STOP_REPORT",
+        "note": "local=客户端 vipdoc lday；formal=官网包已入库行；量纲由 vwap 反推+全量对照双重裁决",
+    }
+
+
+def _local_coverage_report(db: Any, rows: Sequence[Mapping[str, Any]],
+                           trade_date: str, opts: Mapping[str, Any]) -> dict[str, Any]:
+    """B4 覆盖率：写入后正式表该日行数 + 与 lc5（fzline）宇宙覆盖缺口，报告落 runtime。"""
+    coverage_min = int(opts.get("coverage_min") or DEFAULT_COVERAGE_MIN)
+    tdx_root = str(opts.get("tdx_root") or DEFAULT_TDX_VIPDOC_ROOT)
+    postwrite_row_count = _formal_day_count(db, trade_date)
+    lc5_codes = lday.scan_lc5_universe_files(tdx_root)
+    daily_codes = {str(row["code"]) for row in rows}
+    lc5_not_in_daily = sorted(lc5_codes - daily_codes)
+    daily_not_in_lc5 = sorted(daily_codes - lc5_codes)
+    payload: dict[str, Any] = {
+        "trade_date": trade_date,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "tdx_root": tdx_root,
+        "postwrite_row_count": postwrite_row_count,
+        "coverage_min": coverage_min,
+        "coverage_ok": postwrite_row_count >= coverage_min,
+        "daily_row_count": len(daily_codes),
+        "lc5_universe_count": len(lc5_codes),
+        "lc5_not_in_daily_count": len(lc5_not_in_daily),
+        "lc5_not_in_daily": lc5_not_in_daily[:500],
+        "daily_not_in_lc5_count": len(daily_not_in_lc5),
+        "daily_not_in_lc5": daily_not_in_lc5[:500],
+    }
+    payload["report_path"] = str(_write_lday_runtime_json(
+        f"coverage_gap_{trade_date.replace('-', '')}", payload,
+        runtime_dir=opts.get("runtime_dir")))
+    return payload
+
+
 def _run_prev_day_gate(client: Any, rows: Sequence[Mapping[str, Any]], trade_date: str) -> dict[str, Any]:
     sessions_desc = _read_calendar_sessions(client, trade_date)
     earlier = [day for day in sessions_desc if day < trade_date]
@@ -1598,6 +1809,9 @@ def main(argv: Optional[Sequence[str]] = None, injections: Optional[Mapping[str,
     options: dict[str, Any] = {
         "trade_date": args.trade_date,
         "source": args.source,
+        "tdx_root": str(args.tdx_root),
+        "min_fresh_files": args.min_fresh_files,
+        "coverage_min": args.coverage_min,
         "crosscheck_sample": args.crosscheck_sample,
         "stage_write": args.stage_write,
         "formal_write": args.formal_write,
