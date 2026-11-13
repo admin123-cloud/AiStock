@@ -34,6 +34,7 @@ import hashlib
 import json
 import sys
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -312,6 +313,201 @@ def collect_index_rows(fetcher: Callable[[str], dict]) -> List[dict]:
     return list(data.get("diff") or [])
 
 
+# ── 腾讯 qt 批量快照 fallback（2026-11-13 东财 WAF 事故后由热修临时脚本转正）──
+# 通道：qt.gtimg.cn 批量（80 码/请求；a-stock-data SKILL.md §1.1 实测全市场
+# 5574 只 ~70 请求 ≈11s，含北交所）。字段映射沿用事故日热修脚本
+# （tencent_intraday_snapshot.py）实战口径：
+#   parts[3]=现价(f2) [32]=涨跌%(f3) [6]=量手(f5) [37]=额万(f6=×10000)
+#   [4]=昨收(f18) [1]=名称(f14) [31]=涨跌额(f4，仅指数)
+# fallback 与东财主源走同一 run()：同表、同 DbWriteLock(scope=intraday_snapshot_r28)、
+# 同 blake2b 幂等 id 域——只是数据通道不同，治理语义零变化。
+QT_URL = "http://qt.gtimg.cn/q="
+QT_BATCH_SIZE = 80
+QT_BATCH_SLEEP_SEC = 0.12      # 批间冷却（实测 ~70 批全市场 ≈11s 的节奏）
+QT_HTTP_TIMEOUT_SEC = 15.0
+QT_PAGE_INTERVAL_SEC = 0.05    # fetcher 内部已批量拉全，分页出缓存不需 3s 限频
+QT_HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+# A 股号段白名单（2026-11-13 实测全集）：沪 600-689（主板+科创板）、深 000-003/300/301、
+# 北 920（43/83/87 老码已迁移且被 kline 表约束拒绝）。非 A 股（B 股/ETF/债券）剔除。
+A_SHARE_PLAIN_PREFIXES = tuple(f"{i:03d}" for i in range(600, 690)) + (
+    "000", "001", "002", "003", "300", "301", "920")
+
+
+def qt_market_prefix(code6: str) -> str:
+    """裸 6 位码 → qt 前缀（sh/sz/bj）。
+
+    北交所 92x 必须先于 9x→沪 判断（9 开头歧义段）；2026-11-13 实测 qt 对
+    bj920982 正常返回、sh920982 返回 pv_none_match（事故日热修脚本按 9→sh
+    请求导致北交所被静默丢弃，此处修正）。
+    """
+    if code6.startswith(("92", "43", "83", "87")):
+        return "bj"
+    if code6.startswith(("6", "9", "5")):
+        return "sh"
+    if code6.startswith(("8", "4")):
+        return "bj"
+    return "sz"
+
+
+def parse_qt_payload(text: str) -> dict:
+    """qt 批量响应（gbk 文本）→ {prefixed_key: parts 列表}。坏行跳过。"""
+    out: dict[str, List[str]] = {}
+    for line in text.strip().split(";"):
+        line = line.strip()
+        if "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        parts = val.strip('"').split("~")
+        if len(parts) > 37:
+            out[key.replace("v_", "")] = parts
+    return out
+
+
+def _qt_float(parts: List[str], idx: int) -> float:
+    try:
+        return float(parts[idx])
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def qt_row_to_clist_item(parts: List[str], code6: str) -> Optional[dict]:
+    """qt 行 → 东财 clist diff 行形状（f2/f3/f5/f6/f12/f13/f14/f18）。无价跳过。"""
+    price = _qt_float(parts, 3)
+    if price <= 0:
+        return None                                # 停牌/无价如实跳过（与东财口径一致）
+    return {
+        "f2": price,                               # 现价
+        "f3": _qt_float(parts, 32),                # 涨跌%
+        "f5": _qt_float(parts, 6),                 # 量（手；688 量纲为股的 caveat 同 §1.1）
+        "f6": _qt_float(parts, 37) * 10000.0,      # 额（万 → 元）
+        "f12": code6,
+        "f13": 1 if qt_market_prefix(code6) == "sh" else 0,
+        "f14": parts[1],                           # 名称
+        "f18": _qt_float(parts, 4),                # 昨收
+    }
+
+
+def qt_row_to_ulist_item(parts: List[str], plain: str) -> Optional[dict]:
+    """qt 指数行 → 东财 ulist diff 行形状（多 f4=涨跌额）。无价跳过。"""
+    price = _qt_float(parts, 3)
+    if price <= 0:
+        return None
+    return {
+        "f2": price,
+        "f3": _qt_float(parts, 32),
+        "f4": _qt_float(parts, 31),                # 涨跌额
+        "f5": _qt_float(parts, 6),
+        "f6": _qt_float(parts, 37) * 10000.0,
+        "f12": plain,
+        "f14": parts[1],
+        "f18": _qt_float(parts, 4),
+    }
+
+
+def extract_a_share_plain_codes(rows: Sequence[str]) -> List[str]:
+    """kline_daily 后缀码行 → 去重升序裸码列表（剔冻结指数、剔非 A 股号段）。"""
+    frozen = {suffix for _, suffix in INDEX_SECIDS}
+    seen: set = set()
+    codes: List[str] = []
+    for row in rows:
+        code = str(row or "").strip()
+        if not code or code in frozen:
+            continue
+        plain = code.split(".")[0]
+        if (len(plain) == 6 and plain.isdigit() and plain[:3] in A_SHARE_PLAIN_PREFIXES
+                and plain not in seen):
+            seen.add(plain)
+            codes.append(plain)
+    return sorted(codes)
+
+
+def load_qt_universe(client: Any) -> List[str]:
+    """代码表：kline_daily 最新交易日的 distinct A 股码（裸码）。"""
+    res = client.query(
+        "SELECT DISTINCT code FROM stock.kline_daily "
+        "WHERE trade_date = (SELECT max(trade_date) FROM stock.kline_daily)"
+    )
+    return extract_a_share_plain_codes([r[0] for r in res.result_rows])
+
+
+def fetch_qt_batch(prefixed_codes: Sequence[str],
+                   url_open: Optional[Callable] = None) -> dict:
+    """qt 批量拉一批（≤80 码）→ {prefixed_key: parts}。"""
+    open_ = url_open or urllib.request.urlopen
+    url = QT_URL + ",".join(prefixed_codes)
+    req = urllib.request.Request(url, headers=QT_HTTP_HEADERS)
+    with open_(req, timeout=QT_HTTP_TIMEOUT_SEC) as resp:
+        text = resp.read().decode("gbk", errors="replace")
+    return parse_qt_payload(text)
+
+
+def build_qt_fetcher(client_factory: Optional[Callable[[], Any]] = None,
+                     url_open: Optional[Callable] = None,
+                     sleep_fn: Callable[[float], None] = time.sleep) -> Callable[[str], dict]:
+    """构造 mimicking fetcher：把东财 clist/ulist 请求喂成 qt 批量数据。
+
+    - 代码表懒加载（首次 clist 请求时查 CH kline_daily 最新交易日，进程内缓存）；
+    - clist 分页语义与东财一致（data.total + diff 切片），直接复用
+      collect_market_pages / normalize_stock_rows / snapshot_id 幂等链路；
+    - ulist：冻结 10 指数一次 qt 批量（f12=纯码，normalize_index_rows 负责映射）。
+    """
+    cache: dict = {"items": None}
+
+    def _stock_items() -> List[dict]:
+        if cache["items"] is not None:
+            return cache["items"]
+        factory = client_factory or _default_client_factory
+        codes = load_qt_universe(factory())
+        logger.info(f"qt fallback universe: {len(codes)} codes from kline_daily")
+        items: List[dict] = []
+        for i in range(0, len(codes), QT_BATCH_SIZE):
+            batch = codes[i:i + QT_BATCH_SIZE]
+            data = fetch_qt_batch([qt_market_prefix(c) + c for c in batch], url_open)
+            for code in batch:
+                parts = data.get(qt_market_prefix(code) + code)
+                if not parts:
+                    continue
+                item = qt_row_to_clist_item(parts, code)
+                if item is not None:
+                    items.append(item)
+            if i + QT_BATCH_SIZE < len(codes):
+                sleep_fn(QT_BATCH_SLEEP_SEC)
+        cache["items"] = items
+        return items
+
+    def fetch(url: str) -> dict:
+        if "/api/qt/clist/get" in url:
+            items = _stock_items()
+            parsed = urllib.parse.urlparse(url)
+            params = urllib.parse.parse_qs(parsed.query)
+            pn = int(params.get("pn", ["1"])[0])
+            pz = int(params.get("pz", ["100"])[0])
+            start = (pn - 1) * pz
+            return {"data": {"total": len(items), "diff": items[start:start + pz]}}
+        if "/api/qt/ulist.np/get" in url:
+            qt_keys = []
+            plain_by_key = {}
+            for _, suffix in INDEX_SECIDS:
+                plain = suffix.split(".")[0]
+                key = ("sh" if suffix.endswith(".SH") else "sz") + plain
+                qt_keys.append(key)
+                plain_by_key[key] = plain
+            data = fetch_qt_batch(qt_keys, url_open)
+            items = []
+            for key in qt_keys:
+                parts = data.get(key)
+                if not parts:
+                    continue
+                item = qt_row_to_ulist_item(parts, plain_by_key[key])
+                if item is not None:
+                    items.append(item)
+            return {"data": {"diff": items}}
+        raise RuntimeError(f"qt fallback fetcher 收到未知 url: {url}")
+
+    return fetch
+
+
 # ── 落库（客户端可注入）────────────────────────────────────────
 
 def _default_client_factory() -> Any:
@@ -367,19 +563,39 @@ def run(
     }
 
     # -- 采集（fail-closed：任一环节失败即中止，零部分写入）--
+    # 默认链：东财 clist/ulist 主源；源不可达 → 自动切腾讯 qt 批量快照 fallback
+    # （同表/同锁/同幂等 id，仅换数据通道）。显式注入 fetcher 时不做隐式回退。
     t0 = time.monotonic()
+    source_name = "eastmoney_push2"
     try:
         raw_stocks, total_hint = collect_market_pages(fetch, sleep_fn=sleep_fn)
         raw_indices = collect_index_rows(fetch)
     except RuntimeError as exc:
-        report.update({
-            "status": "failure",
-            "reason": "source_unreachable",
-            "error": str(exc),
-        })
-        _write_report(report_path, report)
-        logger.error(f"intraday snapshot source unreachable: {exc}")
-        return report
+        if fetcher is not None:
+            report.update({
+                "status": "failure",
+                "reason": "source_unreachable",
+                "error": str(exc),
+            })
+            _write_report(report_path, report)
+            logger.error(f"intraday snapshot source unreachable: {exc}")
+            return report
+        logger.warning(f"east push2 unreachable, falling back to tencent qt batch: {exc}")
+        try:
+            qt_fetch = build_qt_fetcher(client_factory=client_factory, sleep_fn=sleep_fn)
+            raw_stocks, total_hint = collect_market_pages(
+                qt_fetch, sleep_fn=sleep_fn, interval_sec=QT_PAGE_INTERVAL_SEC)
+            raw_indices = collect_index_rows(qt_fetch)
+            source_name = "tencent_qt_batch"
+        except RuntimeError as exc2:
+            report.update({
+                "status": "failure",
+                "reason": "source_unreachable",
+                "error": f"east: {exc}; qt_fallback: {exc2}",
+            })
+            _write_report(report_path, report)
+            logger.error(f"intraday snapshot sources unreachable (east+qt): {exc2}")
+            return report
     fetch_elapsed = round(time.monotonic() - t0, 1)
 
     stock_rows, skipped = normalize_stock_rows(raw_stocks, snapshot_ts, created_at)
@@ -441,6 +657,7 @@ def run(
             return report
         report.update({
             "status": "success",
+            "source": source_name,
             "raw_total": total_hint,
             "valid_stock_rows": len(stock_rows),
             "skipped_no_price": skipped,

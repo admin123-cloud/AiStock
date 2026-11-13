@@ -378,11 +378,73 @@ EAST_K_URL = ("http://push2his.eastmoney.com/api/qt/stock/kline/get"
               "?secid={secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f56,f57"
               "&klt={klt}&fqt=1&end=20500101&lmt={lmt}")
 
+def _tencent_fallback_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
+    """东财 502 第一回退级：vendored 腾讯分钟线（utils/market_sources/tencent_kline）。
+
+    真实 OHLC bar（proxy.finance.qq.com 通道，2026-11-13 接入）。ts=周期结束边界，
+    与东财口径一致（closed_bars 按 ts<=now 去未收 bar）。无成交额字段 → amount=0.0
+    如实置零（day_vwap 在 Σamount=0 时返回 None，不做假 VWAP）。北交所码抛
+    ValueError → 上层按回退失败处理，不返回部分数据。
+    """
+    from utils.market_sources import tencent_kline
+
+    period = {1: "m1", 5: "m5", 15: "m15", 30: "m30", 60: "m60"}.get(int(klt))
+    if period is None:
+        return []
+    result = tencent_kline.fetch_minute_kline(code, period, min(int(lmt) or 120, 320))
+    rows = []
+    for r in result["rows"]:
+        rows.append({
+            "ts": f"{r['datetime']}:00",
+            "open": float(r["open"]),
+            "close": float(r["close"]),
+            "volume": float(r["volume"]),
+            "amount": 0.0,            # 腾讯分钟线无成交额字段：如实为 0，不造数
+        })
+    return rows
+
+
+QT_KLINE_URL = "http://qt.gtimg.cn/q={code}"
+
+
+def _qt_snapshot_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:  # noqa: ARG001
+    """东财 502 末级回退：腾讯 qt 快照合成一根伪 bar（O=H=L=C=现价）。
+
+    仅保信号链不断供（RSI 退化为现价单点、VWAP 失真）；量=当日累计手
+    （qt parts[6]；科创板 688 量纲为股，票池无 688 时无影响），额=parts[37]万×10000。
+    快照失败抛异常由上层记录，不返回部分数据。
+    """
+    code6 = str(code).split(".")[0]
+    tc = ("sh" if code6.startswith(("6", "9", "5")) else "sz") + code6
+    req = urllib.request.Request(QT_KLINE_URL.format(code=tc),
+                                 headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        text = resp.read().decode("gbk", errors="replace")
+    if "=" not in text:
+        return []
+    parts = text.split("=", 1)[1].strip('"').strip(";").split("~")
+    if len(parts) < 40 or not parts[3]:
+        return []
+    price = float(parts[3])
+    now_text = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:00")
+    return [{
+        "ts": now_text,
+        "open": price,
+        "close": price,
+        "volume": float(parts[6] or 0),
+        "amount": float(parts[37] or 0) * 10000.0,
+    }]
+
+
 def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
     """东财 push2his 前复权分时K（含当日）：[{ts, open, close, volume(手), amount(元)}]。
 
     R40 起含 open（f52，影子做T虚拟成交次开价用）；既有消费方按 key 取值不受影响。
-    502 时自动回退腾讯 qt 快照。
+    502 回退链（2026-11-13 定序，东财WAF事故后改造）：
+      ① vendored 腾讯分钟线（真 bar，_tencent_fallback_klines）
+      ② CH 本地 5min 聚合（_ch_fallback_klines，自第一回退级降为第三级）
+      ③ 腾讯 qt 快照伪 bar（_qt_snapshot_klines，末级保不断供）
+    全链为空 → 上抛原 502（调用方按票记录失败，不返回部分/伪造数据）。
     """
     url = EAST_K_URL.format(secid=east_secid(code), klt=klt, lmt=lmt)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -391,11 +453,26 @@ def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 502:
-            # 回退到 CH 本地数据 + 腾讯 qt 快照价
+            try:
+                rows = _tencent_fallback_klines(code, klt, lmt)
+            except Exception as t_exc:  # noqa: BLE001 - 第一回退级失败降级到下一级
+                logger.warning("[east_klines] %s %dmin 腾讯分钟线回退失败: %s", code, klt, t_exc)
+                rows = []
+            if rows:
+                return rows
+            logger.warning("[east_klines] %s %dmin 502+腾讯分钟线回退为空，尝试CH聚合", code, klt)
             rows = _ch_fallback_klines(code, klt, lmt)
             if rows:
                 return rows
-            logger.warning("[east_klines] %s %dmin 502+CH回退为空，返回[]", code, klt)
+            logger.warning("[east_klines] %s %dmin 502+CH聚合为空，qt快照兜底", code, klt)
+            try:
+                rows = _qt_snapshot_klines(code, klt, lmt)
+            except Exception as qt_exc:  # noqa: BLE001 - 末级失败记录后按原 502 上抛
+                logger.warning("[east_klines] %s qt快照兜底失败: %s", code, qt_exc)
+                rows = []
+            if rows:
+                return rows
+            logger.warning("[east_klines] %s %dmin 502 全回退链为空，返回[]", code, klt)
         raise
     except Exception:
         raise
