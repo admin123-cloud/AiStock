@@ -335,7 +335,7 @@ def _click_window(hwnd: int) -> None:
     x = (left + right) // 2
     y = (top + bottom) // 2
     hit = _window_from_point(x, y)
-    if not hit or _root(hit) != _root(hwnd):
+    if not hit or (hit != hwnd and not USER32.IsChild(hwnd, hit)):
         raise ThsXiadanError(
             f"click target is covered by another window: target={hwnd} hit={hit}"
         )
@@ -508,7 +508,7 @@ def _password_state(login_hwnd: int) -> dict[str, Any]:
         (h for h in edits if int(_window_style(h)) & ES_PASSWORD), None
     )
     selector = "es_password"
-    if password is None and edits:
+    if password is None and len(edits) >= 2:
         password = edits[-1]  # 约定：登录框密码框在账号框下方（最后一个编辑框）
         selector = "last_edit"
     if password is None:
@@ -522,15 +522,12 @@ def _password_state(login_hwnd: int) -> dict[str, Any]:
 def _click_login_and_wait(
     login_hwnd: int, button_hwnd: int, timeout: float,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """BM_CLICK 点「登录」；8s 无过渡则真鼠标坐标点击兜底一次；仍无主窗口即停。"""
+    """命中验证后真实点击一次；不重复提交登录。"""
     clicks: list[dict[str, Any]] = []
-    _bring_to_front(login_hwnd)
-    _message_int(button_hwnd, BM_CLICK)
-    clicks.append({"method": "bm_click", "button_hwnd": button_hwnd})
+    _click_window(button_hwnd)
+    clicks.append({"method": "coordinate_click", "button_hwnd": button_hwnd})
 
     deadline = time.monotonic() + timeout
-    fallback_at = time.monotonic() + min(8.0, timeout)
-    used_fallback = False
     last_state = "dialog"
     while True:
         last_state, wins, _main = _poll_state()
@@ -540,12 +537,6 @@ def _click_login_and_wait(
         now = time.monotonic()
         if now >= deadline:
             break
-        if (not used_fallback and last_state == "dialog" and now >= fallback_at
-                and len(wins) == 1 and wins[0].get("hwnd") == login_hwnd
-                and _find_visible_login_dialog(wins) == login_hwnd):
-            _click_window(button_hwnd)  # 覆盖校验 + 真鼠标点击，一次为限
-            clicks.append({"method": "coordinate_click", "button_hwnd": button_hwnd})
-            used_fallback = True
         time.sleep(0.5)
     raise ThsXiadanError(
         f"login click did not reach a main window "
@@ -567,6 +558,8 @@ def _reach_login_state(*, window_wait: float, login_timeout: float,
                 "main_window": main, "clicks": [], "password_remembered": None}
     if state == "main" and visible_login is None:
         raise ThsXiadanError("visible unrecognized dialog blocks login verification")
+    if visible_login is not None and len(windows) != 1:
+        raise ThsXiadanError("additional window blocks login")
     if visible_login is None:
         # state == dialog 但无登录框形状（遗留/错误弹窗）——维持原契约：
         # 取首个可见对话框按登录框流程做形状校验（形状不明 fail-closed）
@@ -599,6 +592,34 @@ def _reach_login_state(*, window_wait: float, login_timeout: float,
         login_hwnd, button, login_timeout
     )
     return detail
+
+
+def _read_default_account_label(hwnd: int) -> str:
+    """只读交易窗口账号切换器的 Value；不读取登录框或凭证。"""
+    try:
+        from pywinauto import Application
+        window = Application(backend="uia").connect(handle=hwnd).window(handle=hwnd)
+        combos = window.descendants(auto_id="2322", control_type="ComboBox")
+        if len(combos) != 1:
+            return ""
+        return str(combos[0].iface_value.CurrentValue or "").strip()
+    except Exception:
+        return ""
+
+
+def _verify_default_account(timeout: float) -> str:
+    """窗口和当前账户下拉框共同确认目标账户；仅返回内部代号。"""
+    labels = {"广发证券-曾*": "acct1", "广发证券-王*美": "acct2"}
+    def observe() -> Optional[str]:
+        state, windows, main = _poll_state()
+        if state != "main" or windows or not main:
+            return None
+        label = _read_default_account_label(main["hwnd"])
+        return labels.get("".join(str(label or "").split()))
+    account = _wait_for(observe, timeout, 0.5)
+    if not account:
+        raise ThsXiadanError("default account identity could not be verified")
+    return account
 
 
 # ── 导出子进程 ──
@@ -659,13 +680,15 @@ def run(
         "xiadan_exe": str(xiadan_exe),
     }
     try:
-        pids, steps = _ensure_processes(hexin_exe, xiadan_exe, launch_wait, direct_wait)
-        report["launch"] = steps
-        report["xiadan_pids"] = pids
-
-        detail = _reach_login_state(
-            window_wait=window_wait, login_timeout=login_timeout, dry_run=dry_run,
-        )
+        with bridge._ths_window_operation_lock(lock_name=bridge.HOTSWITCH_LOCK_NAME):
+            pids, steps = _ensure_processes(hexin_exe, xiadan_exe, launch_wait, direct_wait)
+            report["launch"] = steps
+            report["xiadan_pids"] = pids
+            detail = _reach_login_state(
+                window_wait=window_wait, login_timeout=login_timeout, dry_run=dry_run,
+            )
+            if not dry_run and detail["login_state"] in {"logged_in", "logged_in_after_click"}:
+                report["account"] = _verify_default_account(login_timeout)
         launched = any(
             s.get("step") in {"launched_hexin", "launched_xiadan_direct"} for s in steps
         )

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import contextmanager, nullcontext
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -71,8 +73,13 @@ def install(monkeypatch, fake, pids):
     monkeypatch.setattr(ths, "_window_style",
                         lambda h: fake.windows.get(h, {}).get("style", 0))
     monkeypatch.setattr(ths, "_bring_to_front", lambda h: None)
-    monkeypatch.setattr(ths, "_click_window",
-                        lambda h: fake.coord_clicks.append(h))
+    def click_window(h):
+        fake.coord_clicks.append(h)
+        if fake.on_click:
+            fake.on_click(fake, h)
+    monkeypatch.setattr(ths, "_click_window", click_window)
+    monkeypatch.setattr(ths.bridge, "_ths_window_operation_lock", lambda **_: nullcontext())
+    monkeypatch.setattr(ths, "_read_default_account_label", lambda _: "广发证券-曾*")
 
     def message_int(hwnd, msg):
         fake.messages.append((hwnd, msg))
@@ -170,9 +177,9 @@ def test_login_box_remembered_password_clicks_login_and_reaches_main(monkeypatch
     assert report["password_remembered"] is True
     assert report["password_edit_selector"] == "es_password"
     assert fake.popen_calls == []  # 两进程都在跑：零 Popen
-    assert (303, ths.BM_CLICK) in fake.messages
-    assert fake.coord_clicks == []  # BM_CLICK 即过渡，无需坐标兜底
-    assert report["clicks"] == [{"method": "bm_click", "button_hwnd": 303}]
+    assert fake.coord_clicks == [303]
+    assert report["clicks"] == [{"method": "coordinate_click", "button_hwnd": 303}]
+    assert report["account"] == "acct1"
     # 登录框只记 class，不记标题/子控件文本
     assert "title" not in report["windows"][0]
 
@@ -266,7 +273,7 @@ def test_login_click_without_transition_fails_closed(monkeypatch, tmp_path):
 
     assert report["status"] == "failure"
     assert "login click did not reach" in report["reason"]
-    assert (303, ths.BM_CLICK) in fake.messages
+    assert fake.coord_clicks == [303]
 
 
 def test_login_click_with_shell_and_login_dialog_is_not_success(monkeypatch, tmp_path):
@@ -295,6 +302,82 @@ def test_unknown_dialog_with_trade_shell_does_not_prove_login(monkeypatch, tmp_p
     report = ths.run(report_root=tmp_path / "rt", **FAST)
     assert report["status"] == "failure"
     assert "unrecognized dialog" in report["reason"]
+
+
+def test_missing_identity_blocks_login_success_and_export(monkeypatch, tmp_path):
+    fake, pids = FakeWindows(), {"hexin.exe": [100], "xiadan.exe": [200]}
+    install(monkeypatch, fake, pids)
+    _main_window(fake)
+    monkeypatch.setattr(ths, "_read_default_account_label", lambda _: "")
+    monkeypatch.setattr(ths, "_wait_for", lambda predicate, *_args: predicate())
+    monkeypatch.setattr(ths, "_run_export", lambda *_: pytest.fail("must not export"))
+    report = ths.run(export=True, report_root=tmp_path / "rt", **FAST)
+    assert report["status"] == "failure"
+    assert "identity could not be verified" in report["reason"]
+    assert fake.coord_clicks == []
+
+
+def test_default_second_account_is_accepted_without_account_selection(monkeypatch, tmp_path):
+    fake, pids = FakeWindows(), {"hexin.exe": [100], "xiadan.exe": [200]}
+    install(monkeypatch, fake, pids)
+    _main_window(fake)
+    monkeypatch.setattr(ths, "_read_default_account_label", lambda _: "广发证券-王*美")
+    report = ths.run(report_root=tmp_path / "rt", **FAST)
+    assert report["status"] == "logged_in" and report["account"] == "acct2"
+    assert fake.coord_clicks == []
+
+
+def test_extra_dialog_blocks_default_login(monkeypatch, tmp_path):
+    fake, pids = FakeWindows(), {"hexin.exe": [100], "xiadan.exe": [200]}
+    install(monkeypatch, fake, pids)
+    _login_box(fake)
+    fake.add(500, cls="#32770", pid=200)
+    report = ths.run(report_root=tmp_path / "rt", **FAST)
+    assert report["status"] == "failure"
+    assert fake.coord_clicks == []
+
+
+def test_single_edit_cannot_be_assumed_to_be_password(monkeypatch):
+    fake, pids = FakeWindows(), {}
+    install(monkeypatch, fake, pids)
+    _login_box(fake)
+    fake.windows[300]["children"] = [301, 303]
+    assert ths._password_state(300)["password_edit_found"] is False
+
+
+def test_account_read_uses_uia_value_property(monkeypatch):
+    combo = SimpleNamespace(iface_value=SimpleNamespace(CurrentValue="广发证券-曾*"))
+    class Window:
+        def descendants(self, **kwargs):
+            assert kwargs == {"auto_id": "2322", "control_type": "ComboBox"}
+            return [combo]
+    class App:
+        def __init__(self, **_kwargs): pass
+        def connect(self, **_kwargs): return self
+        def window(self, **_kwargs): return Window()
+    monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=App))
+    assert ths._read_default_account_label(123) == "广发证券-曾*"
+
+
+def test_window_lock_is_released_before_export(monkeypatch, tmp_path):
+    fake, pids = FakeWindows(), {"hexin.exe": [100], "xiadan.exe": [200]}
+    install(monkeypatch, fake, pids)
+    _main_window(fake)
+    state = {"locked": False}
+    @contextmanager
+    def lock(**_kwargs):
+        state["locked"] = True
+        try:
+            yield
+        finally:
+            state["locked"] = False
+    monkeypatch.setattr(ths.bridge, "_ths_window_operation_lock", lock)
+    def run_export(*_args):
+        assert not state["locked"]
+        return {"returncode": 0}
+    monkeypatch.setattr(ths, "_run_export", run_export)
+    report = ths.run(export=True, report_root=tmp_path / "rt", **FAST)
+    assert report["status"] == "success"
 
 
 def test_unrecognized_dialog_is_never_clicked(monkeypatch, tmp_path):
