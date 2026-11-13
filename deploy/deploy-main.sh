@@ -15,8 +15,8 @@ SRC="F:/Aistock/data/builds/$SHA-src"; rm -rf "$SRC"; mkdir -p "$SRC"
 git -C "$APP" archive --format=tar "$SHA" | tar -x -C "$SRC"
 test -f "$SRC/Dockerfile.backend" && test -f "$SRC/frontend-react/Dockerfile.release" && test -f "$SRC/scripts/pipeline_scheduler.py" && test -f "$SRC/services/intraday_price_feed.py" && test -f "$SRC/scripts/alert_local.py"
 echo '== 构建后端/前端镜像 =='
-"$DOCK" build -t "aistock-core-backend:$SHA" -f "$SRC/Dockerfile.backend" "$SRC" 2>&1 | tail -2
-"$DOCK" build -t "aistock-core-frontend:$SHA" -f "$SRC/frontend-react/Dockerfile.release" "$SRC/frontend-react" 2>&1 | tail -2
+"$DOCK" build -t "aistock-backend:$SHA" -f "$SRC/Dockerfile.backend" "$SRC" 2>&1 | tail -2
+"$DOCK" build -t "aistock-frontend:$SHA" -f "$SRC/frontend-react/Dockerfile.release" "$SRC/frontend-react" 2>&1 | tail -2
 echo '== 切换容器（preview + frontend + pipeline-runner） =='
 export AISTOCK_MAIN_VERSION="$SHA"
 "$DC" -f "$APP/deploy/docker-compose.main.yml" up -d 2>&1 | tail -4
@@ -26,6 +26,6 @@ for p in '/api/health/check' '/api/market/indices?all=true' '/api/operations/tas
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:3000$p" || true); code=${code:0:3}
   echo "  $p -> $code"; [ "$code" = '200' ] || fail=1
 done
-"$DOCK" ps --format '{{.Names}}\t{{.Status}}' | grep -E 'observation|pipeline'
+"$DOCK" ps --format '{{.Names}}\t{{.Status}}' | grep -E 'aistock-(backend|frontend|pipeline)'
 [ "$fail" = 0 ] || { echo 'DEPLOY VERIFY FAILED'; exit 2; }
 echo "DEPLOY_OK main=$SHA"
