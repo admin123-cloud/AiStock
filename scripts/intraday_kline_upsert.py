@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
 """盘中 5min K 线聚合并增量落盘（R57，每 5 分钟将持仓票的分钟数据聚合为 5min K 写入 CH）。
 
+⚠️ 盘中临时方案（2026-11-13）：腾讯 ifzq.gtimg.cn 分钟接口返回 302，
+改用腾讯 qt 快照（qt.gtimg.cn）每 5 分钟采样一次实时价/量写入。
+缺陷：O/H/L = 当前 snapshot 价（非真实聚合），volume = 累计手数。
+盘后正式管道（TDX lc5）会覆盖当日数据。
+TODO: 接入可用替代源做真实 5min 聚合后再废除本临时方案。
+
 取代盘中反复调 API 算 RSI 的做法——数据进 CH 后 t_trade_monitor 可以直接 SQL 查询。
 
-数据流：
-  腾讯分钟接口 → 聚合 5min K（O/H/L/C/V） → INSERT INTO kline_minute_5
+数据流（临时）：
+  腾讯 qt 快照 → 采样 O/H/L=当前价 → INSERT INTO kline_minute_5
+数据流（正式，盘后）：
+  TDX lc5 文件 → build_tdx_minute_periods.py 覆盖写入
 
 风险：
   - 写入用 ReplacingMergeTree + id=cityHash64(code, datetime) 去重
@@ -34,10 +42,13 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 # ── 监控清单（持仓 + watchlist，6 位码格式） ──
 MONITOR_CODES = ["002015", "300054", "603881"]
 
-# ── 腾讯分钟接口 ──
-TENCENT_MINUTE_URL = (
-    "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
-    "?_var=min_data_{code}&code={code}"
+# ── 腾讯 qt 接口（实时快照获取最新价/量；盘中每5分钟采样做5min K线） ──
+QT_URL = "http://qt.gtimg.cn/q={code}"
+
+# ── 东财 push2 实时快照（备用） ──
+EM_SNAPSHOT_URL = (
+    "http://push2.eastmoney.com/api/qt/stock/get"
+    "?secid={market}.{code}&fields=f43,f44,f45,f46,f47,f48,f50,f57,f58,f170"
 )
 
 # ── CH 地址（容器内外统一：pipeline-runner host 模式用 127.0.0.1） ──
@@ -46,43 +57,77 @@ CH_URL = "http://127.0.0.1:8123/"
 logger = logging.getLogger("intraday_kline_upsert")
 
 
+SN_CACHE: dict[str, dict] = {}
+
+
 def _tencent_code(code: str) -> str:
     return ("sh" if code.startswith(("6", "9", "5")) else "sz") + code
 
 
-def fetch_today_minutes(code: str) -> list[dict]:
-    """获取今日分钟均价数据（腾讯分钟接口，返回 [{time, price, cumvol}, ...]）。"""
-    tc = _tencent_code(code)
-    url = TENCENT_MINUTE_URL.format(code=tc)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        raw = resp.read()
+def _em_market(code: str) -> int:
+    return 1 if code.startswith(("6", "9")) else 0
+
+
+def _parse_qt(text: str) -> dict | None:
+    """解析腾讯 qt 实时行情返回。"""
     try:
-        text = raw.decode("gbk")
-    except UnicodeDecodeError:
-        text = raw.decode("utf-8", errors="replace")
-    if "=" in text:
-        text = text.split("=", 1)[1]
-    payload = json.loads(text)
-    data = (
-        payload.get("data", {})
-        .get(tc, {})
-        .get("data", {})
-        .get("data", [])
-    )
-    bars: list[dict] = []
-    for line in data:
-        parts = line.split(" ")
-        if len(parts) < 3:
-            continue
+        if "=" not in text:
+            return None
+        raw = text.split("=", 1)[1].strip('"').strip(";")
+        parts = raw.split("~")
+        if len(parts) < 50:
+            return None
+        fields = {
+            "name": parts[1],
+            "code": parts[2],
+            "price": float(parts[3]) if parts[3] else None,
+            "pre_close": float(parts[4]) if parts[4] else None,
+            "open": float(parts[5]) if parts[5] else None,
+            "volume": int(parts[6]) if parts[6] else 0,  # 手
+            "bid_vol": int(parts[7]) if parts[7] else 0,
+            "ask_vol": int(parts[8]) if parts[8] else 0,
+            "high": float(parts[33]) if parts[33] else None,
+            "low": float(parts[34]) if parts[34] else None,
+            "amount": float(parts[37]) if parts[37] else 0.0,
+        }
+        return fields
+    except (ValueError, IndexError):
+        return None
+
+
+def fetch_qt_snapshot(code: str) -> dict | None:
+    """腾讯 qt 实时快照。"""
+    tc = _tencent_code(code)
+    url = QT_URL.format(code=tc)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            text = resp.read().decode("gbk", errors="replace")
+    except Exception:
+        # fallback 东财 push2
+        mkt = _em_market(code)
+        url2 = EM_SNAPSHOT_URL.format(market=mkt, code=code)
+        req2 = urllib.request.Request(url2, headers={"User-Agent": "Mozilla/5.0"})
         try:
-            t = parts[0]  # "0930"
-            p = float(parts[1])  # 分钟均价
-            cv = int(float(parts[2]))  # 累计量（股）
-            bars.append({"time": t, "price": p, "cumvol": cv})
-        except (ValueError, IndexError):
-            continue
-    return bars
+            with urllib.request.urlopen(req2, timeout=10) as resp2:
+                data = json.loads(resp2.read())
+                d = data.get("data", {})
+                if not d:
+                    return None
+                return {
+                    "name": code,
+                    "code": code,
+                    "price": d.get("f43"),
+                    "pre_close": d.get("f44"),
+                    "open": d.get("f45"),
+                    "high": d.get("f44"),
+                    "low": d.get("f44"),
+                    "volume": d.get("f47", 0) // 100 if d.get("f47") else 0,
+                    "amount": d.get("f48", 0.0),
+                }
+        except Exception:
+            return None
+    return _parse_qt(text)
 
 
 def agg_5min(bars: list[dict], code: str) -> list[dict]:
@@ -162,23 +207,40 @@ def run_upsert(codes: Optional[list[str]] = None) -> dict:
 
     for code in codes:
         try:
-            bars = fetch_today_minutes(code)
+            snap = fetch_qt_snapshot(code)
         except Exception as exc:
-            logger.warning("[upsert] %s 分钟数据采集失败: %s", code, exc)
+            logger.warning("[upsert] %s 快照采集失败: %s", code, exc)
             results[code] = {"status": "fetch_failed", "error": str(exc)}
             continue
 
-        if not bars:
-            logger.info("[upsert] %s 今日无分钟数据", code)
+        if not snap or snap.get("price") is None:
+            logger.info("[upsert] %s 无快照数据", code)
             results[code] = {"status": "no_data"}
             continue
 
-        k5 = agg_5min(bars, code)
-        if not k5:
-            results[code] = {"status": "agg_empty"}
-            continue
+        # 用快照数据构建一条 5min K 线（每5分钟采样视为一根完整K线）
+        now_t = datetime.now(BEIJING_TZ)
+        hhmm = now_t.strftime("%H:%M")
+        dt_str = f"{hhmm}:00"
+        price = snap["price"]
+        vol = snap.get("volume", 0)
+        amount = snap.get("amount", 0.0)
+        row_id = abs(hash(f"{code}_{dt_str}")) % (10 ** 15)
 
-        n, msg = insert_rows(k5, today)
+        rows = [{
+            "code": code,
+            "datetime": dt_str,
+            "open": round(price, 2),
+            "high": round(price, 2),
+            "low": round(price, 2),
+            "close": round(price, 2),
+            "volume": vol,
+            "amount": round(amount, 2),
+            "created_at": now_t.strftime("%Y-%m-%d %H:%M:%S"),
+            "id": row_id,
+        }]
+
+        n, msg = insert_rows(rows, today)
         if msg == "ok":
             logger.info("[upsert] %s 写入 %d 根 5min K", code, n)
             results[code] = {"status": "ok", "rows": n}
