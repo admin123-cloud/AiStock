@@ -60,8 +60,9 @@ LOCK_SCOPE = "intraday_snapshot_r28"
 LOCK_OWNER = "aistock-engineer"
 
 # ── 东财端点参数（调研定案，勿扩大）─────────────────────────────
-CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
-ULIST_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+# 2026-11-13：https 端点被 WAF 掐（Remote end closed），http 可通——全链路降级 http
+CLIST_URL = "http://push2.eastmoney.com/api/qt/clist/get"
+ULIST_URL = "http://push2.eastmoney.com/api/qt/ulist.np/get"
 CLIST_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
 CLIST_FIELDS = "f2,f3,f5,f6,f12,f13,f14,f18"
 ULIST_FIELDS = "f2,f3,f4,f5,f6,f12,f13,f14,f18"
