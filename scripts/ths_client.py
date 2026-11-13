@@ -544,9 +544,53 @@ def _click_login_and_wait(
     )
 
 
+_TOAST_MAX_AREA = 80_000  # px²；小于此的可见 #32770=通知/提示条（2026-11-14 冷启动实测 265×29 屏幕底角条）
+_WM_CLOSE = 0x0010
+
+
+def _dismiss_tiny_toasts(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """关闭微小可见 #32770 通知条（WM_CLOSE 零交互）。
+
+    安全护栏：带「登录」按钮的对话框（真登录框）绝不关闭；登录框尺寸
+    ≥300×200（60,000px² 边界重叠），护栏一 _find_login_button 双保险。
+    返回关闭记录；调用方需重新 _poll_state。
+    """
+    closed: list[dict[str, Any]] = []
+    for w in windows or []:
+        if w.get("class") != DIALOG_CLASS:
+            continue
+        hwnd = int(w.get("hwnd") or 0)
+        if not hwnd or _find_login_button(hwnd) is not None:
+            continue  # 真登录框：绝不关
+        try:
+            l, t, r, b = _rect(hwnd)
+        except ThsXiadanError:
+            continue
+        if (r - l) * (b - t) < _TOAST_MAX_AREA:
+            USER32.SendMessageW(hwnd, _WM_CLOSE, 0, 0)
+            closed.append({"hwnd": hwnd, "rect": [l, t, r, b]})
+    return closed
+
+
 def _reach_login_state(*, window_wait: float, login_timeout: float,
                        dry_run: bool) -> dict[str, Any]:
     state, windows, main = _wait_any_window(window_wait)
+    toasts_closed = _dismiss_tiny_toasts(windows)
+    if toasts_closed:
+        time.sleep(1.0)
+        state, windows, main = _poll_state()
+    # 2026-11-14 冷启动实盘：整面板最小化时登录框也"不可见"→误判 logged_in。
+    # 主窗存在但隐藏且无可见窗口 → 先还原（零点击）再判定。
+    restored_hidden_panel = False
+    if (state == "main" and main is not None and not main.get("visible")
+            and not windows):
+        USER32.ShowWindow(int(main["hwnd"]), 9)  # SW_RESTORE
+        time.sleep(1.5)
+        state, windows, main = _poll_state()
+        restored_hidden_panel = True
+    toast_note: dict[str, Any] = {"toasts_closed": toasts_closed} if toasts_closed else {}
+    if restored_hidden_panel:
+        toast_note["restored_hidden_panel"] = True
     if state == "none":
         raise ThsXiadanError(
             "no visible xiadan top-level window after launch (NO_XIADAN_WINDOW)"
@@ -555,7 +599,8 @@ def _reach_login_state(*, window_wait: float, login_timeout: float,
     visible_login = _find_visible_login_dialog(windows)
     if state == "main" and not windows:
         return {"login_state": "logged_in", "windows": windows,
-                "main_window": main, "clicks": [], "password_remembered": None}
+                "main_window": main, "clicks": [], "password_remembered": None,
+                **toast_note}
     if state == "main" and visible_login is None:
         raise ThsXiadanError("visible unrecognized dialog blocks login verification")
     if visible_login is not None and len(windows) != 1:
@@ -575,6 +620,7 @@ def _reach_login_state(*, window_wait: float, login_timeout: float,
         "login_hwnd": login_hwnd,
         "password_remembered": password["password_nonempty"],
         "password_edit_selector": password["selector"],
+        **toast_note,
     }
     # 形态不明的 #32770 绝不点击（可能是错误弹窗而非登录框）
     if password["selector"] == "none" or button is None:
