@@ -439,11 +439,8 @@ def _is_trade_window_title(title: str) -> bool:
 def _poll_state() -> tuple[str, list[dict[str, Any]], Optional[dict[str, Any]]]:
     """xiadan 顶层窗口 → (main|dialog|none, 可见窗口证据, 主窗口或 None)。
 
-    主窗口判定（实盘 2026-11-13 19:48 取证：盘后面板最小化/隐藏时
-    IsWindowVisible=False，但窗口仍在、标题为「网上股票交易系统5.0」）：
-      a) 可见且非 #32770（任务规范）；或
-      b) 非 #32770 且标题含交易系统锚点（隐藏也代表已登录——fills 导出器
-         自会恢复窗口）。
+    只接受标题含交易系统锚点的非对话框窗口；可见的其他窗口不能证明登录。
+    隐藏的交易系统壳窗口仍需结合可见登录框判断，不能独立证明登录。
     #32770 只有可见时才算登录框（隐藏的 #32770 是遗留对话框，实机多个）。
     """
     pids = set(_pids_of(XIADAN_PROCESS))
@@ -456,7 +453,7 @@ def _poll_state() -> tuple[str, list[dict[str, Any]], Optional[dict[str, Any]]]:
         if cls != DIALOG_CLASS:
             title = _window_text(hwnd)
             is_visible = _is_visible(hwnd)
-            if is_visible or _is_trade_window_title(title):
+            if _is_trade_window_title(title):
                 main = {"hwnd": hwnd, "class": cls, "title": title,
                         "visible": is_visible}
                 continue
@@ -536,13 +533,16 @@ def _click_login_and_wait(
     used_fallback = False
     last_state = "dialog"
     while True:
-        last_state, _wins, _main = _poll_state()
-        if last_state == "main":
+        last_state, wins, _main = _poll_state()
+        # 登录后壳窗可能先于登录框消失；任何可见对话框都不能作为成功。
+        if last_state == "main" and not wins:
             return "logged_in_after_click", clicks
         now = time.monotonic()
         if now >= deadline:
             break
-        if not used_fallback and last_state == "dialog" and now >= fallback_at:
+        if (not used_fallback and last_state == "dialog" and now >= fallback_at
+                and len(wins) == 1 and wins[0].get("hwnd") == login_hwnd
+                and _find_visible_login_dialog(wins) == login_hwnd):
             _click_window(button_hwnd)  # 覆盖校验 + 真鼠标点击，一次为限
             clicks.append({"method": "coordinate_click", "button_hwnd": button_hwnd})
             used_fallback = True
@@ -562,9 +562,11 @@ def _reach_login_state(*, window_wait: float, login_timeout: float,
         )
     # R51：登录框可见 = 未登录（标题壳窗不算数，2026-11-13 19:5x 实盘根因）
     visible_login = _find_visible_login_dialog(windows)
-    if state == "main" and visible_login is None:
+    if state == "main" and not windows:
         return {"login_state": "logged_in", "windows": windows,
                 "main_window": main, "clicks": [], "password_remembered": None}
+    if state == "main" and visible_login is None:
+        raise ThsXiadanError("visible unrecognized dialog blocks login verification")
     if visible_login is None:
         # state == dialog 但无登录框形状（遗留/错误弹窗）——维持原契约：
         # 取首个可见对话框按登录框流程做形状校验（形状不明 fail-closed）

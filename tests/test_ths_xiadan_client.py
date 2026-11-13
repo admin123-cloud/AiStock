@@ -42,6 +42,8 @@ class FakeWindows:
         return hwnd
 
     def remove(self, hwnd):
+        for child in self.windows.get(hwnd, {}).get("children", []):
+            self.remove(child)
         self.windows.pop(hwnd, None)
 
 
@@ -265,6 +267,34 @@ def test_login_click_without_transition_fails_closed(monkeypatch, tmp_path):
     assert report["status"] == "failure"
     assert "login click did not reach" in report["reason"]
     assert (303, ths.BM_CLICK) in fake.messages
+
+
+def test_login_click_with_shell_and_login_dialog_is_not_success(monkeypatch, tmp_path):
+    fake, pids = FakeWindows(), {"hexin.exe": [100], "xiadan.exe": [200]}
+    install(monkeypatch, fake, pids)
+    _login_box(fake)
+    _main_window(fake)
+    report = ths.run(report_root=tmp_path / "rt", **FAST)
+    assert report["status"] == "failure"
+    assert "login click did not reach" in report["reason"]
+
+
+def test_visible_non_trade_window_does_not_prove_login(monkeypatch, tmp_path):
+    fake, pids = FakeWindows(), {"hexin.exe": [100], "xiadan.exe": [200]}
+    install(monkeypatch, fake, pids)
+    fake.add(400, cls="OtherWindow", pid=200, title="启动提示")
+    report = ths.run(report_root=tmp_path / "rt", **FAST)
+    assert report["status"] == "failure"
+
+
+def test_unknown_dialog_with_trade_shell_does_not_prove_login(monkeypatch, tmp_path):
+    fake, pids = FakeWindows(), {"hexin.exe": [100], "xiadan.exe": [200]}
+    install(monkeypatch, fake, pids)
+    _main_window(fake)
+    fake.add(500, cls="#32770", pid=200)
+    report = ths.run(report_root=tmp_path / "rt", **FAST)
+    assert report["status"] == "failure"
+    assert "unrecognized dialog" in report["reason"]
 
 
 def test_unrecognized_dialog_is_never_clicked(monkeypatch, tmp_path):

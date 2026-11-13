@@ -216,9 +216,9 @@ def test_client_shell_window_plus_login_box_remembered_password_clicks(
     assert report["login_state"] == "logged_in_after_click"
 
 
-def test_client_error_popup_with_shell_window_still_logged_in(
+def test_client_error_popup_with_shell_window_is_not_proven_logged_in(
         monkeypatch, tmp_path):
-    """错误弹窗（确定钮、无密码框）不构成登录框 → 仍判已登录。"""
+    """交易壳窗加未知弹窗不能证明登录成功。"""
     fake, harness = _client_harness(monkeypatch, tmp_path)
     harness._main_window(fake, pid=200, hwnd=400)
     ok_btn = fake.add(311, cls="Button", pid=200, title="确定")
@@ -227,4 +227,4 @@ def test_client_error_popup_with_shell_window_still_logged_in(
                              xiadan_exe=tmp_path / "xiadan.exe",
                              export=False, report_root=tmp_path / "rt",
                              **harness.FAST)
-    assert report["status"] == "logged_in"
+    assert report["status"] == "failure"
