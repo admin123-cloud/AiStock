@@ -232,10 +232,11 @@ def test_hotswitch_to_target_then_survey_ok_rc0(monkeypatch, tmp_path):
 
     def _ensure(window, cfg):
         window.is_minimized()  # 真实服务第一步（_ensure_restored 触窗口面）
-        assert cfg["target_hint"] == "曾"          # R49c：无热键字段
-        assert "target_hotkey" not in cfg
+        assert cfg["target_hint"] == "曾"
+        assert cfg["target_hotkey"] == "1"         # R52：目标账号热键（曾=1）
+        assert cfg["channels"][0] == "hotkey_alt_n"  # R52 通道链（热键A在前）
         assert window.set_focus is not None        # 契约面仍在（不再首触）
-        return None      # ComboBox 选择 + OCR 自证通过
+        return None      # 通道切换 + OCR 自证通过
     monkeypatch.setattr(l2ps.hotswitch, "ensure_target_account", _ensure)
     monkeypatch.setattr(l2ps.poll, "print_window_image",
                         lambda hwnd: _FakeShot())

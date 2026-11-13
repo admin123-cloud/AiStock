@@ -167,6 +167,12 @@ def _click_query_menu_item(item: str) -> None:
     if rel_y is None:
         raise ValueError(f"unsupported THS query menu item: {item}")
     mouse.click(button="left", coords=(rect.left + 82, rect.top + rel_y))
+    try:  # R52：登记自注入，避免 Owner 活跃判定把自家菜单点击当 Owner 手动操作
+        from services.ths_hotswitch import note_self_injection
+
+        note_self_injection()
+    except Exception:  # noqa: BLE001 - 判定精度问题不阻断导出链
+        pass
     time.sleep(1.2)
 
 

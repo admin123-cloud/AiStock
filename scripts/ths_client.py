@@ -1236,7 +1236,20 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
                     f"account_field={login.get('account')!r} "
                     f"password_remembered={login.get('password_nonempty')} "
                     f"expect~{identity_hint!r} target_account={account}")
-            # R51 ②③：门禁前置（多锚读取 + 纯函数决策），点菜单之前零交互
+            # R52 ①：热切换先于身份门禁——面板停在另一账号时，门禁先行
+            # mismatch 会让切换代码永不执行（2026-11-14 实证根因，当晚两次
+            # unavailable 皆是此因）。切换自带 OCR 身份自证 + 未知身份
+            # identity_mismatch fail-closed；门禁随后复核切换结果（双保险）。
+            if hotswitch:
+                from services import ths_hotswitch as hs
+                pre = hs.ensure_target_account(window, hotswitch)
+                if pre is not None:
+                    raise RuntimeError(
+                        f"PANEL_{str(pre.get('status', 'switch_failed')).upper()}: "
+                        f"label={pre.get('identity_label')!r} "
+                        f"expect~{hotswitch.get('target_hint')!r} "
+                        f"account={account}")
+            # R51 ②③：身份门禁（多锚读取 + 纯函数决策），点菜单之前零交互
             if identity_hint:
                 from services.ths_hotswitch import read_window_identity_robust
                 ident = read_window_identity_robust(
@@ -1247,15 +1260,6 @@ def _capture_ths_views(evidence_dir: Optional[Path] = None,
                 assert_panel_identity_robust(
                     ident, identity_hint, account,
                     allow_combo_fallback=combo_identity_fallback)
-            if hotswitch:
-                from services import ths_hotswitch as hs
-                pre = hs.ensure_target_account(window, hotswitch)
-                if pre is not None:
-                    raise RuntimeError(
-                        f"PANEL_{str(pre.get('status', 'switch_failed')).upper()}: "
-                        f"label={pre.get('identity_label')!r} "
-                        f"expect~{hotswitch.get('target_hint')!r} "
-                        f"account={account}")
             on_target = True
             _click_query_menu_item("today_trades")
             _today_items, today_lines, shot_today = _ocr_xiadan_window()
@@ -2398,8 +2402,17 @@ def _survey_main(args: argparse.Namespace) -> int:
             if hit is None:
                 status_identity = "identity_mismatch"
             elif args.allow_hotswitch and rule_by_acct.get(hit, {}).get("hotkey"):
+                # R52：通道链 + 目标账号热键（曾=1/王=2，注册表规则携带）
+                target_hotkey = ""
+                for _acct, _rule in sorted(rule_by_acct.items()):
+                    if (_rule or {}).get("identity_hint") == target_hint:
+                        target_hotkey = str(_rule.get("hotkey") or "")
+                        break
                 cfg = {"target_hint": target_hint,
-                       "known_hints": known_hints}
+                       "known_hints": known_hints,
+                       "channels": [hotswitch.CHANNEL_HOTKEY,
+                                    hotswitch.CHANNEL_COMBOBOX],
+                       "target_hotkey": target_hotkey}
                 try:
                     # 生产窗口契约（fills_export/poll 同源）：pywinauto uia 包装
                     # 窗满足 hotswitch 服务的完整调用面（最小化/恢复）；
