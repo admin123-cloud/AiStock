@@ -16,7 +16,7 @@ from typing import Any, Callable
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import ths_xiadan_client as ths  # noqa: E402
+import ths_client as ths  # noqa: E402  # 实现已收拢进统一入口（原 ths_xiadan_client 为薄 wrapper）
 
 
 FAST = {"launch_wait": 0.02, "direct_wait": 0.02, "window_wait": 0.02,
@@ -332,7 +332,8 @@ def test_export_strips_pythonpath_and_passes_stdout_into_report(monkeypatch, tmp
                      export=True, report_root=tmp_path / "rt", **FAST)
 
     assert report["status"] == "success"
-    assert captured["cmd"] == [str(python_exe), str(export_script), "--once"]
+    assert captured["cmd"] == [str(python_exe), str(export_script),
+                               "export-fills", "--once"]
     assert "PYTHONPATH" not in captured["env"]          # 剥离（cron DLL 污染事故）
     assert captured["env"]["PYTHONIOENCODING"] == "utf-8"
     assert captured["cwd"] == str(export_script.parent)
@@ -423,7 +424,7 @@ def test_exit_code_mapping(monkeypatch, status, rc):
     monkeypatch.setattr(ths, "run", lambda **_kw: {"schema": ths.SCHEMA,
                                                    "status": status})
     monkeypatch.setattr(ths, "_write_report", lambda *_a, **_k: Path("x"))
-    assert ths.main([]) == rc
+    assert ths.main(["login"]) == rc
 
 
 def test_source_contract_never_reads_or_writes_credentials():

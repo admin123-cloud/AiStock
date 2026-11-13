@@ -226,7 +226,7 @@ def test_identity_label_parsing():
 
 
 def test_fills_export_identity_gate():
-    from scripts.ths_fills_export import assert_panel_identity
+    from scripts.ths_client import assert_panel_identity
     wang = ["买\t卖\t撤\t查\t广发证券-王*美\t退出"]
     zeng = ["买\t卖\t撤\t查\t广发证券-曾*\t退出"]
     assert assert_panel_identity(wang, None) is None      # 未配置不门禁

@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-l2ps = importlib.import_module("scripts.l2_panel_survey")
+l2ps = importlib.import_module("scripts.ths_client")  # 实现已收拢进统一入口
 
 
 def _btn(name: str, ctl: str = "按钮", invoke: bool = True) -> dict:
@@ -103,7 +103,7 @@ def test_panel_absent_rc2_map(monkeypatch, tmp_path):
     out = _repoint_outdir(monkeypatch, tmp_path)
     monkeypatch.setattr(l2ps.bridge, "enumerate_trade_panels",
                         lambda include_minimized=False: [])
-    assert l2ps.main([]) == 2
+    assert l2ps.main(["survey"]) == 2
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "panel_absent"
     assert data["schema"] == l2ps.PANEL_MAP_SCHEMA
@@ -115,7 +115,7 @@ def test_ambiguous_panels_rc6(monkeypatch, tmp_path):
     monkeypatch.setattr(l2ps.bridge, "enumerate_trade_panels",
                         lambda include_minimized=False:
                         [_fake_panel(0x11), _fake_panel(0x22)])
-    assert l2ps.main([]) == 6
+    assert l2ps.main(["survey"]) == 6
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "ambiguous_panels"
 
@@ -127,7 +127,7 @@ def test_foreground_skip_rc3_zero_touch(monkeypatch, tmp_path):
     monkeypatch.setattr(l2ps.bridge, "_ths_window_operation_lock",
                         lambda **kw: contextlib.nullcontext())
     monkeypatch.setattr(l2ps.poll, "_is_foreground", lambda hwnd: True)
-    assert l2ps.main([]) == 3
+    assert l2ps.main(["survey"]) == 3
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "skipped_foreground"
 
@@ -147,7 +147,7 @@ def test_identity_mismatch_rc4_zero_touch(monkeypatch, tmp_path):
     monkeypatch.setattr(l2ps, "UiaReader",
                         lambda: called.append(1) or pytest.fail(
                             "identity fail-closed 不得触 UIA"))
-    assert l2ps.main([]) == 4
+    assert l2ps.main(["survey"]) == 4
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "identity_mismatch"
     assert data["identity_label"] == "广发证券-张三"
@@ -167,7 +167,7 @@ def test_not_target_account_no_hotswitch_rc4(monkeypatch, tmp_path):
                         lambda w, save_png=None: ("广发证券-王*美", None))
     monkeypatch.setattr(l2ps.hotswitch, "ensure_target_account",
                         lambda w, cfg: pytest.fail("未授权不得热切换"))
-    assert l2ps.main([]) == 4
+    assert l2ps.main(["survey"]) == 4
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "not_target_account_no_hotswitch"
 
@@ -243,7 +243,7 @@ def test_hotswitch_to_target_then_survey_ok_rc0(monkeypatch, tmp_path):
                         lambda pid, main_hwnd: [])
     monkeypatch.setattr(l2ps, "UiaReader", lambda: _FakeReader())
 
-    assert l2ps.main(["--allow-hotswitch"]) == 0
+    assert l2ps.main(["survey", "--allow-hotswitch"]) == 0
     assert win.calls == []   # R49c：不再 set_focus（零抢焦点，仅零交互查询）
     data = json.loads((out / "panel_map.json").read_text(encoding="utf-8"))
     assert data["status"] == "ok"

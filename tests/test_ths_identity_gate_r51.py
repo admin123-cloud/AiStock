@@ -32,13 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 # ── ②③ 纯函数决策矩阵 ─────────────────────────────────────────
 
 def test_gate_no_hint_disables_gate():
-    from ths_fills_export import gate_identity_decision
+    from ths_client import gate_identity_decision
     assert gate_identity_decision("", "", None, allow_combo_fallback=False) \
         == (True, "no_hint", "")
 
 
 def test_gate_ocr_primary_anchor_match():
-    from ths_fills_export import gate_identity_decision
+    from ths_client import gate_identity_decision
     assert gate_identity_decision("广发证券-曾*", "", "曾",
                                   allow_combo_fallback=False) \
         == (True, "ocr", "广发证券-曾*")
@@ -46,7 +46,7 @@ def test_gate_ocr_primary_anchor_match():
 
 def test_gate_ocr_read_other_identity_no_fallback_saves():
     """主锚读到他人身份 = 明确换登，任何降级不救（fail-closed）。"""
-    from ths_fills_export import gate_identity_decision
+    from ths_client import gate_identity_decision
     ok, reason, label = gate_identity_decision(
         "广发证券-王*美", "广发证券-曾*", "曾", allow_combo_fallback=True)
     assert (ok, reason, label) == (False, "mismatch", "广发证券-王*美")
@@ -54,7 +54,7 @@ def test_gate_ocr_read_other_identity_no_fallback_saves():
 
 def test_gate_ocr_empty_single_account_combo_fallback_passes():
     """主锚空（渲染缺层/OCR 波动）+ 单账号 + 备用锚读到目标 → 放行。"""
-    from ths_fills_export import gate_identity_decision
+    from ths_client import gate_identity_decision
     assert gate_identity_decision("", "广发证券-曾*", "曾",
                                   allow_combo_fallback=True) \
         == (True, "combo_fallback", "广发证券-曾*")
@@ -62,7 +62,7 @@ def test_gate_ocr_empty_single_account_combo_fallback_passes():
 
 def test_gate_ocr_empty_dual_account_stays_fail_closed():
     """双账号采集：备用锚读到目标账号也不降级（PM ③ fail-closed 语义）。"""
-    from ths_fills_export import gate_identity_decision
+    from ths_client import gate_identity_decision
     ok, reason, _ = gate_identity_decision("", "广发证券-曾*", "曾",
                                            allow_combo_fallback=False)
     assert (ok, reason) == (False, "dual_account_fail_closed")
@@ -70,20 +70,20 @@ def test_gate_ocr_empty_dual_account_stays_fail_closed():
 
 def test_gate_both_anchors_empty_fail_closed():
     """双锚皆空（登录框态骨架窗）→ fail-closed（真原因由登录框检测先报）。"""
-    from ths_fills_export import gate_identity_decision
+    from ths_client import gate_identity_decision
     assert gate_identity_decision("", "", "曾", allow_combo_fallback=True)[:2] \
         == (False, "unreadable")
 
 
 def test_gate_combo_reads_other_identity_rejected():
-    from ths_fills_export import gate_identity_decision
+    from ths_client import gate_identity_decision
     ok, reason, _ = gate_identity_decision("", "广发证券-王*美", "曾",
                                            allow_combo_fallback=True)
     assert (ok, reason) == (False, "mismatch")
 
 
 def test_assert_robust_raises_with_dual_anchor_evidence():
-    from ths_fills_export import assert_panel_identity_robust
+    from ths_client import assert_panel_identity_robust
     with pytest.raises(RuntimeError, match="PANEL_IDENTITY_MISMATCH") as ei:
         assert_panel_identity_robust(
             {"ocr_label": "", "combo_text": ""}, "曾", "acct1",
@@ -109,7 +109,7 @@ def test_capture_login_dialog_fails_closed_before_any_menu_click(
         monkeypatch, tmp_path):
     """登录框在 → PANEL_LOGIN_DIALOG（真原因），绝不点击查询菜单。"""
     from services import ths_account_bridge as bridge
-    import ths_fills_export as fx
+    import ths_client as fx
 
     clicked: list[str] = []
     monkeypatch.setattr(bridge, "_find_xiadan_window", lambda: _FakeWindow())
@@ -131,7 +131,7 @@ def test_capture_login_dialog_fails_closed_before_any_menu_click(
 def test_capture_identity_gate_runs_before_menu_clicks(monkeypatch, tmp_path):
     """健康路径：多锚门禁在读身份处放行/拦截，均先于查询菜单点击。"""
     from services import ths_account_bridge as bridge
-    import ths_fills_export as fx
+    import ths_client as fx
 
     clicked: list[str] = []
     monkeypatch.setattr(bridge, "_find_xiadan_window", lambda: _FakeWindow())
@@ -154,7 +154,7 @@ def test_capture_identity_gate_runs_before_menu_clicks(monkeypatch, tmp_path):
 
 def test_run_export_login_dialog_writes_unavailable_marker(tmp_path):
     """run_export 层：PANEL_LOGIN_DIALOG → unavailable 标记（真原因），无 fills。"""
-    import ths_fills_export as fx
+    import ths_client as fx
 
     def bad_capture(_ev):
         raise RuntimeError(

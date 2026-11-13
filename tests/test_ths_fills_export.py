@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ths_fills_export import (
+from scripts.ths_client import (
     build_payload,
     merge_fills,
     parse_today_trades_lines,

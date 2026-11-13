@@ -444,7 +444,7 @@ def test_minimized_panel_resolves_for_hotswitch(tmp_path):
 
 
 def test_plan_builder_orders_home_first_with_restore_on_last():
-    from scripts.ths_holdings_poll import build_hotswitch_plan
+    from services.ths_hotswitch import build_hotswitch_plan  # 实现本就在 services 层（旧 scripts.ths_holdings_poll 只是转发）
 
     reg = _type_stub_registry()
     plan = build_hotswitch_plan(reg, _live_panels())

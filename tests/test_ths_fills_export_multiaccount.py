@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import scripts.ths_fills_export as tfe  # noqa: E402
+import scripts.ths_client as tfe  # noqa: E402  # 实现已收拢进统一入口
 
 
 TODAY = date(2026, 11, 11)
