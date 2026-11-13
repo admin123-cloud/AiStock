@@ -141,7 +141,7 @@ TTRACKER_SHADOW_FINALIZE_CRON_TIME = dt_time(15, 16)  # R40：15:15 后收盘已
 # ── L2 t_trade_monitor（2026-11-12，任务书 20261112_l2_integration.md）────
 # 工作日 09:25-15:00 每 30s 心跳（APScheduler cron 触发面 09:25~15:00 每分钟，
 # 函数内二次守卫收口 09:25~15:00；cron 每分钟执行一次，函数内 30s 自循环）。
-TTRADE_MONITOR_JOB_ID = "t_trade_monitor"
+TTRADE_MONITOR_JOB_ID = "t_trade_monitor_v2"
 TTRADE_MONITOR_CRON_HOURS = "9-15"
 TTRADE_MONITOR_CRON_MINUTE = "25-59"  # 09:25~15:59 每分钟触发
 TTRADE_MONITOR_WINDOW_START = dt_time(9, 25)
@@ -1304,7 +1304,9 @@ def run_t_trade_monitor(
     subloop_count = 0
     signals_fired = 0
     while True:
-        now = cn_now(now_fn) if now_fn else datetime.now(BEIJING_TZ)
+        # L2 心跳 now 必须与 L1 t_trade_tracker 一致用 naive 北京时间：
+        # closed_bars 的 ts<=now 比较不允许 naive/aware 混用（R50 起 bug）
+        now = cn_now(now_fn).replace(tzinfo=None)
         t = now.timetz().replace(tzinfo=None) if now.tzinfo else now.time()
 
         # 窗口退出
@@ -1637,12 +1639,12 @@ def _register_tdx_postclose_minutes(scheduler):
                     "--adjust", "none",
                     "--delete-range",
                 ]
-                log.info("[tdx_postclose] 运行: %s %s", market, " ".join(cmd[-8:]))
+                logger.info("[tdx_postclose] 运行: %s %s", market, " ".join(cmd[-8:]))
                 ret = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
                 if ret.returncode != 0:
-                    log.warning("[tdx_postclose] %s rc=%d stderr=%s", market, ret.returncode, ret.stderr[-200:])
+                    logger.warning("[tdx_postclose] %s rc=%d stderr=%s", market, ret.returncode, ret.stderr[-200:])
                 else:
-                    log.info("[tdx_postclose] %s 完成", market)
+                    logger.info("[tdx_postclose] %s 完成", market)
 
             # Step 2: 聚合 15/30/60min（从 CH 读取全市场 5min 数据聚合，不依赖 --markets）
             import urllib.request
@@ -1678,7 +1680,7 @@ def _register_tdx_postclose_minutes(scheduler):
                     _q(sql)
                 r = _q(f"SELECT count(), uniqExact(code) FROM stock.{tbl} WHERE datetime >= '{today}' AND datetime < '2026-11-13'")
                 if r:
-                    log.info("[tdx_postclose] 聚合 %s: %s行 %s只", label, r[0][0], r[0][1])
+                    logger.info("[tdx_postclose] 聚合 %s: %s行 %s只", label, r[0][0], r[0][1])
 
             logger.info("[tdx_postclose] TDX lc5 盘后分钟写入完成")
         except Exception as e:
