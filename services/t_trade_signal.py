@@ -1083,6 +1083,12 @@ def evaluate_code(
         if subtype in ("entry", "zone", "hint") and count_today >= DAILY_T_CAP:
             suppress("daily_t_cap", {"side": side, "count_today": count_today, "cap": DAILY_T_CAP})
             continue
+        # fail-closed：无在途 T 时拒绝平仓/减半类草案。L2 卖侧拐点 subtype=exit，
+        # A1 触发撤防后再进警戒区会再触发；open_t=None 时曾使 trigger.band 处
+        # None.get 崩溃（11-13 事故家族：L2 exit 清仓后每拍评估失败循环）。
+        if subtype in ("exit", "stop", "fallback_eod", "trim") and not open_t:
+            suppress("no_open_t", {"side": side, "subtype": subtype})
+            continue
         if lot < LOT:
             suppress("t_lot_below_min", {"base_shares": base_shares, "lot": lot})
             continue

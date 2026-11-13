@@ -596,6 +596,28 @@ class TestUpSellLadder:
             assert res["draft"] is None
         assert state.open_t("002015")["qty"] == 300
 
+    def test_l2_exit_then_retrigger_without_open_t_fail_closed(self):
+        # 11-13 事故家族回归：L2 exit 清仓（open_t=None）后仍在警戒区，
+        # 再触发 l2 卖侧拐点时不得崩溃/不得发无持仓平仓草案——fail-closed
+        # 拒发 no_open_t（此前 trigger.band 处 None.get 每拍评估失败）。
+        state, _ = self._entered()
+        env1 = self._env(now="10:40", series5=series_for_rsi(76.0),
+                         series15=series_for_rsi(76.0))
+        env1["state"] = state
+        assert tts.evaluate_code(**env1)["draft"]["subtype"] == "trim"
+        env2 = self._env(now="10:41", series5=series_for_rsi(76.0),
+                         series15=series_for_rsi(76.0))
+        env2["state"] = state
+        d2 = tts.evaluate_code(**env2)["draft"]
+        assert d2 and "l2_" in d2["trigger"]["kind"] and d2["subtype"] == "exit"
+        assert state.open_t("002015") is None          # L2 exit 已清仓
+        env3 = self._env(now="11:20", series5=series_for_rsi(76.0),
+                         series15=series_for_rsi(76.0))
+        env3["state"] = state
+        res = tts.evaluate_code(**env3)                # 不得 raise
+        assert res["draft"] is None
+        assert res["suppressed"]["reason"] == "no_open_t"
+
     def test_stop_and_target_unchanged_by_ladder(self):
         # 阶梯不碰既有出场语义：
         # ① up+stop 候选维持"周期×方向门"既有拦截（R49b 基线同判，非 R54 改动面）；
