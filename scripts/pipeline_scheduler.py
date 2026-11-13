@@ -155,6 +155,8 @@ STAGE_DAILY = "daily_kline"
 STAGE_MINUTE = "minute_collect"
 STAGE_AGG = "minute_agg"
 STAGE_ORDER = (STAGE_DAILY, STAGE_MINUTE, STAGE_AGG)
+# Owner 2026-11-13 裁决：Stage1 日线主源切本地 lday；官网包保留为自动回退源
+STAGE_DAILY_FALLBACK = "daily_kline_pkg_fallback"
 
 # daily_kline_pipeline 失败重试 3 次（首次 + 3 次重试 = 最多 4 次尝试）
 DAILY_RETRY_MAX = 3
@@ -265,13 +267,24 @@ def build_stage_commands(run_date: date, out_dir: Path) -> dict[str, dict[str, A
     """三阶段的 subprocess 命令与各自报告文件定位。"""
     stamp = run_date.strftime("%Y%m%d")
     daily_report = out_dir / f"{stamp}_{STAGE_DAILY}_report.json"
+    daily_pkg_report = out_dir / f"{stamp}_{STAGE_DAILY_FALLBACK}_report.json"
     return {
         STAGE_DAILY: {
+            # 2026-11-13 起：主源=客户端本地 vipdoc lday（时序门禁 mtime≥16:00
+            # fail-closed；量纲/覆盖/对照门禁见 pipeline 报告）
             "cmd": [
                 sys.executable, str(SCRIPTS_DIR / "daily_kline_pipeline.py"),
-                "--formal-write", "--output", str(daily_report),
+                "--source", "local", "--formal-write", "--output", str(daily_report),
             ],
             "report_path": daily_report,
+        },
+        # 本地 lday 失败（重试耗尽）时的官网包回退（exact-key 幂等，安全补写）
+        STAGE_DAILY_FALLBACK: {
+            "cmd": [
+                sys.executable, str(SCRIPTS_DIR / "daily_kline_pipeline.py"),
+                "--formal-write", "--output", str(daily_pkg_report),
+            ],
+            "report_path": daily_pkg_report,
         },
         STAGE_MINUTE: {
             "cmd": [
@@ -474,10 +487,28 @@ def run_postclose_pipelines(
             stage_ok = rc == 0
         if stage_ok:
             continue
-        failed_stage = stage
         if stage == STAGE_DAILY:
-            reason = "daily_kline_retry_exhausted"
-        elif stage == STAGE_MINUTE:
+            # Owner 2026-11-13：本地 lday 主源失败（重试耗尽）→ 官网包自动回退 + 报警。
+            # 回退成功则视为当日日线已保障，继续 minute/聚合阶段（exact-key 幂等，
+            # 两源同 id 反连接，绝不重复写）；回退也失败才整体 failure。
+            log.error(
+                "[daily] 本地 lday 源失败（rc=%s，重试耗尽），自动回退官网包并置 alarm", rc)
+            fallback = _run_stage(
+                STAGE_DAILY_FALLBACK, specs[STAGE_DAILY_FALLBACK],
+                out_dir=out_dir, run_date=resolved_date, runner=run,
+                retry_max=0, retry_interval_sec=retry_interval_sec,
+                sleep_fn=sleep, log=log,
+            )
+            stage_results[STAGE_DAILY_FALLBACK] = fallback
+            alarm = True
+            if fallback["rc"] == 0:
+                reason = "daily_local_lday_failed_pkg_fallback_ok"
+                continue
+            failed_stage = stage
+            reason = "daily_local_lday_and_pkg_both_failed"
+            break
+        failed_stage = stage
+        if stage == STAGE_MINUTE:
             if rc == MINUTE_COLLECT_ALARM_RC:
                 alarm = True
                 reason = "minute_collect_alarm_rc3_source_unreachable"
@@ -1627,6 +1658,9 @@ def _register_tdx_postclose_minutes(scheduler):
             base = _sys.executable
             script = str(Path(__file__).parent / "build_tdx_minute_periods.py")
             today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
+            # 当日边界 [today, next_day)：修复此前硬编码 '2026-11-13' 上界——
+            # 次日起 DELETE/SELECT 区间恒空，聚合表会整天漏写（11-13 临时实现遗留）
+            next_day = (datetime.now(BEIJING_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
 
             # Step 1: 5min 写入（sh/sz/bj 三个市场）
             for market in ("sh", "sz", "bj"):
@@ -1657,8 +1691,8 @@ def _register_tdx_postclose_minutes(scheduler):
                 return [l.split("\t") for l in t.split("\n")] if t else []
 
             for tbl, step, label in [("kline_minute_15", 3, "15m"), ("kline_minute_30", 6, "30m"), ("kline_minute_60", 12, "60m")]:
-                _q(f"ALTER TABLE stock.{tbl} DELETE WHERE datetime >= '{today}' AND datetime < '2026-11-13' SETTINGS mutations_sync=1")
-                rows = _q(f"SELECT code, datetime, open, high, low, close, volume FROM stock.kline_minute_5 WHERE datetime >= '{today}' AND datetime < '2026-11-13' ORDER BY code, datetime")
+                _q(f"ALTER TABLE stock.{tbl} DELETE WHERE datetime >= '{today}' AND datetime < '{next_day}' SETTINGS mutations_sync=1")
+                rows = _q(f"SELECT code, datetime, open, high, low, close, volume FROM stock.kline_minute_5 WHERE datetime >= '{today}' AND datetime < '{next_day}' ORDER BY code, datetime")
                 buckets = defaultdict(list)
                 for row in rows:
                     buckets[row[0]].append(row)
@@ -1678,7 +1712,7 @@ def _register_tdx_postclose_minutes(scheduler):
                 for i in range(0, len(vals), 500):
                     sql = f"INSERT INTO stock.{tbl}(code,datetime,open,high,low,close,volume) VALUES {','.join(vals[i:i + 500])}"
                     _q(sql)
-                r = _q(f"SELECT count(), uniqExact(code) FROM stock.{tbl} WHERE datetime >= '{today}' AND datetime < '2026-11-13'")
+                r = _q(f"SELECT count(), uniqExact(code) FROM stock.{tbl} WHERE datetime >= '{today}' AND datetime < '{next_day}'")
                 if r:
                     logger.info("[tdx_postclose] 聚合 %s: %s行 %s只", label, r[0][0], r[0][1])
 

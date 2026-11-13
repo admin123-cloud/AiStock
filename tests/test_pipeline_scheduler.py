@@ -208,12 +208,33 @@ def test_daily_retry_exhausted_stops_pipeline(tmp_path):
     report, sleeps = _run(tmp_path, runner)
     assert report["status"] == "failure"
     assert report["failed_stage"] == ps.STAGE_DAILY
-    assert "retry_exhausted" in report["reason"]
+    # 2026-11-13 起：本地 lday 失败 → 官网包回退；回退也失败才整体 failure（报警）
+    assert report["reason"] == "daily_local_lday_and_pkg_both_failed"
+    assert report["alarm"] is True
     daily = report["stages"][ps.STAGE_DAILY]
     assert daily["attempts"] == 1 + ps.DAILY_RETRY_MAX  # 首次 + 3 次重试
     assert len(sleeps) == ps.DAILY_RETRY_MAX
-    assert runner.stems == ["daily_kline_pipeline"] * (1 + ps.DAILY_RETRY_MAX)
+    fallback = report["stages"][ps.STAGE_DAILY_FALLBACK]
+    assert fallback["attempts"] == 1                    # 回退单次尝试
+    assert runner.stems == ["daily_kline_pipeline"] * (2 + ps.DAILY_RETRY_MAX)
     assert ps.STAGE_MINUTE not in report["stages"]  # 后续阶段未执行
+
+
+def test_daily_local_fail_pkg_fallback_ok_continues(tmp_path):
+    # Owner 2026-11-13：本地 lday 失败 → 官网包回退成功 → 报警但整体 success，
+    # minute/聚合阶段照常执行（exact-key 幂等，回退不重复写）
+    results = [{"returncode": 2, "stdout": "", "stderr": "lday gate fail"}] * 4
+    runner = FakeRunner(results + [_ok()])
+    report, sleeps = _run(tmp_path, runner)
+    assert report["status"] == "success"
+    assert report["failed_stage"] is None
+    assert report["alarm"] is True
+    assert report["reason"] == "daily_local_lday_failed_pkg_fallback_ok"
+    assert ps.STAGE_DAILY_FALLBACK in report["stages"]
+    assert report["stages"][ps.STAGE_DAILY_FALLBACK]["rc"] == 0
+    assert ps.STAGE_MINUTE in report["stages"]      # 后续阶段继续
+    assert ps.STAGE_AGG in report["stages"]
+    assert len(sleeps) == ps.DAILY_RETRY_MAX
 
 
 def test_minute_collect_rc1_continues(tmp_path):
