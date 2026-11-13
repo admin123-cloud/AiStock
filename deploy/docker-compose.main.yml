@@ -1,17 +1,18 @@
-# AiStock 唯一部署栈（Owner 2026-11-09 裁决：只运行 main 分支；自动化为项目内机制）
-# 版本由 deploy-main.sh 注入（AISTOCK_MAIN_VERSION = main HEAD 完整 SHA）。
-# 服务：preview=只读 Web 栈（3000/8077）；pipeline-runner=盘后数据管道调度器（项目内自动化）。
-name: aistock-observation
+# AiStock 唯一部署栈（Owner 2026-11-09 裁决：只运行 main 分支）
+# 版本由 deploy-main.sh 注入
+# 服务：backend=只读 Web 栈（3000/8077）；frontend=前端界面；pipeline-runner=盘后数据管道调度器
+name: aistock
 
 networks:
   default:
-    name: aistock-core_default
+    name: aistock_default
     external: true
 
 services:
-  preview:
-    image: aistock-core-backend:${AISTOCK_MAIN_VERSION:?必须经 deploy-main.sh 部署，禁止手填版本}
-    container_name: aistock-observation-backend
+  backend:
+    image: aistock-backend:${AISTOCK_MAIN_VERSION}
+    pull_policy: never
+    container_name: aistock-backend
     restart: unless-stopped
     cpus: "1.5"
     mem_limit: 3g
@@ -52,26 +53,27 @@ services:
       # R55：只读嵌套挂载真实 runtime/market_mood（涨停生态聚合 JSON 所在；
       # market/limit-up-stats 纯读该目录，无回写；写方=pipeline-runner 容器）
       - F:/Aistock/data/data/runtime/market_mood:/aistock/data/runtime/market_mood:ro
-      - observation_logs:/aistock/logs
-      - observation_reports:/aistock/reports
-      - observation_artifacts:/aistock/artifacts
+      - backend_logs:/aistock/logs
+      - backend_reports:/aistock/reports
+      - backend_artifacts:/aistock/artifacts
     command: ["python", "-m", "uvicorn", "api.operations_preview:app", "--host", "0.0.0.0", "--port", "8000"]
 
-  preview-frontend:
-    image: aistock-core-frontend:${AISTOCK_MAIN_VERSION:?必须经 deploy-main.sh 部署}
-    container_name: aistock-observation-frontend
+  frontend:
+    image: aistock-frontend:latest
+    pull_policy: never
+    container_name: aistock-frontend
     restart: unless-stopped
     cpus: "1.0"
     mem_limit: 1g
     depends_on:
-      - preview
+      - backend
     ports:
       - "127.0.0.1:3000:80"
     volumes:
       - F:/Aistock/app/deploy/nginx.preview.conf:/etc/nginx/conf.d/default.conf:ro
 
   pipeline-runner:
-    image: aistock-core-backend:${AISTOCK_MAIN_VERSION:?必须经 deploy-main.sh 部署}
+    image: aistock-backend:${AISTOCK_MAIN_VERSION:?必须经部署脚本注入}
     container_name: aistock-pipeline-runner
     restart: unless-stopped
     cpus: "1.5"
@@ -89,7 +91,28 @@ services:
       - F:/Aistock/data/data:/aistock/data
     command: ["python", "scripts/pipeline_scheduler.py"]
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: aistock-clickhouse
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - aistock_clickhouse_data:/var/lib/clickhouse:rw
+      - F:/Aistock/app/config/clickhouse/config.d/aistock-throttle.xml:/etc/clickhouse-server/config.d/aistock-throttle.xml:ro
+      - F:/Aistock/app/config/clickhouse/users.d/aistock-throttle.xml:/etc/clickhouse-server/users.d/aistock-throttle.xml:ro
+      - aistock_clickhouse_log:/var/log/clickhouse-server:rw
+    networks:
+      default:
+        aliases:
+          - clickhouse
+
 volumes:
-  observation_logs:
-  observation_reports:
-  observation_artifacts:
+  backend_logs:
+  backend_reports:
+  backend_artifacts:
+  aistock_clickhouse_data:
+    external: true
+  aistock_clickhouse_log:
+    external: true
