@@ -508,10 +508,12 @@ class TestUpSellLadder:
 
     def test_trim_fires_at_75_boundary_inclusive(self):
         # RSI 75.001 ≥ 75 → trim；74.999 < 75 → 无草案（边界含等号，参数字面 75.0）
+        # series15 固定 60（<65 卖侧警戒、>30 买侧警戒）→ L2 拐点不布防，
+        # 隔离出 L1 trim 边界语义（trim 只看 rsi5，与 rsi15 无关）
         for target, fires in ((75.001, True), (74.999, False)):
             state, _ = self._entered()
             env = self._env(now="10:40", series5=series_for_rsi(target),
-                            series15=series_for_rsi(target))
+                            series15=series_for_rsi(60.0))
             env["state"] = state
             res = tts.evaluate_code(**env)
             assert abs(self._rsi(env) - target) < 1e-6
@@ -578,15 +580,17 @@ class TestUpSellLadder:
         assert state.open_t("002015") is None
 
     def test_no_double_trim_while_hot(self):
-        # 已 trim：RSI 持续 ≥75 不再二次减半（trimmed 标志 + 独立布防）
+        # 已 trim：RSI 持续 ≥75 不再二次减半（trimmed 标志 + 独立布防）。
+        # series15=60 → L2 拐点不布防（本测只验证 L1 trim 不重复；L2 exit 在
+        # test_l2_integration 覆盖）
         state, _ = self._entered()
         env1 = self._env(now="10:40", series5=series_for_rsi(76.0),
-                         series15=series_for_rsi(76.0))
+                         series15=series_for_rsi(60.0))
         env1["state"] = state
         assert tts.evaluate_code(**env1)["draft"]["subtype"] == "trim"
         for t in ("10:41", "11:20", "13:10"):
             env = self._env(now=t, series5=series_for_rsi(76.0),
-                            series15=series_for_rsi(76.0))
+                            series15=series_for_rsi(60.0))
             env["state"] = state
             res = tts.evaluate_code(**env)
             assert res["draft"] is None

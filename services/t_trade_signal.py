@@ -382,11 +382,23 @@ def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
     """东财 push2his 前复权分时K（含当日）：[{ts, open, close, volume(手), amount(元)}]。
 
     R40 起含 open（f52，影子做T虚拟成交次开价用）；既有消费方按 key 取值不受影响。
+    502 时自动回退腾讯 qt 快照。
     """
     url = EAST_K_URL.format(secid=east_secid(code), klt=klt, lmt=lmt)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 502:
+            # 回退到 CH 本地数据 + 腾讯 qt 快照价
+            rows = _ch_fallback_klines(code, klt, lmt)
+            if rows:
+                return rows
+            logger.warning("[east_klines] %s %dmin 502+CH回退为空，返回[]", code, klt)
+        raise
+    except Exception:
+        raise
     klines = (data.get("data") or {}).get("klines") or []
     out = []
     for row in klines:
@@ -517,6 +529,58 @@ def fetch_east_trends_1m(code: str, ndays: int = 2, *,
     return out
 
 
+def _ch_fallback_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
+    """CH 回退：当东财 502 时从本地分钟表取最近N根K。
+
+    klt=5 → kline_minute_5 直读；klt=15/30/60 → 盘中 15min 表无当日数据，
+    从 5min 表按周期桶聚合（昨日=TDX 实OHLC，今日=快照采样；盘后正式管道覆盖）。
+    """
+    client = _ch_client()
+    # 分钟表存在双命名空间：TDX 历史=带后缀(300054.SZ)，盘中快照=裸码(300054)。
+    # 两种都查，按 ts 归并（closed_bars 去未来 bar，重复无害——ReplacingMergeTree id 不同但值一致）
+    suffix = ".SH" if code.startswith(("6", "9", "5")) else ".SZ"
+    codes_in = f"'{code}','{code}{suffix}'"
+    if klt == 5:
+        res = client.query(
+            f"SELECT datetime, open, high, low, close, volume, amount "
+            f"FROM stock.kline_minute_5 "
+            f"WHERE code IN ({codes_in}) AND datetime >= now() - INTERVAL {lmt * klt + 60} MINUTE "
+            f"ORDER BY datetime ASC "
+            f"LIMIT {lmt}"
+        )
+        rows = []
+        for r in res.result_rows:
+            rows.append({
+                "ts": r[0].strftime("%Y-%m-%d %H:%M:%S") if hasattr(r[0], "strftime") else str(r[0]),
+                "open": float(r[1]),
+                "close": float(r[4]),
+                "volume": float(r[5]) if r[5] else 0.0,
+                "amount": float(r[6]) if r[6] else 0.0,
+            })
+        return rows
+    # klt=15/30/60：从 5min 聚合（窗口放宽到覆盖上一交易日，保证 RSI 历史长度）
+    window_min = lmt * klt + 1200
+    res = client.query(
+        f"SELECT toStartOfInterval(datetime, INTERVAL {klt} MINUTE) AS dt, "
+        f"argMin(open, datetime), max(high), min(low), argMax(close, datetime), "
+        f"sum(volume), sum(amount) "
+        f"FROM stock.kline_minute_5 "
+        f"WHERE code IN ({codes_in}) AND datetime >= now() - INTERVAL {window_min} MINUTE "
+        f"GROUP BY dt ORDER BY dt ASC "
+        f"LIMIT {lmt}"
+    )
+    rows = []
+    for r in res.result_rows:
+        rows.append({
+            "ts": r[0].strftime("%Y-%m-%d %H:%M:%S") if hasattr(r[0], "strftime") else str(r[0]),
+            "open": float(r[1]),
+            "close": float(r[4]),
+            "volume": float(r[5]) if r[5] else 0.0,
+            "amount": float(r[6]) if r[6] else 0.0,
+        })
+    return rows
+
+
 def _ch_client():
     import sys
     proj = Path(__file__).resolve().parents[1]
@@ -630,6 +694,21 @@ def load_t_pool(*, watchlist_store: Optional[Path] = None) -> dict[str, Any]:
     项与其重复时去重）。
     """
     pool = load_broker_holdings()
+    # A2（2026-11-13 Owner 裁决）：0 < shares < 200 的微型底仓不入 T 票池
+    # （如 300054 鼎龙 100 股——不做 T、不参与判定，免每拍 t_lot_below_min 空转）。
+    # shares=0/null 的纯观察票保留（watchlist 设计语义）。对 broker 与最终
+    # 合并结果双重过滤（含 watchlist 合入的小仓位）。
+    def _is_small_base(h) -> bool:
+        s = h.get("shares")
+        return isinstance(s, int) and 0 < s < 200
+
+    dropped_names = [f'{h.get("code")}({h.get("shares")}股)'
+                     for h in pool["holdings"] if _is_small_base(h)]
+    if dropped_names:
+        pool = dict(pool)
+        pool["holdings"] = [h for h in pool["holdings"] if not _is_small_base(h)]
+        pool["pool_dropped_small"] = dropped_names
+        logger.info("[pool] A2 微型底仓不入T池：%s", ",".join(dropped_names))
     try:
         store, legacy = (watchlist_store, None) if watchlist_store is not None \
             else _default_watchlist_paths()
@@ -657,6 +736,8 @@ def load_t_pool(*, watchlist_store: Optional[Path] = None) -> dict[str, Any]:
             shares = int(it.get("qty") or 0)
         except (TypeError, ValueError):
             shares = 0
+        if 0 < shares < 200:  # A2：watchlist 小仓位同样不入池
+            continue
         merged.append({"code": code6, "name": str(it.get("name") or ""),
                        "shares": shares,
                        "source": f"watchlist:{it.get('source') or 'manual'}"})
@@ -951,6 +1032,8 @@ def evaluate_code(
     # 各布防组（open/exit/hint）的触发条件当前不再成立时恢复 armed。
     still_hot = _groups_still_hot(code, regime, params, px, rsi5, rsi15, vwap_dev, open_t, now)
     for group, hot in still_hot.items():
+        if group in ("rsi_sell", "rsi_buy"):
+            continue  # A1：L2 组不适用"离区重布防"——进警戒区才布防（见 _l2_rsi_candidates）
         st = state.side_state(code, group)
         if not hot:
             st["armed"] = True
@@ -1093,7 +1176,10 @@ def fmt_t(t: dt_time) -> str:
 
 
 def make_draft_id(now: datetime, code: str, side: str, drafts_today: Sequence[Mapping[str, Any]]) -> str:
-    side_short = {"buy-T": "buy", "sell-T": "sell", "reduce-hint": "red"}[side]
+    # L2 候选（t_trade_signal.py _l2_rsi_candidates）用裸 "buy"/"sell"，
+    # L1 用 "buy-T"/"sell-T"/"reduce-hint" —— 两种都兼容（R50-L2 起裸侧漏入此处曾 KeyError）
+    side_short = {"buy-T": "buy", "sell-T": "sell", "reduce-hint": "red",
+                  "buy": "buy", "sell": "sell"}.get(side, side[:3])
     existing = {d.get("id") for d in drafts_today}
     seq = len([d for d in drafts_today if d.get("code") == code]) + 1
     draft_id = f"T{now.strftime('%Y%m%d')}_{code}_{side_short}_{seq:02d}"
@@ -1133,10 +1219,13 @@ def _groups_still_hot(code, regime, params, px, rsi5, rsi15, vwap_dev, open_t, n
     hot["hint"] = bool(
         regime == "down" and params.get("reduce_rsi5_min")
         and rsi5 >= float(params["reduce_rsi5_min"]))
-    # L2: 15min RSI 警戒 —— ≥80时 warm，跌破80→冷（可触发卖出）
-    hot["rsi_sell"] = bool(rsi15 is not None and rsi15 >= 65.0)
-    # L2: 15min RSI ≤30 时 cold_warn，升破30→暖（可触发买入）
-    hot["rsi_buy"] = bool(rsi15 is not None and rsi15 <= 30.0)
+    # L2: RSI 警戒入口 —— 任一条件进入即布防
+    # - 15min RSI ≥65（卖出警戒）/ ≤30（买入警戒）
+    # - 5min RSI ≥80（短线超买）/ ≤20（短线超卖）
+    rsi5_sell = rsi5 is not None and rsi5 >= 80.0
+    rsi5_buy = rsi5 is not None and rsi5 <= 20.0
+    hot["rsi_sell"] = bool(rsi15 is not None and rsi15 >= 65.0) or rsi5_sell
+    hot["rsi_buy"] = bool(rsi15 is not None and rsi15 <= 30.0) or rsi5_buy
     return hot
 
 
@@ -1158,6 +1247,21 @@ def _l2_rsi_candidates(
     sell_st = state.side_state(code, "rsi_sell")
     buy_st = state.side_state(code, "rsi_buy")
 
+    # ── A1 布防语义（2026-11-13 Owner 批准"判定为A档"）：进警戒区才布防；
+    #    触发即撤防；离区不撤防（拐点允许在区外完成，如峰值回落）；
+    #    再进区才再布防。修复：趋势日无警戒前置也能发拐点（曾致 11-13
+    #    rsi15=25.5 时发出卖侧 MA5 破位草案）。 ──
+    sell_zone_hot = (rsi15 is not None and rsi15 >= 65.0) or (rsi5 is not None and rsi5 >= 80.0)
+    buy_zone_hot = (rsi15 is not None and rsi15 <= 30.0) or (rsi5 is not None and rsi5 <= 20.0)
+    if sell_zone_hot:
+        sell_st["zone_seen"] = True
+        sell_st["armed"] = True
+    if buy_zone_hot:
+        buy_st["zone_seen"] = True
+        buy_st["armed"] = True
+    sell_armed = bool(sell_st.get("zone_seen")) and bool(sell_st.get("armed"))
+    buy_armed = bool(buy_st.get("zone_seen")) and bool(buy_st.get("armed"))
+
     # ── 5min MA5 计算（取最近5根close均线） ──
     ma5 = None
     if bars5 and len(bars5) >= 5:
@@ -1167,7 +1271,7 @@ def _l2_rsi_candidates(
     # ── 卖出拐点（15min RSI≥65 后） ──
     is_rsi15_warn = rsi15 is not None and rsi15 >= 65.0
     sold = False
-    if sell_st.get("armed"):
+    if sell_armed:
         # ① 5min RSI 从警戒后峰值回落 ≥ 10
         rsi5_peak = sell_st.get("rsi5_peak") or 0.0
         if rsi5 is not None:
@@ -1191,7 +1295,7 @@ def _l2_rsi_candidates(
                               "trigger_kind": "l2_price_break_ma5"})
                 sold = True
     # 持续追踪峰值 + 顶背离检测
-    if rsi5 is not None and sell_st.get("armed") and not sold:
+    if rsi5 is not None and sell_armed and not sold:
         old_peak = sell_st.get("rsi5_peak") or 0.0
         old_peak_price = sell_st.get("price_at_peak") or 0.0
         if bars5:
@@ -1211,7 +1315,7 @@ def _l2_rsi_candidates(
     # ── 买入拐点（15min RSI≤30 后） ──
     is_rsi15_cold = rsi15 is not None and rsi15 <= 30.0
     bought = False
-    if buy_st.get("armed"):
+    if buy_armed:
         # ① 5min RSI 从警戒后谷底回升 ≥ 10
         rsi5_trough = buy_st.get("rsi5_trough") or 999.0
         if rsi5 is not None:
@@ -1235,7 +1339,7 @@ def _l2_rsi_candidates(
                               "trigger_kind": "l2_price_rise_ma5"})
                 bought = True
     # 持续追踪谷底 + 底背离检测
-    if rsi5 is not None and buy_st.get("armed") and not bought:
+    if rsi5 is not None and buy_armed and not bought:
         old_trough = buy_st.get("rsi5_trough") or 999.0
         old_trough_price = buy_st.get("price_at_trough") or 1e9
         if bars5:
@@ -1251,6 +1355,12 @@ def _l2_rsi_candidates(
             cands.append({"side": "buy", "subtype": "entry", "priority": 2,
                           "trigger_kind": "l2_bottom_divergence"})
             bought = True
+
+    # A1：触发即撤防（再进警戒区才再布防）
+    if sold:
+        sell_st["armed"] = False
+    if bought:
+        buy_st["armed"] = False
 
     return cands
 

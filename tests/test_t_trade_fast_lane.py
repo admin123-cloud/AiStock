@@ -307,10 +307,13 @@ class TestFastTriggers:
         assert d["trigger"]["kind"] == "fast_target_band" and d["subtype"] == "exit"
         assert d["open_t_ref"] == "T_x"
         # RSI 类：px 不在带内（12.95 > stop 12.5、RSI 极高）→ 无 fast 草案
+        # （R50-L2/A1 起 rsi5≥80 布防 L2 卖侧拐点，l2_* 拐点可发——它不是
+        # 价带 fast 类；本断言只拦 exit_rsi/fast_* 泄漏进快车道）
         rep2, _ = run("t2", 12.95, {"draft_id": "T_y", "entry_px": 13.2, "qty": 600,
                                     "target_band": [13.7, 13.9], "stop": 12.5,
                                     "ts": "2026-11-11 09:40:00"})
-        assert rep2["codes"]["002015"]["draft"] is None
+        d2 = rep2["codes"]["002015"]["draft"]
+        assert d2 is None or "l2_" in d2["trigger"]["kind"]
         # 止损线：px ≤ stop → fast_stop_break
         rep3, _ = run("t3", 12.88, {"draft_id": "T_z", "entry_px": 13.2, "qty": 600,
                                     "target_band": [13.7, 13.9], "stop": 12.9,
