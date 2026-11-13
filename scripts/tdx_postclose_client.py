@@ -49,6 +49,7 @@ SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_SHOWWINDOW = 0x0040
 HWND_TOP = 0
+ASFW_ANY = -1
 WM_CLOSE = 0x0010
 WM_COMMAND = 0x0111
 WM_LBUTTONDOWN = 0x0201
@@ -146,6 +147,20 @@ def _root(hwnd: int) -> int:
     return int(USER32.GetAncestor(hwnd, GA_ROOT)) or hwnd
 
 
+def _process_id(hwnd: int) -> int:
+    if not hwnd or USER32 is None:
+        return 0
+    pid = wintypes.DWORD()
+    USER32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return int(pid.value)
+
+
+def _window_from_point(x: int, y: int) -> int:
+    if USER32 is None:
+        return 0
+    return int(USER32.WindowFromPoint(wintypes.POINT(int(x), int(y))))
+
+
 def _normal_label(value: str) -> str:
     return " ".join(value.replace("&", "").split()).strip()
 
@@ -204,8 +219,15 @@ def _find_owned_windows(owner: int, *, cls: Optional[str] = None) -> list[int]:
 def _bring_to_front(hwnd: int) -> None:
     _require_windows()
     root = _root(hwnd)
+    foreground = int(USER32.GetForegroundWindow())
+    foreground_thread = int(USER32.GetWindowThreadProcessId(foreground, None)) if foreground else 0
+    target_thread = int(USER32.GetWindowThreadProcessId(root, None))
+    attached = bool(foreground_thread and target_thread and foreground_thread != target_thread)
+    if attached:
+        USER32.AttachThreadInput(foreground_thread, target_thread, True)
     USER32.ShowWindow(root, SW_RESTORE)
     USER32.ShowWindow(root, SW_SHOW)
+    USER32.AllowSetForegroundWindow(ASFW_ANY)
     USER32.SetWindowPos(
         root,
         HWND_TOP,
@@ -217,6 +239,9 @@ def _bring_to_front(hwnd: int) -> None:
     )
     USER32.BringWindowToTop(root)
     USER32.SetForegroundWindow(root)
+    USER32.SetFocus(root)
+    if attached:
+        USER32.AttachThreadInput(foreground_thread, target_thread, False)
 
 
 def _click_window(hwnd: int) -> None:
@@ -226,6 +251,11 @@ def _click_window(hwnd: int) -> None:
     left, top, right, bottom = _rect(hwnd)
     x = (left + right) // 2
     y = (top + bottom) // 2
+    hit = _window_from_point(x, y)
+    if not hit or _root(hit) != _root(hwnd):
+        raise TdxAutomationError(
+            f"click target is covered by another window: target={hwnd} hit={hit}"
+        )
     if not USER32.SetCursorPos(x, y):
         raise TdxAutomationError(f"SetCursorPos failed for hwnd={hwnd}")
     time.sleep(0.08)
@@ -240,6 +270,17 @@ def _click_point(x: int, y: int) -> None:
     time.sleep(0.08)
     USER32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     USER32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+def _click_main_point(main: int, x: int, y: int) -> None:
+    """Click only after proving the screen point belongs to the TDX main window."""
+    _bring_to_front(main)
+    hit = _window_from_point(x, y)
+    if not hit or _root(hit) != main:
+        raise TdxAutomationError(
+            f"TDX menu point is covered: main={main} hit={hit} root={_root(hit)}"
+        )
+    _click_point(x, y)
 
 
 def _wait_for(predicate: Callable[[], Any], timeout: float, interval: float = 0.25) -> Any:
@@ -330,17 +371,53 @@ def _visible_menu_window(owner: int) -> Optional[int]:
     return None
 
 
+def _looks_like_vendor_ad(title: str, child_texts: Iterable[str]) -> bool:
+    normalized = _normal_label(title)
+    if "通达信信息" in normalized or "广告" in normalized:
+        return True
+    return any(
+        "webview" in _normal_label(value).lower()
+        or _normal_label(value) == "SubWebView"
+        for value in child_texts
+    )
+
+
 def _dismiss_main_overlays(main: int) -> None:
-    """Close the vendor's transient web/ad dialog before opening the menu."""
-    for hwnd in _find_owned_windows(main, cls=TDX_LOGIN_CLASS):
-        is_web_overlay = any(
-            "webview" in _class_name(child).lower()
-            or _normal_label(_window_text(child)) == "SubWebView"
-            for child in _children(hwnd)
+    """Close every same-process TDX web/ad layer before sending any click."""
+    main_pid = _process_id(main)
+    for _ in range(4):
+        closed = False
+        for hwnd in _top_level_windows():
+            if hwnd == main or not _is_visible(hwnd):
+                continue
+            if _process_id(hwnd) != main_pid or _class_name(hwnd) != TDX_LOGIN_CLASS:
+                continue
+            child_values = [
+                _class_name(child) + " " + _window_text(child)
+                for child in _children(hwnd)
+            ]
+            if _looks_like_vendor_ad(_window_text(hwnd), child_values):
+                USER32.SendMessageW(hwnd, WM_CLOSE, 0, 0)
+                _wait_for(lambda hwnd=hwnd: not _is_visible(hwnd), 3.0)
+                closed = True
+        if not closed:
+            break
+        time.sleep(0.2)
+
+    remaining = [
+        hwnd
+        for hwnd in _top_level_windows()
+        if hwnd != main
+        and _is_visible(hwnd)
+        and _process_id(hwnd) == main_pid
+        and _class_name(hwnd) == TDX_LOGIN_CLASS
+        and _looks_like_vendor_ad(
+            _window_text(hwnd),
+            [_class_name(child) + " " + _window_text(child) for child in _children(hwnd)],
         )
-        if is_web_overlay:
-            USER32.SendMessageW(hwnd, WM_CLOSE, 0, 0)
-            _wait_for(lambda: not _is_visible(hwnd), 3.0)
+    ]
+    if remaining:
+        raise TdxAutomationError(f"TDX ad/web overlay remains visible: {remaining}")
 
 
 def _menu_command_by_text(menu_hwnd: int, wanted: str) -> Optional[int]:
@@ -370,11 +447,19 @@ def _open_download_dialog(main: int, timeout: float) -> int:
     y = top + round(OPTION_MENU_Y_96DPI * scale)
 
     popup = None
-    for _ in range(3):
-        _click_point(x, y)
+    for attempt in range(2):
+        try:
+            _click_main_point(main, x, y)
+        except TdxAutomationError:
+            _dismiss_main_overlays(main)
+            _bring_to_front(main)
+            if attempt:
+                raise
+            continue
         popup = _wait_for(lambda: _visible_menu_window(main), 1.5)
         if popup:
             break
+        _dismiss_main_overlays(main)
         _bring_to_front(main)
     if not popup:
         raise TdxAutomationError("TDX 选项菜单 did not open")
@@ -407,6 +492,9 @@ def _select_tab(dialog: int, index: int) -> None:
         raise TdxAutomationError(f"Invalid download tab index: {index}")
     x = left + round((index + 0.5) * (right - left) / count)
     y = top + max(8, min(16, (bottom - top) // 2))
+    hit = _window_from_point(x, y)
+    if not hit or _root(hit) != dialog:
+        raise TdxAutomationError(f"Download tab point is covered: dialog={dialog} hit={hit}")
     _click_point(x, y)
     # The tab header is native, but the page body is owner-drawn and repaints
     # asynchronously.  Give the next visibility probe a short settling window.
@@ -437,6 +525,12 @@ def _ensure_checkbox(dialog: int, label: str, checked: bool) -> None:
     if (state != 0) != checked:
         USER32.SendMessageW(hwnd, BM_CLICK, 0, 0)
         time.sleep(0.15)
+        # TDX's checkbox controls are owner-drawn on some cold-start paths;
+        # BM_CLICK can be accepted without changing the visual state.  Fall
+        # back to the same real mouse click used for the login button.
+        if (_checkbox_state(hwnd) != 0) != checked:
+            _click_window(hwnd)
+            time.sleep(0.15)
     if (_checkbox_state(hwnd) != 0) != checked:
         raise TdxAutomationError(f"Could not set checkbox: {label}")
 
@@ -485,9 +579,6 @@ def _start_and_wait(dialog: int, tdx_root: Path, timeout: float) -> dict[str, An
     deadline = started_at + timeout
     while time.monotonic() < deadline:
         if not _is_visible(dialog):
-            after = _file_snapshot(tdx_root)
-            if after != before:
-                return {"before": before, "after": after, "evidence": "dialog_closed_files_changed"}
             raise TdxAutomationError("Download dialog closed without completion evidence")
         enabled = bool(USER32.IsWindowEnabled(start))
         pos = _progress_position(dialog)
@@ -498,12 +589,14 @@ def _start_and_wait(dialog: int, tdx_root: Path, timeout: float) -> dict[str, An
             saw_progress = True
         if current != before:
             saw_file_change = True
-        if saw_file_change or (saw_disabled and enabled):
+        if saw_disabled and enabled:
             return {
                 "before": before,
                 "after": current,
-                "evidence": "lc5_files_changed" if saw_file_change else "button_reenabled",
+                "evidence": "button_reenabled_after_disabled",
                 "progress_seen": saw_progress,
+                "files_changed": saw_file_change,
+                "coverage_verified": False,
             }
         time.sleep(2.0)
     raise TdxAutomationError(
