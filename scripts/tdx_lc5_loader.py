@@ -44,12 +44,14 @@ MAINTAINED_INDICES = frozenset({
     '000852.SH','000688.SH',
 })
 
+# 2026-11-13：创业板新增 302 号段（302132.SZ 首例，官网包口径含它）——补入，
+# 否则日线/分钟链对该号段全部缺漏（pkg classify 深市按 '30' 前缀放行）。
 def is_a_share_stock(code: str) -> bool:
     base = code.upper().split('.')[0]
     mkt = code.upper().split('.')[1] if '.' in code else ''
     if len(base) != 6 or not base.isdigit():
         return False
-    return (mkt == 'SZ' and base.startswith(('000','001','002','003','300','301'))
+    return (mkt == 'SZ' and base.startswith(('000','001','002','003','300','301','302'))
             or mkt == 'SH' and base.startswith(('600','601','603','605','688','689'))
             or mkt == 'BJ' and base.startswith('92'))
 
