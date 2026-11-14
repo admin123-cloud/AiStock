@@ -575,20 +575,33 @@ def _dismiss_tiny_toasts(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _reach_login_state(*, window_wait: float, login_timeout: float,
                        dry_run: bool) -> dict[str, Any]:
     state, windows, main = _wait_any_window(window_wait)
-    toasts_closed = _dismiss_tiny_toasts(windows)
-    if toasts_closed:
+    toasts_closed: list[dict[str, Any]] = []
+    restored_hidden_panel = False
+    # 判定前清理循环（2026-11-14 冷启动二轮实盘）：证书自动登录后 xiadan 处于
+    # 隐藏主窗+通知条状态——通知条在轮询后才弹出，一次性清理覆盖不到。
+    # 循环：关微小通知条 → 隐藏主窗先还原 → 重轮询，直到状态稳定（≤4 轮）。
+    for _round in range(4):
+        closed_now = _dismiss_tiny_toasts(windows)
+        if closed_now:
+            toasts_closed.extend(closed_now)
+            time.sleep(1.0)
+            state, windows, main = _poll_state()
+        if (state == "main" and main is not None and not main.get("visible")
+                and not windows):
+            USER32.ShowWindow(int(main["hwnd"]), 9)  # SW_RESTORE
+            time.sleep(1.5)
+            state, windows, main = _poll_state()
+            restored_hidden_panel = True
+        # 稳定判定：无可见杂窗，或剩的就是登录框形状
+        if not windows or _find_visible_login_dialog(windows) is not None:
+            break
+        if state == "main" and not windows:
+            break
         time.sleep(1.0)
         state, windows, main = _poll_state()
-    # 2026-11-14 冷启动实盘：整面板最小化时登录框也"不可见"→误判 logged_in。
-    # 主窗存在但隐藏且无可见窗口 → 先还原（零点击）再判定。
-    restored_hidden_panel = False
-    if (state == "main" and main is not None and not main.get("visible")
-            and not windows):
-        USER32.ShowWindow(int(main["hwnd"]), 9)  # SW_RESTORE
-        time.sleep(1.5)
-        state, windows, main = _poll_state()
-        restored_hidden_panel = True
-    toast_note: dict[str, Any] = {"toasts_closed": toasts_closed} if toasts_closed else {}
+    toast_note: dict[str, Any] = {}
+    if toasts_closed:
+        toast_note["toasts_closed"] = toasts_closed
     if restored_hidden_panel:
         toast_note["restored_hidden_panel"] = True
     if state == "none":
