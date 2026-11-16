@@ -20,6 +20,9 @@ test -f "$SRC/Dockerfile.backend" && test -f "$SRC/frontend-react/Dockerfile.rel
 echo '== 构建后端/前端镜像 =='
 "$DOCK" build -t "aistock-backend:$SHA" -f "$SRC/Dockerfile.backend" "$SRC" 2>&1 | tail -2
 "$DOCK" build -t "aistock-frontend:$SHA" -f "$SRC/frontend-react/Dockerfile.release" "$SRC/frontend-react" 2>&1 | tail -2
+# compose frontend 固定引用 aistock-frontend:latest（backend/pipeline 才是 ${AISTOCK_MAIN_VERSION}）；
+# 不打 latest tag 则 compose 判定无变化、前端容器永不更新（2026-11-16 实证：DEPLOY_OK 但前端仍为 3 天前镜像）。
+"$DOCK" tag "aistock-frontend:$SHA" "aistock-frontend:latest"
 echo '== 切换容器（preview + frontend + pipeline-runner） =='
 export AISTOCK_MAIN_VERSION="$SHA"
 "$DC" -f "$APP/deploy/docker-compose.main.yml" up -d 2>&1 | tail -4
