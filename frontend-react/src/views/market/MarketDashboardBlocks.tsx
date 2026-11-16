@@ -96,9 +96,14 @@ function BreadthCard({ breadth }: { breadth: any | null }) {
   )
 }
 
-/* ② 涨跌分布直方图（13 桶，红涨绿跌） */
+/* ② 涨跌分布直方图（13 桶，红涨绿跌；渲染反转=红涨在左，对齐首页 9 桶图习惯） */
 function DistributionCard({ distribution }: { distribution: any | null }) {
-  const buckets = distribution?.buckets || []
+  /* 渲染层反转桶序：红涨（>10）在左、绿跌（<-10）在右，平盘 0 居中。
+     后端 payload 仍是 <-10 → >10 数轴序（契约由 test_market_breadth_r55 锁定），此处只动展示。 */
+  const buckets = useMemo(
+    () => (distribution?.buckets || []).slice().reverse(),
+    [distribution]
+  )
   const maxCount = useMemo(
     () => buckets.reduce((acc: number, b: any) => Math.max(acc, b?.count || 0), 0),
     [buckets]
@@ -148,7 +153,9 @@ function DistributionCard({ distribution }: { distribution: any | null }) {
           </div>
           <div className="grid grid-cols-2 gap-2 border-t border-zinc-100 pt-2 text-center dark:border-slate-700/60">
             <div>
-              <div className={`text-base font-bold tabular-nums ${UP}`}>{fmtPct(distribution.avg_change_pct)}</div>
+              <div className={`text-base font-bold tabular-nums ${(distribution.avg_change_pct ?? 0) >= 0 ? UP : DOWN}`}>
+                {fmtPct(distribution.avg_change_pct)}
+              </div>
               <div className="text-[11px] text-zinc-400 dark:text-zinc-500">平均涨跌</div>
             </div>
             <div>
