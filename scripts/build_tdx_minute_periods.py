@@ -509,10 +509,10 @@ def main() -> int:
         "source_5m_rows": 0,
         "qfq_factor_days": 0,
         "qfq_missing_factor_days": 0,
-        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "started_at": datetime.now(CN_TZ).isoformat(timespec="seconds"),
     }
     started = time.time()
-    created_at = datetime.now()
+    created_at = datetime.now(CN_TZ).replace(tzinfo=None)  # naive 北京墙钟（列为 naive DateTime）
 
     for idx, path in enumerate(files, start=1):
         raw_rows = list(_iter_lc5(path, start_ts, end_ts))
@@ -551,7 +551,7 @@ def main() -> int:
 
     stats["written"] = written
     stats["tables"] = tables
-    stats["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    stats["finished_at"] = datetime.now(CN_TZ).isoformat(timespec="seconds")
     stats["elapsed_seconds"] = round(time.time() - started, 3)
     print("done " + json.dumps(stats, ensure_ascii=False, default=str), flush=True)
     if args.report_path:
