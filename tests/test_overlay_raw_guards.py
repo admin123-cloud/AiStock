@@ -23,6 +23,7 @@
 真库性能/口径验证由部署后独立核查完成（任务书第 3 条），不在本文件范围。
 """
 import ast
+import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -240,8 +241,11 @@ def test_structure_guard_turnover_forecast_module_raw_and_view_free():
 # ── 5) 运行时守卫：两查询 SQL 形状 + 端到端可用载荷 ────────────────────────
 
 
-def test_turnover_forecast_runtime_sql_shapes(monkeypatch):
+def test_turnover_forecast_runtime_sql_shapes(monkeypatch, tmp_path):
     import scheduler.trading_calendar as trading_calendar
+
+    monkeypatch.setattr(mtf, "_PERSISTED_FORECAST_PATH", tmp_path / "forecast" / "latest.json")
+    monkeypatch.setattr(mtf, "_CACHE", {"payload": None, "expires_at": 0.0})
 
     captured = []
 
@@ -279,8 +283,6 @@ def test_turnover_forecast_runtime_sql_shapes(monkeypatch):
         trading_calendar.TradingCalendar, "is_trading_day",
         classmethod(lambda cls, value: True),
     )
-    mtf._CACHE.update(payload=None, expires_at=0.0)
-
     payload = mtf.get_intraday_turnover_forecast(current_snapshot=None)
 
     assert len(captured) == 2, f"应恰好发出两条查询，实际 {len(captured)}"
@@ -321,3 +323,5 @@ def test_turnover_forecast_runtime_sql_shapes(monkeypatch):
     assert payload["available"] is True
     assert payload["current_amounts"]["total"] == pytest.approx(6.0e11)
     assert payload["sample_days"] == 25
+    assert mtf._PERSISTED_FORECAST_PATH.is_file()
+    assert json.loads(mtf._PERSISTED_FORECAST_PATH.read_text(encoding="utf-8")) == payload

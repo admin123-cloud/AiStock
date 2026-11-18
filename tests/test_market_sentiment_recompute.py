@@ -245,7 +245,8 @@ class _FakeClickhouse:
 
 
 @pytest.fixture(autouse=True)
-def _clear_caches():
+def _clear_caches(monkeypatch):
+    monkeypatch.setattr(mo, "latest_snapshot_ts", lambda now=None: None)
     mo._MARKET_SENTIMENT_RESULT_CACHE.clear()
     yield
     mo._MARKET_SENTIMENT_RESULT_CACHE.clear()

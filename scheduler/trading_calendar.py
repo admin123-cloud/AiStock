@@ -1,11 +1,23 @@
 """交易日历工具（ClickHouse 查询）"""
 from datetime import datetime, time as dt_time, timedelta
+from dataclasses import dataclass
 from typing import Any, Optional, List
 
 from utils.logger import get_logger
 from utils.market_warehouse import clickhouse_scalar, clickhouse_query_df, clickhouse_available, clickhouse_table_exists
 
 logger = get_logger("TradingCalendar")
+
+
+@dataclass(frozen=True)
+class CalendarDayResult:
+    state: str
+    source: str
+    evidence: str
+
+
+class CalendarUnknownError(RuntimeError):
+    """The calendar cannot provide a safe answer."""
 
 
 class TradingCalendar:
@@ -53,14 +65,9 @@ class TradingCalendar:
     @classmethod
     def _db_calendar_available(cls) -> bool:
         def _probe() -> bool:
-            if clickhouse_available():
-                ok = clickhouse_table_exists("trade_calendar")
-                if not ok:
-                    cls._warn_calendar_fallback(
-                        "trade_calendar 在 ClickHouse 中不存在，回退到周末判断"
-                    )
-                return ok
-            return True
+            if not clickhouse_available():
+                return False
+            return bool(clickhouse_table_exists("trade_calendar"))
 
         return cls._cached_lookup("table_exists:trade_calendar", _probe)
 
@@ -99,35 +106,39 @@ class TradingCalendar:
         return cls._normalize_db_date(min_dt), cls._normalize_db_date(max_dt)
 
     @classmethod
-    def is_trading_day(cls, date: datetime = None) -> bool:
+    def resolve_trading_day(cls, date: datetime = None) -> CalendarDayResult:
         if date is None:
             date = datetime.now()
 
         try:
             target_date = date.date()
-            trade_date = date.date().isoformat()
-            if cls._db_calendar_available():
-                row = cls._cached_lookup(
-                    f"is_trading:{trade_date}",
-                    lambda: clickhouse_scalar(
-                        """
-                        SELECT is_trading
-                        FROM trade_calendar
-                        WHERE trade_date = ? AND market = 'SH'
-                        LIMIT 1
-                        """,
-                        [trade_date],
-                    ),
-                )
-                if row is not None:
-                    return bool(row)
-                min_date, max_date = cls._db_calendar_bounds()
-                if min_date and max_date and min_date <= target_date <= max_date:
-                    return False
+            trade_date = target_date.isoformat()
+            if not cls._db_calendar_available():
+                return CalendarDayResult("unknown", "trade_calendar", "database unavailable or table missing")
+            row = cls._cached_lookup(
+                f"is_trading:{trade_date}",
+                lambda: clickhouse_scalar(
+                    """
+                    SELECT is_trading
+                    FROM trade_calendar
+                    WHERE trade_date = ? AND market = 'SH'
+                    LIMIT 1
+                    """,
+                    [trade_date],
+                ),
+            )
+            if row is not None:
+                return CalendarDayResult("trading" if bool(row) else "closed", "trade_calendar", "explicit row")
+            min_date, max_date = cls._db_calendar_bounds()
+            if min_date and max_date and min_date <= target_date <= max_date:
+                return CalendarDayResult("closed", "trade_calendar", "no row within existing bounds")
+            return CalendarDayResult("unknown", "trade_calendar", "empty calendar or date outside bounds")
         except Exception as e:
-            cls._warn_calendar_fallback(f"数据库判断交易日失败，回退到周末判断: {e}")
+            return CalendarDayResult("unknown", "trade_calendar", f"query failed ({type(e).__name__})")
 
-        return date.weekday() not in cls.WEEKEND_DAYS
+    @classmethod
+    def is_trading_day(cls, date: datetime = None) -> bool:
+        return cls.resolve_trading_day(date).state == "trading"
 
     @classmethod
     def is_trading_time(cls, now: datetime = None) -> bool:
@@ -155,61 +166,50 @@ class TradingCalendar:
 
     @classmethod
     def get_next_trading_day(cls, date: datetime = None) -> datetime:
-        if date is None:
-            date = datetime.now()
-
-        try:
-            trade_date = date.date().isoformat()
-            if cls._db_calendar_available():
-                next_dt = cls._cached_lookup(
-                    f"next_trading:{trade_date}",
-                    lambda: clickhouse_scalar(
-                        """
-                        SELECT MIN(trade_date)
-                        FROM trade_calendar
-                        WHERE market = 'SH' AND is_trading = 1 AND trade_date > ?
-                        """,
-                        [trade_date],
-                    ),
-                )
-                if next_dt:
-                    return datetime.combine(next_dt, date.time())
-        except Exception as e:
-            logger.warning(f"数据库获取下一个交易日失败，回退计算: {e}")
-
-        next_day = date + timedelta(days=1)
-        while not cls.is_trading_day(next_day):
-            next_day += timedelta(days=1)
-        return next_day
+        return cls._adjacent_trading_day(date or datetime.now(), 1)
 
     @classmethod
     def get_previous_trading_day(cls, date: datetime = None) -> datetime:
-        if date is None:
-            date = datetime.now()
+        return cls._adjacent_trading_day(date or datetime.now(), -1)
 
+    @classmethod
+    def _adjacent_trading_day(cls, date: datetime, direction: int) -> datetime:
+        trade_date = date.date().isoformat()
+        aggregate, operator, prefix = ("minOrNull", ">", "next") if direction == 1 else ("maxOrNull", "<", "prev")
         try:
-            trade_date = date.date().isoformat()
-            if cls._db_calendar_available():
-                prev_dt = cls._cached_lookup(
-                    f"prev_trading:{trade_date}",
-                    lambda: clickhouse_scalar(
-                        """
-                        SELECT MAX(trade_date)
-                        FROM trade_calendar
-                        WHERE market = 'SH' AND is_trading = 1 AND trade_date < ?
-                        """,
-                        [trade_date],
-                    ),
-                )
-                if prev_dt:
-                    return datetime.combine(prev_dt, date.time())
-        except Exception as e:
-            logger.warning(f"数据库获取上一个交易日失败，回退计算: {e}")
+            if not cls._db_calendar_available():
+                raise CalendarUnknownError("trade calendar unavailable")
+            found = cls._cached_lookup(
+                f"{prefix}_trading:{trade_date}",
+                lambda: clickhouse_scalar(
+                    f"SELECT {aggregate}(trade_date) FROM trade_calendar "
+                    f"WHERE market = 'SH' AND is_trading = 1 AND trade_date {operator} ?",
+                    [trade_date],
+                ),
+            )
+            if found:
+                found_date = cls._normalize_db_date(found)
+                if (found_date is None or
+                        (direction == 1 and found_date <= date.date()) or
+                        (direction == -1 and found_date >= date.date())):
+                    raise CalendarUnknownError("invalid adjacent calendar result")
+                return datetime.combine(found_date, date.time())
+        except CalendarUnknownError:
+            raise
+        except Exception as exc:
+            raise CalendarUnknownError(f"adjacent calendar query failed ({type(exc).__name__})") from None
 
-        prev_day = date - timedelta(days=1)
-        while not cls.is_trading_day(prev_day):
-            prev_day -= timedelta(days=1)
-        return prev_day
+        for step in range(1, 31):
+            try:
+                candidate = date + timedelta(days=direction * step)
+            except OverflowError:
+                raise CalendarUnknownError("calendar date range exceeded") from None
+            result = cls.resolve_trading_day(candidate)
+            if result.state == "unknown":
+                raise CalendarUnknownError(f"calendar unknown: {result.evidence}")
+            if result.state == "trading":
+                return candidate
+        raise CalendarUnknownError("no trading day within 30 calendar days")
 
     @classmethod
     def time_to_market_open(cls, now: datetime = None) -> Optional[timedelta]:

@@ -4,8 +4,9 @@ import sqlite3
 from scripts import sync_trade_calendar as calendar
 
 
-def test_history_only_refresh_keeps_future_calendar(monkeypatch):
+def test_history_only_refresh_keeps_future_calendar(monkeypatch, request):
     db=sqlite3.connect(':memory:')
+    request.addfinalizer(db.close)
     db.execute('CREATE TABLE trade_calendar(trade_date TEXT,market TEXT,is_trading INT)')
     db.executemany('INSERT INTO trade_calendar VALUES (?,?,?)',[
         ('2026-09-04','SH',1),('2026-09-05','SH',1),
