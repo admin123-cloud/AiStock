@@ -1583,7 +1583,6 @@ def serve(
     register_market_mood_finalize_job(scheduler)
     register_t_trade_monitor_job(scheduler)
     _register_intraday_kline_upsert(scheduler)
-    _register_tdx_postclose_minutes(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
@@ -1702,95 +1701,8 @@ TDX_POSTCLOSE_CRON_MINUTE = 15
 
 
 def _register_tdx_postclose_minutes(scheduler):
-    """注册盘后分钟K线写入（16:15 从 TDX lc5 读取 + 聚合 15/30/60min）。"""
-    from apscheduler.triggers.cron import CronTrigger
-
-    def _run_tdx_postclose():
-        logger.info("[tdx_postclose] 开始执行 TDX lc5 盘后分钟写入")
-        try:
-            import subprocess
-            import sys as _sys
-
-            base = _sys.executable
-            script = str(Path(__file__).parent / "build_tdx_minute_periods.py")
-            today = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
-            # 当日边界 [today, next_day)：修复此前硬编码 '2026-11-13' 上界——
-            # 次日起 DELETE/SELECT 区间恒空，聚合表会整天漏写（11-13 临时实现遗留）
-            next_day = (datetime.now(BEIJING_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
-
-            # Step 1: 5min 写入（sh/sz/bj 三个市场）
-            for market in ("sh", "sz", "bj"):
-                cmd = [
-                    base, script,
-                    "--tdx-root", "D:/TDX/vipdoc",
-                    "--markets", market,
-                    "--periods", "5m",
-                    "--start-date", today, "--end-date", today,
-                    "--adjust", "none",
-                    "--delete-range",
-                ]
-                logger.info("[tdx_postclose] 运行: %s %s", market, " ".join(cmd[-8:]))
-                ret = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-                if ret.returncode != 0:
-                    logger.warning("[tdx_postclose] %s rc=%d stderr=%s", market, ret.returncode, ret.stderr[-200:])
-                else:
-                    logger.info("[tdx_postclose] %s 完成", market)
-
-            # Step 2: 聚合 15/30/60min（从 CH 读取全市场 5min 数据聚合，不依赖 --markets）
-            import urllib.request
-            from collections import defaultdict
-
-            def _q(sql):
-                req = urllib.request.Request("http://127.0.0.1:8123/", data=sql.encode("utf-8"), headers={"Content-Type": "text/plain"})
-                resp = urllib.request.urlopen(req, timeout=600)
-                t = resp.read().decode().strip()
-                return [l.split("\t") for l in t.split("\n")] if t else []
-
-            for tbl, step, label in [("kline_minute_15", 3, "15m"), ("kline_minute_30", 6, "30m"), ("kline_minute_60", 12, "60m")]:
-                _q(f"ALTER TABLE stock.{tbl} DELETE WHERE datetime >= '{today}' AND datetime < '{next_day}' SETTINGS mutations_sync=1")
-                rows = _q(f"SELECT code, datetime, open, high, low, close, volume FROM stock.kline_minute_5 WHERE datetime >= '{today}' AND datetime < '{next_day}' ORDER BY code, datetime")
-                buckets = defaultdict(list)
-                for row in rows:
-                    buckets[row[0]].append(row)
-                vals = []
-                for code, bars in buckets.items():
-                    for i in range(0, len(bars), step):
-                        ch = bars[i:i + step]
-                        if len(ch) < 2:
-                            continue
-                        dt = ch[0][1]
-                        o = float(ch[0][2])
-                        h = max(float(r[3]) for r in ch)
-                        l = min(float(r[4]) for r in ch)
-                        c = float(ch[-1][5])
-                        v = sum(int(r[6]) for r in ch if r[6] and r[6].isdigit())
-                        vals.append(f"('{code}','{dt}',{o},{h},{l},{c},{v})")
-                for i in range(0, len(vals), 500):
-                    sql = f"INSERT INTO stock.{tbl}(code,datetime,open,high,low,close,volume) VALUES {','.join(vals[i:i + 500])}"
-                    _q(sql)
-                r = _q(f"SELECT count(), uniqExact(code) FROM stock.{tbl} WHERE datetime >= '{today}' AND datetime < '{next_day}'")
-                if r:
-                    logger.info("[tdx_postclose] 聚合 %s: %s行 %s只", label, r[0][0], r[0][1])
-
-            logger.info("[tdx_postclose] TDX lc5 盘后分钟写入完成")
-        except Exception as e:
-            logger.exception("[tdx_postclose] 失败: %s", e)
-
-    scheduler.add_job(
-        _run_tdx_postclose,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour=TDX_POSTCLOSE_CRON_HOUR,
-            minute=TDX_POSTCLOSE_CRON_MINUTE,
-            timezone=BEIJING_TZ,
-        ),
-        id=TDX_POSTCLOSE_JOB_ID,
-        name="R59 盘后分钟K线全量写入（TDX lc5 + 15/30/60min聚合）",
-        max_instances=1,
-        misfire_grace_time=600,
-        coalesce=True,
-        replace_existing=True,
-    )
+    """R59 已退役（Owner 2026-11-19 P1 裁决④）：盘后分钟K线写入链停止注册，本入口无条件 fail-closed。"""
+    raise RuntimeError("R59 盘后分钟K线写入已于2026-11-19按Owner P1 裁决④退役，禁止注册或调用本入口")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
