@@ -10,18 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import clickhouse_connect
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
 
 from utils.common.logger import get_logger
 from utils.common.paths import PROJECT_ROOT
-from utils.db.database import DatabaseManager
 
 logger = get_logger("g3_mainwave_scanner")
 BJ_TZ = timezone(timedelta(hours=8))
@@ -42,12 +42,25 @@ def _load_contract() -> tuple[dict[str, Any], dict[str, Any]]:
     return data, meta
 
 
+def _get_ch_client():
+    return clickhouse_connect.get_client(
+        host=os.getenv("AISTOCK_CLICKHOUSE_HOST", "127.0.0.1"),
+        port=int(os.getenv("AISTOCK_CLICKHOUSE_PORT", "8123")),
+        username=os.getenv("AISTOCK_CLICKHOUSE_USER", "default"),
+        password=os.getenv("AISTOCK_CLICKHOUSE_PASSWORD", ""),
+        database=os.getenv("AISTOCK_CLICKHOUSE_DATABASE", "stock"),
+        connect_timeout=10,
+        send_receive_timeout=60,
+    )
+
+
 def _query_df(sql: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
-    with DatabaseManager().engine.connect() as conn:
-        res = conn.execute(text(sql), params or {})
-        rows = res.fetchall()
-        cols = list(res.keys())
-    return pd.DataFrame(rows, columns=cols)
+    client = _get_ch_client()
+    try:
+        res = client.query(sql, parameters=params or {})
+        return pd.DataFrame(res.result_rows, columns=list(res.column_names))
+    finally:
+        client.close()
 
 
 def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
@@ -82,7 +95,7 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
         """
         SELECT min(trade_date) AS next_date
         FROM stock.trade_calendar
-        WHERE market = 'SH' AND is_trading = 1 AND trade_date > :d
+        WHERE market = 'SH' AND is_trading = 1 AND trade_date > {d:String}
         """,
         {"d": decision_date},
     )
@@ -98,8 +111,8 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
         SELECT trade_date, anyLast(close) AS close
         FROM stock.kline_daily
         WHERE code IN ('000001.SH', '999999.SH')
-          AND trade_date <= :d
-          AND trade_date >= toDate(:d) - 120
+          AND trade_date <= toDate({d:String})
+          AND trade_date >= toDate({d:String}) - 120
         GROUP BY trade_date
         ORDER BY trade_date DESC
         LIMIT 65
@@ -134,8 +147,8 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
               AND st = 0
               AND listing_status = 'active'
         ) s ON k.code = s.code
-        WHERE k.trade_date <= :d
-          AND k.trade_date >= toDate(:d) - 105
+        WHERE k.trade_date <= toDate({d:String})
+          AND k.trade_date >= toDate({d:String}) - 105
           AND k.close > 0
           AND k.volume > 0
         GROUP BY k.code, k.trade_date
