@@ -84,6 +84,12 @@ CROSSCHECK_SAMPLE_CAP = 100
 
 # ── --source local（Owner 2026-11-13 裁决：日线走 TDX 客户端本地 lday 文件）──
 DEFAULT_TDX_VIPDOC_ROOT = r"D:/TDX/vipdoc"
+
+
+def _default_tdx_vipdoc_root() -> str:
+    """解析本地 TDX vipdoc 根目录，优先环境变量 AISTOCK_TDX_VIPDOC_ROOT（容器内通常为 /d/TDX/vipdoc）。"""
+    env_val = os.environ.get("AISTOCK_TDX_VIPDOC_ROOT", "").strip()
+    return env_val or DEFAULT_TDX_VIPDOC_ROOT
 # 时序门禁：mtime≥16:00 且含当日记录的 lday 文件数下限（下载完成证据的体量下限；
 # 全市场 universe≈5600，停牌/数据缺失余量后取 5000）
 DEFAULT_MIN_FRESH_LDAY_FILES = 5000
@@ -411,8 +417,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--source", choices=["pkg", "local"], default="pkg",
                         help="主数据源：pkg=通达信官网盘后包（默认，保留为回退源）；"
                              "local=客户端本地 vipdoc lday 文件（Owner 2026-11-13 起主源）")
-    parser.add_argument("--tdx-root", default=DEFAULT_TDX_VIPDOC_ROOT, type=Path,
-                        help=f"local 源的 vipdoc 根目录（默认 {DEFAULT_TDX_VIPDOC_ROOT}）")
+    parser.add_argument("--tdx-root", default=None, type=Path,
+                        help=f"local 源的 vipdoc 根目录（默认读取 AISTOCK_TDX_VIPDOC_ROOT 或 {DEFAULT_TDX_VIPDOC_ROOT}）")
     parser.add_argument("--min-fresh-files", type=_non_negative_int,
                         default=DEFAULT_MIN_FRESH_LDAY_FILES,
                         help="local 源时序门禁：mtime≥16:00 且含当日记录的文件数下限")
@@ -518,9 +524,11 @@ def check_duplicate_keys(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 # 逐码一致，比例=1.0000），不做 ÷100 —— 个股路径才是 股÷100→手，量纲不同（这也是
 # tdx_official_package.normalize_to_contract 拒收指数行的原因）。包内缺码如实上报
 # （官网包从不含 000985.SH 中证全指——R18 起该码也不在清单内），绝不硬造。
+# 2026-11-19 Owner 确认：在 R18 冻结 10 码基础上纳入北证50（899050.BJ）→ 11 码
 FROZEN_INDEX_CODES = frozenset({
     "000001.SH", "399001.SZ", "399106.SZ", "000300.SH", "000016.SH",
     "000905.SH", "000852.SH", "399006.SZ", "000680.SH", "000688.SH",
+    "899050.BJ",
 })
 
 
@@ -667,7 +675,7 @@ def run_pipeline(options: Mapping[str, Any]) -> dict[str, Any]:
             # ── Owner 2026-11-13 裁决主源：客户端本地 vipdoc lday（官网包保留为回退）──
             # local 模式默认接入 DB（只读）：量纲对照/前日对比/重叠一致性门禁需要
             engage_db()
-            tdx_root = str(opts.get("tdx_root") or DEFAULT_TDX_VIPDOC_ROOT)
+            tdx_root = str(opts.get("tdx_root") or _default_tdx_vipdoc_root())
             scan = lday.scan_lday_universe(tdx_root, trade_date)
             timing = scan["timing"]
             rows = scan["rows"]
@@ -1757,7 +1765,7 @@ def _local_coverage_report(db: Any, rows: Sequence[Mapping[str, Any]],
                            trade_date: str, opts: Mapping[str, Any]) -> dict[str, Any]:
     """B4 覆盖率：写入后正式表该日行数 + 与 lc5（fzline）宇宙覆盖缺口，报告落 runtime。"""
     coverage_min = int(opts.get("coverage_min") or DEFAULT_COVERAGE_MIN)
-    tdx_root = str(opts.get("tdx_root") or DEFAULT_TDX_VIPDOC_ROOT)
+    tdx_root = str(opts.get("tdx_root") or _default_tdx_vipdoc_root())
     postwrite_row_count = _formal_day_count(db, trade_date)
     lc5_codes = lday.scan_lc5_universe_files(tdx_root)
     daily_codes = {str(row["code"]) for row in rows}
@@ -1809,7 +1817,7 @@ def main(argv: Optional[Sequence[str]] = None, injections: Optional[Mapping[str,
     options: dict[str, Any] = {
         "trade_date": args.trade_date,
         "source": args.source,
-        "tdx_root": str(args.tdx_root),
+        "tdx_root": str(args.tdx_root) if args.tdx_root is not None else _default_tdx_vipdoc_root(),
         "min_fresh_files": args.min_fresh_files,
         "coverage_min": args.coverage_min,
         "crosscheck_sample": args.crosscheck_sample,

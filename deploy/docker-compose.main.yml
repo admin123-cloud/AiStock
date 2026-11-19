@@ -85,10 +85,14 @@ services:
       <<: *backend_env
       PYTHONPATH: /app
       AISTOCK_CLICKHOUSE_HOST: 127.0.0.1
+      TDX_BASE: /d/TDX
+      AISTOCK_TDX_VIPDOC_ROOT: /d/TDX/vipdoc
     volumes:
       - F:/Aistock/code/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
       # 管道写入方：挂真实数据根（可写）——报告/journal 落 runtime/postclose_auto 等
       - F:/Aistock/data/data:/aistock/data
+      # 通达信本地盘后下载产物只读挂载（供 daily_kline_pipeline --source local 与本地 lc5 读取）
+      - D:/TDX:/d/TDX:ro
     command: ["python", "scripts/pipeline_scheduler.py"]
 
   postclose-watcher:

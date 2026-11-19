@@ -43,11 +43,11 @@ ROW_000300 = ("000300", "沪深300", 4150.0, 4160.0, 4188.0, 4155.0, 4180.0, 144
 ROW_399005 = ("399005", "中小100", 6500.0, 6510.0, 6550.0, 6490.0, 6530.0, 80000000, 210000000000.0)
 ROW_880001 = ("880001", "通达信板块", 100.0, 101.0, 102.0, 99.0, 100.5, 500000, 80000000.0)
 
-# 任务书 20261109_daily_index_bars_r17.md 冻结 11 码；R18（20261109_index_000985_removal）
-# 移除 000985.SH 中证全指 → 10 码（独立字面量，防实现侧手误）
+# 任务书 20261109_daily_index_bars_r17.md 冻结 11 码；R18 移除 000985.SH → 10 码；
+# 2026-11-19 Owner 确认纳入北证50（899050.BJ）→ 11 码（独立字面量，防实现侧手误）
 FROZEN_TEN = frozenset({
     "000001.SH", "399001.SZ", "399106.SZ", "000300.SH", "000016.SH", "000905.SH",
-    "000852.SH", "399006.SZ", "000680.SH", "000688.SH",
+    "000852.SH", "399006.SZ", "000680.SH", "000688.SH", "899050.BJ",
 })
 
 SYNTHETIC_MARKETS = {
@@ -274,8 +274,16 @@ def test_fetch_failure_is_error_status_with_report(tmp_path):
 #   历史 K 线停在 10-21，Owner 裁决下线）。
 def test_frozen_index_codes_constant_is_exactly_the_frozen_ten():
     assert pipeline.FROZEN_INDEX_CODES == FROZEN_TEN
-    assert len(FROZEN_TEN) == 10
+    assert len(FROZEN_TEN) == 11
     assert "000985.SH" not in pipeline.FROZEN_INDEX_CODES   # R18：中证全指出清单
+    assert "899050.BJ" in pipeline.FROZEN_INDEX_CODES       # 2026-11-19：纳入北证50
+
+
+def test_default_tdx_vipdoc_root_respects_env(monkeypatch):
+    monkeypatch.delenv("AISTOCK_TDX_VIPDOC_ROOT", raising=False)
+    assert pipeline._default_tdx_vipdoc_root() == pipeline.DEFAULT_TDX_VIPDOC_ROOT
+    monkeypatch.setenv("AISTOCK_TDX_VIPDOC_ROOT", "/d/TDX/vipdoc")
+    assert pipeline._default_tdx_vipdoc_root() == "/d/TDX/vipdoc"
 
 
 def test_r18_removed_000985_row_stays_excluded(tmp_path):
