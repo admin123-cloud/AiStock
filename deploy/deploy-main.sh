@@ -28,10 +28,10 @@ export AISTOCK_MAIN_VERSION="$SHA"
 "$DC" -f "$APP/deploy/docker-compose.main.yml" up -d 2>&1 | tail -4
 sleep 15
 fail=0
-for p in '/api/health/check' '/api/market/indices?all=true' '/api/operations/tasks'; do
+for p in '/api/health/check' '/api/market/indices?all=true' '/api/operations/tasks' '/api/market/publication-status'; do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:3000$p" || true); code=${code:0:3}
   echo "  $p -> $code"; [ "$code" = '200' ] || fail=1
 done
-"$DOCK" ps --format '{{.Names}}\t{{.Status}}' | grep -E 'aistock-(backend|frontend|pipeline)'
+"$DOCK" ps --format '{{.Names}}\t{{.Status}}' | grep -E 'aistock-(backend|frontend|pipeline|postclose-watcher)'
 [ "$fail" = 0 ] || { echo 'DEPLOY VERIFY FAILED'; exit 2; }
 echo "DEPLOY_OK main=$SHA"

@@ -36,8 +36,6 @@ services:
       AISTOCK_ARTIFACTS_ROOT: /aistock/artifacts
       AISTOCK_LOGS_ROOT: /aistock/logs
       AISTOCK_TDX_GATEWAY_URL: http://host.docker.internal:8765
-      AISTOCK_QMT_TICK_BRIDGE_URL: http://host.docker.internal:8766/full-tick
-      AISTOCK_QMT_ACCOUNT_BRIDGE_URL: http://host.docker.internal:8766/account-snapshot
     volumes:
       - F:/Aistock/code/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
       - F:/Aistock/data/data/local_observation_preview/data:/aistock/data
@@ -118,6 +116,7 @@ services:
         "--config-path",
         "/app/config/settings.local.yaml",
         "--send-email",
+        "--allow-uninitialized-state",
         "--loop-seconds",
         "120",
       ]

@@ -78,6 +78,7 @@ def inspect_postclose_deadlines(
     now: Optional[datetime] = None,
     is_trading_day: bool = True,
     max_heartbeat_age_sec: float = 300.0,
+    allow_uninitialized_state: bool = False,
 ) -> list[dict[str, Any]]:
     """纯只读巡检：检查控制面证据并把触发的风险事件入队 ``AlertOutbox``。"""
     now_bj = _to_bj(now)
@@ -155,7 +156,7 @@ def inspect_postclose_deadlines(
 
     # 3) state.json 读取与旧日/缺失核验
     if not state_path.is_file():
-        if wall >= CLOSE_DEADLINE:
+        if wall >= CLOSE_DEADLINE and not allow_uninitialized_state:
             _emit(
                 target_date=today_iso,
                 plan_id="watcher",
@@ -277,11 +278,13 @@ def _run_once(
     is_trading_day: bool,
     send_email: bool,
     config_path: Optional[Path],
+    allow_uninitialized_state: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
     events = inspect_postclose_deadlines(
         control_root=control_root,
         outbox=outbox,
         is_trading_day=is_trading_day,
+        allow_uninitialized_state=allow_uninitialized_state,
     )
     mail_outcomes: dict[str, str] = {}
     smtp_summary: dict[str, Any] = {}
@@ -302,6 +305,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--send-email", action="store_true", help="对 pending 脱敏告警执行 SMTP 投递")
     parser.add_argument("--test-email", action="store_true", help="发送 1 封脱敏 S11 测试邮件并打印脱敏回执后退出")
     parser.add_argument("--loop-seconds", type=int, default=0, help="常驻轮询间隔秒数（0=单次退出；sidecar 建议 120）")
+    parser.add_argument(
+        "--allow-uninitialized-state",
+        action="store_true",
+        help="S8 尚未切入实盘前的过渡观察模式：state.json 尚未创建时不报 15:05 缺失，但仍严格监控心跳与已存在 state.json 违约",
+    )
     parser.add_argument("--non-trading-day", action="store_true", help="显式标注非交易日")
     args = parser.parse_args(argv)
 
@@ -352,6 +360,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             is_trading_day=not args.non_trading_day,
             send_email=bool(args.send_email),
             config_path=cfg_path,
+            allow_uninitialized_state=bool(args.allow_uninitialized_state),
         )
         print(
             json.dumps(
