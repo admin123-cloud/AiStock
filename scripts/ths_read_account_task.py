@@ -384,11 +384,175 @@ def _write_report(out_dir: Path, account: str, report: dict[str, Any]) -> Path:
     return latest
 
 
+def _detect_active_account(happ_exe: Path) -> Optional[str]:
+    """只读探测当前交易面板已登录的账号键（acct1/acct2）；不可读返回 None。"""
+    try:
+        chain = tc._yh_ro_chain_snapshot(happ_exe)
+        q_hwnd, _ = tc._yh_ro_find_query_window(chain["xiadan"]["pid"])
+        vals = tc._yh_ro_identity_values(q_hwnd)
+        if not vals:
+            return None
+        resolved = tc._yh_ro_resolve_identity(vals)
+        if isinstance(resolved, dict):
+            return resolved.get("account")
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _write_named_report(out_dir: Path, filename: str, report: dict[str, Any]) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    target = out_dir / filename
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, target)
+    return target
+
+
+def run_multi_account_task(
+    *,
+    accounts: list[str],
+    happ_exe: Path = DEFAULT_HAPP_EXE,
+    with_fills: bool = True,
+    cold_start: bool = True,
+    switch_dry_run: bool = False,
+    wait_idle_after_bootstrap: float = 92.0,
+    out_dir: Path = DEFAULT_OUT_DIR,
+) -> dict[str, Any]:
+    """双账号/多账号串行安全采集：冷启动引导 → 逐账号身份核验/受控切换 → 单账号只读采集 → 分账落盘。
+
+    安全铁律：
+    - 切号失败或未验证（rc != 0）立即 fail-closed，绝不将上一账号数据归属到目标账号；
+    - 每次切号均通过 `ths_client.run_switch_account`（含 Owner 守卫 + 切换后脱敏账号复验）；
+    - `switch_dry_run=True` 时仅验证菜单定位，零真实点击切号。
+    """
+    ordered = [a.strip() for a in accounts if a and a.strip()]
+    if not ordered:
+        raise ValueError("accounts 不能为空")
+
+    bootstrap: Optional[dict[str, Any]] = None
+    if cold_start:
+        bootstrap = bootstrap_cold_start(happ_exe=happ_exe)
+        if not bootstrap.get("ready"):
+            summary = {
+                "schema": tc.SCHEMA,
+                "command": "read-multi-account-task",
+                "yuanhang": True,
+                "generated_at": datetime.now(BJ_TZ).isoformat(),
+                "credentials_touched": False,
+                "accounts_requested": ordered,
+                "switch_dry_run": bool(switch_dry_run),
+                "status": bootstrap.get("status", "bootstrap_failed"),
+                "rc": 4,
+                "reason": bootstrap.get("reason"),
+                "bootstrap": bootstrap,
+                "accounts": {},
+            }
+            _write_named_report(out_dir, "latest_multi.json", summary)
+            return summary
+        if bootstrap.get("interacted") and wait_idle_after_bootstrap > 0:
+            time.sleep(wait_idle_after_bootstrap)
+
+    # 若当前活跃账号在目标列表中，优先采集当前账号，减少一次切号
+    active_now = _detect_active_account(happ_exe)
+    if active_now in ordered and ordered[0] != active_now:
+        ordered = [active_now] + [a for a in ordered if a != active_now]
+
+    per_account: dict[str, dict[str, Any]] = {}
+    all_ok = True
+    for acct in ordered:
+        cur = _detect_active_account(happ_exe)
+        switch_rep: Optional[dict[str, Any]] = None
+        if cur != acct:
+            switch_rep = tc.run_switch_account(
+                to=acct,
+                happ_exe=happ_exe,
+                dry_run=bool(switch_dry_run),
+            )
+            sw_rc = int(switch_rep.get("rc", 1))
+            if switch_dry_run:
+                per_account[acct] = {
+                    "account": acct,
+                    "status": switch_rep.get("status"),
+                    "rc": sw_rc,
+                    "switch": switch_rep,
+                    "read_account": None,
+                }
+                _write_named_report(out_dir, f"latest_{acct}.json", per_account[acct])
+                if sw_rc != 0:
+                    all_ok = False
+                continue
+            if sw_rc != 0:
+                all_ok = False
+                per_account[acct] = {
+                    "account": acct,
+                    "status": switch_rep.get("status") or "switch_failed",
+                    "rc": sw_rc,
+                    "reason": switch_rep.get("reason") or "switch_account_fail_closed",
+                    "switch": switch_rep,
+                    "read_account": None,
+                }
+                _write_named_report(out_dir, f"latest_{acct}.json", per_account[acct])
+                continue
+            # 切号成功产生真实 GUI 点击后，等待 Owner 守卫空闲窗口再只读采集
+            if switch_rep.get("clicks") and wait_idle_after_bootstrap > 0:
+                time.sleep(wait_idle_after_bootstrap)
+
+        read_rep = tc.run_read_account(
+            account=acct,
+            happ_exe=happ_exe,
+            allow_switch=False,
+            with_fills=bool(with_fills),
+        )
+        r_rc = int(read_rep.get("rc", 1))
+        if r_rc != 0:
+            all_ok = False
+        entry = {
+            "account": acct,
+            "status": read_rep.get("status"),
+            "rc": r_rc,
+            "reason": read_rep.get("reason"),
+            "switch": switch_rep,
+            "read_account": read_rep,
+        }
+        per_account[acct] = entry
+        _write_named_report(out_dir, f"latest_{acct}.json", entry)
+
+    summary = {
+        "schema": tc.SCHEMA,
+        "command": "read-multi-account-task",
+        "yuanhang": True,
+        "generated_at": datetime.now(BJ_TZ).isoformat(),
+        "credentials_touched": False,
+        "accounts_requested": ordered,
+        "switch_dry_run": bool(switch_dry_run),
+        "status": "ok" if all_ok else "partial_or_failed",
+        "rc": 0 if all_ok else 4,
+        "bootstrap": bootstrap,
+        "accounts": per_account,
+    }
+    stamp = datetime.now(BJ_TZ).strftime("%Y%m%d_%H%M%S")
+    _write_named_report(out_dir, f"read_multi_{stamp}.json", summary)
+    _write_named_report(out_dir, "latest_multi.json", summary)
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="同花顺远航单账号冷启动引导 + 只读采集任务（凭证零接触、绝不切号/绝不下单）"
+        description="同花顺远航单/双账号冷启动引导 + 只读采集任务（凭证零接触、绝不下单）"
     )
     parser.add_argument("--account", default="acct1", help="目标单账号（默认 acct1）")
+    parser.add_argument(
+        "--accounts",
+        default=None,
+        help="多账号逗号列表（如 acct1,acct2）；指定时启用双账号受控切换采集模式",
+    )
+    parser.add_argument(
+        "--switch-dry-run",
+        action="store_true",
+        help="多账号模式下切号仅做菜单定位干跑（零真实点击）",
+    )
     parser.add_argument("--happ-exe", type=Path, default=DEFAULT_HAPP_EXE, help="远航版主程序路径")
     parser.add_argument("--no-fills", action="store_true", help="跳过历史成交只读采集")
     parser.add_argument("--no-cold-start", action="store_true", help="禁用冷启动引导，仅做纯只读采集")
@@ -396,10 +560,23 @@ def main(argv: list[str] | None = None) -> int:
         "--wait-idle-after-bootstrap",
         type=float,
         default=92.0,
-        help="冷启动交互后等待 Owner 守卫空闲窗口秒数（默认 92s；0 表示不等待）",
+        help="冷启动/切号交互后等待 Owner 守卫空闲窗口秒数（默认 92s；0 表示不等待）",
     )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR, help="报告输出目录")
     args = parser.parse_args(argv)
+
+    if args.accounts:
+        acct_list = [x.strip() for x in str(args.accounts).split(",") if x.strip()]
+        rep = run_multi_account_task(
+            accounts=acct_list,
+            happ_exe=args.happ_exe,
+            with_fills=not bool(args.no_fills),
+            cold_start=not bool(args.no_cold_start),
+            switch_dry_run=bool(args.switch_dry_run),
+            wait_idle_after_bootstrap=float(args.wait_idle_after_bootstrap),
+            out_dir=args.out_dir,
+        )
+        return int(rep.get("rc", 1))
 
     rep = run_task(
         account=args.account,

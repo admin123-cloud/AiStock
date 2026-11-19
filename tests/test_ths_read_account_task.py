@@ -73,3 +73,60 @@ class TestThsReadAccountTaskColdStart:
         assert rep["credentials_touched"] is False
         saved = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
         assert saved["bootstrap"]["ready"] is True
+
+    def test_multi_account_reads_active_first_switches_to_second_and_isolates_reports(self, monkeypatch, tmp_path):
+        state = {"active": "acct1"}
+        switches = []
+
+        monkeypatch.setattr(task, "bootstrap_cold_start", lambda **kw: {"ready": True, "status": "bootstrap_ready", "interacted": False})
+        monkeypatch.setattr(task, "_detect_active_account", lambda _exe: state["active"])
+
+        def fake_switch(*, to, happ_exe, dry_run=False):
+            switches.append((to, dry_run))
+            state["active"] = to
+            return {"status": "switched", "rc": 0, "to": to, "clicks": [{"target": to}]}
+
+        monkeypatch.setattr(task.tc, "run_switch_account", fake_switch)
+        monkeypatch.setattr(
+            task.tc,
+            "run_read_account",
+            lambda **kw: {"status": "ok", "rc": 0, "account": kw["account"], "allow_switch": kw["allow_switch"]},
+        )
+
+        rep = task.run_multi_account_task(
+            accounts=["acct2", "acct1"],
+            wait_idle_after_bootstrap=0.0,
+            out_dir=tmp_path,
+        )
+        # 当前已在 acct1，自动优先读 acct1 再切到 acct2（仅切 1 次）
+        assert rep["rc"] == 0
+        assert rep["accounts_requested"] == ["acct1", "acct2"]
+        assert switches == [("acct2", False)]
+        assert (tmp_path / "latest_acct1.json").is_file()
+        assert (tmp_path / "latest_acct2.json").is_file()
+        assert (tmp_path / "latest_multi.json").is_file()
+
+    def test_multi_account_switch_failure_fails_closed_without_cross_account_pollution(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(task, "bootstrap_cold_start", lambda **kw: {"ready": True, "status": "bootstrap_ready", "interacted": False})
+        monkeypatch.setattr(task, "_detect_active_account", lambda _exe: "acct1")
+        monkeypatch.setattr(
+            task.tc,
+            "run_switch_account",
+            lambda **kw: {"status": "menu_not_located", "rc": 4, "reason": "menu_not_located"},
+        )
+        read_calls = []
+        monkeypatch.setattr(
+            task.tc,
+            "run_read_account",
+            lambda **kw: read_calls.append(kw["account"]) or {"status": "ok", "rc": 0, "account": kw["account"]},
+        )
+
+        rep = task.run_multi_account_task(
+            accounts=["acct1", "acct2"],
+            wait_idle_after_bootstrap=0.0,
+            out_dir=tmp_path,
+        )
+        assert rep["rc"] == 4
+        assert read_calls == ["acct1"]  # acct2 切号失败后严禁调用 read_account 防止串账
+        assert rep["accounts"]["acct2"]["read_account"] is None
+        assert rep["accounts"]["acct2"]["status"] == "menu_not_located"
