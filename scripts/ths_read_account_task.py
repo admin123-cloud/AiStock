@@ -96,6 +96,42 @@ def _inspect_panel_login_controls(panel_hwnd: int) -> dict[str, Any]:
     return info
 
 
+def _activate_and_raise_window(hwnd: int) -> dict[str, Any]:
+    """激活目标窗口并短暂置顶后恢复（确保同花顺主窗/交易面板处于桌面最上层）。"""
+    if not hwnd or not tc.IS_WINDOWS or tc.USER32 is None:
+        return {"ok": False, "reason": "non_windows_or_invalid_hwnd"}
+    h = int(hwnd)
+    try:
+        # SW_RESTORE = 9：若最小化先恢复
+        tc.USER32.ShowWindow(h, 9)
+        # 临时置顶抬升到桌面最上层再还原 NOTOPMOST（避免永久强占置顶）
+        tc.USER32.SetWindowPos(
+            h, 0xFFFFFFFF, 0, 0, 0, 0,
+            tc.SWP_NOMOVE | tc.SWP_NOSIZE | tc.SWP_SHOWWINDOW,
+        )
+        time.sleep(0.1)
+        fg = tc._yh_set_foreground(h)
+        tc.USER32.SetWindowPos(
+            h, 0xFFFFFFFE, 0, 0, 0, 0,
+            tc.SWP_NOMOVE | tc.SWP_NOSIZE | tc.SWP_SHOWWINDOW,
+        )
+        return {"ok": True, "hwnd": h, "foreground": fg}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "hwnd": h, "reason": type(exc).__name__}
+
+
+def _diagnose_readonly_bind(happ_exe: Path) -> dict[str, Any]:
+    """当 run_read_account 返回 exception_fail_closed 时，只读诊断适配器绑定的具体拒绝原因。"""
+    try:
+        with tc._yh_readonly_lock(timeout_seconds=3.0) as acq:
+            if acq is not True:
+                return {"stage": "lock", "error": "lock_busy"}
+            tc._YhReadonlyAdapter(happ_exe=happ_exe)
+            return {"stage": "adapter_init", "error": None}
+    except Exception as exc:  # noqa: BLE001
+        return {"stage": "adapter_init", "error_type": type(exc).__name__, "error": str(exc)}
+
+
 def _click_panel_login_button(login_button_hwnd: int) -> dict[str, Any]:
     """点击交易面板登录按钮（仅在密码已记住且无空验证码时调用）。"""
     if not login_button_hwnd:
@@ -178,16 +214,23 @@ def bootstrap_cold_start(
             "xiadan_pid": ro_chain["xiadan"]["pid"],
             "plus_pid": ro_chain["plus"]["pid"],
         })
+        # 确保同花顺交易面板（优先）或主窗口被激活并置于上层
+        existing_panels = tc._yh_enum_panels()
+        target_hwnd = existing_panels[0]["hwnd"] if existing_panels else main_win["hwnd"]
+        raise_res = _activate_and_raise_window(target_hwnd)
+        steps.append({"step": "activate_and_raise", **raise_res})
         result["ready"] = True
         result["status"] = "bootstrap_ready"
         return result
 
-    # 4) 枚举交易面板；未开则前台化主程序并按 F12 拉起
+    # 4) 枚举交易面板；未开则激活置顶主程序并按 F12 拉起
     panels = tc._yh_enum_panels()
     if panels:
         panel = panels[0]
         steps.append({"step": "panel_already_open", "hwnd": panel["hwnd"]})
+        steps.append({"step": "activate_and_raise", **_activate_and_raise_window(panel["hwnd"])})
     else:
+        steps.append({"step": "activate_and_raise_main", **_activate_and_raise_window(main_win["hwnd"])})
         fg = tc._yh_set_foreground(main_win["hwnd"])
         steps.append({"step": "main_foreground", **fg})
         time.sleep(0.3)
@@ -292,6 +335,13 @@ def run_task(
         "read_account": read_rep,
     }
     _write_report(out_dir, account, report)
+    if read_rep.get("status") == "exception_fail_closed":
+        diag = _diagnose_readonly_bind(happ_exe)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "diagnostic.json").write_text(
+            json.dumps(diag, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return report
 
 
