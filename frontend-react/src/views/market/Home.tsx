@@ -312,6 +312,7 @@ export default function Home() {
   const [allIndices, setAllIndices] = useState<any[]>([])
   const [tradingDate, setTradingDate] = useState<string | null>(null)
   const [sentiment, setSentiment] = useState<any>(null)
+  const [publicationStatus, setPublicationStatus] = useState<any>(null)
   const [marginSentiment, setMarginSentiment] = useState<any>({ available: false, dates: [], latest: null })
   const [emotionCycleData, setEmotionCycleData] = useState<any>(null)
   const [emotionGranularity, setEmotionGranularity] = useState<'daily' | 'hourly'>('daily')
@@ -357,16 +358,18 @@ export default function Home() {
     async (retryCount = 0) => {
       try {
         const refreshParams = { _ts: Date.now() }
-        const [indicesRes, sentimentRes, marginRes] = (await Promise.all([
+        const [indicesRes, sentimentRes, marginRes, pubRes] = (await Promise.all([
           request.get('/market/indices', { params: { all: true, ...refreshParams }, skipErrorHandler: true }),
           request.get('/market/sentiment', { params: refreshParams, skipErrorHandler: true }),
-          request.get('/market/margin-sentiment', { params: { days: 30, ...refreshParams }, skipErrorHandler: true })
+          request.get('/market/margin-sentiment', { params: { days: 30, ...refreshParams }, skipErrorHandler: true }),
+          request.get('/market/publication-status', { params: refreshParams, skipErrorHandler: true }).catch(() => null)
         ])) as any[]
 
         setMarginSentiment(marginRes || { available: false, dates: [], latest: null })
         setAllIndices(indicesRes?.indices || [])
         setTradingDate(indicesRes?.trading_date || null)
         setSentiment(sentimentRes?.error ? null : sentimentRes)
+        setPublicationStatus(pubRes && typeof pubRes === 'object' ? pubRes : null)
 
         await loadEmotionCycle()
       } catch (error) {
@@ -1032,6 +1035,28 @@ export default function Home() {
           title="大盘情绪概览"
           subtitle={<span className="tabular-nums">{sentiment?.date || tradingDate || '加载中...'}</span>}
         />
+
+        {/* S9 发布代际状态条：仅在控制面已激活时呈现 CERTIFIED 或 not_ready 重建提示 */}
+        {publicationStatus && publicationStatus.reason !== 'control_state_missing' && (
+          <div
+            className={`mb-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-xs ${
+              publicationStatus.ready
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300'
+                : 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800/70 dark:bg-amber-950/50 dark:text-amber-200'
+            }`}
+          >
+            <div className="font-medium">
+              {publicationStatus.ready
+                ? `盘后数据已认证发布 · 数据日 ${publicationStatus.data_date || '--'} · 代际 g${publicationStatus.generation}`
+                : `盘后数据重建或门禁拦截中（${publicationStatus.status} · ${publicationStatus.reason}）— 不混合展示未认证当日数据`}
+            </div>
+            <div className="tabular-nums opacity-80">
+              {publicationStatus.last_certified_date
+                ? `上一认证日：${publicationStatus.last_certified_date}`
+                : '尚无认证记录'}
+            </div>
+          </div>
+        )}
 
         {/* 主要指数 */}
         <section className="mb-8">
