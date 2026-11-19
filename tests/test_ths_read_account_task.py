@@ -80,6 +80,7 @@ class TestThsReadAccountTaskColdStart:
 
         monkeypatch.setattr(task, "bootstrap_cold_start", lambda **kw: {"ready": True, "status": "bootstrap_ready", "interacted": False})
         monkeypatch.setattr(task, "_detect_active_account", lambda _exe: state["active"])
+        monkeypatch.setattr(task, "_switch_via_panel_combobox", lambda *_a, **_kw: None)
 
         def fake_switch(*, to, happ_exe, dry_run=False):
             switches.append((to, dry_run))
@@ -109,6 +110,7 @@ class TestThsReadAccountTaskColdStart:
     def test_multi_account_switch_failure_fails_closed_without_cross_account_pollution(self, monkeypatch, tmp_path):
         monkeypatch.setattr(task, "bootstrap_cold_start", lambda **kw: {"ready": True, "status": "bootstrap_ready", "interacted": False})
         monkeypatch.setattr(task, "_detect_active_account", lambda _exe: "acct1")
+        monkeypatch.setattr(task, "_switch_via_panel_combobox", lambda *_a, **_kw: None)
         monkeypatch.setattr(
             task.tc,
             "run_switch_account",

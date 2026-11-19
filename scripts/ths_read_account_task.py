@@ -402,17 +402,8 @@ def _switch_via_panel_combobox(
     try:
         chain = tc._yh_ro_chain_snapshot(happ_exe)
         q_hwnd, _ = tc._yh_ro_find_query_window(chain["xiadan"]["pid"])
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "schema": tc.SCHEMA,
-            "command": "switch-account-combobox",
-            "status": "combobox_exception",
-            "rc": 4,
-            "to": target_account,
-            "reason": f"{type(exc).__name__}: {exc}",
-            "clicks": [],
-            "credentials_touched": False,
-        }
+    except Exception:  # noqa: BLE001
+        return None
 
     try:
         from pywinauto import Desktop
@@ -496,17 +487,8 @@ def _detect_active_account(happ_exe: Path) -> Optional[str]:
     try:
         chain = tc._yh_ro_chain_snapshot(happ_exe)
         q_hwnd, _ = tc._yh_ro_find_query_window(chain["xiadan"]["pid"])
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "schema": tc.SCHEMA,
-            "command": "switch-account-combobox",
-            "status": "combobox_exception",
-            "rc": 4,
-            "to": target_account,
-            "reason": f"{type(exc).__name__}: {exc}",
-            "clicks": [],
-            "credentials_touched": False,
-        }
+    except Exception:  # noqa: BLE001
+        return None
     # 1) 优先通过 _yh_ro_identity_values 读顶栏脱敏账号与标签
     try:
         vals = tc._yh_ro_identity_values(q_hwnd)
@@ -525,17 +507,8 @@ def _detect_active_account(happ_exe: Path) -> Optional[str]:
         win = Desktop(backend="win32").window(handle=int(q_hwnd))
         label, _png = hs.read_window_identity(win)
         return _match_account_from_text(label)
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "schema": tc.SCHEMA,
-            "command": "switch-account-combobox",
-            "status": "combobox_exception",
-            "rc": 4,
-            "to": target_account,
-            "reason": f"{type(exc).__name__}: {exc}",
-            "clicks": [],
-            "credentials_touched": False,
-        }
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _write_named_report(out_dir: Path, filename: str, report: dict[str, Any]) -> Path:
