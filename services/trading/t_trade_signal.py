@@ -186,7 +186,7 @@ def tracker_dir(out_dir: Optional[Path] = None) -> Path:
     if root:
         return Path(root)
     import sys
-    proj = Path(__file__).resolve().parents[1]
+    proj = Path(__file__).resolve().parents[2]
     if str(proj) not in sys.path:
         sys.path.insert(0, str(proj))
     from utils.paths import runtime_path
@@ -695,7 +695,7 @@ def _ch_fallback_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
 
 def _ch_client():
     import sys
-    proj = Path(__file__).resolve().parents[1]
+    proj = Path(__file__).resolve().parents[2]
     if str(proj) not in sys.path:
         sys.path.insert(0, str(proj))
     from utils.market_warehouse import clickhouse_client
@@ -753,7 +753,7 @@ def load_broker_holdings() -> dict[str, Any]:
     文件缺失/不可解析 → 抛异常（fail-closed，不猜持仓）。
     """
     import sys
-    proj = Path(__file__).resolve().parents[1]
+    proj = Path(__file__).resolve().parents[2]
     if str(proj) not in sys.path:
         sys.path.insert(0, str(proj))
     from utils.paths import runtime_path
@@ -786,7 +786,7 @@ def load_broker_holdings() -> dict[str, Any]:
 
 def _default_watchlist_paths() -> tuple[Path, Path]:
     import sys
-    proj = Path(__file__).resolve().parents[1]
+    proj = Path(__file__).resolve().parents[2]
     if str(proj) not in sys.path:
         sys.path.insert(0, str(proj))
     from utils.paths import runtime_path
@@ -827,7 +827,7 @@ def load_t_pool(*, watchlist_store: Optional[Path] = None) -> dict[str, Any]:
         items: list[dict[str, Any]] = []
         if store.exists():
             import sys
-            proj = Path(__file__).resolve().parents[1]
+            proj = Path(__file__).resolve().parents[2]
             if str(proj) not in sys.path:
                 sys.path.insert(0, str(proj))
             from services.holding_t_watchlist import read_watchlist
@@ -2582,7 +2582,7 @@ def _default_fills_loader(for_date: date,
             return rows, f"file:{fills_file.name}"
     try:
         import sys
-        proj = Path(__file__).resolve().parents[1]
+        proj = Path(__file__).resolve().parents[2]
         if str(proj) not in sys.path:
             sys.path.insert(0, str(proj))
         from services.ths_account_bridge import read_ths_trade_history

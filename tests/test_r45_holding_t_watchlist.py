@@ -386,7 +386,7 @@ class TestApiHandlers:
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _G3_SOURCE = (_PROJECT_ROOT / "api" / "gen3_state_alpha.py").read_text(encoding="utf-8")
 _G3_TREE = ast.parse(_G3_SOURCE)
-_HTW_SOURCE = (_PROJECT_ROOT / "services" / "holding_t_watchlist.py").read_text(encoding="utf-8")
+_HTW_SOURCE = (_PROJECT_ROOT / "services" / "trading" / "holding_t_watchlist.py").read_text(encoding="utf-8")
 _HTW_TREE = ast.parse(_HTW_SOURCE)
 
 _R45_WRITE_HANDLERS = ("post_gen3_holding_t_watchlist_upsert", "post_gen3_holding_t_watchlist_sync_ths")

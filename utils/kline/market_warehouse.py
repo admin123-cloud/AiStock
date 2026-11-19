@@ -11,7 +11,7 @@ import pandas as pd
 
 from utils.paths import warehouse_path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 WAREHOUSE_ROOT = warehouse_path()
 _CH_LOCAL = threading.local()
 _CH_LOCK = threading.Lock()

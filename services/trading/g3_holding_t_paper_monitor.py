@@ -38,7 +38,7 @@ SHADOW_ATTRIBUTION_STATE_PATH = runtime_path("g3_holding_t_paper", "shadow_attri
 TICK_SNAPSHOT_DIR = runtime_path("g3_holding_t_paper", "tick_snapshots")
 MINUTE_REPAIR_STATE_PATH = runtime_path("g3_holding_t_paper", "minute_repair_state.json")
 MINUTE_REPAIR_REPORT_PATH = runtime_path("g3_holding_t_paper", "minute_repair_report.json")
-MINUTE_REPAIR_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "qmt_fullpush_intraday_aggregator.py"
+MINUTE_REPAIR_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "qmt_fullpush_intraday_aggregator.py"
 # A complete T cycle consumes two event notices.  Six keeps the user's
 # 2-3-cycle daily boundary while ensuring two confirmed sell legs can both
 # receive their corresponding conditional buyback reminders.

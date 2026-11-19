@@ -1,0 +1,9 @@
+# Web API 与生产容器运行依赖（与 worker 共享同一依赖层以复用 Docker BuildKit 缓存）
+-r base.txt
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+apscheduler==3.10.4
+pytdx==1.72
+tushare==1.2.89
+akshare==1.18.49
+efinance==0.5.8

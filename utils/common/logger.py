@@ -37,7 +37,7 @@ def setup_logger(
     # 创建日志目录（相对于项目根目录）
     log_path = Path(log_dir)
     if not log_path.is_absolute():
-        log_path = logs_root() if log_dir == "logs" else Path(__file__).parent.parent / log_path
+        log_path = logs_root() if log_dir == "logs" else Path(__file__).resolve().parents[2] / log_path
     log_path.mkdir(parents=True, exist_ok=True)
     
     # 日志格式

@@ -29,15 +29,15 @@ git -C "$APP" archive --format=tar "$SHA" | tar -x -C "$SRC"
 
 test -f "$SRC/infra/docker/Dockerfile.api" \
   && test -f "$SRC/infra/docker/Dockerfile.worker" \
-  && test -f "$SRC/frontend-react/Dockerfile.release" \
+  && test -f "$SRC/frontend/Dockerfile.release" \
   && test -f "$SRC/pipelines/scheduler.py" \
   && test -f "$SRC/pipelines/postclose_watcher.py" \
-  && test -f "$SRC/services/intraday_price_feed.py"
+  && test -f "$SRC/services/market/intraday_price_feed.py"
 
 echo '== 构建分角色精简镜像 (api / worker / frontend) =='
 "$DOCK" build -t "aistock-backend:$SHA" -f "$SRC/infra/docker/Dockerfile.api" "$SRC" 2>&1 | tail -3
 "$DOCK" build -t "aistock-worker:$SHA" -f "$SRC/infra/docker/Dockerfile.worker" "$SRC" 2>&1 | tail -3
-"$DOCK" build -t "aistock-frontend:$SHA" -f "$SRC/frontend-react/Dockerfile.release" "$SRC/frontend-react" 2>&1 | tail -3
+"$DOCK" build -t "aistock-frontend:$SHA" -f "$SRC/frontend/Dockerfile.release" "$SRC/frontend" 2>&1 | tail -3
 "$DOCK" tag "aistock-frontend:$SHA" "aistock-frontend:latest"
 
 echo '== 切换容器（backend + frontend + pipeline-runner + postclose-watcher）=='

@@ -23,7 +23,7 @@ from data_fetcher.sources.tdxquant_pool import tdxquant_pool
 
 
 app = FastAPI(title="AiStock TDX Gateway", version="1.0.0")
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_MARKET_DATA_RESPONSE_FIELDS = ("Open", "High", "Low", "Close", "Volume", "Amount")
 GATEWAY_TASK_NAME = "AiStock TDX Gateway"

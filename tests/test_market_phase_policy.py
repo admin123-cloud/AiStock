@@ -10,7 +10,7 @@ from services.postclose_contracts import Purpose
 
 # Loading this single module directly avoids utils/__init__.py, which imports
 # application configuration and database modules before the tested module.
-_spec = importlib.util.spec_from_file_location("s1_market_phase_policy", Path(__file__).resolve().parents[1] / "utils" / "market_phase_policy.py")
+_spec = importlib.util.spec_from_file_location("s1_market_phase_policy", Path(__file__).resolve().parents[1] / "utils" / "calendar" / "market_phase_policy.py")
 p = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = p
 _spec.loader.exec_module(p)

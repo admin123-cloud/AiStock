@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aistock"
+version = "2.0.0"
+description = "AiStock 量化行情、盘后数据治理与交易辅助系统"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    "Libs",
+    ".graphify-out",
+    "data",
+    "runtime",
+    "storage",
+    "archive",
+    "reports",
+    "frontend",
+    "node_modules",
+    ".git",
+]

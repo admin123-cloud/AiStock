@@ -13,7 +13,7 @@ from services import postclose_contracts as contracts
 
 # Avoid executing utils/__init__.py and its config/database imports.
 _spec = importlib.util.spec_from_file_location(
-    's3a_lock_context', Path(__file__).resolve().parents[1] / 'utils' / 'postclose_lock_context.py')
+    's3a_lock_context', Path(__file__).resolve().parents[1] / 'utils' / 'db' / 'postclose_lock_context.py')
 _lock_module = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = _lock_module
 _spec.loader.exec_module(_lock_module)

@@ -8,12 +8,12 @@ __pycache__/
 .coverage
 
 # Frontend
-frontend-react/node_modules/
-frontend-react/.npm-cache/
-frontend-react/dist/
-frontend-react/.vite/
-frontend-react/*.log
-frontend-react/tsconfig.tsbuildinfo
+frontend/node_modules/
+frontend/.npm-cache/
+frontend/dist/
+frontend/.vite/
+frontend/*.log
+frontend/tsconfig.tsbuildinfo
 
 # Local environment and secrets
 .env

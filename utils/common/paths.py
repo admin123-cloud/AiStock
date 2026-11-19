@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUNTIME_ROOT = Path(r"F:\Aistock\runtime")
 DEFAULT_STORAGE_ROOT = Path(r"F:\Aistock\storage")
 DEFAULT_DATA_ROOT = DEFAULT_STORAGE_ROOT
