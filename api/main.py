@@ -10,8 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.accounts import router as accounts_router
 from api.cls_news import router as cls_news_router
-from api.data_statistics import router as data_stats_router
-from api.kline_check import router as kline_check_router
+from api.data_center import router as data_center_router
 from api.market_board import router as market_board_router
 from api.market_overview import router as market_router
 from api.sectors import router as sectors_router
@@ -59,19 +58,12 @@ async def lifespan(app: FastAPI):
             start_core_data_maintenance_scheduler,
             maybe_run_startup_reference_sync,
         )
-            init_gen2_shadow_buy_monitor_scheduler_from_config,
-            init_v4_manual_holdings_monitor_scheduler_from_config,
-        )
 
         core_maintenance_status = start_core_data_maintenance_scheduler()
         if core_maintenance_status is None:
             logger.info("Core data maintenance scheduler remains disabled; Windows Host QMT tasks own market-data production")
         else:
             logger.info("Core data maintenance scheduler started")
-        v4_monitor_status = init_v4_manual_holdings_monitor_scheduler_from_config()
-        logger.info(f"V4 manual holdings monitor scheduler initialized: {v4_monitor_status}")
-        gen2_shadow_monitor_status = init_gen2_shadow_buy_monitor_scheduler_from_config()
-        logger.info(f"G2 shadow buy monitor scheduler initialized: {gen2_shadow_monitor_status}")
         if maybe_run_startup_reference_sync():
             logger.info("Startup reference data sync enabled")
         else:
@@ -136,14 +128,13 @@ async def runtime_health_check():
     return snapshot
 
 
-app.include_router(data_stats_router, prefix="/api", tags=["data-statistics"])
+app.include_router(data_center_router, prefix="/api")
 app.include_router(stocks_router, prefix="/api")
 app.include_router(market_board_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(sectors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(system_router, prefix="/api", tags=["system"])
-app.include_router(kline_check_router, prefix="/api", tags=["kline-check"])
 app.include_router(cls_news_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
 

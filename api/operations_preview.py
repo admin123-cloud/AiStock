@@ -43,8 +43,7 @@ from api.accounts import router as accounts_router
 from api.g3 import router as g3_router
 from api.operations import router as operations_router
 from api.cls_news import router as cls_news_router
-from api.data_statistics import router as data_stats_router
-from api.kline_check import router as kline_check_router
+from api.data_center import router as data_center_router
 from api.market_overview import router as market_overview_router
 from api.market_board import router as market_board_router
 from api.sectors import router as sectors_router
@@ -58,8 +57,7 @@ app = FastAPI(title='AiStock 统一栈预览（安全观察模式，只读）',
               docs_url=None, redoc_url=None, openapi_url=None, oauth2_redirect_url=None)
 app.include_router(operations_router, prefix='/api')
 app.include_router(cls_news_router, prefix='/api')
-app.include_router(data_stats_router, prefix='/api', tags=['data-statistics'])
-app.include_router(kline_check_router, prefix='/api', tags=['kline-check'])
+app.include_router(data_center_router, prefix='/api')
 app.include_router(market_board_router)
 app.include_router(market_overview_router, prefix='/api')
 app.include_router(sectors_router, prefix='/api')
@@ -111,10 +109,9 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/g3/review/shadow',
     '/api/g3/review/signal-quality',
     '/api/g3/settings',
-    '/api/data-statistics/completeness',
-    '/api/data-statistics/field-missing',
-    '/api/data-statistics/kline-missing',
-    '/api/data-statistics/overview',
+    '/api/data-center/health-matrix',
+    '/api/data-center/kline-inspect',
+    '/api/data-center/overview',
     '/api/gen3-shadow/guarded',
     '/api/gen3-shadow/live',
     '/api/gen3-shadow/range-filtered',
@@ -178,15 +175,6 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/gen3-state-alpha/workflow/status',
     '/api/health/check',
     '/api/health/runtime',
-    '/api/kline-check/check-single',
-    '/api/kline-check/health',
-    '/api/kline-check/history',
-    '/api/kline-check/history/{check_id}',
-    '/api/kline-check/progress/{task_id}',
-    '/api/kline-check/repair-progress/{task_id}',
-    '/api/kline-check/repair-results/{task_id}',
-    '/api/kline-check/results-all/{task_id}',
-    '/api/kline-check/results/{task_id}',
     '/api/market/advance-decline-distribution',
     '/api/market/breadth',
     '/api/market/emotion-trend',

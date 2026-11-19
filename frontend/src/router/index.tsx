@@ -41,14 +41,14 @@ export const routes: AppRoute[] = [
   ),
   page(
     '/data/health',
-    'DataHealth',
-    { title: '数据健康', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1 },
-    () => import('@/views/operations/DataHealth')
+    'DataCenter',
+    { title: '数据健康与监控', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1, navLabel: '数据健康与监控' },
+    () => import('@/views/operations/DataCenter')
   ),
   page(
     '/kline-check',
     'KlineCheck',
-    { title: 'K线完整性检查', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1.2, navLabel: 'K线完整性', icon: '✓' },
+    { title: 'K线完整性检查', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 2, navLabel: 'K线完整性', icon: '✓' },
     () => import('@/views/operations/KlineCheck')
   ),
   page(
@@ -130,11 +130,12 @@ export const routes: AppRoute[] = [
     { title: 'G3 做T实战台', group: 'gen3', hiddenInNav: true },
     () => import('@/views/g3/G3Desk')
   ),
+  // 兼容旧 /data-stats 书签，自动落入统一数据健康与监控页
   page(
     '/data-stats',
-    'DataStats',
-    { title: '数据监控', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1, navLabel: '数据监控', icon: '📊' },
-    () => import('@/views/operations/DataStats')
+    'DataStatsRedirect',
+    { title: '数据健康与监控', group: 'data', hiddenInNav: true },
+    () => import('@/views/operations/DataCenter')
   ),
   page(
     '/system-config',
