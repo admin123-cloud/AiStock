@@ -29,7 +29,7 @@ from services import l2_fill_closure  # noqa: E402
 from services import t_trade_signal as tts  # noqa: E402
 
 BJ_TZ = timezone(timedelta(hours=8))
-DEFAULT_ROOT = Path(r"F:\Aistock\data\data\runtime\ths_read_account")
+DEFAULT_ROOT = Path(r"F:\Aistock\runtime\ths_read_account")
 DEFAULT_HAPP_EXE = Path(r"D:\同花顺远航\同花顺远航版\bin\happ.exe")
 
 

@@ -1,37 +1,3 @@
 #!/usr/bin/env bash
-# AiStock main 唯一部署管道（Owner 2026-11-09 裁决固化；2026-11-09 归位仓库内）
-set -euo pipefail
-APP='F:/Aistock/code'
-# 2026-11-13：config.json 的 credsStore=desktop 需要 docker-credential-desktop 在 PATH
-# （Docker Desktop 重启会把删掉的 credsStore 写回来；resources/bin 常规不在 git-bash PATH）
-export PATH="/c/Program Files/Docker/Docker/resources/bin:$PATH"
-DOCK='/c/Program Files/Docker/Docker/resources/bin/docker.exe'
-DC='/c/Program Files/Docker/Docker/resources/cli-plugins/docker-compose.exe'
-
-cur=$(git -C "$APP" symbolic-ref --short HEAD 2>/dev/null || echo DETACHED)
-if [ "$cur" != 'main' ]; then echo "REFUSE: 当前处于 '$cur'。裁决：只部署 main。"; exit 1; fi
-SHA=$(git -C "$APP" rev-parse HEAD)
-echo "AISTOCK_MAIN_VERSION=$SHA"
-dirty=$(git -C "$APP" status --porcelain=v1 | wc -l)
-if [ "$dirty" -gt 0 ]; then echo "提示：main 有 $dirty 项未提交改动（不参与构建）："; git -C "$APP" status --porcelain=v1 | head -5; fi
-SRC="F:/Aistock/data/builds/$SHA-src"; rm -rf "$SRC"; mkdir -p "$SRC"
-git -C "$APP" archive --format=tar "$SHA" | tar -x -C "$SRC"
-test -f "$SRC/Dockerfile.backend" && test -f "$SRC/frontend-react/Dockerfile.release" && test -f "$SRC/scripts/pipeline_scheduler.py" && test -f "$SRC/services/intraday_price_feed.py" && test -f "$SRC/scripts/alert_local.py"
-echo '== 构建后端/前端镜像 =='
-"$DOCK" build -t "aistock-backend:$SHA" -f "$SRC/Dockerfile.backend" "$SRC" 2>&1 | tail -2
-"$DOCK" build -t "aistock-frontend:$SHA" -f "$SRC/frontend-react/Dockerfile.release" "$SRC/frontend-react" 2>&1 | tail -2
-# compose frontend 固定引用 aistock-frontend:latest（backend/pipeline 才是 ${AISTOCK_MAIN_VERSION}）；
-# 不打 latest tag 则 compose 判定无变化、前端容器永不更新（2026-11-16 实证：DEPLOY_OK 但前端仍为 3 天前镜像）。
-"$DOCK" tag "aistock-frontend:$SHA" "aistock-frontend:latest"
-echo '== 切换容器（preview + frontend + pipeline-runner） =='
-export AISTOCK_MAIN_VERSION="$SHA"
-"$DC" -f "$APP/deploy/docker-compose.main.yml" up -d 2>&1 | tail -4
-sleep 15
-fail=0
-for p in '/api/health/check' '/api/market/indices?all=true' '/api/operations/tasks' '/api/market/publication-status'; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:3000$p" || true); code=${code:0:3}
-  echo "  $p -> $code"; [ "$code" = '200' ] || fail=1
-done
-"$DOCK" ps --format '{{.Names}}\t{{.Status}}' | grep -E 'aistock-(backend|frontend|pipeline|postclose-watcher)'
-[ "$fail" = 0 ] || { echo 'DEPLOY VERIFY FAILED'; exit 2; }
-echo "DEPLOY_OK main=$SHA"
+# 兼容转发入口：唯一正式部署脚本已收敛至 F:/Aistock/code/infra/deploy.sh
+exec bash F:/Aistock/code/infra/deploy.sh "$@"

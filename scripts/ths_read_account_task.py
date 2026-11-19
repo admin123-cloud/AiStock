@@ -34,7 +34,7 @@ from scripts import ths_client as tc  # noqa: E402
 
 BJ_TZ = timezone(timedelta(hours=8))
 DEFAULT_HAPP_EXE = Path(r"D:\同花顺远航\同花顺远航版\bin\happ.exe")
-DEFAULT_OUT_DIR = Path(r"F:\Aistock\data\data\runtime\ths_read_account")
+DEFAULT_OUT_DIR = Path(r"F:\Aistock\runtime\ths_read_account")
 WM_GETTEXTLENGTH = 0x000E
 
 

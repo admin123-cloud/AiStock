@@ -17,19 +17,23 @@
 
 ## Repository Shape
 
-This repository is the unified AiStock application source under F:\Aistock\code. Keep runtime data and research artifacts in the sibling directories managed by this root.
+This repository is the unified AiStock application source under `F:\Aistock\code`. Keep runtime state, storage, and cold archives in the sibling directories managed by `F:\Aistock`:
 
-External layers:
-
-- Data/runtime: `F:\AiStock\data`
-- Research archive: `F:\AiStock\research`
-- Unified root: `F:\AiStock`
+- Source & Docker orchestration (Git repo): `F:\Aistock\code`
+  - `infra/`: Single source of truth for Docker Compose (`docker-compose.yml`), role-based Dockerfiles (`docker/`), Nginx (`nginx/`), and `deploy.sh`
+  - `pipelines/`: Production container scheduler & watcher entrypoints
+  - `host_bridges/`: Windows host-only GUI bridge entrypoints (TDX / THS)
+  - `research/`: Strategy research, backtests, and archived G2/G3 legacy scripts (excluded from production Docker images)
+- Hot runtime & host-container IPC: `F:\Aistock\runtime`
+- Persistent storage (warehouse / reports / artifacts / logs): `F:\Aistock\storage`
+- Cold archive (historical snapshots & raw packages): `F:\Aistock\archive`
+- Build context cache (auto-pruned to latest 3 SHAs): `F:\Aistock\.cache\builds`
 
 ## Path Rules
 
-- Use `utils.paths` for runtime/data/report/log paths.
-- Prefer `data_path(...)`, `runtime_path(...)`, `cache_path(...)`, `warehouse_path(...)`, and `report_path(...)`.
-- Runtime data is stored in `F:\AiStock\data`; research reports are stored in `F:\AiStock\research`. Keep generated heavy outputs outside the app source when possible.
+- Use `utils.paths` for runtime/storage/report/log paths.
+- Prefer `runtime_path(...)`, `warehouse_path(...)`, `cache_path(...)`, `report_path(...)`, and `data_path(...)`.
+- Runtime state lives in `F:\Aistock\runtime`; persistent warehouse/reports/artifacts/logs live in `F:\Aistock\storage`. Keep generated heavy outputs outside `F:\Aistock\code`.
 - Do not create junctions or symlinks from this repo to the external heavy directories unless the user explicitly requests it.
 
 ## Secrets

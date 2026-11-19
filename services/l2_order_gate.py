@@ -122,7 +122,7 @@ def default_config_path() -> Path:
         from utils.paths import runtime_path
         return runtime_path("t_tracker") / "l2_risk_config.json"
     except Exception:  # pragma: no cover - 独立运行兜底
-        return Path(r"F:\Aistock\data\data\runtime\t_tracker\l2_risk_config.json")
+        return Path(r"F:\Aistock\runtime\t_tracker\l2_risk_config.json")
 
 
 def load_config(path: Optional[Path] = None) -> dict:

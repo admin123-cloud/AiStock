@@ -1,0 +1,17 @@
+# AiStock 策略研究与回测沙箱镜像（按需经 docker compose --profile research 启动）
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Shanghai \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+# 研究容器通过 bind mount 挂载 code/research 与 storage，避免研究代码频繁改动触发重打镜像
+CMD ["tail", "-f", "/dev/null"]

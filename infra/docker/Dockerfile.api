@@ -1,0 +1,31 @@
+# AiStock Web API (只读观察栈 + 受控 Scoped-Write) 精简镜像
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Shanghai
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+# 仅拷贝 API 运行必需的代码与配置（严格排除 research / tests / frontend / host_bridges）
+COPY api ./api
+COPY config ./config
+COPY core ./core
+COPY data_fetcher ./data_fetcher
+COPY execution ./execution
+COPY models ./models
+COPY scheduler ./scheduler
+COPY services ./services
+COPY strategies ./strategies
+COPY utils ./utils
+COPY pipelines ./pipelines
+COPY scripts ./scripts
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "api.operations_preview:app", "--host", "0.0.0.0", "--port", "8000"]

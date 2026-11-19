@@ -1,0 +1,30 @@
+# AiStock Pipeline Runner & Postclose Watcher 专用工作镜像
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Shanghai \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+# 仅拷贝管道调度与数据治理必需模块
+COPY api ./api
+COPY config ./config
+COPY core ./core
+COPY data_fetcher ./data_fetcher
+COPY execution ./execution
+COPY models ./models
+COPY scheduler ./scheduler
+COPY services ./services
+COPY strategies ./strategies
+COPY utils ./utils
+COPY pipelines ./pipelines
+COPY scripts ./scripts
+
+CMD ["python", "pipelines/scheduler.py"]

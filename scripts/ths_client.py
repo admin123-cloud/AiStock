@@ -141,8 +141,8 @@ def _runtime_dir(name: str) -> Path:
 
         return Path(runtime_path(name))
     except Exception:
-        base = Path(os.environ.get("AISTOCK_DATA_ROOT", r"F:\AiStock\data\data"))
-        return base / "runtime" / name
+        base = Path(os.environ.get("AISTOCK_RUNTIME_ROOT", r"F:\Aistock\runtime"))
+        return base / name
 
 
 def _tracker_root(out_dir: Optional[Path] = None) -> Path:
@@ -1665,7 +1665,7 @@ def _anchor_holdings() -> list[tuple[str, int]]:
         from utils.paths import runtime_path
         broker_file = Path(runtime_path("gen3_state_alpha")) / "broker_state.json"
     except Exception:
-        broker_file = Path(r"F:\AiStock\data\data\runtime\gen3_state_alpha\broker_state.json")
+        broker_file = Path(r"F:\Aistock\runtime\gen3_state_alpha\broker_state.json")
     payload = json.loads(broker_file.read_text(encoding="utf-8"))
     out = []
     for h in payload.get("holdings") or []:
@@ -6196,10 +6196,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 # ══════════════════════════════════════════════════════════════════════════════
 _SURVEY_SECTION_MARKER = "# ==== SURVEY SECTION (self-audit scans from here to EOF) ===="
 
-OUT_DIR = Path(r"F:\Aistock\data\data\runtime\l2_r50")
+OUT_DIR = Path(r"F:\Aistock\runtime\l2_r50")
 PANEL_MAP = OUT_DIR / "panel_map.json"
 JOURNAL = OUT_DIR / "journal_r50_phase1.md"
-PANELS_JSON = Path(r"F:\Aistock\data\data\runtime\gen3_state_alpha\ths_panels.json")
+PANELS_JSON = Path(r"F:\Aistock\runtime\gen3_state_alpha\ths_panels.json")
 PANEL_MAP_SCHEMA = "l2_panel_map/1"
 
 # 提交/撤单类按钮名令牌（命中即入 submit_buttons，Phase1 绝不 Invoke）

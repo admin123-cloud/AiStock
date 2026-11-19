@@ -24,7 +24,7 @@ def _now_text() -> str:
 def _runtime_export_dir() -> Path:
     if callable(runtime_path):
         return runtime_path("ths_exports")
-    return Path(r"F:\AiStock\data\data\runtime\ths_exports")
+    return Path(r"F:\Aistock\runtime\ths_exports")
 
 
 @contextmanager
@@ -1513,4 +1513,4 @@ class PanelRegistry:
 def load_panel_registry() -> PanelRegistry:
     if callable(runtime_path):
         return PanelRegistry(runtime_path("gen3_state_alpha", PANELS_FILENAME))
-    return PanelRegistry(Path(r"F:\AiStock\data\data\runtime\gen3_state_alpha") / PANELS_FILENAME)
+    return PanelRegistry(Path(r"F:\Aistock\runtime\gen3_state_alpha") / PANELS_FILENAME)

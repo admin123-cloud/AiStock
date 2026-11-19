@@ -50,9 +50,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # 路径与常量
 # ---------------------------------------------------------------------------
-PANEL_MAP = Path(r"F:/Aistock/data/data/runtime/l2_r50/panel_map.json")
+PANEL_MAP = Path(r"F:/Aistock/runtime/l2_r50/panel_map.json")
 PANEL_MAP_SCHEMA = "l2_panel_map/1"
-RUNTIME_DIR = Path(r"F:/Aistock/data/data/runtime/l2_r50")
+RUNTIME_DIR = Path(r"F:/Aistock/runtime/l2_r50")
 HOTSWITCH_LOCK_NAME = "ths_window.lock"
 PANEL_TITLE = "网上股票交易系统5.0"
 PANEL_CLASS = "Afx:004A0000:b:00010003:00000006:74BD1569"
@@ -557,7 +557,7 @@ def submit_order(
                            ts=_dt.now())
         ctx = GateContext(now=_dt.now(), kill_switch=False)
         # 加载真实 l2_risk_config
-        cfg_path = Path(r"F:/Aistock/data/data/runtime/t_tracker/l2_risk_config.json")
+        cfg_path = Path(r"F:/Aistock/runtime/t_tracker/l2_risk_config.json")
         if cfg_path.exists():
             cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
         else:
@@ -619,7 +619,7 @@ def auto_submit(
         req = OrderRequest(account=account, code=code, side=side,
                            price=round(price, 2), qty=qty, ts=_dt.now())
         ctx = GateContext(now=_dt.now(), kill_switch=False)
-        cfg_path = Path(r"F:/Aistock/data/data/runtime/t_tracker/l2_risk_config.json")
+        cfg_path = Path(r"F:/Aistock/runtime/t_tracker/l2_risk_config.json")
         if cfg_path.exists():
             cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
         else:

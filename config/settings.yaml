@@ -65,10 +65,11 @@ proxy:
   http: ''
   https: ''
 paths:
-  data_root: ${AISTOCK_DATA_ROOT:F:\AiStock\data\data}
-  reports_root: ${AISTOCK_REPORTS_ROOT:F:\AiStock\research\reports}
-  artifacts_root: ${AISTOCK_ARTIFACTS_ROOT:F:\AiStock\data\artifacts}
-  logs_root: ${AISTOCK_LOGS_ROOT:F:\AiStock\data\logs}
+  runtime_root: ${AISTOCK_RUNTIME_ROOT:F:\Aistock\runtime}
+  data_root: ${AISTOCK_DATA_ROOT:F:\Aistock\storage}
+  reports_root: ${AISTOCK_REPORTS_ROOT:F:\Aistock\storage\reports}
+  artifacts_root: ${AISTOCK_ARTIFACTS_ROOT:F:\Aistock\storage\artifacts}
+  logs_root: ${AISTOCK_LOGS_ROOT:F:\Aistock\storage\logs}
 startup:
   enable_reference_data_sync_on_launch: false
 email:

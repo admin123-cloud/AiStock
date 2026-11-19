@@ -1,22 +1,35 @@
+# Git & IDE
 .git
+.githooks
 .idea
 .vscode
+.graphify-out
+
+# Python caches & tests
 __pycache__
-*.pyc
+*.py[cod]
 .pytest_cache
 .mypy_cache
 .ruff_cache
 .coverage
+htmlcov
+tests
 
-frontend-react/node_modules
-frontend-react/.npm-cache
-frontend-react/dist
-frontend-react/.vite
-frontend-react/*.log
-frontend-react/tsconfig.tsbuildinfo
+# Frontend (built by its own Dockerfile.web)
+frontend-react
+frontend
 
+# Research & host-only GUI bridges (excluded from production backend/worker images)
+research
+host_bridges
+docs
+Libs
+
+# Runtime/data/outputs & secrets
 data
 runtime
+storage
+archive
 reports
 artifacts
 logs
@@ -27,8 +40,9 @@ output*
 *.sqlite
 *.sqlite3
 *.duckdb
-
 .env
 .env.local
 .env.*.local
 config/settings.local.yaml
+config/settings.docker-app.yaml
+config/settings.docker-dev.yaml
