@@ -588,8 +588,10 @@ def _prepare(client: Any, days: Sequence[str], ch: Sequence[str],
     reject_keys = {(r["day"], r["code"]) for r in rejects}
     skipped = [k for k in missing_union if k not in bars_keys and k not in reject_keys]
     probe = id_domain_probe(client)
+    from utils.tdx_lc5 import is_index_code
+    cal_codes = [c for c in union_codes if not is_index_code(c)][:5] or union_codes[:5]
     calibration = ({"skipped": True} if skip_calibration
-                   else grid_calibration_probe(client, union_codes[:5]))
+                   else grid_calibration_probe(client, cal_codes))
     return {"trading_days": trading, "missing": {p: len(v) for p, v in missing.items()},
             "missing_union": len(missing_union), "candidates": candidates,
             "plan": plan, "rejects": rejects,
