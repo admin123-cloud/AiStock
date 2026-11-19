@@ -29,6 +29,7 @@ PROJECT_ROOT = SCRIPTS_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from services import l2_fill_closure  # noqa: E402
 from services import t_trade_shadow  # noqa: E402
 from services import t_trade_signal as tts  # noqa: E402
 from services.t_trade_signal import BEIJING_TZ, fmt_ts, parse_ts  # noqa: E402
@@ -124,6 +125,53 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         root=tts.tracker_dir(Path(args.out_dir) if args.out_dir else None),
         for_date=for_date, now=now)
     report["accounts"] = extra["accounts"]
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+def cmd_sync_fills(args: argparse.Namespace) -> int:
+    """L2 做T真实成交闭环 CLI（#23-#26）：默认 dry-run 只读，显式 --apply 才落盘。"""
+    for_date = _parse_date(args.date)
+    account = str(args.account or "acct1").strip()
+    root = tts.tracker_dir(Path(args.out_dir) if args.out_dir else None)
+    stamp = for_date.strftime("%Y%m%d")
+
+    if args.fills_file:
+        fills_path = Path(args.fills_file)
+    else:
+        acct_path = root / "fills" / f"{stamp}_{account}.json"
+        legacy_path = root / "fills" / f"{stamp}.json"
+        fills_path = acct_path if acct_path.is_file() else legacy_path
+
+    if not fills_path.is_file():
+        print(json.dumps({
+            "status": "missing_fills_file",
+            "account": account,
+            "date": for_date.isoformat(),
+            "fills_file": str(fills_path),
+        }, ensure_ascii=False))
+        return 2
+
+    payload = json.loads(fills_path.read_text(encoding="utf-8"))
+    rows = payload.get("fills") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        print(json.dumps({
+            "status": "invalid_fills_payload",
+            "account": account,
+            "date": for_date.isoformat(),
+            "fills_file": str(fills_path),
+        }, ensure_ascii=False))
+        return 2
+
+    report = l2_fill_closure.reconcile_account_fills_closure(
+        root=root,
+        for_date=for_date,
+        target_account=account,
+        fills=rows,
+        dry_run=not bool(args.apply),
+    )
+    report["status"] = "ok"
+    report["fills_file"] = str(fills_path)
     print(json.dumps(report, ensure_ascii=False))
     return 0
 
@@ -490,6 +538,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     mode.add_argument("--fast-tick", action="store_true",
                       help="R46 快车道 1 分钟拍（实时价 intrabar 重估，含影子快车道）")
     mode.add_argument("--reconcile", action="store_true", help="15:10 当日成交对账")
+    mode.add_argument("--sync-fills", action="store_true",
+                      help="L2 做T真实成交闭环回放（默认 dry-run，显式 --apply 落盘）")
     mode.add_argument("--replay", action="store_true", help="回放验证（写 replay/ 目录）")
     mode.add_argument("--fast-replay", action="store_true",
                       help="R46 快车道全日回放（1min fast + 5min beat 交织 + 影子）")
@@ -499,6 +549,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", help="YYYY-MM-DD（默认今天）")
     parser.add_argument("--now", help="beat 用北京时间 YYYY-MM-DD HH:MM:SS（默认当前）")
     parser.add_argument("--fills-file", help="对账成交文件（{fills:[...]}）")
+    parser.add_argument("--account", default="acct1", help="--sync-fills 目标账号（默认 acct1）")
+    parser.add_argument("--apply", action="store_true",
+                        help="--sync-fills 显式确认落盘到每日 SignalState（默认 dry-run）")
     parser.add_argument("--cache", help="回放行情缓存文件路径")
     parser.add_argument("--out-dir", help="覆盖 t_tracker 根目录（测试用）")
     parser.add_argument("--no-shadow", action="store_true",
@@ -516,6 +569,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return cmd_fast_tick(args)
     if args.reconcile:
         return cmd_reconcile(args)
+    if args.sync_fills:
+        return cmd_sync_fills(args)
     if args.replay:
         return cmd_replay(args)
     if args.fast_replay:
