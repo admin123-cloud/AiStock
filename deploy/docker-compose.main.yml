@@ -53,6 +53,8 @@ services:
       # R55：只读嵌套挂载真实 runtime/market_mood（涨停生态聚合 JSON 所在；
       # market/limit-up-stats 纯读该目录，无回写；写方=pipeline-runner 容器）
       - F:/Aistock/data/data/runtime/market_mood:/aistock/data/runtime/market_mood:ro
+      # R14/S9：只读嵌套挂载真实 runtime/postclose_control（盘后发布状态与认证证书控制面）
+      - F:/Aistock/data/data/runtime/postclose_control:/aistock/data/runtime/postclose_control:ro
       - backend_logs:/aistock/logs
       - backend_reports:/aistock/reports
       - backend_artifacts:/aistock/artifacts

@@ -251,6 +251,8 @@ def run_postclose_orchestration(
     now_fn: Callable[[], datetime],
     admission: Optional[WriteAdmission] = None,
     mood_invalidator: Optional[Callable[[date, datetime], Mapping[str, Any]]] = None,
+    publication_store: Any = None,
+    alert_outbox: Any = None,
     dry_run: bool = True,
     price_tol: float = 0.01,
     qty_tol: float = 0.03,
@@ -259,6 +261,43 @@ def run_postclose_orchestration(
 ) -> OrchestrationResult:
     """盘后单进程全链编排入口：先全证备清(<16:15)，后16:15+顺序导入与全集认证。"""
     now_bj = _to_bj(now_fn())
+
+    def _emit_stage_and_alert(sr: StageResult, *, phase: str) -> None:
+        if publication_store is not None and sr.outcome is not StageState.CERTIFIED:
+            try:
+                publication_store.write_stage(
+                    target_date=manifest.target_date,
+                    plan_id=manifest.plan_id,
+                    generation=manifest.generation,
+                    approval_id=manifest.approval_id,
+                    status=sr.outcome,
+                    reason=sr.reason_code,
+                    coverage=sr.coverage_status,
+                    exceptions_ref=sr.exception_ledger_ref,
+                    now=_to_bj(now_fn()),
+                )
+            except Exception:
+                pass
+        if alert_outbox is not None and sr.alarm_severity in ("warning", "critical"):
+            try:
+                alert_outbox.enqueue(
+                    {
+                        "target_date": manifest.target_date.isoformat(),
+                        "plan_id": manifest.plan_id,
+                        "generation": manifest.generation,
+                        "phase": phase,
+                        "reason_code": sr.reason_code,
+                        "severity": sr.alarm_severity,
+                        "episode": f"{manifest.target_date.isoformat()}:{phase}",
+                        "write_attempted": sr.write_attempted,
+                        "writes_known": sr.writes_known,
+                        "read_availability": "not_ready",
+                        "evidence_id": sr.stage_entry_ref or sr.certificate_ref or sr.reason_code,
+                    },
+                    now=_to_bj(now_fn()),
+                )
+            except Exception:
+                pass
 
     # 0) 日历三态首闸：closed=NO_OP_CLOSED(rc0)，unknown/异常=BLOCKED(rc2)
     if calendar_state == "closed":
@@ -559,7 +598,18 @@ def run_postclose_orchestration(
                 {},
             )
 
-        # 5) S7：16:15 前精准清理与 CleanCertificate 签发
+        # 5) S7：先切读侧控制面为 CLEANING（not_ready），再执行 16:15 前精准清理
+        if publication_store is not None:
+            publication_store.write_stage(
+                target_date=manifest.target_date,
+                plan_id=manifest.plan_id,
+                generation=manifest.generation,
+                approval_id=manifest.approval_id,
+                status=StageState.CLEANING,
+                reason="cleanup_in_progress",
+                coverage="complete",
+                now=_to_bj(now_fn()),
+            )
         cleanup_report = run_postclose_cleanup(
             manifest=manifest,
             source_cert=src_bundle.certificate,
@@ -582,6 +632,7 @@ def run_postclose_orchestration(
         if not cleanup_report.stage_result.writes_known:
             writes_uncertain = True
         if cleanup_report.certificate is None:
+            _emit_stage_and_alert(cleanup_report.stage_result, phase="cleanup")
             return OrchestrationResult(
                 manifest.target_date, manifest.plan_id, manifest.generation,
                 src_bundle, backup_bundle, cleanup_report, None,
@@ -661,6 +712,17 @@ def run_postclose_orchestration(
         journal.append(importing_planned)
         journal.append(replace(importing_planned, state=AttemptState.ISSUED, issued_at=import_now))
         stage_ref = f"journal:{importing_planned.attempt_id}"
+        if publication_store is not None:
+            publication_store.write_stage(
+                target_date=manifest.target_date,
+                plan_id=manifest.plan_id,
+                generation=manifest.generation,
+                approval_id=manifest.approval_id,
+                status=StageState.IMPORTING,
+                reason="import_in_progress",
+                coverage="complete",
+                now=import_now,
+            )
 
         pending_imports: dict[str, dict[str, Any]] = {}
 
@@ -758,6 +820,7 @@ def run_postclose_orchestration(
                 coverage_status="complete", retry_safe=False, alarm_severity="critical",
                 stage_entry_ref=stage_ref,
             )
+            _emit_stage_and_alert(sr, phase="import_5m")
             return OrchestrationResult(
                 manifest.target_date, manifest.plan_id, manifest.generation,
                 src_bundle, backup_bundle, cleanup_report, None, sr, daily_inserted, 0, {},
@@ -800,6 +863,7 @@ def run_postclose_orchestration(
                 concurrent_events=("unknown_writes",),
                 stage_entry_ref=stage_ref,
             )
+            _emit_stage_and_alert(sr, phase="import_5m")
             return OrchestrationResult(
                 manifest.target_date, manifest.plan_id, manifest.generation,
                 src_bundle, backup_bundle, cleanup_report, None, sr, daily_inserted, 0, {},
@@ -952,6 +1016,13 @@ def run_postclose_orchestration(
             rejected_keys=0,
             stage_entry_ref=stage_ref,
         )
+        if publication_store is not None:
+            publication_store.publish_certified(
+                pub_cert,
+                as_of=published_bj.isoformat(),
+                reason="postclose_orchestration_certified",
+                now=published_bj,
+            )
         return OrchestrationResult(
             target_date=manifest.target_date,
             plan_id=manifest.plan_id,

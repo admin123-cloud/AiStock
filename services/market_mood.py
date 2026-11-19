@@ -315,6 +315,71 @@ def invalidate_day_realtime(
         }
 
 
+def write_certified_final_payload(
+    day: str,
+    *,
+    final: Dict[str, Any],
+    certificate_digest: str,
+    generation: int,
+    certified_at: Optional[datetime] = None,
+    out_root: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """S10 认证事件驱动终算落盘：绑定 ``(generation, certificate_digest)`` 且重放幂等。"""
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    digest_str = str(certificate_digest or "").strip()
+    if len(digest_str) != 64:
+        raise ValueError("certificate_digest must be a 64-char sha256 hex string")
+    if type(generation) is not int or generation < 1:
+        raise ValueError(f"invalid generation: {generation!r}")
+
+    compact_day = str(day).replace("-", "")[:8]
+    path = day_path(compact_day, out_root)
+    stamp = (certified_at or _dt.now(ZoneInfo(BJ))).isoformat()
+    with _path_lock(path):
+        existing: Dict[str, Any] = {}
+        if path.exists():
+            raw_text = path.read_text(encoding="utf-8")
+            if raw_text.strip():
+                existing = json.loads(raw_text)
+                if not isinstance(existing, dict):
+                    raise ValueError(f"corrupt market_mood payload in {path}: expected JSON object")
+
+        prev_cert = existing.get("final_certification") or {}
+        if (
+            existing.get("final") is not None
+            and prev_cert.get("certificate_digest") == digest_str
+            and prev_cert.get("generation") == generation
+        ):
+            return {
+                "status": "idempotent_noop",
+                "day": compact_day,
+                "generation": generation,
+                "certificate_digest": digest_str,
+            }
+
+        payload = dict(existing)
+        payload.update({
+            "schema": SCHEMA_DAY_FILE,
+            "date": f"{compact_day[:4]}-{compact_day[4:6]}-{compact_day[6:8]}",
+            "updated_at": stamp,
+            "final": final,
+            "final_certification": {
+                "generation": generation,
+                "certificate_digest": digest_str,
+                "certified_at": stamp,
+            },
+        })
+        _atomic_write_payload(path, payload)
+        return {
+            "status": "written",
+            "day": compact_day,
+            "generation": generation,
+            "certificate_digest": digest_str,
+        }
+
+
 def load_day_payload(day: str, out_root: Optional[Any] = None) -> Optional[Dict[str, Any]]:
     path = day_path(day, out_root)
     if not path.exists():

@@ -117,8 +117,23 @@ def is_fresh(ts: Optional[datetime], now: Optional[datetime] = None) -> bool:
     return -FUTURE_TOLERANCE_SEC <= delta <= FRESH_WINDOW_SEC
 
 
+_POSTCLOSE_CONTROL_ROOT: Optional[Any] = None
+
+
+def _is_postclose_rebuilding(now: Optional[datetime] = None) -> bool:
+    try:
+        from services.postclose_publication import PublicationStore
+
+        day = (now or _now_beijing()).date()
+        return PublicationStore(_POSTCLOSE_CONTROL_ROOT).is_rebuilding(day)
+    except Exception:
+        return False
+
+
 def latest_snapshot_ts(now: Optional[datetime] = None) -> Optional[datetime]:
     """明细表最新快照时间（轻量标量；供 sentiment 缓存键绑定新快照即时失效）。"""
+    if _is_postclose_rebuilding(now):
+        return None
     if not _table_ready(SNAPSHOT_TABLE):
         return None
     try:

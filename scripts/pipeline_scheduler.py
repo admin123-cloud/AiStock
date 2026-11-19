@@ -732,6 +732,8 @@ def run_market_mood_finalize_beat(
     runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
     now_fn: Optional[Callable[[], datetime]] = None,
     logger_: Optional[logging.Logger] = None,
+    require_certified: bool = False,
+    control_root: Optional[Path] = None,
 ) -> dict:
     """R55 涨停生态终算节拍：窗口/交易日守卫 → subprocess --finalize。
 
@@ -764,6 +766,10 @@ def run_market_mood_finalize_beat(
         sys.executable, str(SCRIPTS_DIR / MARKET_MOOD_SCRIPT),
         "--finalize", "--date", now_bj.date().isoformat(),
     ]
+    if require_certified:
+        cmd.append("--require-certified")
+    if control_root is not None:
+        cmd.extend(["--control-root", str(control_root)])
     try:
         result = run(cmd) or {}
         rc = int(result.get("returncode", -1))

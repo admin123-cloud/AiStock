@@ -138,6 +138,18 @@ def build_fast_intraday_turnover_fallback(current_amounts: Dict[str, Any]) -> Di
     }
 
 
+_POSTCLOSE_CONTROL_ROOT: Optional[Path] = None
+
+
+def _is_postclose_rebuilding(today: date) -> bool:
+    try:
+        from services.postclose_publication import PublicationStore
+
+        return PublicationStore(_POSTCLOSE_CONTROL_ROOT).is_rebuilding(today)
+    except Exception:
+        return False
+
+
 def get_intraday_turnover_forecast(
     *,
     current_snapshot: Dict[str, Any] | None = None,
@@ -149,6 +161,10 @@ def get_intraday_turnover_forecast(
     P25/P50/P75 of that share give a robust forecast interval without looking
     at today's close.
     """
+    # S9 发布代际门控：必须位于暖缓存命中之前，重建期绝不返回旧缓存或混代数据
+    if _is_postclose_rebuilding(_now_bj().date()):
+        return _empty("盘后重建中（not_ready），暂不提供盘中成交额预测")
+
     cached = _CACHE.get("payload")
     if cached is not None and time.monotonic() < float(_CACHE.get("expires_at") or 0):
         return cached

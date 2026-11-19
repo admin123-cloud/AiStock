@@ -25,18 +25,26 @@ if str(PROJECT_ROOT) not in sys.path:
 from services.market_mood import (  # noqa: E402
     compute_final_mood,
     compute_intraday_mood,
+    write_certified_final_payload,
     write_day_payload,
 )
 from utils.logger import get_logger  # noqa: E402
 
 logger = get_logger("market_mood_update")
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 def run_intraday(out_root: Optional[Path] = None,
                  now: Optional[datetime] = None) -> dict:
-    mood = compute_intraday_mood(now=now)
+    from zoneinfo import ZoneInfo
+    from services.intraday_phase_gate import is_before_postclose_cutoff
+
+    now_bj = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+    if not is_before_postclose_cutoff(now_bj):
+        return {"status": "blocked", "reason": "after_1505_cutoff"}
+
+    mood = compute_intraday_mood(now=now_bj)
     if mood is None:
         return {"status": "failure", "reason": "intraday_data_unavailable"}
     day = mood["date"].replace("-", "")
@@ -51,6 +59,60 @@ def run_intraday(out_root: Optional[Path] = None,
         "as_of": mood.get("as_of"),
         "limit_up_count": mood.get("limit_up_count"),
         "seal_rate": mood.get("seal_rate"),
+    }
+
+
+def run_certified_finalize(
+    trade_date: str,
+    *,
+    control_root: Optional[Path] = None,
+    out_root: Optional[Path] = None,
+    trusted_issuers: tuple[str, ...] = ("postclose_orchestrator",),
+    now: Optional[datetime] = None,
+    require_certificate: bool = True,
+) -> dict:
+    """S10 认证事件驱动终算：必须验证当日 ``CERTIFIED`` 发布证书且绑定摘要，重复触发幂等。"""
+    from datetime import date as _date
+    from services.postclose_publication import PublicationStore
+
+    target_d = _date.fromisoformat(str(trade_date)[:10])
+    store = PublicationStore(control_root)
+    view = store.read_view(requested_date=target_d, trusted_issuers=trusted_issuers, now=now)
+    if require_certificate and (not view.ready or view.status != "CERTIFIED" or not view.certificate_digest):
+        return {
+            "status": "blocked",
+            "mode": "final",
+            "date": target_d.isoformat(),
+            "reason": f"postclose_not_certified:{view.reason}",
+        }
+
+    mood = compute_final_mood(target_d.isoformat())
+    if mood is None:
+        return {"status": "failure", "reason": "final_data_unavailable", "date": target_d.isoformat()}
+    day = mood["date"].replace("-", "")
+    if view.certificate_digest and view.generation >= 1:
+        write_res = write_certified_final_payload(
+            day,
+            final=mood,
+            certificate_digest=view.certificate_digest,
+            generation=view.generation,
+            certified_at=now,
+            out_root=out_root,
+        )
+    else:
+        write_day_payload(day, final=mood, out_root=out_root)
+        write_res = {"status": "written", "generation": 0, "certificate_digest": None}
+    return {
+        "status": "success",
+        "mode": "final",
+        "date": mood["date"],
+        "write_status": write_res["status"],
+        "generation": write_res.get("generation"),
+        "certificate_digest": write_res.get("certificate_digest"),
+        "limit_up_count": mood.get("limit_up_count"),
+        "ever_limit_up": mood.get("ever_limit_up"),
+        "broke_count": mood.get("broke_count"),
+        "max_streak": mood.get("max_streak"),
     }
 
 
@@ -93,9 +155,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="finalize 目标交易日（YYYY-MM-DD，默认=日线最新）")
     parser.add_argument("--out-root", default=None,
                         help="输出根目录（默认 AISTOCK_DATA_ROOT/runtime；测试注入用）")
+    parser.add_argument("--require-certified", action="store_true",
+                        help="S10 门禁：仅当日 postclose_control 呈 CERTIFIED 证书有效时才执行终算")
+    parser.add_argument("--control-root", default=None,
+                        help="S9/S10 postclose_control 控制目录（默认 runtime/postclose_control）")
     args = parser.parse_args(argv)
 
     out_root = Path(args.out_root) if args.out_root else None
+    control_root = Path(args.control_root) if args.control_root else None
 
     if args.intraday and args.finalize:
         parser.error("--intraday 与 --finalize 互斥")
@@ -104,6 +171,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.intraday:
         report = run_intraday(out_root=out_root)
+    elif args.require_certified:
+        target = args.date or datetime.now().strftime("%Y-%m-%d")
+        report = run_certified_finalize(
+            target, control_root=control_root, out_root=out_root, require_certificate=True
+        )
     else:
         report = run_finalize(trade_date=args.date, out_root=out_root)
     print(json.dumps(report, ensure_ascii=False))
