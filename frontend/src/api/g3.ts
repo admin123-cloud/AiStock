@@ -142,3 +142,9 @@ export const getG3SignalQuality = (limit = 10) =>
   request.get<unknown, G3SignalQualityResponse>('/g3/review/signal-quality', { params: { limit } })
 
 export const getG3Settings = () => request.get<unknown, G3SettingsResponse>('/g3/settings')
+
+export const getG3MainwaveDaily = (refresh = false) =>
+  request.get<unknown, Record<string, unknown>>('/g3/mainwave', {
+    params: refresh ? { refresh: true } : undefined,
+    timeout: 60000,
+  })

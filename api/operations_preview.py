@@ -106,6 +106,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/accounts/overview',
     '/api/accounts/{account_id}',
     '/api/g3/desk',
+    '/api/g3/mainwave',
     '/api/g3/review/daily',
     '/api/g3/review/shadow',
     '/api/g3/review/signal-quality',

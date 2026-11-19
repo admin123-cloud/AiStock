@@ -8,8 +8,9 @@ import {
 import { Dialog, DialogBody, DialogTitle } from '@/components/catalyst/dialog'
 import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import {
-  dateTime, getMainwaveDaily, reasonText, statusLabel, statusTone, type StatusTone,
+  dateTime, reasonText, statusLabel, statusTone, type StatusTone,
 } from '@/api/operations'
+import { getG3MainwaveDaily } from '@/api/g3'
 
 interface MainwaveCandidate {
   code?: string
@@ -85,11 +86,11 @@ export default function MainwaveDaily() {
   const [selected, setSelected] = useState<MainwaveCandidate | null>(null)
   const [historyDay, setHistoryDay] = useState<HistoryDay | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (forceRefresh = false) => {
     setLoading(true)
     setError('')
     try {
-      const res = await getMainwaveDaily()
+      const res = await getG3MainwaveDaily(forceRefresh)
       setData(res as MainwaveDailyData)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
@@ -121,7 +122,7 @@ export default function MainwaveDaily() {
       <PageHeader
         title="主升每日跟踪"
         subtitle="先判断数据是否可信，再看候选推进与每日验收。"
-        actions={<Button onClick={() => void load()} disabled={loading}>{loading ? '刷新中…' : '刷新跟踪'}</Button>}
+        actions={<Button onClick={() => void load(true)} disabled={loading}>{loading ? '刷新中…' : '刷新跟踪'}</Button>}
       />
 
       {error && (
