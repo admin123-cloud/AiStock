@@ -105,15 +105,18 @@ task_manager = SystemTaskManager()
 def get_trade_calendar_status() -> dict[str, Any]:
     """查询 ClickHouse 交易日历覆盖范围与最近交易日（纯只读）。"""
     try:
+        from sqlalchemy import text
         from utils.db.database import DatabaseManager
 
-        client = DatabaseManager().get_clickhouse_client()
-        res = client.query(
-            "SELECT count(), min(trade_date), max(trade_date), "
-            "maxIf(trade_date, is_open = 1 AND trade_date <= today()) "
-            "FROM stock.trade_calendar"
-        )
-        row = res.result_rows[0] if res.result_rows else (0, None, None, None)
+        with DatabaseManager().engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT count(), min(trade_date), max(trade_date), "
+                    "maxIf(trade_date, is_open = 1 AND trade_date <= today()) "
+                    "FROM stock.trade_calendar"
+                )
+            ).fetchone()
+        row = row or (0, None, None, None)
         return {
             "status": "ok",
             "total_days": int(row[0] or 0),
