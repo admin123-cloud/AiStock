@@ -482,6 +482,11 @@ def run_multi_account_task(
                 _write_named_report(out_dir, f"latest_{acct}.json", per_account[acct])
                 if sw_rc != 0:
                     all_ok = False
+                # 若本次 dry-run 内部发送了 F12 拉起面板，避免后续账号立即命中自身造成的 owner_active
+                steps_list = switch_rep.get("steps") or []
+                if any(isinstance(s, dict) and s.get("step") == "f12_send" for s in steps_list):
+                    if wait_idle_after_bootstrap > 0:
+                        time.sleep(wait_idle_after_bootstrap)
                 continue
             if sw_rc != 0:
                 all_ok = False
