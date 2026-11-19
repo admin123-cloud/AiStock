@@ -2316,21 +2316,39 @@ def _yh_click_window(hwnd: int, xy: Iterable[float]) -> dict[str, Any]:
         raise ThsXiadanError(f"click xy must be [x, y], got {xy!r}")
     left, top, _right, _bottom = _rect(int(hwnd))
     sx, sy = int(left + float(coords[0])), int(top + float(coords[1]))
+    def _same_app_window(h_hit: int, h_target: int) -> bool:
+        if not h_hit:
+            return True
+        if _root(h_hit) == _root(h_target):
+            return True
+        # 远航版 CEF 顶栏菜单/下拉层可能为同进程独立顶层子窗；同 PID 不视为外部遮挡
+        try:
+            p_hit = int(_process_id(h_hit) or 0)
+            p_tgt = int(_process_id(h_target) or 0)
+            return p_hit > 0 and p_hit == p_tgt
+        except Exception:  # noqa: BLE001
+            return False
+
     hit = _window_from_point(sx, sy)
     topmost_used = False
-    if hit and _root(hit) != _root(int(hwnd)):
+    if hit and not _same_app_window(hit, int(hwnd)):
         # 遮挡兜底：临时 TOPMOST 抬升目标窗（点毕还原），复验通过才点
         USER32.SetWindowPos(int(hwnd), 0xFFFFFFFF, 0, 0, 0, 0,  # HWND_TOPMOST
                             SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
         time.sleep(0.15)
         topmost_used = True
         hit = _window_from_point(sx, sy)
-        if hit and _root(hit) != _root(int(hwnd)):
+        if hit and not _same_app_window(hit, int(hwnd)):
             USER32.SetWindowPos(int(hwnd), 0xFFFFFFFE, 0, 0, 0, 0,  # NOTOPMOST
                                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            hit_pid = 0
+            try:
+                hit_pid = int(_process_id(hit) or 0)
+            except Exception:  # noqa: BLE001
+                pass
             raise ThsXiadanError(
-                f"click_target_covered: target={int(hwnd)} hit={hit} "
-                f"at screen=({sx},{sy})（TOPMOST 抬升后仍被遮挡，"
+                f"click_target_covered: target={int(hwnd)} hit={hit} hit_pid={hit_pid} "
+                f"at screen=({sx},{sy})（TOPMOST 抬升后仍被外部窗口遮挡，"
                 "fail-closed 拒点）")
     try:
         result = {"window_xy": [float(coords[0]), float(coords[1])],
