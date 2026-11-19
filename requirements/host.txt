@@ -1,4 +1,0 @@
-# Windows 宿主机 GUI 桥接专用依赖（不进入 Linux Docker 镜像）
--r base.txt
-pywinauto>=0.6.8
-psutil>=5.9.0
