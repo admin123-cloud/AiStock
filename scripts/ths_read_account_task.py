@@ -122,14 +122,34 @@ def _activate_and_raise_window(hwnd: int) -> dict[str, Any]:
 
 def _diagnose_readonly_bind(happ_exe: Path) -> dict[str, Any]:
     """当 run_read_account 返回 exception_fail_closed 时，只读诊断适配器绑定的具体拒绝原因。"""
+    extra: dict[str, Any] = {}
+    try:
+        chain = tc._yh_ro_chain_snapshot(happ_exe)
+        extra["chain"] = {k: chain[k]["pid"] for k in ("happ", "xiadan", "plus")}
+        try:
+            q_hwnd, q_rect = tc._yh_ro_find_query_window(chain["xiadan"]["pid"])
+            extra["query_window"] = {"hwnd": q_hwnd, "rect": list(q_rect)}
+        except Exception as q_exc:  # noqa: BLE001
+            extra["query_window_error"] = str(q_exc)
+        vis = []
+        for h in sorted(tc._yh_ro_visible_windows(chain)):
+            vis.append({
+                "hwnd": h,
+                "pid": tc._process_id(h),
+                "rect": list(tc._rect(h)),
+                "title": tc._window_text(h),
+            })
+        extra["visible_windows"] = vis
+    except Exception:  # noqa: BLE001
+        pass
     try:
         with tc._yh_readonly_lock(timeout_seconds=3.0) as acq:
             if acq is not True:
-                return {"stage": "lock", "error": "lock_busy"}
+                return {"stage": "lock", "error": "lock_busy", **extra}
             tc._YhReadonlyAdapter(happ_exe=happ_exe)
-            return {"stage": "adapter_init", "error": None}
+            return {"stage": "adapter_init", "error": None, **extra}
     except Exception as exc:  # noqa: BLE001
-        return {"stage": "adapter_init", "error_type": type(exc).__name__, "error": str(exc)}
+        return {"stage": "adapter_init", "error_type": type(exc).__name__, "error": str(exc), **extra}
 
 
 def _click_panel_login_button(login_button_hwnd: int) -> dict[str, Any]:
@@ -214,11 +234,17 @@ def bootstrap_cold_start(
             "xiadan_pid": ro_chain["xiadan"]["pid"],
             "plus_pid": ro_chain["plus"]["pid"],
         })
-        # 确保同花顺交易面板（优先）或主窗口被激活并置于上层
+        # 确保同花顺交易面板（优先）或主窗口被激活并置于上层；
+        # 若已在前台则零操作直接放行，避免无谓切换焦点重置系统空闲计时。
         existing_panels = tc._yh_enum_panels()
         target_hwnd = existing_panels[0]["hwnd"] if existing_panels else main_win["hwnd"]
-        raise_res = _activate_and_raise_window(target_hwnd)
-        steps.append({"step": "activate_and_raise", **raise_res})
+        cur_fg = int(tc.USER32.GetForegroundWindow() or 0) if (tc.IS_WINDOWS and tc.USER32 is not None) else 0
+        if cur_fg == int(target_hwnd):
+            steps.append({"step": "already_foreground", "hwnd": int(target_hwnd)})
+        else:
+            raise_res = _activate_and_raise_window(target_hwnd)
+            steps.append({"step": "activate_and_raise", **raise_res})
+            result["interacted"] = True
         result["ready"] = True
         result["status"] = "bootstrap_ready"
         return result

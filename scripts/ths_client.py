@@ -4523,9 +4523,20 @@ def _yh_ro_input_state() -> dict[str, Any]:
 
 
 def _yh_ro_visible_windows(chain: dict[str, Any]) -> set[int]:
-    pids = {chain[name]["pid"] for name in ("happ", "xiadan", "plus")}
-    return {int(hwnd) for hwnd in _top_level_windows()
-            if _process_id(hwnd) in pids and _is_visible(hwnd)}
+    """枚举交易面板进程（xiadan/plus）的有效可见顶层窗（排除 happ 行情主窗与无标题微型状态条）。"""
+    pids = {chain[name]["pid"] for name in ("xiadan", "plus")}
+    out: set[int] = set()
+    for hwnd in _top_level_windows():
+        if _process_id(hwnd) not in pids or not _is_visible(hwnd):
+            continue
+        title = _window_text(hwnd).strip()
+        left, top, right, bottom = _rect(hwnd)
+        width, height = right - left, bottom - top
+        # 过滤 xiadan 自带的无标题微型状态条（如 298x29），保留所有具名窗或正常尺寸弹窗
+        if not title and (width <= 300 or height < 60):
+            continue
+        out.add(int(hwnd))
+    return out
 
 
 def _yh_ro_window_state(hwnd: int, owner_pid: int) -> bool:
