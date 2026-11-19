@@ -991,6 +991,68 @@ def register_signal_quality_job(scheduler):
     return scheduler.get_job(SIGNAL_QUALITY_JOB_ID)
 
 
+WEEKLY_DATA_AUDIT_JOB_ID = "weekly_data_audit"
+WEEKLY_DATA_AUDIT_SCRIPT = "run_weekly_data_audit.py"
+WEEKLY_DATA_AUDIT_DAYS = 30
+WEEKLY_DATA_AUDIT_DAY_OF_WEEK = "mon"
+WEEKLY_DATA_AUDIT_CRON_TIME = dt_time(10, 30)
+
+
+def run_weekly_data_audit(
+    *,
+    mode: str = "scheduled",
+    runner: Optional[Callable[[Sequence[str]], Mapping[str, Any]]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+    logger_: Optional[logging.Logger] = None,
+) -> dict:
+    """每周只读审计最近 30 个交易日数据交付（从 Windows 计划任务迁入项目内调度）。"""
+    log = logger_ or logger
+    now_bj = cn_now(now_fn)
+    run = runner or _default_runner
+    cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / WEEKLY_DATA_AUDIT_SCRIPT),
+        "--days",
+        str(WEEKLY_DATA_AUDIT_DAYS),
+    ]
+    result = run(cmd) or {}
+    try:
+        rc = int(result.get("returncode", -1))
+    except (TypeError, ValueError):
+        rc = -1
+    if rc != 0:
+        log.error("[weekly_data_audit] rc=%s stderr=%s", rc,
+                  str(result.get("stderr") or "")[-300:])
+    return {
+        "step": WEEKLY_DATA_AUDIT_JOB_ID,
+        "mode": mode,
+        "date": now_bj.date().isoformat(),
+        "status": "success" if rc == 0 else "failure",
+        "rc": rc,
+    }
+
+
+def register_weekly_data_audit_job(scheduler):
+    """注册每周数据交付只读审计（每周一 10:30，Asia/Shanghai）。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler.add_job(
+        run_weekly_data_audit,
+        trigger=CronTrigger(
+            day_of_week=WEEKLY_DATA_AUDIT_DAY_OF_WEEK,
+            hour=WEEKLY_DATA_AUDIT_CRON_TIME.hour,
+            minute=WEEKLY_DATA_AUDIT_CRON_TIME.minute,
+            timezone=BEIJING_TZ,
+        ),
+        id=WEEKLY_DATA_AUDIT_JOB_ID,
+        name="每周只读数据交付审计（周一 10:30，最近 30 个交易日）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler.get_job(WEEKLY_DATA_AUDIT_JOB_ID)
+
+
 def in_holding_tick_alert_window(now_bj: datetime) -> bool:
     """R42 窗口守卫：09:25 ≤ 北京钟 ≤ 15:10（cron 触发面 09:00~15:50 由它收口）。"""
     current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
@@ -1164,6 +1226,56 @@ _L2_LAST_SIGNAL: dict[str, datetime] = {}  # code:account → last signal time
 def _is_trading_day_simple(d: date) -> bool:
     """交易日粗略判定（周一到周五，不含假期）。"""
     return d.weekday() < 5
+
+
+# ── R56 L2 午休闸（外层，2026-11-16 任务书 l2_alert_trade_closure_v1 R3 裁决）──
+# 与 services.t_trade_signal.l2_time_phase 同一套相位语义（北京时间）：
+# 正式窗 [09:35,11:30)∪[13:00,14:55]；11:30–11:35 / 12:55–13:00 边界提示窗
+# （不发交易信号）；11:35–12:55 静默；09:35 前 / 14:55 后不发。
+# 边界 notice 按「日期+窗口」至多一次；模块级去重表进程内跨 beat 共享。
+_L2_MIDDAY_NOTIFIED: dict[str, bool] = {}
+
+
+def l2_midday_gate(
+    now_bj: datetime,
+    *,
+    notified: Optional[dict] = None,
+    is_trading_day: Optional[Callable[[date], bool]] = None,
+) -> dict[str, Any]:
+    """L2 午休闸纯函数（R56）：返回 {status, phase, run_heartbeat, notice}。
+
+    - 交易日判断异常 → trading_day_check_failed（fail-closed 静默跳拍）；
+    - 非交易日 → non_trading_noop；
+    - trading → run_heartbeat=True；midday_silent / boundary_* / outside_window
+      → run_heartbeat=False（边界窗 notice 按「日期+窗口」至多一次）。
+    """
+    check = is_trading_day or _is_trading_day_simple
+    try:
+        trading = bool(check(now_bj.date()))
+    except Exception as exc:  # noqa: BLE001 - 日历源故障必须 fail-closed
+        return {"status": "trading_day_check_failed", "phase": None,
+                "run_heartbeat": False, "notice": False, "error": str(exc)}
+    if not trading:
+        return {"status": "non_trading_noop", "phase": None,
+                "run_heartbeat": False, "notice": False}
+
+    from services import t_trade_signal as _sig  # 延迟导入（同 _run_l2_heartbeat）
+
+    if now_bj.tzinfo is not None:
+        now_bj = now_bj.astimezone(BEIJING_TZ).replace(tzinfo=None)
+    phase = _sig.l2_time_phase(now_bj.time())
+    gate: dict[str, Any] = {
+        "status": phase, "phase": phase,
+        "run_heartbeat": phase == "trading", "notice": False,
+    }
+    if phase in ("boundary_am", "boundary_pm"):
+        window = "am" if phase == "boundary_am" else "pm"
+        seen = notified if notified is not None else _L2_MIDDAY_NOTIFIED
+        key = f"{now_bj.date().isoformat()}|{window}"
+        if not seen.get(key):
+            seen[key] = True
+            gate["notice"] = True
+    return gate
 
 
 def _run_l2_heartbeat(now_bj: datetime, log: logging.Logger) -> dict[str, Any]:
@@ -1381,6 +1493,8 @@ def run_t_trade_monitor(
     # 主心跳循环
     subloop_count = 0
     signals_fired = 0
+    midday_silent_beats = 0
+    midday_boundary_notices: list[str] = []
     while True:
         # L2 心跳 now 必须与 L1 t_trade_tracker 一致用 naive 北京时间：
         # closed_bars 的 ts<=now 比较不允许 naive/aware 混用（R50 起 bug）
@@ -1398,6 +1512,33 @@ def run_t_trade_monitor(
                 eod = _run_l2_eod_report(now)
                 log.info("[t_trade_monitor] 日终报告: l2_drafts=%d", eod.get("l2_drafts_total", 0))
 
+        # R56 午休闸（外层）：静默/边界/窗外跳过心跳（零信号零弹窗零行情拉取）；
+        # 边界窗每「日期+窗口」至多一次可观察提示；闸门自身异常同样 fail-closed
+        # 跳拍（不静默扩大 15:00 后旧外窗守卫——窗口退出检查仍在闸前）。
+        try:
+            gate = l2_midday_gate(now, notified=_L2_MIDDAY_NOTIFIED,
+                                  is_trading_day=check)
+        except Exception as exc:  # noqa: BLE001
+            log.error("[t_trade_monitor] 午休闸异常（fail-closed 跳拍）：%s", exc)
+            gate = {"status": "gate_error", "phase": None,
+                    "run_heartbeat": False, "notice": False}
+        if not gate.get("run_heartbeat"):
+            gate_status = str(gate.get("status") or "")
+            if gate_status == "midday_silent":
+                midday_silent_beats += 1
+            elif gate.get("notice"):
+                window = "am" if gate_status == "boundary_am" else "pm"
+                midday_boundary_notices.append(window)
+                log.info("[t_trade_monitor] 午休边界提示（%s 窗，不发交易信号）：%s",
+                         window, now.strftime("%H:%M:%S"))
+            subloop_count += 1
+            # 自循环 30s 间隔（与心跳同节拍，保持循环计数/退出语义不变）
+            time.sleep(TTRADE_MONITOR_HEARTBEAT_SEC)
+            # 电池保护：最多 60 次循环（≈30min）后退出，让 APScheduler 重触发
+            if subloop_count >= 60:
+                break
+            continue
+
         # 心跳
         try:
             report = _run_l2_heartbeat(now, log)
@@ -1412,7 +1553,6 @@ def run_t_trade_monitor(
 
         subloop_count += 1
         # 自循环 30s 间隔
-        import time
         time.sleep(TTRADE_MONITOR_HEARTBEAT_SEC)
 
         # 电池保护：最多 60 次循环（≈30min）后退出，让 APScheduler 重触发
@@ -1424,6 +1564,9 @@ def run_t_trade_monitor(
         "status": "ok",
         "subloop_count": subloop_count,
         "signals_fired": signals_fired,
+        # R56：午休闸可观察汇总（静默拍数 + 边界提示窗序列）
+        "midday": {"silent_beats": midday_silent_beats,
+                   "boundary_notices": midday_boundary_notices},
     }
 
 
@@ -1579,7 +1722,8 @@ def serve(
     register_intraday_job(scheduler)
     register_t_tracker_jobs(scheduler)
     register_signal_quality_job(scheduler)
-    register_holding_tick_alert_job(scheduler)
+    # QMT 已全线退役：停止在 serve() 中注册 holding_tick_qmt_alert
+    register_weekly_data_audit_job(scheduler)
     register_market_mood_finalize_job(scheduler)
     register_t_trade_monitor_job(scheduler)
     _register_intraday_kline_upsert(scheduler)
@@ -1621,8 +1765,6 @@ def serve(
         TTRACKER_BROKER_SYNC_JOB_ID, TTRACKER_BROKER_SYNC_CRON_TIME.strftime("%H:%M"),
         TTRACKER_SHADOW_FINALIZE_JOB_ID, TTRACKER_SHADOW_FINALIZE_CRON_TIME.strftime("%H:%M"),
     )
-    holding_job = scheduler.get_job(HOLDING_TICK_ALERT_JOB_ID)
-    holding_next = getattr(holding_job, "next_run_time", None) if holding_job else None
     quality_job = scheduler.get_job(SIGNAL_QUALITY_JOB_ID)
     quality_next = getattr(quality_job, "next_run_time", None) if quality_job else None
     logger.info(
@@ -1631,12 +1773,13 @@ def serve(
         SIGNAL_QUALITY_CRON_TIME.strftime("%H:%M"), "Asia/Shanghai",
         quality_next.isoformat() if quality_next else "pending",
     )
+    audit_job = scheduler.get_job(WEEKLY_DATA_AUDIT_JOB_ID)
+    audit_next = getattr(audit_job, "next_run_time", None) if audit_job else None
     logger.info(
-        "调度注册：R42 %s cron=[day_of_week=%s %s 每10min %s] 窗口=%s~%s（holding-tick GET 净化后的通知通道）next_run=%s",
-        HOLDING_TICK_ALERT_JOB_ID, CRON_DAY_OF_WEEK, HOLDING_TICK_ALERT_CRON_HOURS,
-        "Asia/Shanghai",
-        HOLDING_TICK_ALERT_WINDOW_START.strftime("%H:%M"), HOLDING_TICK_ALERT_WINDOW_END.strftime("%H:%M"),
-        holding_next.isoformat() if holding_next else "pending",
+        "调度注册：%s cron=[day_of_week=%s %s %s] next_run=%s（每周30日数据交付只读审计）",
+        WEEKLY_DATA_AUDIT_JOB_ID, WEEKLY_DATA_AUDIT_DAY_OF_WEEK,
+        WEEKLY_DATA_AUDIT_CRON_TIME.strftime("%H:%M"), "Asia/Shanghai",
+        audit_next.isoformat() if audit_next else "pending",
     )
     mood_job = scheduler.get_job(MARKET_MOOD_FINALIZE_JOB_ID)
     mood_next = getattr(mood_job, "next_run_time", None) if mood_job else None

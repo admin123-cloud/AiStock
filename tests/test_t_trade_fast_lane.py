@@ -279,7 +279,7 @@ class TestFastTriggers:
         assert d["subtype"] == "entry" and d["bar_status"] == "open"
         root = tts.tracker_dir(env["out_dir"])
         st = tts.load_state(root, DAY)
-        assert st.open_t("300054")["draft_id"] == d["id"]   # open_t 与慢车道同构
+        assert st.open_t("300054") is None               # R56: 买入建议不建立 open_t
 
     def test_fast_target_band_exit_rsi_filtered_stop_ok(self, tmp_path):
         """在途 T：目标带/止损线属价带类 → fast 草案；exit_rsi（RSI 类）不进。"""
@@ -295,7 +295,7 @@ class TestFastTriggers:
                            sub=sub)
             root = tts.tracker_dir(env["out_dir"])
             state = tts.SignalState({})
-            state.set_open_t("002015", open_t)
+            state.set_open_t("002015", {**open_t, "source": "fill", "fill_id": f"F_{sub}"})
             tts.save_state(root, DAY, state)
             return tts.run_fast_tick(now=now, **env), root
 

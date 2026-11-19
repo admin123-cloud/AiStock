@@ -290,7 +290,7 @@ class TestEvaluate:
         assert d["trigger"]["band"] == [13.00, 13.20]
         assert d["target_band"] == [13.70, 13.90] and d["stop"] == 12.90
         assert d["regime"] == "sideways" and d["params_source"] == tts.CALIB_SOURCE
-        assert env["state"].open_t("002015")["draft_id"] == d["id"]
+        assert env["state"].open_t("002015") is None  # R56: 建议不等于成交
 
     def test_no_trigger_outside_band(self):
         res = tts.evaluate_code(**self._env(px=13.50))
@@ -365,15 +365,21 @@ class TestEvaluate:
         assert res4["draft"] and res4["draft"]["id"] != first["draft"]["id"]
 
     def test_cooldown_blocks_within_30min_after_rearm(self):
-        # 买侧：10:01 入场 → 10:10 目标带离场（清在途T）→ 10:20 回踩买带，
-        # 距上次买侧触发 19min < 30min → 冷却抑制
+        # 买侧：10:01 入场（成交建 open_t）→ 10:10 目标带离场（成交清 open_t）→
+        # 10:20 回踩买带，距上次买侧触发 19min < 30min → 冷却抑制
         env = self._env(now="10:01", px=13.10)
-        assert tts.evaluate_code(**env)["draft"]
+        entry = tts.evaluate_code(**env)["draft"]
+        assert entry
         shared = env["state"]
+        tts.record_fill_open_t(
+            shared, "002015", draft_id=entry["id"], entry_px=entry["px"],
+            qty=entry["qty"], target_band=entry["target_band"],
+            stop=entry["stop"], ts=entry["ts"], fill_id="F_cd_1", account="acct1")
         exit_env = self._env(now="10:10", px=13.80, series5=up_series(20, 13.80),
                              series15=up_series(20, 13.80))
         exit_env["state"] = shared
         assert tts.evaluate_code(**exit_env)["draft"]["subtype"] == "exit"
+        shared.set_open_t("002015", None)
         back = self._env(now="10:20", px=13.10)
         back["state"] = shared
         res = tts.evaluate_code(**back)
@@ -381,12 +387,12 @@ class TestEvaluate:
         assert res["suppressed"]["reason"] == "cooldown_30min"
 
     def test_daily_cap_two(self):
-        env = self._env(now="10:01", px=13.10)
-        d1 = tts.evaluate_code(**env)["draft"]
-        draft_rows = [d1]
-        # 直接预置今日已有 2 条开仓类草案 → 第三次拒
+        # 直接预置今日已有 2 条开仓类草案（非在途建议）→ 第三次拒
         env2 = self._env(now="10:40", px=13.10)
-        env2["drafts_today"] = draft_rows + [{"code": "002015", "subtype": "zone"}]
+        env2["drafts_today"] = [
+            {"code": "002015", "subtype": "zone"},
+            {"code": "002015", "subtype": "zone"},
+        ]
         res2 = tts.evaluate_code(**env2)
         assert res2["draft"] is None
         assert res2["suppressed"]["reason"] == "daily_t_cap"
@@ -429,6 +435,10 @@ class TestEvaluate:
         env = self._env(now="10:01", px=13.10)
         entry = tts.evaluate_code(**env)["draft"]
         state = env["state"]
+        tts.record_fill_open_t(
+            state, "002015", draft_id=entry["id"], entry_px=entry["px"],
+            qty=entry["qty"], target_band=entry["target_band"],
+            stop=entry["stop"], ts=entry["ts"], fill_id="F_exit_1", account="acct1")
         # 目标带上沿 → exit
         env2 = self._env(now="10:40", px=13.80, series5=up_series(20, 13.80),
                          series15=up_series(20, 13.80))
@@ -437,12 +447,16 @@ class TestEvaluate:
         d = res2["draft"]
         assert d and d["side"] == tts.SIDE_SELL and d["subtype"] == "exit"
         assert d["open_t_ref"] == entry["id"] and d["qty"] == 600
-        assert state.open_t("002015") is None
+        assert state.open_t("002015") is not None  # R56: 建议不直接清 open_t
 
     def test_stop_break_urgent_exit(self):
         env = self._env(now="10:01", px=13.10)
-        tts.evaluate_code(**env)
+        entry = tts.evaluate_code(**env)["draft"]
         state = env["state"]
+        tts.record_fill_open_t(
+            state, "002015", draft_id=entry["id"], entry_px=entry["px"],
+            qty=entry["qty"], target_band=entry["target_band"],
+            stop=entry["stop"], ts=entry["ts"], fill_id="F_stop_1", account="acct1")
         env2 = self._env(now="10:30", px=12.85, series5=down_series(20, 12.85),
                          series15=down_series(20, 12.85))
         env2["state"] = state
@@ -451,8 +465,12 @@ class TestEvaluate:
 
     def test_fallback_eod_exit(self):
         env = self._env(now="10:01", px=13.10)
-        tts.evaluate_code(**env)
+        entry = tts.evaluate_code(**env)["draft"]
         state = env["state"]
+        tts.record_fill_open_t(
+            state, "002015", draft_id=entry["id"], entry_px=entry["px"],
+            qty=entry["qty"], target_band=entry["target_band"],
+            stop=entry["stop"], ts=entry["ts"], fill_id="F_eod_1", account="acct1")
         env2 = self._env(now="14:51", px=13.30)
         env2["state"] = state
         res = tts.evaluate_code(**env2)
@@ -496,10 +514,15 @@ class TestUpSellLadder:
         }
 
     def _entered(self, **kw):
-        """先入场建立 open_t（RSI=0 conviction 买），返回 (state, entry_draft)。"""
+        """先入场并模拟真实成交建 open_t（R56），返回 (state, entry_draft)。"""
         env = self._env(**kw)
         entry = tts.evaluate_code(**env)["draft"]
         assert entry and entry["subtype"] == "entry"
+        tts.record_fill_open_t(
+            env["state"], entry["code"], draft_id=entry["id"],
+            entry_px=entry["px"], qty=entry["qty"],
+            target_band=entry["target_band"], stop=entry["stop"],
+            ts=entry["ts"], fill_id=f"F_{entry['id']}", account="acct1")
         return env["state"], entry
 
     @staticmethod
@@ -523,13 +546,12 @@ class TestUpSellLadder:
                 assert d["trigger"]["kind"] == "exit_rsi"
                 assert d["qty"] == 300                    # 600 的一半，整百
                 ot = state.open_t("002015")
-                assert ot["qty"] == 300 and ot["trimmed"] is True
-                assert ot["trim_ref"] == d["id"]
+                assert ot["qty"] == 600                   # R56: 建议不直接改写 open_t
             else:
                 assert res["draft"] is None and res["suppressed"] is None
 
     def test_trim_half_rounds_down_to_lot(self):
-        # open_t 300 股 → 半仓 150 → 向下取整百 = 100，余 200
+        # open_t 300 股 → 半仓 150 → 向下取整百 = 100
         state, entry = self._entered()
         ot = state.open_t("002015")
         state.set_open_t("002015", {**ot, "qty": 300})
@@ -538,7 +560,6 @@ class TestUpSellLadder:
         env["state"] = state
         d = tts.evaluate_code(**env)["draft"]
         assert d["subtype"] == "trim" and d["qty"] == 100
-        assert state.open_t("002015")["qty"] == 200
 
     def test_trim_infeasible_below_lot_fail_closed(self):
         # open_t 100 股：半仓取整百 = 0 → fail-closed 拒发 trim（清仓仍走 80 档）
@@ -561,7 +582,6 @@ class TestUpSellLadder:
         d = tts.evaluate_code(**env)["draft"]
         assert d["subtype"] == "exit" and d["qty"] == 600
         assert d["open_t_ref"] == entry["id"]
-        assert state.open_t("002015") is None
 
     def test_trim_then_immediate_clear_at_80_no_cooldown_block(self):
         # 75 档减半后 1 分钟内冲 80 → 清余必须立即可发（trim 独立布防组，
@@ -572,12 +592,13 @@ class TestUpSellLadder:
         env1["state"] = state
         d1 = tts.evaluate_code(**env1)["draft"]
         assert d1["subtype"] == "trim"
+        ot = state.open_t("002015")
+        state.set_open_t("002015", {**ot, "qty": ot["qty"] - d1["qty"], "trimmed": True})
         env2 = self._env(now="10:41", series5=series_for_rsi(85.0),
                          series15=series_for_rsi(85.0))
         env2["state"] = state
         d2 = tts.evaluate_code(**env2)["draft"]
         assert d2 and d2["subtype"] == "exit" and d2["qty"] == 300
-        assert state.open_t("002015") is None
 
     def test_no_double_trim_while_hot(self):
         # 已 trim：RSI 持续 ≥75 不再二次减半（trimmed 标志 + 独立布防）。
@@ -587,7 +608,10 @@ class TestUpSellLadder:
         env1 = self._env(now="10:40", series5=series_for_rsi(76.0),
                          series15=series_for_rsi(60.0))
         env1["state"] = state
-        assert tts.evaluate_code(**env1)["draft"]["subtype"] == "trim"
+        d1 = tts.evaluate_code(**env1)["draft"]
+        assert d1["subtype"] == "trim"
+        ot = state.open_t("002015")
+        state.set_open_t("002015", {**ot, "qty": ot["qty"] - d1["qty"], "trimmed": True})
         for t in ("10:41", "11:20", "13:10"):
             env = self._env(now=t, series5=series_for_rsi(76.0),
                             series15=series_for_rsi(60.0))
@@ -604,13 +628,16 @@ class TestUpSellLadder:
         env1 = self._env(now="10:40", series5=series_for_rsi(76.0),
                          series15=series_for_rsi(76.0))
         env1["state"] = state
-        assert tts.evaluate_code(**env1)["draft"]["subtype"] == "trim"
+        d1 = tts.evaluate_code(**env1)["draft"]
+        assert d1["subtype"] == "trim"
+        ot = state.open_t("002015")
+        state.set_open_t("002015", {**ot, "qty": ot["qty"] - d1["qty"], "trimmed": True})
         env2 = self._env(now="10:41", series5=series_for_rsi(76.0),
                          series15=series_for_rsi(76.0))
         env2["state"] = state
         d2 = tts.evaluate_code(**env2)["draft"]
         assert d2 and "l2_" in d2["trigger"]["kind"] and d2["subtype"] == "exit"
-        assert state.open_t("002015") is None          # L2 exit 已清仓
+        state.set_open_t("002015", None)               # 模拟 L2 exit 成交清仓
         env3 = self._env(now="11:20", series5=series_for_rsi(76.0),
                          series15=series_for_rsi(76.0))
         env3["state"] = state
@@ -647,14 +674,16 @@ class TestUpSellLadder:
         entry = tts.evaluate_code(**env)["draft"]
         assert entry["subtype"] == "entry"
         state = env["state"]
-        ot = state.open_t("002015")
-        state.set_open_t("002015", {**ot, "target_band": [14.50, 14.60]})
+        tts.record_fill_open_t(
+            state, "002015", draft_id=entry["id"], entry_px=entry["px"],
+            qty=entry["qty"], target_band=[14.50, 14.60],
+            stop=entry["stop"], ts=entry["ts"], fill_id="F_sw_1", account="acct1")
         env2 = self._env(now="10:40", regime="sideways", px=13.40,
                          series5=up_series(20, 13.40), series15=up_series(20, 13.40))
         env2["state"] = state
         d = tts.evaluate_code(**env2)["draft"]
         assert d["subtype"] == "exit" and d["trigger"]["kind"] == "exit_rsi"
-        assert d["qty"] == 600 and state.open_t("002015") is None
+        assert d["qty"] == 600
 
 
 # ── R54：上升周期买侧分层（≤35 常规 / ≤20 conviction）──────────
@@ -701,7 +730,7 @@ class TestUpBuyTier:
             assert d["buy_tier"] == "conviction"
             assert d["conviction"] is True and "6-14%" in d["buy_tier_note"]
             assert d["qty"] == 600                       # 同 1x T 仓上限
-            assert env["state"].open_t("002015")["draft_id"] == d["id"]
+            assert env["state"].open_t("002015") is None  # R56: 建议不直接建立 open_t
 
     def test_normal_tier_just_above_20(self):
         env = self._env(series5=series_for_rsi(20.001), series15=series_for_rsi(20.001))
@@ -806,8 +835,19 @@ class TestBeatEndToEnd:
 
         r1 = tts.run_beat(now=now1, bars5_loader=loader_for(now1, base_in),
                           bars15_loader=loader_for(now1, base_in), **env)
+        root = tmp_path / T_ROOT_NAME
+        d1 = tts.read_jsonl(root / "drafts" / f"{STAMP}.jsonl")[0]
+        st = tts.load_state(root, DAY)
+        tts.record_fill_open_t(
+            st, "002015", draft_id=d1["id"], entry_px=d1["px"], qty=d1["qty"],
+            target_band=d1["target_band"], stop=d1["stop"], ts=d1["ts"],
+            fill_id="F_e2e_1", account="acct1")
+        tts.save_state(root, DAY, st)
         r2 = tts.run_beat(now=now2, bars5_loader=loader_for(now2, base_target),
                           bars15_loader=loader_for(now2, base_target), **env)
+        st2 = tts.load_state(root, DAY)
+        st2.set_open_t("002015", None)
+        tts.save_state(root, DAY, st2)
         r3 = tts.run_beat(now=now3, bars5_loader=loader_for(now3, base_in),
                           bars15_loader=loader_for(now3, base_in), **env)
         assert r1["new_draft_ids"] and r2["new_draft_ids"] and r3["new_draft_ids"]

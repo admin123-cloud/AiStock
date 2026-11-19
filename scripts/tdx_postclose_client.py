@@ -77,6 +77,67 @@ class TdxAutomationError(RuntimeError):
     """Expected UI contract was not present; caller must stop and inspect."""
 
 
+class TdxClickError(TdxAutomationError):
+    """Click failed before or during dispatch; click_sent tracks whether input fired."""
+
+    def __init__(self, message: str, *, click_sent: bool = False) -> None:
+        super().__init__(message)
+        self.click_sent = bool(click_sent)
+
+
+class TdxDownloadError(TdxAutomationError):
+    """Download failure or uncertainty carrying retry-safety metadata."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        state: str = "failed",
+        retry_safe: bool = False,
+        retry_blocked_reason: str = "",
+        evidence: Optional[dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.state = state
+        self.retry_safe = bool(retry_safe)
+        self.retry_blocked_reason = retry_blocked_reason
+        self.evidence = dict(evidence or {})
+
+    def report_fields(self) -> dict[str, Any]:
+        return {
+            "download_state": self.state,
+            "retry_safe": self.retry_safe,
+            "retry_blocked_reason": self.retry_blocked_reason,
+            "download_evidence": dict(self.evidence),
+        }
+
+
+def _classify_download_failure(
+    *,
+    dialog_visible: bool,
+    saw_disabled: bool,
+    saw_progress: bool,
+    saw_file_change: bool,
+) -> dict[str, Any]:
+    if (saw_progress or saw_file_change) and not saw_disabled:
+        return {
+            "state": "uncertain_in_progress",
+            "retry_safe": False,
+            "retry_blocked_reason": "activity_seen_without_completion_evidence",
+        }
+    if saw_disabled:
+        return {
+            "state": "uncertain_in_progress",
+            "retry_safe": False,
+            "retry_blocked_reason": "download_started_without_completion_evidence",
+        }
+    return {
+        "state": "failed",
+        "retry_safe": bool(dialog_visible),
+        "retry_blocked_reason": "" if dialog_visible else "dialog_closed",
+    }
+
+
 def _require_windows() -> None:
     if not IS_WINDOWS or USER32 is None:
         raise TdxAutomationError("TDX client automation requires Windows")
@@ -564,6 +625,59 @@ def _file_snapshot(tdx_root: Path) -> dict[str, Any]:
 def _progress_position(hwnd: int) -> int:
     progress = _find_visible_child_class(hwnd, "msctls_progress32")
     return int(USER32.SendMessageW(progress, PBM_GETPOS, 0, 0)) if progress else 0
+
+
+def _unexpected_download_modal(dialog: int) -> Optional[int]:
+    if not IS_WINDOWS or USER32 is None or not hasattr(USER32, "GetWindow"):
+        return None
+    main = _find_main_window()
+    if not main:
+        return None
+    for hwnd in _find_owned_windows(main):
+        if int(hwnd) != int(dialog) and _is_visible(hwnd):
+            return int(hwnd)
+    return None
+
+
+def _click_download_start(dialog: int) -> int:
+    _require_windows()
+    start = _find_button(dialog, "开始下载")
+    if not start or not _is_visible(start):
+        raise TdxDownloadError(
+            "开始下载 button not found",
+            state="failed",
+            retry_safe=False,
+            retry_blocked_reason="start_button_missing",
+        )
+    for attempt in (1, 2):
+        if not bool(USER32.IsWindowEnabled(start)):
+            raise TdxDownloadError(
+                "开始下载 button already disabled",
+                state="uncertain_in_progress",
+                retry_safe=False,
+                retry_blocked_reason="start_button_disabled",
+            )
+        try:
+            _click_window(start)
+            return attempt
+        except TdxClickError as exc:
+            modal_after = _unexpected_download_modal(dialog)
+            if modal_after:
+                raise TdxDownloadError(
+                    f"unexpected modal visible: {modal_after}",
+                    state="failed",
+                    retry_safe=False,
+                    retry_blocked_reason=f"unexpected_modal_visible:{modal_after}",
+                ) from exc
+            if exc.click_sent or attempt == 2:
+                raise TdxDownloadError(
+                    str(exc),
+                    state="uncertain_in_progress" if exc.click_sent else "failed",
+                    retry_safe=False,
+                    retry_blocked_reason="click_sent_uncertain" if exc.click_sent else "retry_exhausted",
+                ) from exc
+            time.sleep(0.3)
+    return 1
 
 
 def _start_and_wait(dialog: int, tdx_root: Path, timeout: float) -> dict[str, Any]:

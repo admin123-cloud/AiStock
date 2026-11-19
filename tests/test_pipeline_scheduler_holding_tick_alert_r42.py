@@ -129,11 +129,16 @@ def test_register_job_cron_fields():
     assert job.coalesce is True
 
 
-def test_serve_registers_holding_tick_alert_job(monkeypatch):
+def test_serve_retires_holding_tick_alert_and_registers_weekly_audit(monkeypatch):
     registered = []
     monkeypatch.setattr(ps, "register_postclose_job", lambda s, f=None: registered.append("postclose"))
     monkeypatch.setattr(ps, "register_intraday_job", lambda s, f=None: registered.append("intraday"))
     monkeypatch.setattr(ps, "register_t_tracker_jobs", lambda s: registered.append("t_tracker"))
+    monkeypatch.setattr(ps, "register_signal_quality_job", lambda s: registered.append("signal_quality"))
+    monkeypatch.setattr(ps, "register_weekly_data_audit_job", lambda s: registered.append("weekly_data_audit"))
+    monkeypatch.setattr(ps, "register_market_mood_finalize_job", lambda s: registered.append("market_mood_finalize"))
+    monkeypatch.setattr(ps, "register_t_trade_monitor_job", lambda s: registered.append("t_trade_monitor"))
+    monkeypatch.setattr(ps, "_register_intraday_kline_upsert", lambda s: registered.append("intraday_kline_upsert"))
     monkeypatch.setattr(ps, "register_holding_tick_alert_job", lambda s: registered.append("holding_tick_qmt_alert"))
 
     class _ShutdownScheduler(_FakeScheduler):
@@ -146,7 +151,22 @@ def test_serve_registers_holding_tick_alert_job(monkeypatch):
 
     rc = ps.serve(["--once"], scheduler_factory=_ShutdownScheduler, pipeline_fn=lambda **kw: {"status": "success"})
     assert rc == 0
-    assert registered == ["postclose", "intraday", "t_tracker", "holding_tick_qmt_alert"]
+    assert "holding_tick_qmt_alert" not in registered
+    assert "weekly_data_audit" in registered
+
+
+def test_weekly_data_audit_runner_and_registration():
+    commands = []
+    result = ps.run_weekly_data_audit(
+        runner=lambda cmd: (commands.append(list(cmd)) or {"returncode": 0}),
+    )
+    assert result["status"] == "success" and result["rc"] == 0
+    assert Path(commands[0][1]).name == "run_weekly_data_audit.py"
+    assert commands[0][2:] == ["--days", "30"]
+
+    scheduler = _FakeScheduler()
+    job = ps.register_weekly_data_audit_job(scheduler)
+    assert job is not None and job.id == ps.WEEKLY_DATA_AUDIT_JOB_ID
 
 
 def test_version_bumped():

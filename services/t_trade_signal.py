@@ -89,6 +89,41 @@ L2_BUY_RSI5_MAX = 30.0
 L2_FRACTION = 4                 # T 仓 ≤ 母仓 1/4（与 L1 的 1/3 不同）
 L2_HEAD_SHOULDER_PLACEHOLDER = "STRUCTURE_PLACEHOLDER"
 
+# ── R56 午休闸（2026-11-16，任务书 l2_alert_trade_closure_v1 R3 裁决）────
+# 双层闸内层（evaluate_l2_signal 内部北京时间门）；外层=调度器
+# pipeline_scheduler.l2_midday_gate 跳拍。相位语义（北京时间，半开区间）：
+#   trading: [09:35,11:30) ∪ [13:00,14:55]（14:55 含端点，镜像 TIME_WINDOWS）
+#   boundary_am: [11:30,11:35) / boundary_pm: [12:55,13:00) —— 不发交易信号
+#   midday_silent: [11:35,12:55) —— 静默
+#   outside_window: 09:35 前 / 14:55 后 —— 不发
+L2_PHASE_TRADING = "trading"
+L2_PHASE_BOUNDARY_AM = "boundary_am"
+L2_PHASE_MIDDAY_SILENT = "midday_silent"
+L2_PHASE_BOUNDARY_PM = "boundary_pm"
+L2_PHASE_OUTSIDE = "outside_window"
+
+
+def to_beijing_naive(now: datetime) -> datetime:
+    """aware → 北京时间 naive；naive 视为已是北京时间（L2 链现行约定）。
+
+    午休闸判定不得依赖宿主本地时区（v1 RED test_10 契约）。"""
+    if now.tzinfo is not None:
+        return now.astimezone(BEIJING_TZ).replace(tzinfo=None)
+    return now
+
+
+def l2_time_phase(t: dt_time) -> str:
+    """北京时间时分 → L2 午休闸相位（纯函数，供内外两层闸共用）。"""
+    if (dt_time(9, 35) <= t < dt_time(11, 30)) or (dt_time(13, 0) <= t <= dt_time(14, 55)):
+        return L2_PHASE_TRADING
+    if dt_time(11, 30) <= t < dt_time(11, 35):
+        return L2_PHASE_BOUNDARY_AM
+    if dt_time(11, 35) <= t < dt_time(12, 55):
+        return L2_PHASE_MIDDAY_SILENT
+    if dt_time(12, 55) <= t < dt_time(13, 0):
+        return L2_PHASE_BOUNDARY_PM
+    return L2_PHASE_OUTSIDE
+
 # ── R34 校准参数（2026-11-10，来源 R34 §3.5；作为回归锚）──────────
 # R54（2026-11-11 Owner 裁决"卖晚一点、买早一点"）只改上升周期两档：
 #   卖侧 65/70 → 阶梯 75 卖半（exit_rsi5_trim_min）→ 80 清余（exit_rsi5_min）；
@@ -969,6 +1004,106 @@ def save_state(root: Path, day: date, state: SignalState) -> None:
     _atomic_write_json(state_path(root, day), state.data)
 
 
+def is_fill_backed_open_t(open_t: Any) -> bool:
+    """open_t 是否携带真实成交证据（R56：建议≠成交，fail-closed）。
+
+    两种合法证据形状均可被安全识别（兼容两会话测试已读出的形状）：
+      ① fill_backed=True 且 fill 证据 dict 完整（source="fills"、side="BUY"、
+         id 非空）——record_fill_open_t 写出的正典形状（并集）；
+      ② 旧接线形状 source=="fill" 且 fill_id 非空。
+    旧"建议路径写入"的 open_t（无任何成交血统键）一律 False。
+    """
+    if not isinstance(open_t, dict):
+        return False
+    fill = open_t.get("fill")
+    if open_t.get("fill_backed") is True and isinstance(fill, dict):
+        if (str(fill.get("source") or "") == "fills"
+                and str(fill.get("side") or "").upper() == "BUY"
+                and bool(str(fill.get("id") or "").strip())):
+            return True
+    if (str(open_t.get("source") or "") == "fill"
+            and bool(str(open_t.get("fill_id") or "").strip())):
+        return True
+    return False
+
+
+def record_fill_open_t(
+    state: SignalState,
+    code: str,
+    *,
+    draft_id: str,
+    entry_px: float,
+    qty: int,
+    target_band: Optional[Sequence[float]],
+    stop: Optional[float],
+    ts: str,
+    fill_id: str,
+    fill_ts: Optional[str] = None,
+    account: Optional[str] = None,
+    fill_side: str = "BUY",
+    fill_qty: Optional[int] = None,
+    fill_px: Optional[float] = None,
+) -> dict:
+    """唯一合法的「真实成交 → open_t」接线口（R56 裁决 §2）。
+
+    未来只允许 fills 事实源调用；本批不接 THS、不造 fills——建议路径
+    （entry/trim/exit/stop/fallback）永不调用本函数。fail-closed 校验：
+    account/code 非空、fill_id 非空、ts/fill_ts 可解析、fill_side 必须 BUY
+    （开仓侧）、qty/价格必须为正，任一不过即 ValueError（不写入任何状态）。
+
+    写入形状（正典并集，两会话测试形状均兼容）：
+      fill_backed=True + fill{source,id,side,qty,px,ts}
+      + source="fill" + fill_id + fill_ts（可选 account）。
+    """
+    code_s = str(code or "").strip()
+    if not code_s:
+        raise ValueError("record_fill_open_t: code 不能为空")
+    if account is not None and not str(account).strip():
+        raise ValueError("record_fill_open_t: account 不能为空")
+    if not str(fill_id or "").strip():
+        raise ValueError("record_fill_open_t: fill_id 不能为空（无成交事实）")
+    if str(fill_side or "").upper() != "BUY":
+        raise ValueError(f"record_fill_open_t: 开仓侧必须 BUY，得到 {fill_side!r}")
+    try:
+        qty_i = int(qty)
+    except (TypeError, ValueError):
+        raise ValueError(f"record_fill_open_t: qty 非法 {qty!r}") from None
+    if qty_i <= 0:
+        raise ValueError(f"record_fill_open_t: qty 必须为正，得到 {qty_i}")
+    try:
+        px_f = float(entry_px)
+    except (TypeError, ValueError):
+        raise ValueError(f"record_fill_open_t: entry_px 非法 {entry_px!r}") from None
+    if px_f <= 0:
+        raise ValueError(f"record_fill_open_t: entry_px 必须为正，得到 {px_f}")
+    fill_qty_i = qty_i if fill_qty is None else int(fill_qty)
+    fill_px_f = px_f if fill_px is None else float(fill_px)
+    if fill_qty_i <= 0 or fill_px_f <= 0:
+        raise ValueError(
+            f"record_fill_open_t: fill_qty/fill_px 必须为正，得到 {fill_qty_i}/{fill_px_f}")
+    ts_dt = parse_ts(str(ts or ""))
+    if ts_dt is None:
+        raise ValueError(f"record_fill_open_t: ts 无法解析为北京时间 {ts!r}")
+    fill_ts_s = str(fill_ts) if fill_ts else str(ts)
+    if parse_ts(fill_ts_s) is None:
+        raise ValueError(f"record_fill_open_t: fill_ts 无法解析 {fill_ts_s!r}")
+    fill_id_s = str(fill_id).strip()
+    ot: dict[str, Any] = {
+        "draft_id": str(draft_id or ""), "entry_px": px_f, "qty": qty_i,
+        "target_band": list(target_band) if target_band else None,
+        "stop": float(stop) if stop is not None else None,
+        "ts": fmt_ts(ts_dt),
+        "fill_backed": True,
+        "fill": {"source": "fills", "id": fill_id_s, "side": "BUY",
+                 "qty": fill_qty_i, "px": fill_px_f, "ts": fill_ts_s},
+        "source": "fill", "fill_id": fill_id_s, "fill_ts": fill_ts_s,
+    }
+    if account is not None:
+        ot["account"] = str(account).strip()
+    state.set_open_t(code_s, ot)
+    return ot
+
+
 def cooldown_ok(side_state: Mapping[str, Any], now: datetime) -> bool:
     last = side_state.get("last_fire")
     if not last:
@@ -1042,18 +1177,44 @@ def evaluate_code(
 
     # ── 触发条件（与 R34 手册逐条对应；价带+RSI 阈为硬条件，量能/乖离仅记录）──
     open_t = state.open_t(code)
+    # R56 建议不等于成交：建议路径（entry/trim/exit/stop/fallback）一律不再
+    # 建立/推进/清除 open_t；open_t 只能由 record_fill_open_t（fills 事实源）
+    # 写入。无 open_t 但当日存在 entry 建议草案时，卖族触发仍进入判定
+    # （11-16 事故链保持可观察），但预检必然以 no_fill_backed_open_t 抑制。
+    fill_backed = is_fill_backed_open_t(open_t)
+    trigger_open_t = open_t
+    if not trigger_open_t:
+        pending_entry = None
+        for d in drafts_today:
+            if str(d.get("code") or "") != code:
+                continue
+            st_d = d.get("subtype")
+            if st_d == "entry" and str(d.get("side") or "").startswith("buy"):
+                pending_entry = d
+            elif st_d in ("exit", "stop", "fallback_eod"):
+                pending_entry = None
+        if pending_entry is not None:
+            trigger_open_t = {
+                "draft_id": pending_entry.get("id"),
+                "entry_px": pending_entry.get("px"),
+                "qty": pending_entry.get("qty"),
+                "target_band": pending_entry.get("target_band"),
+                "stop": pending_entry.get("stop"),
+                "ts": pending_entry.get("ts"),
+                "advice_backed": True,   # 标注：来自建议草案，非成交事实
+            }
     candidates: list[dict[str, Any]] = []
-    if open_t:
-        target = open_t.get("target_band")
+    if trigger_open_t:
+        target = trigger_open_t.get("target_band")
         hit_target = bool(target and float(target[0]) <= px <= float(target[1]))
         hit_exit_rsi = rsi5 >= float(params.get("exit_rsi5_min") or 1e9)
         # R54 阶梯第一档：≥trim_min 且尚未减半 → 卖 1/2（elif 链保证 ≥exit_min 时
         # 全清优先，绝不出现"该清仓却只卖半"）
         trim_min = params.get("exit_rsi5_trim_min")
         hit_trim_rsi = bool(
-            trim_min and not open_t.get("trimmed")
+            trim_min and not trigger_open_t.get("trimmed")
             and rsi5 >= float(trim_min))
-        stop_px = open_t.get("stop")
+        stop_px = trigger_open_t.get("stop")
         hit_stop = bool(stop_px and px <= float(stop_px))
         fallback = now.time() >= FALLBACK_EXIT_AFTER
         if hit_stop:
@@ -1163,9 +1324,19 @@ def evaluate_code(
         # fail-closed：无在途 T 时拒绝平仓/减半类草案。L2 卖侧拐点 subtype=exit，
         # A1 触发撤防后再进警戒区会再触发；open_t=None 时曾使 trigger.band 处
         # None.get 崩溃（11-13 事故家族：L2 exit 清仓后每拍评估失败循环）。
-        if subtype in ("exit", "stop", "fallback_eod", "trim") and not open_t:
-            suppress("no_open_t", {"side": side, "subtype": subtype})
-            continue
+        # R56 升级：卖族必须有 fill-backed open_t（成交事实）。open_t 完全缺失
+        # =旧 no_open_t 内部分支（L2 拐点通道，兼容既有回归）；open_t 存在但无
+        # 成交血统（含 entry 建议派生的 advice_backed 临时视图、旧建议写入的
+        # 存量形状）→ 对外一律 no_fill_backed_open_t，抑制载荷不得含 qty。
+        if subtype in ("exit", "stop", "fallback_eod", "trim"):
+            if not trigger_open_t:
+                suppress("no_open_t", {"side": side, "subtype": subtype})
+                continue
+            if not fill_backed:
+                suppress("no_fill_backed_open_t",
+                         {"side": side, "subtype": subtype,
+                          "open_t_ref": trigger_open_t.get("draft_id")})
+                continue
         if lot < LOT:
             suppress("t_lot_below_min", {"base_shares": base_shares, "lot": lot})
             continue
@@ -1236,19 +1407,10 @@ def evaluate_code(
                     "R34 实证 ≤20 全年仅 6-14% 交易日出现，稀缺")
         st["armed"] = False
         st["last_fire"] = fmt_ts(now)
-        if subtype == "entry":
-            state.set_open_t(code, {
-                "draft_id": draft_id, "entry_px": px, "qty": qty,
-                "target_band": params.get("sell_band"), "stop": params.get("stop"),
-                "ts": fmt_ts(now),
-            })
-        elif subtype == "trim":
-            # R54 阶梯第一档成交入草案：在途 T 减半续存（trimmed 防二次减半）
-            remaining = int(open_t["qty"]) - qty
-            state.set_open_t(code, {**open_t, "qty": remaining, "trimmed": True,
-                                    "trim_ts": fmt_ts(now), "trim_ref": draft_id})
-        elif subtype in ("exit", "stop", "fallback_eod"):
-            state.set_open_t(code, None)
+        # R56 建议不等于成交：entry/trim/exit/stop/fallback 建议一律不再
+        # 建立/推进/清除 open_t（旧缺陷：10:11 买建议建 open_t → 10:12 stop
+        # 草案照发）。open_t 仅由 record_fill_open_t（fills 事实源）写入，
+        # 核销同样待真实成交接线；低层 set_open_t 保留供该接线与测试注入。
         result["draft"] = draft
         return result
     return result
@@ -1639,12 +1801,8 @@ def run_beat(
                     fast["confirmed_at"] = fmt_ts(now)
                     fast["confirm_source"] = "slow_beat_merge"
                     fast["closed_rsi5"] = res["draft"]["trigger"]["rsi5"]
-                    if res["draft"].get("subtype") == "entry":
-                        state.set_open_t(code, {
-                            "draft_id": fast["id"], "entry_px": fast.get("px"),
-                            "qty": int(fast.get("qty") or 0),
-                            "target_band": fast.get("target_band"),
-                            "stop": fast.get("stop"), "ts": fmt_ts(now)})
+                    # R56：并入升级的 entry 建议同样不建立 open_t（建议≠成交，
+                    # 与 evaluate_code 建议路径同一裁决）。
                     res["draft"] = None
                     res["merged_into"] = fast["id"]
                     merged_fast.append(fast)
@@ -2486,6 +2644,18 @@ def evaluate_l2_signal(
 
     def suppress(reason: str, **kw: Any) -> None:
         result["suppressed"] = {"reason": reason, **kw}
+
+    # ── R56 午休闸（内层，北京时间）──────────────────────────────
+    # 正式窗 [09:35,11:30)∪[13:00,14:55]；11:30–11:35 / 12:55–13:00 边界窗与
+    # 11:35–12:55 静默窗不发交易信号；09:35 前 / 14:55 后不发。aware 时间先
+    # 折算北京时间（宿主本地时区不得作为判定依据）。外层调度闸见
+    # pipeline_scheduler.l2_midday_gate；15:00 后旧外窗守卫不变。
+    phase = l2_time_phase(to_beijing_naive(now).time())
+    if phase != L2_PHASE_TRADING:
+        suppress(f"l2_{phase}",
+                 windows=[[fmt_t(a), fmt_t(b)] for a, b in TIME_WINDOWS],
+                 phase=phase)
+        return result
 
     if rsi15 is None or rsi5 is None:
         suppress("rsi_data_insufficient",
