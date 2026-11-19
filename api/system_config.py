@@ -112,7 +112,7 @@ def get_trade_calendar_status() -> dict[str, Any]:
             row = conn.execute(
                 text(
                     "SELECT count(), min(trade_date), max(trade_date), "
-                    "maxIf(trade_date, is_open = 1 AND trade_date <= today()) "
+                    "maxIf(trade_date, is_trading = 1 AND trade_date <= today()) "
                     "FROM stock.trade_calendar"
                 )
             ).fetchone()
