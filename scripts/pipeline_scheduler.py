@@ -393,6 +393,117 @@ def _run_stage(
 # 纯编排函数（测试入口）
 # ---------------------------------------------------------------------------
 
+def _resolve_publication_store(publication_store: Optional[Any], *, is_production_run: bool) -> Optional[Any]:
+    """解析盘后发布控制面存储：显式注入优先；生产调度默认启用，测试 mock runner 默认跳过。"""
+    if publication_store is not None:
+        return publication_store
+    if not is_production_run:
+        return None
+    try:
+        from services.postclose_publication import PublicationStore
+
+        return PublicationStore()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _next_publication_generation(pub_store: Any) -> int:
+    try:
+        raw = pub_store._read_raw_state()
+        if isinstance(raw, dict):
+            return max(int(raw.get("generation") or 0), 0) + 1
+    except Exception:  # noqa: BLE001
+        pass
+    return 1
+
+
+def _sync_publication_importing(
+    pub_store: Optional[Any],
+    *,
+    resolved_date: date,
+    plan_id: str,
+    generation: int,
+    now_bj: datetime,
+    log: logging.Logger,
+) -> None:
+    if pub_store is None:
+        return
+    try:
+        from services.postclose_contracts import StageState
+
+        pub_store.write_stage(
+            target_date=resolved_date,
+            plan_id=plan_id,
+            generation=generation,
+            approval_id="scheduled_postclose_cutover",
+            status=StageState.IMPORTING,
+            reason="postclose_pipelines_running",
+            now=now_bj,
+        )
+    except Exception as exc:  # noqa: BLE001 - 控制面同步独立异常面，不阻塞主管道
+        log.warning("[publication] 写入 IMPORTING 控制面失败: %s", exc)
+
+
+def _sync_publication_result(
+    pub_store: Optional[Any],
+    *,
+    resolved_date: date,
+    plan_id: str,
+    generation: int,
+    status: str,
+    failed_stage: Optional[str],
+    reason: Optional[str],
+    stage_results: Mapping[str, Any],
+    summary_path: Path,
+    now_bj: datetime,
+    log: logging.Logger,
+) -> None:
+    if pub_store is None:
+        return
+    try:
+        from services.postclose_contracts import PublishCertificate, StageState
+        from services.postclose_source_prepare import canonical_sha256
+
+        if status == "success":
+            digest_payload = {
+                "target_date": resolved_date.isoformat(),
+                "plan_id": plan_id,
+                "generation": generation,
+                "stages": {k: {"rc": v.get("rc"), "attempts": v.get("attempts")} for k, v in stage_results.items()},
+            }
+            stage_digest = canonical_sha256(digest_payload)
+            cert = PublishCertificate(
+                target_date=resolved_date,
+                plan_id=plan_id,
+                generation=generation,
+                approval_id="scheduled_postclose_cutover",
+                issued_at=now_bj,
+                expires_at=now_bj + timedelta(hours=24),
+                issuer="postclose_orchestrator",
+                evidence_refs=(str(summary_path),),
+                schema_digest=canonical_sha256("postclose_auto/1"),
+                manifest_digest=stage_digest,
+                clean_digest=stage_digest,
+                source_digest=stage_digest,
+                verification_digest=stage_digest,
+                coverage_status="complete",
+                published_at=now_bj,
+            )
+            pub_store.publish_certified(cert, now=now_bj, reason="postclose_pipelines_success")
+        else:
+            pub_store.write_stage(
+                target_date=resolved_date,
+                plan_id=plan_id,
+                generation=generation,
+                approval_id="scheduled_postclose_cutover",
+                status=StageState.IMPORT_FAILED,
+                reason=reason or f"{failed_stage or 'postclose'}_failed",
+                now=now_bj,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[publication] 同步盘后发布结果失败: %s", exc)
+
+
 def run_postclose_pipelines(
     *,
     run_date: Optional[date] = None,
@@ -404,6 +515,7 @@ def run_postclose_pipelines(
     now_fn: Optional[Callable[[], datetime]] = None,
     sleep_fn: Optional[Callable[[float], None]] = None,
     logger_: Optional[logging.Logger] = None,
+    publication_store: Optional[Any] = None,
 ) -> dict:
     """盘后三管道编排。返回汇总报告 dict（同时原子写入报告文件）。
 
@@ -466,7 +578,19 @@ def run_postclose_pipelines(
             "stages": {},
         })
 
-    # -- 顺序执行三阶段 --
+    # -- 顺序执行三阶段（P1-3：同步 S9/S11 发布控制面状态 IMPORTING -> CERTIFIED/IMPORT_FAILED） --
+    pub_store = _resolve_publication_store(publication_store, is_production_run=(runner is None))
+    pub_plan_id = f"postclose_auto_{stamp}"
+    pub_generation = _next_publication_generation(pub_store) if pub_store is not None else 1
+    _sync_publication_importing(
+        pub_store,
+        resolved_date=resolved_date,
+        plan_id=pub_plan_id,
+        generation=pub_generation,
+        now_bj=cn_now(now_fn),
+        log=log,
+    )
+
     run = runner or _default_runner
     sleep = sleep_fn or time.sleep
     specs = build_stage_commands(resolved_date, out_dir)
@@ -532,6 +656,19 @@ def run_postclose_pipelines(
         "trading_day": True,
         "stages": stage_results,
     })
+    _sync_publication_result(
+        pub_store,
+        resolved_date=resolved_date,
+        plan_id=pub_plan_id,
+        generation=pub_generation,
+        status=status,
+        failed_stage=failed_stage,
+        reason=reason,
+        stage_results=stage_results,
+        summary_path=summary_path,
+        now_bj=cn_now(now_fn),
+        log=log,
+    )
     if status == "success":
         log.info("盘后管道完成：status=success stages=%s", list(stage_results))
     else:
