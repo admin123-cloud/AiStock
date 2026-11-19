@@ -12,8 +12,6 @@ from api.accounts import router as accounts_router
 from api.backtest import router as backtest_router
 from api.cls_news import router as cls_news_router
 from api.data_statistics import router as data_stats_router
-from api.gen3_state_alpha import router as gen3_state_alpha_router
-from api.gen3_shadow import router as gen3_shadow_router
 from api.kline_check import router as kline_check_router
 from api.market_board import router as market_board_router
 from api.market_overview import router as market_router
@@ -62,7 +60,6 @@ async def lifespan(app: FastAPI):
             start_core_data_maintenance_scheduler,
             maybe_run_startup_reference_sync,
         )
-        from api.gen3_state_alpha import init_gen3_state_alpha_monitor_scheduler_from_config
             init_gen2_shadow_buy_monitor_scheduler_from_config,
             init_v4_manual_holdings_monitor_scheduler_from_config,
         )
@@ -76,8 +73,6 @@ async def lifespan(app: FastAPI):
         logger.info(f"V4 manual holdings monitor scheduler initialized: {v4_monitor_status}")
         gen2_shadow_monitor_status = init_gen2_shadow_buy_monitor_scheduler_from_config()
         logger.info(f"G2 shadow buy monitor scheduler initialized: {gen2_shadow_monitor_status}")
-        gen3_state_alpha_monitor_status = init_gen3_state_alpha_monitor_scheduler_from_config()
-        logger.info(f"G3 State Alpha monitor scheduler initialized: {gen3_state_alpha_monitor_status}")
         if maybe_run_startup_reference_sync():
             logger.info("Startup reference data sync enabled")
         else:
@@ -151,8 +146,6 @@ app.include_router(watchlist_router, prefix="/api")
 app.include_router(system_router, prefix="/api", tags=["system"])
 app.include_router(kline_check_router, prefix="/api", tags=["kline-check"])
 app.include_router(backtest_router, prefix="/api", tags=["backtest"])
-app.include_router(gen3_state_alpha_router, prefix="/api")
-app.include_router(gen3_shadow_router, prefix="/api")
 app.include_router(cls_news_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
 

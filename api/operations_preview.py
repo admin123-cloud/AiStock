@@ -1,6 +1,5 @@
 """统一栈安全观察模式入口（Owner 2026-11-09 裁决：观察架构替代 3000 完整栈成为唯一入口）。
 R30（2026-11-10 Owner 裁定修复范围升级，任务书 20261110_full_readface_allowlist_r30.md）：
-全站只读面开放——挂载全部 12 router（backtest/data_statistics/gen3_shadow/gen3_state_alpha/
 kline_check/system/trading/watchlist 补挂，连同既有 operations/market_overview/stocks/sectors/
 cls_news 共 13 个 include），对 162 条 GET 处理器逐条副作用审计后放行 114 条只读路径
 （含本文件自有的 2 条 health）；39 条"伪读实写/任务触发/调度器变更/外呼"GET 封禁；全部
@@ -9,8 +8,6 @@ r45.md）Owner 批复唯一例外：2 条 scoped-write POST（holding-t/watchlis
 holding-t/watchlist-sync-ths）只写 holding_tick_watchlist.json（原子+备份），其余写方法仍全封。
 
 绝对禁区（Owner 明令）：任何被放行端点的处理器链不得读取
-runtime/gen3_state_alpha/qmtmini_broker_snapshot_sync.log 及其所在子树；审计证据（grep 全
-api/ 无该文件名引用；gen3_state_alpha 读文件全部为显式路径字面量，无目录枚举触达该
 log）见 runtime/full_readface_allowlist_r30/ 审计表。
 research/cross_strategy/qmtmini_probe.py::run_probe 全链禁运（/system/tdx-gateway/diagnostics
 因 run_probe 外呼语义封禁）。
@@ -48,8 +45,6 @@ from api.operations import router as operations_router
 from api.backtest import router as backtest_router
 from api.cls_news import router as cls_news_router
 from api.data_statistics import router as data_stats_router
-from api.gen3_state_alpha import router as gen3_state_alpha_router
-from api.gen3_shadow import router as gen3_shadow_router
 from api.kline_check import router as kline_check_router
 from api.market_overview import router as market_overview_router
 from api.market_board import router as market_board_router
@@ -66,8 +61,6 @@ app.include_router(operations_router, prefix='/api')
 app.include_router(backtest_router, prefix='/api')
 app.include_router(cls_news_router, prefix='/api')
 app.include_router(data_stats_router, prefix='/api', tags=['data-statistics'])
-app.include_router(gen3_state_alpha_router, prefix='/api')
-app.include_router(gen3_shadow_router, prefix='/api')
 app.include_router(kline_check_router, prefix='/api', tags=['kline-check'])
 app.include_router(market_board_router)
 app.include_router(market_overview_router, prefix='/api')
@@ -263,7 +256,6 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
 # 这两条 POST 只写 holding_tick_watchlist.json（services/holding_t_watchlist 原子
 # 写+备份；AST 守卫 tests/test_r45_holding_t_watchlist.py 锁定链上零其他文件写/
 # 零 formal 表写/零调度器）。compose 侧仅嵌套 rw 挂载 holding_t_watchlist 子目录，
-# gen3_state_alpha 其余文件（broker_state.json 等）保持只读。
 _SCOPED_WRITE_PREVIEW_PATHS = frozenset({
     '/api/accounts/sync',
     '/api/g3/watchlist/upsert',
