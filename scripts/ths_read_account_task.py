@@ -406,27 +406,35 @@ def _switch_via_panel_combobox(
         return None
 
     try:
-        from pywinauto import Desktop
         from services import ths_hotswitch as hs
 
-        win = Desktop(backend="win32").window(handle=int(q_hwnd))
-        known_hints = [str(v.get("owner") or "") for v in tc.YH_ACCOUNTS.values() if v.get("owner")]
-        err = hs.ensure_target_account(
-            win,
-            {"target_hint": target_hint, "known_hints": known_hints},
-        )
-        if err is not None:
+        # 前置 Owner 离席守卫（复用 ths_hotswitch 同源守卫，避免抢用户焦点）
+        if hs._owner_idle_seconds() < hs.OWNER_ACTIVE_IDLE_S:
             return {
                 "schema": tc.SCHEMA,
                 "command": "switch-account-combobox",
-                "status": err.get("status") or "switch_failed",
-                "rc": 3 if err.get("status") == "skipped_foreground" else 4,
+                "status": "skipped_foreground",
+                "rc": 3,
                 "to": target_account,
-                "reason": err.get("note") or err.get("reason") or "combobox_switch_failed",
-                "detail": err,
+                "reason": "Owner 活跃（输入空闲<90s），绝不切换",
                 "clicks": [],
                 "credentials_touched": False,
             }
+
+        sel = hs._uia_select_account(int(q_hwnd), target_hint)
+        if not isinstance(sel, dict) or not sel.get("ok"):
+            return {
+                "schema": tc.SCHEMA,
+                "command": "switch-account-combobox",
+                "status": (sel.get("reason") if isinstance(sel, dict) else None) or "switch_failed",
+                "rc": 4,
+                "to": target_account,
+                "reason": str((sel or {}).get("reason") or "uia_select_account_failed"),
+                "detail": sel,
+                "clicks": [],
+                "credentials_touched": False,
+            }
+
         # 切换成功后必须经只读身份锚点二次独立复验，绝不串账
         time.sleep(1.5)
         verified = _detect_active_account(happ_exe)
@@ -439,6 +447,7 @@ def _switch_via_panel_combobox(
                 "to": target_account,
                 "verified_account": verified,
                 "reason": f"ComboBox 切换后身份复验不匹配: got={verified!r} expect={target_account!r}",
+                "detail": sel,
                 "clicks": [{"target": f"combobox:{target_account}"}],
                 "credentials_touched": False,
             }
@@ -449,6 +458,7 @@ def _switch_via_panel_combobox(
             "rc": 0,
             "to": target_account,
             "verified_account": verified,
+            "detail": sel,
             "clicks": [{"target": f"combobox:{target_account}"}],
             "credentials_touched": False,
         }
