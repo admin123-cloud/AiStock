@@ -61,6 +61,7 @@ const NAV_ICONS: Record<string, ComponentType> = {
   '/data-stats': ChartPieIcon,
   '/data/reviews': ClipboardDocumentCheckIcon,
   '/data/health': HeartIcon,
+  '/accounts': ShieldCheckIcon,
   '/system/tasks': ClipboardDocumentListIcon,
   '/system-config': Cog6ToothIcon,
 }

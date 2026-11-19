@@ -131,6 +131,11 @@ _PROJECT_NAMESPACES = ('api', 'services', 'strategies', 'utils')
 # POST 共 310 对，一个不多、一个不少；任何 OPTIONS、其他方法、未识别路由类型或额外路径都是
 # 违规。路径模板取自各 router 文件的实际装饰器（含 /api/stocks/ 尾斜杠与参数名）。
 ALLOWED_BUSINESS_ROUTE_PAIRS = frozenset({
+    ('GET', '/api/accounts/overview'),
+    ('GET', '/api/accounts/{account_id}'),
+    ('HEAD', '/api/accounts/overview'),
+    ('HEAD', '/api/accounts/{account_id}'),
+    ('POST', '/api/accounts/sync'),
     ('GET', '/api/backtest/progress/{task_id}'),
     ('GET', '/api/backtest/result/{task_id}'),
     ('GET', '/api/backtest/strategies'),
@@ -1319,6 +1324,7 @@ def _inner_test_r30_same_path_write_siblings_not_exposed(tmp_path, monkeypatch):
     # 整体收紧：路由面只允许 GET/HEAD 两种方法——R45 唯一例外为 2 条 scoped-write
     # POST（holding-t/watchlist-upsert、watchlist-sync-ths），其余一律违规。
     _R45_SCOPED_WRITE_POSTS = {
+        ('POST', '/api/accounts/sync'),
         ('POST', '/api/gen3-state-alpha/holding-t/watchlist-upsert'),
         ('POST', '/api/gen3-state-alpha/holding-t/watchlist-sync-ths'),
     }

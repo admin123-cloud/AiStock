@@ -53,6 +53,9 @@ services:
       - F:/Aistock/data/data/runtime/market_mood:/aistock/data/runtime/market_mood:ro
       # R14/S9：只读嵌套挂载真实 runtime/postclose_control（盘后发布状态与认证证书控制面）
       - F:/Aistock/data/data/runtime/postclose_control:/aistock/data/runtime/postclose_control:ro
+      # 资金账号管理：只读挂载远航双账号采集产物 + scoped-write 指令队列子目录
+      - F:/Aistock/data/data/runtime/ths_read_account:/aistock/data/runtime/ths_read_account:ro
+      - F:/Aistock/data/data/runtime/ths_read_account/commands:/aistock/data/runtime/ths_read_account/commands
       - backend_logs:/aistock/logs
       - backend_reports:/aistock/reports
       - backend_artifacts:/aistock/artifacts

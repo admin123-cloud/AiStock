@@ -28,6 +28,12 @@ const page = (path: string, name: string, meta: RouteMeta, loader: () => Promise
 
 export const routes: AppRoute[] = [
   page(
+    '/accounts',
+    'BrokerAccounts',
+    { title: '资金账号管理', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 0.5, navLabel: '资金账号管理' },
+    () => import('@/views/operations/BrokerAccounts')
+  ),
+  page(
     '/system/tasks',
     'TaskCenter',
     { title: '任务中心', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 1 },

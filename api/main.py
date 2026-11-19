@@ -8,6 +8,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.accounts import router as accounts_router
 from api.backtest import router as backtest_router
 from api.cls_news import router as cls_news_router
 from api.data_statistics import router as data_stats_router
@@ -159,6 +160,7 @@ app.include_router(backtest_router, prefix="/api", tags=["backtest"])
 app.include_router(gen3_state_alpha_router, prefix="/api")
 app.include_router(gen3_shadow_router, prefix="/api")
 app.include_router(cls_news_router, prefix="/api")
+app.include_router(accounts_router, prefix="/api")
 
 
 if __name__ == "__main__":

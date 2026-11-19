@@ -42,6 +42,7 @@ import os
 os.environ.setdefault("AISTOCK_READFACE_PREVIEW", "1")
 
 from fastapi import FastAPI
+from api.accounts import router as accounts_router
 from api.operations import router as operations_router
 from api.backtest import router as backtest_router
 from api.cls_news import router as cls_news_router
@@ -75,6 +76,7 @@ app.include_router(stocks_router, prefix='/api')
 app.include_router(system_router, prefix='/api', tags=['system'])
 app.include_router(trading_router, prefix='/api')
 app.include_router(watchlist_router, prefix='/api')
+app.include_router(accounts_router, prefix='/api')
 
 
 @app.get('/api/health/runtime')
@@ -110,6 +112,8 @@ def health_check():
 # market/limit-up-stats）入列：153 → 156 条（GET 只读：kline_daily/快照聚合 +
 # runtime/market_mood JSON 读；零写零外呼）。
 _ALLOWED_PREVIEW_PATHS = frozenset({
+    '/api/accounts/overview',
+    '/api/accounts/{account_id}',
     '/api/backtest/progress/{task_id}',
     '/api/backtest/result/{task_id}',
     '/api/backtest/strategies',
@@ -279,6 +283,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
 # 零 formal 表写/零调度器）。compose 侧仅嵌套 rw 挂载 holding_t_watchlist 子目录，
 # gen3_state_alpha 其余文件（broker_state.json 等）保持只读。
 _SCOPED_WRITE_PREVIEW_PATHS = frozenset({
+    '/api/accounts/sync',
     '/api/gen3-state-alpha/holding-t/watchlist-upsert',
     '/api/gen3-state-alpha/holding-t/watchlist-sync-ths',
 })
