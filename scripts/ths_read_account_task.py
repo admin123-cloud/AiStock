@@ -110,9 +110,9 @@ def bootstrap_cold_start(
     *,
     happ_exe: Path = DEFAULT_HAPP_EXE,
     main_wait: float = 25.0,
-    main_login_wait: float = 10.0,
+    main_login_wait: float = 30.0,
     f12_wait: float = 12.0,
-    login_settle_wait: float = 12.0,
+    login_settle_wait: float = 15.0,
 ) -> dict[str, Any]:
     """同花顺远航冷启动安全引导：拉起主程序 → 等待主界面 → F12 拉起面板 → 记住密码自动登录。
 
@@ -164,7 +164,25 @@ def bootstrap_cold_start(
             )
             return result
 
-    # 3) 枚举交易面板；未开则前台化主程序并按 F12 拉起
+    # 3) 优先检查远航版三级只读进程链（happ -> xiadan -> xiadan-plus）是否已就绪；
+    #    若已就绪则直接免 F12 进入单账号只读采集（零键鼠注入）。
+    ro_chain = None
+    try:
+        ro_chain = tc._yh_ro_chain_snapshot(happ_exe)
+    except Exception:  # noqa: BLE001
+        ro_chain = None
+    if ro_chain is not None:
+        steps.append({
+            "step": "ro_chain_ready",
+            "happ_pid": ro_chain["happ"]["pid"],
+            "xiadan_pid": ro_chain["xiadan"]["pid"],
+            "plus_pid": ro_chain["plus"]["pid"],
+        })
+        result["ready"] = True
+        result["status"] = "bootstrap_ready"
+        return result
+
+    # 4) 枚举交易面板；未开则前台化主程序并按 F12 拉起
     panels = tc._yh_enum_panels()
     if panels:
         panel = panels[0]

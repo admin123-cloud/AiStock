@@ -19,7 +19,7 @@ class TestThsReadAccountTaskColdStart:
         monkeypatch.setattr(task.tc, "_yh_ensure_main", lambda **kw: {"pids": [100], "launched": True})
         monkeypatch.setattr(task.tc, "_wait_for", lambda fn, *a, **kw: {"hwnd": 11, "title": "登录"})
         monkeypatch.setattr(task.tc, "_yh_main_window", lambda: {"hwnd": 11, "title": "登录"})
-        ticks = iter([0.0, 0.5, 20.0])
+        ticks = iter([0.0, 0.5, 40.0])
         monkeypatch.setattr(task.time, "monotonic", lambda: next(ticks))
         monkeypatch.setattr(task.time, "sleep", lambda _s: None)
 
@@ -33,6 +33,7 @@ class TestThsReadAccountTaskColdStart:
     def test_panel_empty_password_fails_closed(self, monkeypatch):
         monkeypatch.setattr(task.tc, "_yh_ensure_main", lambda **kw: {"pids": [100], "launched": False})
         monkeypatch.setattr(task.tc, "_wait_for", lambda fn, *a, **kw: {"hwnd": 11, "title": "同花顺远航版"})
+        monkeypatch.setattr(task.tc, "_yh_ro_chain_snapshot", lambda *_a, **_kw: None)
         monkeypatch.setattr(task.tc, "_yh_enum_panels", lambda: [{"hwnd": 22}])
         monkeypatch.setattr(
             task,
@@ -47,6 +48,7 @@ class TestThsReadAccountTaskColdStart:
     def test_panel_remembered_password_clicks_login_and_proceeds_to_readonly(self, monkeypatch, tmp_path):
         monkeypatch.setattr(task.tc, "_yh_ensure_main", lambda **kw: {"pids": [100], "launched": True})
         monkeypatch.setattr(task.tc, "_wait_for", lambda fn, *a, **kw: {"hwnd": 11, "title": "同花顺远航版"})
+        monkeypatch.setattr(task.tc, "_yh_ro_chain_snapshot", lambda *_a, **_kw: None)
         monkeypatch.setattr(task.tc, "_yh_enum_panels", lambda: [{"hwnd": 22}])
         monkeypatch.setattr(
             task,
