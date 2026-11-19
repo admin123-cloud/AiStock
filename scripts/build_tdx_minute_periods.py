@@ -283,7 +283,21 @@ def _target_table(period: str, adjust: str, target_suffix: Optional[str]) -> str
     return BASE_TABLES[period] + suffix
 
 
+_FORMAL_BASE_TABLES = frozenset(
+    set(BASE_TABLES.values()) | {f"stock.{name}" for name in BASE_TABLES.values()}
+)
+
+
+def _assert_no_formal_bypass(table: str, *, dry_run: bool, operation: str) -> None:
+    """R14/S8 退役门禁：禁止绕过 postclose_orchestrator 直接建/删/写正式分钟基表。"""
+    if not dry_run and str(table).strip().lower() in _FORMAL_BASE_TABLES:
+        raise RuntimeError(
+            f"R14/S8 退役门禁：禁止对正式分钟表 {table} 执行未受控 {operation}，请走 postclose_orchestrator"
+        )
+
+
 def _create_table(client, table: str) -> None:
+    _assert_no_formal_bypass(table, dry_run=False, operation="CREATE")
     client.command(
         f"""
         CREATE TABLE IF NOT EXISTS {table}
@@ -308,6 +322,7 @@ def _create_table(client, table: str) -> None:
 
 
 def _delete_range(client, table: str, start_dt: datetime, end_dt: datetime, codes: set[str], dry_run: bool) -> None:
+    _assert_no_formal_bypass(table, dry_run=dry_run, operation="DELETE")
     partition_key = client.query(
         "SELECT partition_key FROM system.tables WHERE database = currentDatabase() AND name = %(table)s",
         parameters={"table": table},
@@ -450,6 +465,7 @@ def _to_insert_rows(rows: Iterable[Bar], period: str, adjust: str, created_at: d
 
 
 def _flush(client, table: str, rows: list[tuple], dry_run: bool) -> int:
+    _assert_no_formal_bypass(table, dry_run=dry_run, operation="INSERT")
     if not rows:
         return 0
     period = next((key for key, value in BASE_TABLES.items() if value == table), "")

@@ -201,6 +201,22 @@ def build_ladder(
 
 # ── runtime/market_mood/YYYYMMDD.json（原子写，realtime/final 双键）──
 
+import threading
+
+_MOOD_LOCKS_GUARD = threading.Lock()
+_MOOD_PATH_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _path_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _MOOD_LOCKS_GUARD:
+        lock = _MOOD_PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _MOOD_PATH_LOCKS[key] = lock
+        return lock
+
+
 def _day_dir(out_root: Optional[Any] = None) -> Any:
     if out_root is not None:
         path = Path(out_root) / "market_mood"
@@ -214,6 +230,15 @@ def day_path(day: str, out_root: Optional[Any] = None) -> Any:
     return _day_dir(out_root) / f"{day}.json"
 
 
+def _atomic_write_payload(path: Path, payload: Dict[str, Any]) -> None:
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
 def write_day_payload(
     day: str,
     *,
@@ -221,34 +246,73 @@ def write_day_payload(
     final: Optional[Dict[str, Any]] = None,
     out_root: Optional[Any] = None,
 ) -> None:
-    """合并写（保留另一键的历史）；tmp + os.replace 原子落盘。"""
+    """合并写（保留另一键的历史）；per-path 互斥 + tmp + os.replace 原子落盘。"""
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo
 
     path = day_path(day, out_root)
-    existing: Dict[str, Any] = {}
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - 损坏则重建（保留 realtime/final 入参为准）
-            existing = {}
-    payload = dict(existing)
-    payload.update({
-        "schema": SCHEMA_DAY_FILE,
-        "date": f"{day[:4]}-{day[4:6]}-{day[6:8]}",
-        "updated_at": _dt.now(ZoneInfo(BJ)).isoformat(),
-    })
-    if realtime is not None:
-        payload["realtime"] = realtime
-    if final is not None:
-        payload["final"] = final
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2,
-                   default=str) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
+    with _path_lock(path):
+        existing: Dict[str, Any] = {}
+        if path.exists():
+            raw_text = path.read_text(encoding="utf-8")
+            if raw_text.strip():
+                existing = json.loads(raw_text)
+                if not isinstance(existing, dict):
+                    raise ValueError(f"corrupt market_mood payload in {path}: expected JSON object")
+        if realtime is not None and existing.get("realtime_invalidated"):
+            raise RuntimeError(f"market_mood {day} realtime 已失效，禁止盘后复活写入 realtime")
+        payload = dict(existing)
+        payload.update({
+            "schema": SCHEMA_DAY_FILE,
+            "date": f"{day[:4]}-{day[4:6]}-{day[6:8]}",
+            "updated_at": _dt.now(ZoneInfo(BJ)).isoformat(),
+        })
+        if realtime is not None:
+            payload["realtime"] = realtime
+        if final is not None:
+            payload["final"] = final
+        _atomic_write_payload(path, payload)
+
+
+def invalidate_day_realtime(
+    day: str,
+    *,
+    reason: str = "postclose_cleanup",
+    invalidated_at: Optional[datetime] = None,
+    out_root: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """S7/S10 键级失效：仅清除当日 ``realtime`` 并标失效戳，严格保全既有 ``final``。"""
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    compact_day = str(day).replace("-", "")[:8]
+    path = day_path(compact_day, out_root)
+    stamp = (invalidated_at or _dt.now(ZoneInfo(BJ))).isoformat()
+    with _path_lock(path):
+        existing: Dict[str, Any] = {}
+        if path.exists():
+            raw_text = path.read_text(encoding="utf-8")
+            if raw_text.strip():
+                existing = json.loads(raw_text)
+                if not isinstance(existing, dict):
+                    raise ValueError(f"corrupt market_mood payload in {path}: expected JSON object")
+        payload = dict(existing)
+        had_realtime = "realtime" in payload
+        payload.pop("realtime", None)
+        payload.update({
+            "schema": SCHEMA_DAY_FILE,
+            "date": f"{compact_day[:4]}-{compact_day[4:6]}-{compact_day[6:8]}",
+            "updated_at": stamp,
+            "realtime_invalidated": {"at": stamp, "reason": reason},
+        })
+        _atomic_write_payload(path, payload)
+        return {
+            "path": str(path),
+            "day": compact_day,
+            "had_realtime": had_realtime,
+            "final_preserved": "final" in payload,
+            "realtime_invalidated": payload["realtime_invalidated"],
+        }
 
 
 def load_day_payload(day: str, out_root: Optional[Any] = None) -> Optional[Dict[str, Any]]:
@@ -602,7 +666,7 @@ def limit_up_stats(
 
     today_compact = now.strftime("%Y%m%d")
     payload = load_day_payload(today_compact, out_root) or {}
-    realtime = payload.get("realtime")
+    realtime = None if payload.get("realtime_invalidated") else payload.get("realtime")
     if realtime and realtime.get("date") == now.strftime("%Y-%m-%d"):
         as_of = _parse_as_of(realtime.get("as_of"))
         if as_of and (now - as_of).total_seconds() <= FRESH_WINDOW_SEC:
