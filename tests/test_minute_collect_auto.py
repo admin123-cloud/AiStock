@@ -807,3 +807,13 @@ def test_run_auto_resolves_and_daily_missing_hint(tmp_path):
     with pytest.raises(SystemExit, match="daily_kline_pipeline"):
         mca.run(["--mode", "audit", "--out-dir", str(tmp_path)],
                 client_factory=lambda: client2)
+
+
+def test_tdx_lc5_source_resolves_and_validates_lots():
+    assert mca.resolve_source("tdx_lc5") == "tdx_lc5"
+    rows, err = mca.gate_bars(
+        "600519.SH", DAY, make_bars(amount=1000.0), daily_ref_row(),
+        source="tdx_lc5", created_at=CREATED_AT,
+    )
+    assert err is None
+    assert len(rows) == 48
