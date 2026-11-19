@@ -259,10 +259,9 @@ def _extract_key_counts(report: Optional[Mapping[str, Any]], limit: int = 24) ->
 # ---------------------------------------------------------------------------
 
 def _default_is_trading_day(day: date) -> bool:
-    from scheduler.trading_calendar import TradingCalendar  # 延迟导入：调用时才查库
+    from services.intraday_phase_gate import resolve_three_state_trading_day
 
-    probe = datetime(day.year, day.month, day.day, 12, 0, tzinfo=BEIJING_TZ)
-    return bool(TradingCalendar.is_trading_day(probe))
+    return resolve_three_state_trading_day(day)
 
 
 # ---------------------------------------------------------------------------
@@ -556,9 +555,9 @@ def intraday_out_dir(out_root: Optional[Path] = None) -> Path:
 
 
 def in_intraday_window(now_bj: datetime) -> bool:
-    """窗口守卫：09:35 ≤ 北京钟 ≤ 15:05（含端点；cron 触发面 09:00~15:55 由它收口）。"""
+    """窗口守卫：09:35:00 <= 北京钟 < 15:05:00（左闭右开；15:05:00 起硬截断禁写）。"""
     current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
-    return INTRADAY_WINDOW_START <= current <= INTRADAY_WINDOW_END
+    return INTRADAY_WINDOW_START <= current < INTRADAY_WINDOW_END
 
 
 def _load_intraday_state(path: Path) -> dict:
@@ -1812,6 +1811,17 @@ def _register_intraday_kline_upsert(scheduler):
     from apscheduler.triggers.cron import CronTrigger
 
     def _run_upsert():
+        from datetime import datetime
+        from services.intraday_phase_gate import guard_intraday_execution
+
+        allowed, reason = guard_intraday_execution(
+            datetime.now(BEIJING_TZ),
+            trading_day_checker=_default_is_trading_day,
+            require_window_start=True,
+        )
+        if not allowed:
+            logger.info("[kline_upsert] 跳过盘中 5min K 落盘（reason=%s）", reason)
+            return
         from scripts.intraday_kline_upsert import run_upsert
         logger.info("[kline_upsert] 执行 5min K 落盘")
         result = run_upsert()

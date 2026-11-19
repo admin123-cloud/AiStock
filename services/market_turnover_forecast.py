@@ -25,16 +25,28 @@ _CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
 _PERSISTED_FORECAST_PATH = runtime_path("market_turnover_forecast", "latest.json")
 
 
+def _now_bj() -> datetime:
+    return datetime.now(SH_TZ)
+
+
 def _is_current_trading_day(payload: Any) -> bool:
     return bool(
         isinstance(payload, dict)
         and payload.get("available")
-        and str(payload.get("trade_date") or "") == datetime.now(SH_TZ).date().isoformat()
+        and str(payload.get("trade_date") or "") == _now_bj().date().isoformat()
     )
 
 
 def _persist(payload: Dict[str, Any]) -> None:
     if not _is_current_trading_day(payload):
+        return
+    try:
+        from services.intraday_phase_gate import is_before_postclose_cutoff
+
+        if not is_before_postclose_cutoff(_now_bj()):
+            # S4 硬截断：15:05:00 起禁止再把盘中成交额预测落盘为当天缓存
+            return
+    except Exception:
         return
     try:
         _PERSISTED_FORECAST_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -152,15 +164,20 @@ def get_intraday_turnover_forecast(
     if not clickhouse_available() or not clickhouse_table_exists("kline_minute_5"):
         return finish(_empty("5分钟行情表不可用"))
 
-    today = datetime.now(SH_TZ).date()
+    now_bj = _now_bj()
+    today = now_bj.date()
     try:
         from scheduler.trading_calendar import TradingCalendar
 
-        if not TradingCalendar.is_trading_day(datetime.now(SH_TZ)):
+        cal_res = TradingCalendar.resolve_trading_day(now_bj)
+        cal_state = getattr(cal_res, "state", "unknown")
+        if cal_state == "closed":
             return finish(_empty("非交易日，不生成盘中成交额预测"))
+        if cal_state != "trading":
+            return finish(_empty("交易日历未知（fail-closed），不生成盘中成交额预测"))
     except Exception:
-        # Calendar availability must not make the homepage endpoint fail.
-        pass
+        # 三态日历异常或不可用时严格 fail-closed，拒绝生成并落盘预测
+        return finish(_empty("交易日历不可用（fail-closed），不生成盘中成交额预测"))
     if current_snapshot:
         # R27b：kline_minute_5 datetime 已标注 Asia/Shanghai，as_of 读回即
         # 北京墙钟（aware），规整为 naive 北京墙后再做同刻进度匹配。

@@ -67,9 +67,9 @@ _REPORT_SUMMARY_KEYS = (
 
 
 def in_intraday_window(now_bj: datetime) -> bool:
-    """硬窗口守卫：09:35 ≤ 北京钟 ≤ 15:05（含端点；aware/naive 均按北京钟）。"""
+    """硬窗口守卫：09:35:00 <= 北京钟 < 15:05:00（左闭右开；15:05:00 起硬截断禁写）。"""
     current = now_bj.timetz().replace(tzinfo=None) if now_bj.tzinfo else now_bj.time()
-    return WINDOW_START <= current <= WINDOW_END
+    return WINDOW_START <= current < WINDOW_END
 
 
 def _default_is_trading_day(day: date_type) -> bool:

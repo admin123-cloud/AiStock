@@ -40,9 +40,9 @@ import logging
 import os
 import sys
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPTS_DIR.parent
@@ -76,7 +76,16 @@ RECON_VOLUME_TOL = 0.03
 # 盘中写入行的确定性 id 域（进程无关幂等；替代事故日的 abs(hash()) 随机 id）
 ID_DOMAIN = "r58-intraday-m5-v1"
 
+LOCK_SCOPE = "kline_minute_5_intraday"
+LOCK_OWNER = "intraday_kline_upsert"
+
 logger = logging.getLogger("intraday_kline_upsert")
+
+
+def _default_lock_client_factory() -> Any:
+    from utils.market_warehouse import clickhouse_client
+
+    return clickhouse_client()
 
 
 def _tencent_code(code: str) -> str:
@@ -407,35 +416,84 @@ def reconcile_against_tdx(fetched: dict[str, list[dict]], now: datetime,
     return report
 
 
-def run_upsert(codes: Optional[list[str]] = None, reconcile: bool = True,
-               now: Optional[datetime] = None) -> dict:
+def _normalize_bj(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=BEIJING_TZ) if dt.tzinfo is None else dt.astimezone(BEIJING_TZ)
+
+
+def run_upsert(
+    codes: Optional[list[str]] = None,
+    reconcile: bool = True,
+    now: Optional[datetime] = None,
+    *,
+    trading_day_checker: Optional[Callable[[date], bool]] = None,
+    lock_client_factory: Optional[Callable[[], Any]] = None,
+    now_fn: Optional[Callable[[], datetime]] = None,
+) -> dict:
     """主入口：腾讯 m5 主源 → 写入当日已收盘 bar → TDX 重叠日对账。
 
+    P0 S2/S3 门禁：
+    1. 写前通过三态交易日历（unknown fail-closed）与 ``< 15:05:00`` 硬截断守卫；
+    2. 持有 ``DbWriteLock(kline_minute_5_intraday)`` 并行护栏；
+    3. 拉数后与写库前均二次复检 ``< 15:05:00``，防跨点持续写污染盘后窗口。
     主源失败 → qt 快照降级（O=H=L=C 失真，status=fallback_qt）。
-    now 可注入（回放/测试用；默认北京当前时刻）。
-    返回 {code: {status, rows, ...}}（可能附 _reconcile 键）。
     """
+    from services.intraday_phase_gate import guard_intraday_execution, is_before_postclose_cutoff
+    from utils.db_write_lock import DbWriteLock
+
     codes = codes or MONITOR_CODES
-    now = now or datetime.now(BEIJING_TZ)
+    clock_fn = now_fn or (lambda: now if now is not None else datetime.now(BEIJING_TZ))
+    effective_now = _normalize_bj(clock_fn())
+
+    allowed, reason = guard_intraday_execution(
+        effective_now,
+        trading_day_checker=trading_day_checker,
+    )
+    if not allowed:
+        logger.info("[upsert] 门禁阻断盘中 5min K 写入（reason=%s）", reason)
+        return {"_blocked": {"status": "blocked", "reason": reason}}
+
+    lock_factory = lock_client_factory or _default_lock_client_factory
+    lock = DbWriteLock(lock_factory())
+    lock.acquire(LOCK_SCOPE, LOCK_OWNER, purpose="盘中 5min K 线写入（P0 DbWriteLock）")
+
     results: dict[str, dict] = {}
     fetched_all: dict[str, list[dict]] = {}
-
-    for code in codes:
-        try:
-            result = fetch_tencent_m5(code)
-            results[code] = _write_tencent_bars(code, result["rows"], now)
-            fetched_all[code] = result["rows"]      # 全窗口留给对账（不再二次拉取）
-        except Exception as exc:
-            logger.warning("[upsert] %s 腾讯 m5 主源失败，降级 qt 快照: %s", code, exc)
+    try:
+        for code in codes:
+            step_now = _normalize_bj(clock_fn())
+            if not is_before_postclose_cutoff(step_now):
+                logger.warning("[upsert] 抓数前越过 15:05:00 硬截断，中止写入: %s", code)
+                results[code] = {"status": "blocked", "reason": "after_1505_cutoff_pre_write"}
+                continue
             try:
-                results[code] = _upsert_via_qt_snapshot(code, now)
-            except Exception as exc2:
-                logger.warning("[upsert] %s qt fallback 也失败: %s", code, exc2)
-                results[code] = {"status": "fetch_failed", "error": f"{exc}; {exc2}"}
+                result = fetch_tencent_m5(code)
+                write_now = _normalize_bj(clock_fn())
+                if not is_before_postclose_cutoff(write_now):
+                    logger.warning("[upsert] 抓数后已越过 15:05:00 硬截断，放弃写库: %s", code)
+                    results[code] = {"status": "blocked", "reason": "after_1505_cutoff_pre_write"}
+                    continue
+                results[code] = _write_tencent_bars(code, result["rows"], write_now)
+                fetched_all[code] = result["rows"]      # 全窗口留给对账（不再二次拉取）
+            except Exception as exc:
+                logger.warning("[upsert] %s 腾讯 m5 主源失败，降级 qt 快照: %s", code, exc)
+                try:
+                    fb_now = _normalize_bj(clock_fn())
+                    if not is_before_postclose_cutoff(fb_now):
+                        results[code] = {"status": "blocked", "reason": "after_1505_cutoff_pre_write"}
+                    else:
+                        results[code] = _upsert_via_qt_snapshot(code, fb_now)
+                except Exception as exc2:
+                    logger.warning("[upsert] %s qt fallback 也失败: %s", code, exc2)
+                    results[code] = {"status": "fetch_failed", "error": f"{exc}; {exc2}"}
+    finally:
+        try:
+            lock.release(LOCK_SCOPE, LOCK_OWNER)
+        except Exception as exc:
+            logger.error("[upsert] 释放 DbWriteLock 失败: %s", exc)
 
     if reconcile and fetched_all:
         try:
-            report = reconcile_against_tdx(fetched_all, now)
+            report = reconcile_against_tdx(fetched_all, effective_now)
             for code in results:
                 if isinstance(results[code], dict):
                     results[code]["reconcile_ok"] = \

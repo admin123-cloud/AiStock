@@ -538,6 +538,7 @@ def run(
     now_fn: Optional[Callable[[], datetime]] = None,
 ) -> dict:
     """单轮采集。返回报告 dict（同时写 JSON 报告文件）。"""
+    from services.intraday_phase_gate import is_before_postclose_cutoff
     from utils.db_write_lock import DbWriteLock
     from utils.paths import data_root
 
@@ -561,6 +562,16 @@ def run(
         "tables": [STOCK_TABLE_FQN, INDEX_TABLE_FQN],
         "started_at": datetime.now(BEIJING_TZ).isoformat(),
     }
+
+    if not is_before_postclose_cutoff(snapshot_ts):
+        report.update({
+            "status": "blocked",
+            "reason": "after_1505_cutoff",
+            "detail": "15:05:00 硬截断：禁止启动或写入盘中快照",
+        })
+        _write_report(report_path, report)
+        logger.warning("intraday snapshot blocked by 15:05 cutoff: %s", snapshot_ts.isoformat())
+        return report
 
     # -- 采集（fail-closed：任一环节失败即中止，零部分写入）--
     # 默认链：东财 clist/ulist 主源；源不可达 → 自动切腾讯 qt 批量快照 fallback
@@ -616,6 +627,21 @@ def run(
             "reason": "index_rows_empty",
         })
         _write_report(report_path, report)
+        return report
+
+    # -- 写前 15:05:00 二次硬截断重检（防抓数耗时跨过 15:05）--
+    pre_write_ts = now_fn()
+    if pre_write_ts.tzinfo is None:
+        pre_write_ts = pre_write_ts.replace(tzinfo=BEIJING_TZ)
+    if not is_before_postclose_cutoff(pre_write_ts):
+        report.update({
+            "status": "blocked",
+            "reason": "after_1505_cutoff_pre_write",
+            "detail": f"抓数完成已过 15:05:00 硬截断（{pre_write_ts.isoformat()}），中止落库",
+            "fetch_elapsed_sec": fetch_elapsed,
+        })
+        _write_report(report_path, report)
+        logger.warning("intraday snapshot pre-write aborted at 15:05 cutoff: %s", pre_write_ts.isoformat())
         return report
 
     # -- 建表 + 锁内写入 + 读回 --

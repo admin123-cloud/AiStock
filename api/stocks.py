@@ -128,9 +128,17 @@ def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
         return None
 
     now = datetime.now(BUSINESS_TZ)
-    if now.weekday() >= 5 or not (dt_time(9, 30) <= now.time() <= dt_time(15, 35)):
+    if not (dt_time(9, 30) <= now.time() <= dt_time(15, 35)):
         return None
     trade_date = now.date()
+    try:
+        from services.intraday_phase_gate import resolve_three_state_trading_day
+
+        if not resolve_three_state_trading_day(trade_date):
+            return None
+    except Exception:
+        # 三态日历 unknown 或查询失败时 fail-closed，拒绝生成盘中临时日线
+        return None
     try:
         snapshot_df = clickhouse_query_df(
             """
@@ -195,32 +203,8 @@ def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
             "snapshot_at": now.replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
             "source": "clickhouse:kline_minute_5",
         }
-        # Cache the same display-only fact for list/overview consumers.  A
-        # ReplacingMergeTree row is append-only and never mutates formal daily data.
-        # R30 只读面守卫：预览栈（AISTOCK_READFACE_PREVIEW=1）不写任何展示缓存表，
-        # 盘中临时日线仅随本次响应返回；完整栈（未设该变量）行为不变。
-        if os.environ.get("AISTOCK_READFACE_PREVIEW") == "1":
-            return payload
-        if clickhouse_table_exists(INTRADAY_DAILY_TABLE):
-            try:
-                from utils.market_warehouse import quality_clickhouse_client as clickhouse_client
-
-                clickhouse_client().insert(
-                    INTRADAY_DAILY_TABLE,
-                    [[
-                        code, trade_date, payload["open"], high, low, close,
-                        payload["volume"], payload["amount"], previous_close or None,
-                        amplitude, change_pct, change_amount, 0.0, snapshot_at,
-                        "clickhouse:kline_minute_5", 1,
-                    ]],
-                    column_names=[
-                        "code", "trade_date", "open", "high", "low", "close", "volume", "amount",
-                        "previous_close", "amplitude", "change_pct", "change_amount", "turnover_rate",
-                        "snapshot_at", "source", "is_provisional",
-                    ],
-                )
-            except Exception as exc:
-                logger.warning(f"intraday daily snapshot cache write failed: code={code}, error={exc}")
+        # S4 只读面收口：API GET 路径严格禁止写入 ClickHouse 任何表，
+        # 盘中临时日线仅随本次只读响应返回给前端展示。
         return payload
     except Exception as exc:
         logger.warning(f"intraday daily aggregation failed: code={code}, error={exc}")

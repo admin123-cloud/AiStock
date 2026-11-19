@@ -77,7 +77,21 @@ class TestAmountAndId:
 
 # ── 主链路（fetch/insert 全 mock） ─────────────────────────────
 
+class _FakeLock:
+    def acquire(self, scope, owner, *, purpose=""):
+        return True
+
+    def release(self, scope, owner):
+        return True
+
+
 def _patched(monkeypatch, **names):
+    import services.intraday_phase_gate as gate
+    import utils.db_write_lock as dwl
+
+    monkeypatch.setattr(gate, "resolve_three_state_trading_day", lambda _d: True)
+    monkeypatch.setattr(dwl, "DbWriteLock", lambda client: _FakeLock())
+    monkeypatch.setattr(up, "_default_lock_client_factory", lambda: object())
     for name, value in names.items():
         monkeypatch.setattr(up, name, value)
 
@@ -112,7 +126,7 @@ class TestRunUpsert:
             fetch_qt_snapshot=lambda code: {"price": 10.5, "volume": 900, "amount": 950000.0},
             insert_rows=lambda rows: (len(rows), "ok"),
         )
-        results = up.run_upsert(codes=["300054"], reconcile=False)
+        results = up.run_upsert(codes=["300054"], reconcile=False, now=NOW)
         assert results["300054"]["status"] == "fallback_qt"
         assert results["300054"]["rows"] == 1
 
@@ -123,14 +137,14 @@ class TestRunUpsert:
             return None
         _patched(monkeypatch, fetch_tencent_m5=_dead_t, fetch_qt_snapshot=_dead_q,
                  insert_rows=lambda rows: (0, "should_not_be_called"))
-        results = up.run_upsert(codes=["300054"], reconcile=False)
+        results = up.run_upsert(codes=["300054"], reconcile=False, now=NOW)
         assert results["300054"]["status"] in ("no_data", "fetch_failed")
 
     def test_no_data_when_market_closed_all_day(self, monkeypatch):
         _patched(monkeypatch,
                  fetch_tencent_m5=lambda code: {"rows": [_bar("2026-11-12 15:00")]},
                  insert_rows=lambda rows: (0, "no_data"))
-        results = up.run_upsert(codes=["300054"], reconcile=False)
+        results = up.run_upsert(codes=["300054"], reconcile=False, now=NOW)
         assert results["300054"]["status"] == "no_data"
 
 

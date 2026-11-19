@@ -188,7 +188,7 @@ def _ok_market_fetcher():
 class TestWindow:
     @pytest.mark.parametrize("hh,mm,expected", [
         (9, 30, False), (9, 34, False), (9, 35, True), (11, 0, True),
-        (14, 59, True), (15, 5, True), (15, 6, False), (15, 55, False),
+        (14, 59, True), (15, 4, True), (15, 5, False), (15, 6, False), (15, 55, False),
     ])
     def test_window_boundaries(self, hh, mm, expected):
         now_bj = datetime(2026, 11, 10, hh, mm, tzinfo=BJ)

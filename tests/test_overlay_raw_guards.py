@@ -279,14 +279,18 @@ def test_turnover_forecast_runtime_sql_shapes(monkeypatch, tmp_path):
     monkeypatch.setattr(mtf, "clickhouse_available", lambda: True)
     monkeypatch.setattr(mtf, "clickhouse_table_exists", lambda name: True)
     monkeypatch.setattr(mtf, "clickhouse_query_df", _df)
+    today = datetime.now(mtf.SH_TZ).date()
     monkeypatch.setattr(
-        trading_calendar.TradingCalendar, "is_trading_day",
-        classmethod(lambda cls, value: True),
+        mtf, "_now_bj",
+        lambda: datetime(today.year, today.month, today.day, 11, 25, tzinfo=mtf.SH_TZ),
+    )
+    monkeypatch.setattr(
+        trading_calendar.TradingCalendar, "resolve_trading_day",
+        classmethod(lambda cls, value: trading_calendar.CalendarDayResult("trading", "mock", "ok")),
     )
     payload = mtf.get_intraday_turnover_forecast(current_snapshot=None)
 
     assert len(captured) == 2, f"应恰好发出两条查询，实际 {len(captured)}"
-    today = datetime.now(mtf.SH_TZ).date()
 
     current_sql, current_params, current_raw = captured[0]
     assert current_raw is True

@@ -1448,10 +1448,10 @@ def _inner_test_r30_system_task_log_table_guard(tmp_path, monkeypatch):
 
 
 def test_r30_stocks_intraday_cache_guard_precedes_insert():
-    """守卫②：_build_intraday_daily_bar 的预览守卫必须先于任何 insert 调用（结构锁定）。
+    """S4 / R30 守卫②：_build_intraday_daily_bar 必须彻底零 ClickHouse INSERT（纯只读）。
 
-    行为路径受交易时段门控（09:30-15:35）无法离线稳定触发，故按 AST 结构锁定：
-    环境分支存在、且行号全部早于 insert 调用点。
+    S4 已彻底删除 API GET 路径对 INTRADAY_DAILY_TABLE 的 insert 绕过，
+    因此无论是否设置 AISTOCK_READFACE_PREVIEW，函数体内都不允许再出现 `.insert(...)`。
     """
     import ast
     stocks_path = Path(__file__).resolve().parents[1] / 'api' / 'stocks.py'
@@ -1459,18 +1459,13 @@ def test_r30_stocks_intraday_cache_guard_precedes_insert():
     fn = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == '_build_intraday_daily_bar')
-    guard_lines = [
-        node.lineno for node in ast.walk(fn)
-        if isinstance(node, ast.If)
-        and 'AISTOCK_READFACE_PREVIEW' in ast.unparse(node.test)]
     insert_lines = [
         node.lineno for node in ast.walk(fn)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == 'insert']
-    assert guard_lines and insert_lines, '守卫或 insert 调用缺失'
-    assert max(guard_lines) < min(insert_lines), (
-        'AISTOCK_READFACE_PREVIEW 守卫必须位于缓存 insert 之前（api/stocks.py）'
+    assert not insert_lines, (
+        f'_build_intraday_daily_bar 是 GET 只读路径，禁止存在 .insert() 调用（行号: {insert_lines}）'
     )
 
 def test_r30_banned_get_paths_absent_from_surface(tmp_path, monkeypatch):
