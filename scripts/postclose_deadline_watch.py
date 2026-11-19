@@ -23,7 +23,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from services.postclose_alerts import AlertOutbox  # noqa: E402
+from services.postclose_alerts import (  # noqa: E402
+    AlertOutbox,
+    SmtpAlertMailer,
+    load_sanitized_smtp_config,
+)
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -266,21 +270,104 @@ def inspect_postclose_deadlines(
     return emitted
 
 
+def _run_once(
+    *,
+    control_root: Path,
+    outbox: AlertOutbox,
+    is_trading_day: bool,
+    send_email: bool,
+    config_path: Optional[Path],
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
+    events = inspect_postclose_deadlines(
+        control_root=control_root,
+        outbox=outbox,
+        is_trading_day=is_trading_day,
+    )
+    mail_outcomes: dict[str, str] = {}
+    smtp_summary: dict[str, Any] = {}
+    if send_email:
+        cfg, smtp_summary = load_sanitized_smtp_config(config_path)
+        if cfg is not None:
+            mail_outcomes = outbox.dispatch_pending(SmtpAlertMailer(cfg))
+    return events, mail_outcomes, smtp_summary
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    import time as _time
+
     parser = argparse.ArgumentParser(description="AiStock S11 独立只读盘后 Deadline 观察器")
     parser.add_argument("--control-root", required=True, help="postclose_control 只读控制面目录")
     parser.add_argument("--outbox-dir", required=True, help="告警 Outbox 持久化目录")
+    parser.add_argument("--config-path", default="", help="可选 YAML 配置文件路径（仅读 email 段，绝不打印凭据）")
+    parser.add_argument("--send-email", action="store_true", help="对 pending 脱敏告警执行 SMTP 投递")
+    parser.add_argument("--test-email", action="store_true", help="发送 1 封脱敏 S11 测试邮件并打印脱敏回执后退出")
+    parser.add_argument("--loop-seconds", type=int, default=0, help="常驻轮询间隔秒数（0=单次退出；sidecar 建议 120）")
     parser.add_argument("--non-trading-day", action="store_true", help="显式标注非交易日")
     args = parser.parse_args(argv)
 
     outbox = AlertOutbox(Path(args.outbox_dir))
-    events = inspect_postclose_deadlines(
-        control_root=Path(args.control_root),
-        outbox=outbox,
-        is_trading_day=not args.non_trading_day,
-    )
-    print(json.dumps({"emitted": events, "count": len(events)}, ensure_ascii=False))
-    return 0 if not events else 2
+    cfg_path = Path(args.config_path) if str(args.config_path or "").strip() else None
+
+    if args.test_email:
+        cfg, summary = load_sanitized_smtp_config(cfg_path)
+        if cfg is None:
+            print(json.dumps({"status": "blocked", "reason": "smtp_not_configured_or_disabled", "smtp": summary}, ensure_ascii=False))
+            return 2
+        now_bj = datetime.now(BEIJING_TZ)
+        probe_outbox = AlertOutbox(Path(args.outbox_dir) / "test_probes")
+        enq = probe_outbox.enqueue(
+            {
+                "target_date": now_bj.date().isoformat(),
+                "plan_id": "s11-smtp-probe",
+                "generation": 0,
+                "phase": "watch_smtp_probe",
+                "reason_code": "s11_watcher_smtp_probe",
+                "severity": "info",
+                "episode": now_bj.strftime("%Y%m%d_%H%M%S"),
+                "scope_summary": "S11 独立只读观察器脱敏连通性测试（无业务写入/无账户信息）",
+                "read_availability": "read_only_probe",
+                "evidence_id": f"smtp_probe:{now_bj.strftime('%Y%m%d_%H%M%S')}",
+            },
+            now=now_bj,
+        )
+        outcomes = probe_outbox.dispatch_pending(SmtpAlertMailer(cfg))
+        delivery = outcomes.get(enq.event_id, "unknown")
+        print(
+            json.dumps(
+                {
+                    "status": "ok" if delivery == "smtp_accepted" else "error",
+                    "event_id": enq.event_id,
+                    "delivery_status": delivery,
+                    "smtp": summary,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0 if delivery == "smtp_accepted" else 1
+
+    while True:
+        events, mail_outcomes, smtp_summary = _run_once(
+            control_root=Path(args.control_root),
+            outbox=outbox,
+            is_trading_day=not args.non_trading_day,
+            send_email=bool(args.send_email),
+            config_path=cfg_path,
+        )
+        print(
+            json.dumps(
+                {
+                    "emitted": events,
+                    "count": len(events),
+                    "mail_outcomes": mail_outcomes,
+                    "smtp": smtp_summary,
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        if int(args.loop_seconds or 0) <= 0:
+            return 0 if not events else 2
+        _time.sleep(max(10, int(args.loop_seconds)))
 
 
 if __name__ == "__main__":

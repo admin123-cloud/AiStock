@@ -236,3 +236,103 @@ class AlertOutbox:
         rec["delivery_status"] = "delivery_confirmed"
         self._save(records)
         return True
+
+
+def _mask_email(addr: str) -> str:
+    text = str(addr or "").strip()
+    if "@" not in text:
+        return "***"
+    local, domain = text.split("@", 1)
+    prefix = local[:2] if len(local) > 2 else local[:1]
+    return f"{prefix}***@{domain}"
+
+
+def load_sanitized_smtp_config(
+    config_path: Optional[Path] = None,
+) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
+    """加载 SMTP 配置并同步生成脱敏摘要（绝不输出密码或明文凭据）。"""
+    raw_email: dict[str, Any] = {}
+    if config_path is not None and Path(config_path).is_file():
+        import yaml
+
+        loaded = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+        if isinstance(loaded, dict) and isinstance(loaded.get("email"), dict):
+            raw_email = dict(loaded["email"])
+    else:
+        try:
+            from utils.config import config
+
+            cfg_obj = config.get("email") if hasattr(config, "get") else {}
+            if isinstance(cfg_obj, dict):
+                raw_email = dict(cfg_obj)
+        except Exception:
+            raw_email = {}
+
+    enabled = bool(raw_email.get("enabled", False))
+    server = str(raw_email.get("smtp_server") or "").strip()
+    port = int(raw_email.get("smtp_port") or 465)
+    username = str(raw_email.get("smtp_user") or "").strip()
+    password = str(raw_email.get("smtp_password") or "").strip()
+    from_email = str(raw_email.get("from_email") or username).strip()
+    to_emails = [str(x).strip() for x in (raw_email.get("to_emails") or []) if str(x).strip()]
+    use_ssl = bool(raw_email.get("use_ssl", port == 465))
+    configured = bool(server and port > 0 and username and password and from_email and to_emails)
+
+    summary = {
+        "enabled": enabled,
+        "configured": configured,
+        "smtp_server": server,
+        "smtp_port": port,
+        "use_ssl": use_ssl,
+        "recipient_count": len(to_emails),
+        "recipients_masked": [_mask_email(a) for a in to_emails],
+    }
+    if not (enabled and configured):
+        return None, summary
+
+    transport_cfg = {
+        "server": server,
+        "port": port,
+        "username": username,
+        "password": password,
+        "from_email": from_email,
+        "to_emails": to_emails,
+        "use_ssl": use_ssl,
+    }
+    return transport_cfg, summary
+
+
+class SmtpAlertMailer:
+    """S11 脱敏 SMTP 邮件发送器（复用 utils.email_transport，绝不泄露秘密）。"""
+
+    def __init__(self, transport_cfg: Mapping[str, Any], *, sender_fn=None):
+        self._cfg = dict(transport_cfg)
+        self._sender_fn = sender_fn
+
+    def send(self, payload: Mapping[str, Any]) -> None:
+        import socket
+
+        safe = sanitize_alert_event(payload)
+        subject = (
+            f"[AiStock][{safe['severity'].upper()}][{safe['phase']}] "
+            f"{safe['target_date']} {safe['reason_code']}"
+        )
+        body_lines = [
+            "AiStock 盘后治理脱敏告警（严格白名单字段，无账户/凭据信息）：",
+            "",
+            json.dumps(safe, ensure_ascii=False, sort_keys=True, indent=2),
+        ]
+        body = "\n".join(body_lines)
+        send_fn = self._sender_fn
+        if send_fn is None:
+            from utils.email_transport import send_plain_email
+
+            send_fn = send_plain_email
+        try:
+            send_fn(self._cfg, subject, body)
+        except (TimeoutError, socket.timeout) as exc:
+            raise TimeoutError("smtp_timeout") from exc
+        except RuntimeError as exc:
+            if "timed out" in str(exc).lower() or "timeout" in str(exc).lower():
+                raise TimeoutError("smtp_timeout") from exc
+            raise

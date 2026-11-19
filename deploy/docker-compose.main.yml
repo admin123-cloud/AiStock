@@ -93,6 +93,35 @@ services:
       - F:/Aistock/data/data:/aistock/data
     command: ["python", "scripts/pipeline_scheduler.py"]
 
+  postclose-watcher:
+    image: aistock-backend:${AISTOCK_MAIN_VERSION:?必须经部署脚本注入}
+    pull_policy: never
+    container_name: aistock-postclose-watcher
+    restart: unless-stopped
+    cpus: "0.25"
+    mem_limit: 256m
+    environment:
+      TZ: Asia/Shanghai
+      PYTHONPATH: /app
+    volumes:
+      - F:/Aistock/code/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
+      - F:/Aistock/data/data/runtime/postclose_control:/aistock/data/runtime/postclose_control:ro
+      - F:/Aistock/data/data/runtime/postclose_alerts:/aistock/data/runtime/postclose_alerts
+    command:
+      [
+        "python",
+        "scripts/postclose_deadline_watch.py",
+        "--control-root",
+        "/aistock/data/runtime/postclose_control",
+        "--outbox-dir",
+        "/aistock/data/runtime/postclose_alerts",
+        "--config-path",
+        "/app/config/settings.local.yaml",
+        "--send-email",
+        "--loop-seconds",
+        "120",
+      ]
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: aistock-clickhouse

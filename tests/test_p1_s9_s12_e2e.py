@@ -339,3 +339,58 @@ class TestS12EndToEndIntegration:
         emitted = inspect_postclose_deadlines(control_root=ctrl_root, outbox=outbox, now=_at(16, 45, 0))
         assert emitted == []
         assert outbox.list_records() == {}
+
+    def test_s9_publication_status_endpoint_and_s11_smtp_mailer_sanitization(self, tmp_path, monkeypatch):
+        from api import market_overview as mo
+        from services.postclose_alerts import SmtpAlertMailer, load_sanitized_smtp_config
+
+        # 1) S9 只读接口 GET /api/market/publication-status 行为
+        ctrl = tmp_path / "ctrl_api"
+        store = PublicationStore(ctrl)
+        monkeypatch.setattr("services.postclose_publication._default_control_root", lambda: ctrl)
+
+        # 未初始化时 fail-closed 返回 not_ready
+        v_empty = mo.get_publication_status(date="2026-11-18")
+        assert v_empty["ready"] is False
+        assert v_empty["status"] == "not_ready"
+
+        # 非法日期参数 fail-closed 返回 invalid_date_format
+        v_bad = mo.get_publication_status(date="bad-date")
+        assert v_bad["ready"] is False and v_bad["reason"] == "invalid_date_format"
+
+        # 2) S11 SMTP 脱敏配置加载与发送器（绝不泄露密码/凭据）
+        cfg_file = tmp_path / "settings.yaml"
+        cfg_file.write_text(
+            "email:\n"
+            "  enabled: true\n"
+            "  smtp_server: smtp.example.com\n"
+            "  smtp_port: 465\n"
+            "  smtp_user: bot@example.com\n"
+            "  smtp_password: ultra_secret_password\n"
+            "  from_email: bot@example.com\n"
+            "  use_ssl: true\n"
+            "  to_emails:\n"
+            "    - owner@example.com\n",
+            encoding="utf-8",
+        )
+        transport_cfg, summary = load_sanitized_smtp_config(cfg_file)
+        assert transport_cfg is not None
+        assert summary["enabled"] is True and summary["configured"] is True
+        assert summary["recipient_count"] == 1
+        assert "ultra_secret_password" not in json.dumps(summary)
+        assert "owner@example.com" not in json.dumps(summary)
+
+        sent = []
+        mailer = SmtpAlertMailer(transport_cfg, sender_fn=lambda c, subj, body: sent.append((subj, body)))
+        mailer.send({
+            "target_date": "2026-11-19",
+            "plan_id": "p1",
+            "phase": "watch",
+            "reason_code": "password=leak_me token=abc",
+            "severity": "critical",
+            "broker_account": "999888",
+        })
+        assert len(sent) == 1
+        subj, body = sent[0]
+        assert "CRITICAL" in subj
+        assert "leak_me" not in body and "999888" not in body and "ultra_secret_password" not in body

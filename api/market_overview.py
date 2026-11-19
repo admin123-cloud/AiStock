@@ -2339,6 +2339,38 @@ def get_limit_up_stats(date: Optional[str] = None):
     return limit_up_stats(date)
 
 
+@router.get("/publication-status")
+def get_publication_status(date: Optional[str] = None):
+    """S9 只读发布代际视图（PublicationView）：读侧控制面纯只读接口，零写库。"""
+    from dataclasses import asdict
+    from datetime import date as _date
+    from services.postclose_publication import PublicationStore
+
+    requested = None
+    if date:
+        try:
+            requested = _date.fromisoformat(str(date)[:10])
+        except ValueError:
+            return {
+                "target_date": str(date)[:10],
+                "data_date": None,
+                "generation": 0,
+                "status": "not_ready",
+                "ready": False,
+                "datasets": [],
+                "as_of": None,
+                "last_certified_date": None,
+                "coverage": "unknown",
+                "exceptions_ref": "",
+                "reason": "invalid_date_format",
+                "certificate_digest": None,
+            }
+    view = PublicationStore().read_view(requested_date=requested)
+    payload = asdict(view)
+    payload["datasets"] = list(view.datasets)
+    return payload
+
+
 @router.get("/emotion-trend")
 def get_emotion_trend(days: int = 30, granularity: str = "daily"):
     """获取情绪周期趋势数据。

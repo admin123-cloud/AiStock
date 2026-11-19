@@ -1704,6 +1704,33 @@ def _setup_logging(level: str = "INFO") -> None:
         logger.setLevel(logging.INFO)
 
 
+def _write_postclose_runner_heartbeat() -> None:
+    """S11 心跳落盘：供独立只读 postclose-watcher 检测 runner 存活。"""
+    try:
+        from services.postclose_publication import PublicationStore
+
+        PublicationStore().write_heartbeat(runner_id="aistock-pipeline-runner")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[heartbeat] 写入 postclose_control/heartbeat.json 失败: %s", exc)
+
+
+def register_postclose_heartbeat_job(scheduler):
+    """注册 S11 盘后调度器存活心跳（每 120s 原子刷新 heartbeat.json）。"""
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    _write_postclose_runner_heartbeat()
+    scheduler.add_job(
+        _write_postclose_runner_heartbeat,
+        trigger=IntervalTrigger(seconds=120, timezone=BEIJING_TZ),
+        id="postclose_runner_heartbeat",
+        name="S11 调度器存活心跳（heartbeat.json）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    return scheduler.get_job("postclose_runner_heartbeat")
+
+
 def serve(
     argv: Optional[Sequence[str]] = None,
     *,
@@ -1732,6 +1759,7 @@ def serve(
     register_market_mood_finalize_job(scheduler)
     register_t_trade_monitor_job(scheduler)
     _register_intraday_kline_upsert(scheduler)
+    register_postclose_heartbeat_job(scheduler)
 
     if args.once:
         from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED

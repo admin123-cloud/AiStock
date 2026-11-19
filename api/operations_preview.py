@@ -196,6 +196,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/market/indices-legacy',
     '/api/market/limit-up-ladder',
     '/api/market/limit-up-stats',
+    '/api/market/publication-status',
     '/api/market/margin-sentiment',
     '/api/market/sector-heat',
     '/api/market/sector-heat/{code}/stocks',
