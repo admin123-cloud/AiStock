@@ -4,14 +4,15 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    TZ=Asia/Shanghai \
-    PYTHONPATH=/app
+    TZ=Asia/Shanghai
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
+
+ENV PYTHONPATH=/app
 
 # 仅拷贝管道调度与数据治理必需模块
 COPY api ./api
