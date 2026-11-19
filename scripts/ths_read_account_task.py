@@ -575,8 +575,12 @@ def run_multi_account_task(
                 }
                 _write_named_report(out_dir, f"latest_{acct}.json", per_account[acct])
                 continue
-            # 切号成功产生真实 GUI 点击后，等待 Owner 守卫空闲窗口再只读采集
-            if switch_rep.get("clicks") and wait_idle_after_bootstrap > 0:
+            # 切号成功或内部发送了 F12 产生真实键鼠注入后，等待 Owner 守卫空闲窗口再只读采集
+            sw_steps = switch_rep.get("steps") or []
+            did_interact = bool(switch_rep.get("clicks")) or any(
+                isinstance(s, dict) and s.get("step") == "f12_send" for s in sw_steps
+            )
+            if did_interact and wait_idle_after_bootstrap > 0:
                 time.sleep(wait_idle_after_bootstrap)
 
         read_rep = tc.run_read_account(
