@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  AccountsOverviewResponse,
-  BrokerAccountDetail,
   getAccountsOverview,
   triggerAccountsSync,
+  type AccountsOverviewResponse,
+  type BrokerAccountDetail,
 } from '@/api/accounts'
 
 function fmtMoney(val?: number | null): string {
