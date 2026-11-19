@@ -84,3 +84,81 @@ def test_source_never_handles_credentials_or_wm_settext():
     source = Path(tdx.__file__).read_text(encoding="utf-8")
     assert "WM_SETTEXT" not in source
     assert "credentials_touched\": False" in source
+
+
+def test_download_completes_when_button_text_restores_without_disabling(monkeypatch):
+    class FakeUser32:
+        def IsWindowEnabled(self, _):
+            return 1
+
+    labels = iter(["取消下载", "取消下载", "开始下载"])
+    snapshots = iter([
+        {"files": 1, "bytes": 10, "max_mtime_ns": 1},
+        {"files": 1, "bytes": 20, "max_mtime_ns": 2},
+        {"files": 2, "bytes": 40, "max_mtime_ns": 3},
+        {"files": 2, "bytes": 40, "max_mtime_ns": 3},
+    ])
+    monkeypatch.setattr(tdx, "USER32", FakeUser32())
+    monkeypatch.setattr(tdx, "_find_button", lambda *_: 3)
+    monkeypatch.setattr(tdx, "_click_window", lambda _: None)
+    monkeypatch.setattr(tdx, "_is_visible", lambda _: True)
+    monkeypatch.setattr(tdx, "_safe_button_label", lambda _: next(labels))
+    monkeypatch.setattr(tdx, "_progress_position", lambda _: 50)
+    monkeypatch.setattr(tdx, "_file_snapshot", lambda _: next(snapshots))
+    monkeypatch.setattr(tdx.time, "sleep", lambda _: None)
+
+    result = tdx._start_and_wait(1, Path("synthetic"), 30)
+    assert result["evidence"] == "button_text_restored_after_download"
+    assert result["files_changed"] is True
+    assert result["after"]["bytes"] == 40
+
+
+def test_download_completes_after_quiet_period_when_button_never_disables(monkeypatch):
+    class FakeUser32:
+        def IsWindowEnabled(self, _):
+            return 1
+
+    # 模拟单调时钟：初始0s，轮询依次为 2s（有写入）、4s（写入完毕）、10s（静默6s>=5s）
+    clock = iter([0.0, 2.0, 2.0, 4.0, 4.0, 10.0, 10.0])
+    snapshots = iter([
+        {"files": 1, "bytes": 10, "max_mtime_ns": 1},
+        {"files": 2, "bytes": 30, "max_mtime_ns": 2},
+        {"files": 3, "bytes": 60, "max_mtime_ns": 3},
+        {"files": 3, "bytes": 60, "max_mtime_ns": 3},
+    ])
+    positions = iter([50, 100, 100])
+    monkeypatch.setattr(tdx, "USER32", FakeUser32())
+    monkeypatch.setattr(tdx, "_find_button", lambda *_: 3)
+    monkeypatch.setattr(tdx, "_click_window", lambda _: None)
+    monkeypatch.setattr(tdx, "_is_visible", lambda _: True)
+    monkeypatch.setattr(tdx, "_safe_button_label", lambda _: "开始下载")
+    monkeypatch.setattr(tdx, "_progress_position", lambda _: next(positions))
+    monkeypatch.setattr(tdx, "_file_snapshot", lambda _: next(snapshots))
+    monkeypatch.setattr(tdx.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(tdx.time, "sleep", lambda _: None)
+
+    result = tdx._start_and_wait(1, Path("synthetic"), 60, quiet_seconds=5.0)
+    assert result["evidence"] == "files_settled_after_progress"
+    assert result["files_changed"] is True
+    assert result["after"]["bytes"] == 60
+
+
+def test_download_still_times_out_if_no_file_change_observed(monkeypatch):
+    class FakeUser32:
+        def IsWindowEnabled(self, _):
+            return 1
+
+    clock = iter([0.0, 2.0, 2.0, 10.0, 10.0, 35.0])
+    fixed = {"files": 1, "bytes": 10, "max_mtime_ns": 1}
+    monkeypatch.setattr(tdx, "USER32", FakeUser32())
+    monkeypatch.setattr(tdx, "_find_button", lambda *_: 3)
+    monkeypatch.setattr(tdx, "_click_window", lambda _: None)
+    monkeypatch.setattr(tdx, "_is_visible", lambda _: True)
+    monkeypatch.setattr(tdx, "_safe_button_label", lambda _: "开始下载")
+    monkeypatch.setattr(tdx, "_progress_position", lambda _: 50)
+    monkeypatch.setattr(tdx, "_file_snapshot", lambda _: dict(fixed))
+    monkeypatch.setattr(tdx.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(tdx.time, "sleep", lambda _: None)
+
+    with pytest.raises(tdx.TdxAutomationError, match="TDX download timeout"):
+        tdx._start_and_wait(1, Path("synthetic"), 30, quiet_seconds=5.0)

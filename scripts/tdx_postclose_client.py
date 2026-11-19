@@ -680,7 +680,23 @@ def _click_download_start(dialog: int) -> int:
     return 1
 
 
-def _start_and_wait(dialog: int, tdx_root: Path, timeout: float) -> dict[str, Any]:
+def _safe_button_label(hwnd: int) -> str:
+    """安全读取按钮标准化文案；测试替身未实现 GetWindowText 时返回空串。"""
+    if USER32 is None or not hasattr(USER32, "GetWindowTextLengthW"):
+        return ""
+    try:
+        return _normal_label(_window_text(hwnd))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _start_and_wait(
+    dialog: int,
+    tdx_root: Path,
+    timeout: float,
+    *,
+    quiet_seconds: float = 45.0,
+) -> dict[str, Any]:
     start = _find_button(dialog, "开始下载")
     if not start:
         raise TdxAutomationError("开始下载 button not found")
@@ -688,26 +704,65 @@ def _start_and_wait(dialog: int, tdx_root: Path, timeout: float) -> dict[str, An
     started_at = time.monotonic()
     _click_window(start)
     saw_disabled = False
+    saw_label_changed = False
     saw_progress = False
     saw_file_change = False
+    last_snapshot = before
+    last_pos = 0
+    last_activity_at = started_at
     deadline = started_at + timeout
     while time.monotonic() < deadline:
         if not _is_visible(dialog):
             raise TdxAutomationError("Download dialog closed without completion evidence")
+        now_mono = time.monotonic()
         enabled = bool(USER32.IsWindowEnabled(start))
+        label = _safe_button_label(start)
         pos = _progress_position(dialog)
         current = _file_snapshot(tdx_root)
         if not enabled:
             saw_disabled = True
+        if label and label != "开始下载":
+            saw_label_changed = True
         if pos > 0:
             saw_progress = True
         if current != before:
             saw_file_change = True
+        if current != last_snapshot or pos != last_pos:
+            last_snapshot = current
+            last_pos = pos
+            last_activity_at = now_mono
         if saw_disabled and enabled:
             return {
                 "before": before,
                 "after": current,
                 "evidence": "button_reenabled_after_disabled",
+                "progress_seen": saw_progress,
+                "files_changed": saw_file_change,
+                "coverage_verified": False,
+            }
+        if saw_label_changed and enabled and label == "开始下载" and (saw_progress or saw_file_change):
+            return {
+                "before": before,
+                "after": current,
+                "evidence": "button_text_restored_after_download",
+                "progress_seen": saw_progress,
+                "files_changed": saw_file_change,
+                "coverage_verified": False,
+            }
+        # 新版通达信下载期间「开始下载」按钮可能始终保持 enabled 且文本不变；
+        # 仅在已观测到真实进度与 .lc5 文件变化，且文件快照与进度连续静默超过 quiet_seconds 后判定完成。
+        if (
+            saw_progress
+            and saw_file_change
+            and enabled
+            and quiet_seconds > 0
+            and (now_mono - last_activity_at) >= quiet_seconds
+        ):
+            return {
+                "before": before,
+                "after": current,
+                "evidence": "files_settled_after_progress",
+                "quiet_seconds": round(now_mono - last_activity_at, 2),
                 "progress_seen": saw_progress,
                 "files_changed": saw_file_change,
                 "coverage_verified": False,
