@@ -2546,8 +2546,8 @@ def _collect_gen2_promotion_snapshots(signal_date: str, pool_rank: int) -> Dict[
         "error": "",
     }
     try:
-        from scripts.collect_intraday_snapshots import collect_global_index_snapshot, collect_global_stock_snapshot
-        from scripts.gen2_update_live_shadow import build_g2_promotion_snapshot_codes
+        from services.engines.collect_intraday_snapshots import collect_global_index_snapshot, collect_global_stock_snapshot
+        from services.engines.gen2_update_live_shadow import build_g2_promotion_snapshot_codes
 
         targets = build_g2_promotion_snapshot_codes(signal_date, pool_rank=pool_rank, limit=300)
         codes = [str(item.get("code") or "").strip() for item in targets if item.get("code")]
@@ -6180,7 +6180,7 @@ def _build_gen2_volume5_quality_rows(v4_pool_df: pd.DataFrame, selected_date: st
     if v4_pool_df.empty:
         return [], {"available": False, "reason": "empty_v4_pool", "count": 0}
     try:
-        from scripts.gen2_update_live_shadow import (
+        from services.engines.gen2_update_live_shadow import (
             ALPHA191_MAIN_THRESHOLD_Q,
             ALPHA191_VOLUME5_DIRECTIONS,
             ALPHA191_VOLUME5_FACTORS,
@@ -6295,7 +6295,7 @@ def _build_gen2_breakout_quality_rows(v4_pool_df: pd.DataFrame, selected_date: s
     try:
         from scripts.gen2_backtest_open_v1_portfolio import _load_trade_dates
         from scripts.gen2_filter_signals_by_intraday_normal import DEFAULT_STATE_DAILY
-        from scripts.gen2_update_live_shadow import _latest_breakout_setup, _load_daily_for_breakout, _load_g2_open_states
+        from services.engines.gen2_update_live_shadow import _latest_breakout_setup, _load_daily_for_breakout, _load_g2_open_states
 
         trade_dates = _load_trade_dates("2024-07-09", selected_date)
         if selected_date not in trade_dates:
@@ -8577,7 +8577,7 @@ def _load_intraday_minute_bars(
 
     if df is None or df.empty:
         try:
-            from scripts.collect_intraday_snapshots import load_snapshot_minute_bars
+            from services.engines.collect_intraday_snapshots import load_snapshot_minute_bars
 
             df = load_snapshot_minute_bars(
                 codes=[normalized_code],

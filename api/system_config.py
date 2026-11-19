@@ -1883,7 +1883,7 @@ def _repair_emotion_for_dates(dates: List[Any]):
     from sqlalchemy import func
     from utils.database import db
     from models.stock_models import EmotionCycle
-    from scripts.generate_emotion_cycle import EmotionCycleGenerator, publish_emotion_cycle_to_clickhouse
+    from services.engines.generate_emotion_cycle import EmotionCycleGenerator, publish_emotion_cycle_to_clickhouse
 
     session = next(db.get_session())
     try:
@@ -3138,7 +3138,7 @@ def sync_sectors_task():
     task_name = "sync_sectors"
 
     try:
-        from scripts.sync_sectors_and_mapping import SectorSyncer
+        from services.engines.sync_sectors_and_mapping import SectorSyncer
 
         logger.info("弢始同步一二三行业板块")
         task_manager.update_progress(task_name, {"message": "弢始同步行业板?.."})
@@ -4073,7 +4073,7 @@ def update_today_data_task(periods=None, force: bool = False):
 
         if any(period in minute_periods for period in sync_periods):
             try:
-                from scripts.collect_intraday_snapshots import collect_global_index_snapshot
+                from services.engines.collect_intraday_snapshots import collect_global_index_snapshot
 
                 target_codes = [str(item.get("code")) for item in minute_indices if item.get("code")]
                 task_manager.update_progress(
@@ -4480,7 +4480,7 @@ def _legacy_update_stock_today_data_task(periods=None):
         if "1d" in sync_periods:
             try:
                 from models.stock_models import EmotionCycle, KlineDaily
-                from scripts.generate_emotion_cycle import EmotionCycleGenerator
+                from services.engines.generate_emotion_cycle import EmotionCycleGenerator
                 from sqlalchemy import func
                 from utils.database import db
 
@@ -4617,7 +4617,7 @@ def _build_intraday_minute_stock_pool(syncer) -> List[Dict[str, Any]]:
         logger.warning(f"intraday minute pool load gen2 open signals failed: {exc}")
 
     try:
-        from scripts.gen2_update_live_shadow import build_g2_promotion_snapshot_codes
+        from services.engines.gen2_update_live_shadow import build_g2_promotion_snapshot_codes
         from utils.market_warehouse import clickhouse_query_df
 
         latest_df = clickhouse_query_df(
@@ -4772,7 +4772,7 @@ def update_market_today_minute_data_task(periods=None, force: bool = False):
             return
         sync_periods = filtered_periods if requested_periods else requested_periods
 
-        from scripts.collect_intraday_snapshots import collect_global_index_snapshot, collect_global_stock_snapshot
+        from services.engines.collect_intraday_snapshots import collect_global_index_snapshot, collect_global_stock_snapshot
 
         stock_pool = _build_intraday_minute_stock_pool(_IntradayMinutePoolSource())
         index_pool = _build_intraday_minute_index_pool(_get_intraday_minute_indices())
@@ -5130,7 +5130,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
 
         if any(period in minute_periods for period in sync_periods):
             try:
-                from scripts.collect_intraday_snapshots import collect_global_stock_snapshot
+                from services.engines.collect_intraday_snapshots import collect_global_stock_snapshot
 
                 task_manager.update_progress(
                     task_name,
@@ -5787,7 +5787,7 @@ def update_stock_today_data_task(periods=None, force: bool = False):
         if "1d" in sync_periods:
             try:
                 from models.stock_models import EmotionCycle, KlineDaily
-                from scripts.generate_emotion_cycle import EmotionCycleGenerator
+                from services.engines.generate_emotion_cycle import EmotionCycleGenerator
                 from sqlalchemy import func
                 from utils.database import db
 
@@ -6741,7 +6741,7 @@ def update_trade_calendar_task():
         task_manager.update_progress(task_name, {"message": "弢始更新股市日?.."})
         
         # 调用同步交易日历的函?
-        from scripts.sync_trade_calendar import sync_trade_calendar
+        from services.engines.sync_trade_calendar import sync_trade_calendar
         
         # 执行同步
         sync_trade_calendar()
@@ -6783,7 +6783,7 @@ def repair_emotion_cycle_30d_task(days: int = 30):
         metric_repair_result = None
         if dates:
             try:
-                from scripts.repair_kline_daily_metrics import repair_metrics
+                from services.engines.repair_kline_daily_metrics import repair_metrics
 
                 metric_repair_result = repair_metrics(str(min(dates)), str(max(dates)))
                 logger.info(f"emotion repair preflight kline metric repair: {metric_repair_result}")

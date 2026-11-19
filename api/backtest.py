@@ -131,7 +131,7 @@ def run_backtest(request: BacktestRequest, background_tasks: BackgroundTasks):
     # 后台执行回测任务
     def run_backtest_task():
         try:
-            from scripts.backtest_engine import BacktestEngine
+            from services.engines.backtest_engine import BacktestEngine
             
             # 创建回测引擎
             engine = BacktestEngine(

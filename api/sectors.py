@@ -800,7 +800,7 @@ def _sync_sector_kline_data():
     global sync_kline_task_status
 
     try:
-        from scripts.generate_sector_kline import generate_recent_sector_klines
+        from services.engines.generate_sector_kline import generate_recent_sector_klines
 
         sync_kline_task_status["progress"] = {"current": 0, "total": 0, "current_sector": ""}
 

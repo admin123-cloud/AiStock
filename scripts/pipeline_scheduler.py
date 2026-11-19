@@ -64,8 +64,18 @@ from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
-SCRIPTS_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPTS_DIR.parent
+_DEFAULT_SCRIPTS_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = _DEFAULT_SCRIPTS_DIR
+PROJECT_ROOT = _DEFAULT_SCRIPTS_DIR.parent
+JOBS_DIR = PROJECT_ROOT / "pipelines" / "jobs"
+
+
+def _job_script(name: str) -> Path:
+    """解析管道子脚本路径：测试若覆盖 SCRIPTS_DIR 则优先尊重，否则优先命中 pipelines/jobs/。"""
+    if SCRIPTS_DIR != _DEFAULT_SCRIPTS_DIR:
+        return SCRIPTS_DIR / name
+    candidate = JOBS_DIR / name
+    return candidate if candidate.exists() else (SCRIPTS_DIR / name)
 
 # Asia/Shanghai 自 1991 年起固定 +08:00（无夏令时）；静态 tzinfo 免 tzdata 依赖，
 # 策略与 scheduler/config.py 的 _BEIJING_TZINFO 一致。
@@ -280,7 +290,7 @@ def build_stage_commands(run_date: date, out_dir: Path) -> dict[str, dict[str, A
             # 2026-11-13 起：主源=客户端本地 vipdoc lday（时序门禁 mtime≥16:00
             # fail-closed；量纲/覆盖/对照门禁见 pipeline 报告）
             "cmd": [
-                sys.executable, str(SCRIPTS_DIR / "daily_kline_pipeline.py"),
+                sys.executable, str(_job_script("daily_kline_pipeline.py")),
                 "--source", "local", "--formal-write", "--output", str(daily_report),
             ],
             "report_path": daily_report,
@@ -288,7 +298,7 @@ def build_stage_commands(run_date: date, out_dir: Path) -> dict[str, dict[str, A
         # 本地 lday 失败（重试耗尽）时的官网包回退（exact-key 幂等，安全补写）
         STAGE_DAILY_FALLBACK: {
             "cmd": [
-                sys.executable, str(SCRIPTS_DIR / "daily_kline_pipeline.py"),
+                sys.executable, str(_job_script("daily_kline_pipeline.py")),
                 "--formal-write", "--output", str(daily_pkg_report),
             ],
             "report_path": daily_pkg_report,
@@ -296,7 +306,7 @@ def build_stage_commands(run_date: date, out_dir: Path) -> dict[str, dict[str, A
         STAGE_MINUTE: {
             # 2026-11-19 起：主源=容器内本地 /d/TDX/vipdoc lc5（覆盖全市场 A 股 + 11 大主要指数）
             "cmd": [
-                sys.executable, str(SCRIPTS_DIR / "minute_collect_auto.py"),
+                sys.executable, str(_job_script("minute_collect_auto.py")),
                 "--source", "tdx_lc5",
                 "--mode", "formal-write", "--out-dir", str(out_dir),
             ],
@@ -304,7 +314,7 @@ def build_stage_commands(run_date: date, out_dir: Path) -> dict[str, dict[str, A
         },
         STAGE_MINUTE_FALLBACK: {
             "cmd": [
-                sys.executable, str(SCRIPTS_DIR / "minute_collect_auto.py"),
+                sys.executable, str(_job_script("minute_collect_auto.py")),
                 "--source", "east",
                 "--mode", "formal-write", "--out-dir", str(out_dir),
             ],
@@ -312,7 +322,7 @@ def build_stage_commands(run_date: date, out_dir: Path) -> dict[str, dict[str, A
         },
         STAGE_AGG: {
             "cmd": [
-                sys.executable, str(SCRIPTS_DIR / "minute_agg_backfill_window.py"),
+                sys.executable, str(_job_script("minute_agg_backfill_window.py")),
                 "--mode", "formal-write",
                 "--start-date", (run_date - timedelta(days=AGG_WINDOW_DAYS)).isoformat(),
                 "--end-date", run_date.isoformat(),
@@ -784,7 +794,7 @@ def run_intraday_snapshot_beat(
 
     run = runner or _default_runner
     cmd = [
-        sys.executable, str(SCRIPTS_DIR / "intraday_snapshot_collect.py"),
+        sys.executable, str(_job_script("intraday_snapshot_collect.py")),
         "--out-dir", str(beat_dir),
     ]
     result = run(cmd) or {}
@@ -833,7 +843,7 @@ def _run_market_mood_intraday(
     log: logging.Logger,
 ) -> Optional[int]:
     """R55：盘中涨停生态聚合追加计算（subprocess，独立异常面）。"""
-    cmd = [sys.executable, str(SCRIPTS_DIR / MARKET_MOOD_SCRIPT), "--intraday"]
+    cmd = [sys.executable, str(_job_script(MARKET_MOOD_SCRIPT)), "--intraday"]
     try:
         result = runner(cmd) or {}
         try:
@@ -926,7 +936,7 @@ def run_market_mood_finalize_beat(
 
     run = runner or _default_runner
     cmd = [
-        sys.executable, str(SCRIPTS_DIR / MARKET_MOOD_SCRIPT),
+        sys.executable, str(_job_script(MARKET_MOOD_SCRIPT)),
         "--finalize", "--date", now_bj.date().isoformat(),
     ]
     if require_certified:
@@ -1018,7 +1028,7 @@ def _run_t_tracker_step(
     if not trading:
         return {**base, "status": "no_op_non_trading"}
     run = runner or _default_runner
-    cmd = [sys.executable, str(SCRIPTS_DIR / script), cli_flag]
+    cmd = [sys.executable, str(_job_script(script)), cli_flag]
     result = run(cmd) or {}
     try:
         rc = int(result.get("returncode", -1))
@@ -1179,7 +1189,7 @@ def run_weekly_data_audit(
     run = runner or _default_runner
     cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / WEEKLY_DATA_AUDIT_SCRIPT),
+        str(_job_script(WEEKLY_DATA_AUDIT_SCRIPT)),
         "--days",
         str(WEEKLY_DATA_AUDIT_DAYS),
     ]

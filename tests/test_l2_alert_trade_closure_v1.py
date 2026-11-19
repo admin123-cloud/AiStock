@@ -438,7 +438,7 @@ class SchedulerNoopLockTests(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────
 # D：弹窗按钮只确认（AST 静态守卫，不实例化 tkinter）
 # ─────────────────────────────────────────────────────────────────
-ALERT_SRC_PATH = Path(__file__).resolve().parents[1] / "scripts" / "alert_local.py"
+ALERT_SRC_PATH = Path(__file__).resolve().parents[1] / "pipelines" / "jobs" / "alert_local.py"
 
 FORBIDDEN_MODULES = {
     "webbrowser", "subprocess", "socket", "urllib", "ctypes", "requests",

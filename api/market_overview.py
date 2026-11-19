@@ -2750,7 +2750,7 @@ def calculate_emotion_cycle():
             session.delete(existing)
             session.commit()
 
-        from scripts.generate_emotion_cycle import EmotionCycleGenerator, publish_emotion_cycle_to_clickhouse
+        from services.engines.generate_emotion_cycle import EmotionCycleGenerator, publish_emotion_cycle_to_clickhouse
 
         generator = EmotionCycleGenerator()
         generator.session = session

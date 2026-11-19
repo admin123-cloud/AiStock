@@ -71,7 +71,7 @@ TENCENT_MAX_BARS = 320  # 最近 320 根 ≈ 6.7 交易日（覆盖 10-22~10-30�
 
 def _load_cityhash():
     spec = importlib.util.spec_from_file_location(
-        "daily_kline_pipeline", PROJECT_ROOT / "scripts" / "daily_kline_pipeline.py")
+        "daily_kline_pipeline", PROJECT_ROOT / "pipelines" / "jobs" / "daily_kline_pipeline.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

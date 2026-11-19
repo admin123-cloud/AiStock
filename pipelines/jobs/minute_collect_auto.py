@@ -60,7 +60,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 for _p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)

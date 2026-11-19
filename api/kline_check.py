@@ -1906,7 +1906,7 @@ def process_repair_batch_task(task_id: str, items: list, start_date: Optional[st
     session = next(db.get_session())
     try:
         from models.stock_models import Stock, Sector
-        from scripts.generate_sector_kline import generate_sector_klines_for_sector_range
+        from services.engines.generate_sector_kline import generate_sector_klines_for_sector_range
 
         syncer = KlineSyncer()
 
