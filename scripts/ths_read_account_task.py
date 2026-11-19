@@ -456,20 +456,50 @@ def _switch_via_panel_combobox(
         return None
 
 
+def _match_account_from_text(text: str) -> Optional[str]:
+    """根据交易面板身份文本（脱敏账号或顶栏标签）唯一匹配 YH_ACCOUNTS 中的账号键。"""
+    norm = str(text or "").strip()
+    if not norm:
+        return None
+    hits: list[str] = []
+    for acct, meta in tc.YH_ACCOUNTS.items():
+        masked = str(meta.get("masked_id") or "")
+        label = str(meta.get("label") or "")
+        owner = str(meta.get("owner") or "")
+        if (masked and masked in norm) or (label and label in norm) or (owner and owner in norm):
+            hits.append(acct)
+    return hits[0] if len(hits) == 1 else None
+
+
 def _detect_active_account(happ_exe: Path) -> Optional[str]:
     """只读探测当前交易面板已登录的账号键（acct1/acct2）；不可读返回 None。"""
+    if not tc.IS_WINDOWS:
+        return None
     try:
         chain = tc._yh_ro_chain_snapshot(happ_exe)
         q_hwnd, _ = tc._yh_ro_find_query_window(chain["xiadan"]["pid"])
-        vals = tc._yh_ro_identity_values(q_hwnd)
-        if not vals:
-            return None
-        resolved = tc._yh_ro_resolve_identity(vals)
-        if isinstance(resolved, dict):
-            return resolved.get("account")
     except Exception:  # noqa: BLE001
         return None
-    return None
+    # 1) 优先通过 _yh_ro_identity_values 读顶栏脱敏账号与标签
+    try:
+        vals = tc._yh_ro_identity_values(q_hwnd)
+        if isinstance(vals, dict) and vals:
+            joined = " ".join(str(v) for v in vals.values() if v)
+            matched = _match_account_from_text(joined)
+            if matched:
+                return matched
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) 兜底通过 ths_hotswitch 读取交易面板原生 ComboBox 文本
+    try:
+        from pywinauto import Desktop
+        from services import ths_hotswitch as hs
+
+        win = Desktop(backend="win32").window(handle=int(q_hwnd))
+        label, _png = hs.read_window_identity(win)
+        return _match_account_from_text(label)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _write_named_report(out_dir: Path, filename: str, report: dict[str, Any]) -> Path:
