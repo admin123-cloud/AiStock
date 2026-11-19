@@ -104,6 +104,7 @@ services:
       - aistock_clickhouse_data:/var/lib/clickhouse:rw
       - F:/Aistock/code/config/clickhouse/config.d/aistock-throttle.xml:/etc/clickhouse-server/config.d/aistock-throttle.xml:ro
       - F:/Aistock/code/config/clickhouse/users.d/aistock-throttle.xml:/etc/clickhouse-server/users.d/aistock-throttle.xml:ro
+      - F:/Aistock/code/config/clickhouse/users.d/zz-docker-networks.xml:/etc/clickhouse-server/users.d/zz-docker-networks.xml:ro
       - aistock_clickhouse_log:/var/log/clickhouse-server:rw
     networks:
       default:

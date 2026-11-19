@@ -1,0 +1,14 @@
+<clickhouse>
+    <!-- 允许本机回环与 Docker 私有网段连接 default 用户（宿主机仅绑定 127.0.0.1:8123） -->
+    <users>
+        <default>
+            <networks replace="replace">
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>172.16.0.0/12</ip>
+                <ip>192.168.0.0/16</ip>
+                <ip>10.0.0.0/8</ip>
+            </networks>
+        </default>
+    </users>
+</clickhouse>
