@@ -39,7 +39,7 @@ services:
       AISTOCK_QMT_TICK_BRIDGE_URL: http://host.docker.internal:8766/full-tick
       AISTOCK_QMT_ACCOUNT_BRIDGE_URL: http://host.docker.internal:8766/account-snapshot
     volumes:
-      - F:/AiStock/app/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
+      - F:/Aistock/code/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
       - F:/Aistock/data/data/local_observation_preview/data:/aistock/data
       # R33b：只读嵌套挂载真实 runtime/gen3_state_alpha（broker_state.json 所在；应用读 /aistock/data/runtime/...，深路径优先于隔离树挂载；观察栈对真实运行时零写入。整树挂载经 A/B 实证会拦截 holding-t/review 的隔离树回写造成回归，故缩至本子树）
       - F:/Aistock/data/data/runtime/gen3_state_alpha:/aistock/data/runtime/gen3_state_alpha:ro
@@ -70,7 +70,7 @@ services:
     ports:
       - "127.0.0.1:3000:80"
     volumes:
-      - F:/Aistock/app/deploy/nginx.preview.conf:/etc/nginx/conf.d/default.conf:ro
+      - F:/Aistock/code/deploy/nginx.preview.conf:/etc/nginx/conf.d/default.conf:ro
 
   pipeline-runner:
     image: aistock-backend:${AISTOCK_MAIN_VERSION:?必须经部署脚本注入}
@@ -86,7 +86,7 @@ services:
       PYTHONPATH: /app
       AISTOCK_CLICKHOUSE_HOST: 127.0.0.1
     volumes:
-      - F:/AiStock/app/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
+      - F:/Aistock/code/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
       # 管道写入方：挂真实数据根（可写）——报告/journal 落 runtime/postclose_auto 等
       - F:/Aistock/data/data:/aistock/data
     command: ["python", "scripts/pipeline_scheduler.py"]
@@ -100,8 +100,8 @@ services:
       - "127.0.0.1:9000:9000"
     volumes:
       - aistock_clickhouse_data:/var/lib/clickhouse:rw
-      - F:/Aistock/app/config/clickhouse/config.d/aistock-throttle.xml:/etc/clickhouse-server/config.d/aistock-throttle.xml:ro
-      - F:/Aistock/app/config/clickhouse/users.d/aistock-throttle.xml:/etc/clickhouse-server/users.d/aistock-throttle.xml:ro
+      - F:/Aistock/code/config/clickhouse/config.d/aistock-throttle.xml:/etc/clickhouse-server/config.d/aistock-throttle.xml:ro
+      - F:/Aistock/code/config/clickhouse/users.d/aistock-throttle.xml:/etc/clickhouse-server/users.d/aistock-throttle.xml:ro
       - aistock_clickhouse_log:/var/log/clickhouse-server:rw
     networks:
       default:

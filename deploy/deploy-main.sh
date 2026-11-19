@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # AiStock main 唯一部署管道（Owner 2026-11-09 裁决固化；2026-11-09 归位仓库内）
 set -euo pipefail
-APP='F:/Aistock/app'
+APP='F:/Aistock/code'
 # 2026-11-13：config.json 的 credsStore=desktop 需要 docker-credential-desktop 在 PATH
 # （Docker Desktop 重启会把删掉的 credsStore 写回来；resources/bin 常规不在 git-bash PATH）
 export PATH="/c/Program Files/Docker/Docker/resources/bin:$PATH"
