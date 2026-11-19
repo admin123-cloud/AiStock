@@ -277,32 +277,32 @@ export default function BrokerAccounts() {
             {acct.funds ? (
               <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
                 <div>
-                  <div className="text-zinc-500">总资产</div>
-                  <div className="mt-0.5 font-semibold tabular-nums">{fmtMoney(acct.funds.total_assets)}</div>
+                  <div className="text-zinc-500 dark:text-zinc-400">总资产</div>
+                  <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.total_assets)}</div>
                 </div>
                 <div>
-                  <div className="text-zinc-500">股票市值</div>
-                  <div className="mt-0.5 font-semibold tabular-nums">{fmtMoney(acct.funds.market_value)}</div>
+                  <div className="text-zinc-500 dark:text-zinc-400">股票市值</div>
+                  <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.market_value)}</div>
                 </div>
                 <div>
-                  <div className="text-zinc-500">可用资金</div>
-                  <div className="mt-0.5 font-semibold tabular-nums">{fmtMoney(acct.funds.available)}</div>
+                  <div className="text-zinc-500 dark:text-zinc-400">可用资金</div>
+                  <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.available)}</div>
                 </div>
                 <div>
-                  <div className="text-zinc-500">当日盈亏</div>
+                  <div className="text-zinc-500 dark:text-zinc-400">当日盈亏</div>
                   <div className={`mt-0.5 font-semibold tabular-nums ${pnlColor(acct.funds.daily_profit)}`}>
                     {fmtSigned(acct.funds.daily_profit)} ({fmtSigned(acct.funds.daily_profit_ratio, '%')})
                   </div>
                 </div>
                 <div>
-                  <div className="text-zinc-500">持仓盈亏</div>
+                  <div className="text-zinc-500 dark:text-zinc-400">持仓盈亏</div>
                   <div className={`mt-0.5 font-semibold tabular-nums ${pnlColor(acct.funds.holding_profit)}`}>
                     {fmtSigned(acct.funds.holding_profit)}
                   </div>
                 </div>
                 <div>
-                  <div className="text-zinc-500">采集时间</div>
-                  <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
+                  <div className="text-zinc-500 dark:text-zinc-400">采集时间</div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
                     {acct.generated_at ? acct.generated_at.slice(0, 19).replace('T', ' ') : '--'}
                   </div>
                 </div>
@@ -325,13 +325,13 @@ export default function BrokerAccounts() {
           <table className="min-w-full divide-y divide-zinc-200 text-xs dark:divide-zinc-800">
             <thead className="bg-zinc-50 dark:bg-zinc-950/40">
               <tr>
-                <th className="px-4 py-2.5 text-left font-medium text-zinc-500">账号</th>
-                <th className="px-4 py-2.5 text-left font-medium text-zinc-500">代码 / 名称</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">持仓 / 可用</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">成本价</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">现价</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">当日盈亏</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">持仓盈亏</th>
+                <th className="px-4 py-2.5 text-left font-medium text-zinc-500 dark:text-zinc-400">账号</th>
+                <th className="px-4 py-2.5 text-left font-medium text-zinc-500 dark:text-zinc-400">代码 / 名称</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">持仓 / 可用</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">成本价</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">现价</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">当日盈亏</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">持仓盈亏</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/70">
@@ -349,11 +349,11 @@ export default function BrokerAccounts() {
                       <span className="font-mono font-medium text-zinc-900 dark:text-white">{h.code}</span>
                       <span className="ml-2 text-zinc-600 dark:text-zinc-300">{h.name}</span>
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">
+                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
                       {h.quantity ?? '--'} / {h.available_quantity ?? '--'}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{h.cost_price ?? '--'}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{h.current_price ?? '--'}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{h.cost_price ?? '--'}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{h.current_price ?? '--'}</td>
                     <td className={`px-4 py-2.5 text-right tabular-nums ${pnlColor(h.daily_profit)}`}>
                       {fmtSigned(h.daily_profit)} ({fmtSigned(h.daily_profit_ratio, '%')})
                     </td>
@@ -379,13 +379,13 @@ export default function BrokerAccounts() {
           <table className="min-w-full divide-y divide-zinc-200 text-xs dark:divide-zinc-800">
             <thead className="bg-zinc-50 dark:bg-zinc-950/40">
               <tr>
-                <th className="px-4 py-2.5 text-left font-medium text-zinc-500">账号</th>
-                <th className="px-4 py-2.5 text-left font-medium text-zinc-500">日期时间</th>
-                <th className="px-4 py-2.5 text-left font-medium text-zinc-500">代码 / 名称</th>
-                <th className="px-4 py-2.5 text-left font-medium text-zinc-500">方向</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">成交数量</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">成交价</th>
-                <th className="px-4 py-2.5 text-right font-medium text-zinc-500">成交额 / 发生额</th>
+                <th className="px-4 py-2.5 text-left font-medium text-zinc-500 dark:text-zinc-400">账号</th>
+                <th className="px-4 py-2.5 text-left font-medium text-zinc-500 dark:text-zinc-400">日期时间</th>
+                <th className="px-4 py-2.5 text-left font-medium text-zinc-500 dark:text-zinc-400">代码 / 名称</th>
+                <th className="px-4 py-2.5 text-left font-medium text-zinc-500 dark:text-zinc-400">方向</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">成交数量</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">成交价</th>
+                <th className="px-4 py-2.5 text-right font-medium text-zinc-500 dark:text-zinc-400">成交额 / 发生额</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/70">
@@ -417,9 +417,9 @@ export default function BrokerAccounts() {
                         {String(f.side || '').toLowerCase() === 'buy' ? '买入' : f.side || '--'}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{f.quantity ?? '--'}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{f.price ?? '--'}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">
+                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{f.quantity ?? '--'}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{f.price ?? '--'}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
                       {fmtMoney(f.amount)} / {fmtMoney(f.net_amount)}
                     </td>
                   </tr>
