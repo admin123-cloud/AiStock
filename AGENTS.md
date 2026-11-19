@@ -17,7 +17,7 @@
 
 ## Repository Shape
 
-This repository is the unified AiStock application source under F:\AiStock\app. Keep runtime data and research artifacts in the sibling directories managed by this root.
+This repository is the unified AiStock application source under F:\Aistock\code. Keep runtime data and research artifacts in the sibling directories managed by this root.
 
 External layers:
 

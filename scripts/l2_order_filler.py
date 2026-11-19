@@ -548,7 +548,7 @@ def submit_order(
     # 1. 风控门
     try:
         import sys as _sys, json as _json
-        _sys.path.insert(0, str(Path(r"F:/Aistock/app")))
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from services.l2_order_gate import check_order, OrderRequest, GateContext
         from datetime import datetime as _dt
 
@@ -612,7 +612,7 @@ def auto_submit(
     # 1. 风控门
     try:
         import sys as _sys, json as _json
-        _sys.path.insert(0, str(Path(r"F:/Aistock/app")))
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from services.l2_order_gate import check_order, OrderRequest, GateContext
         from datetime import datetime as _dt
 

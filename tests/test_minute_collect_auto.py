@@ -110,8 +110,8 @@ def test_east_m5_fetch_zero_bars_means_no_coverage():
 def test_pytdx_import_is_lazy():
     # 采集器模块导入不得触发 pytdx 连接栈（离线可测、A 路径惰性）
     import subprocess
-    code = ("import sys; sys.path.insert(0, r'F:\\Aistock\\app'); "
-            "sys.path.insert(0, r'F:\\Aistock\\app\\scripts'); "
+    code = ("import sys; sys.path.insert(0, r'F:\\Aistock\\code'); "
+            "sys.path.insert(0, r'F:\\Aistock\\code\\scripts'); "
             "import minute_collect_auto; "
             "print('pytdx' in sys.modules)")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
