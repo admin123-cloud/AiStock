@@ -42,7 +42,6 @@ from fastapi import FastAPI
 from api.accounts import router as accounts_router
 from api.g3 import router as g3_router
 from api.operations import router as operations_router
-from api.backtest import router as backtest_router
 from api.cls_news import router as cls_news_router
 from api.data_statistics import router as data_stats_router
 from api.kline_check import router as kline_check_router
@@ -58,7 +57,6 @@ from utils.paths import runtime_path
 app = FastAPI(title='AiStock 统一栈预览（安全观察模式，只读）',
               docs_url=None, redoc_url=None, openapi_url=None, oauth2_redirect_url=None)
 app.include_router(operations_router, prefix='/api')
-app.include_router(backtest_router, prefix='/api')
 app.include_router(cls_news_router, prefix='/api')
 app.include_router(data_stats_router, prefix='/api', tags=['data-statistics'])
 app.include_router(kline_check_router, prefix='/api', tags=['kline-check'])
@@ -112,9 +110,6 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/g3/review/shadow',
     '/api/g3/review/signal-quality',
     '/api/g3/settings',
-    '/api/backtest/progress/{task_id}',
-    '/api/backtest/result/{task_id}',
-    '/api/backtest/strategies',
     '/api/data-statistics/completeness',
     '/api/data-statistics/field-missing',
     '/api/data-statistics/kline-missing',

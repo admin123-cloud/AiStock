@@ -137,15 +137,9 @@ export const routes: AppRoute[] = [
     () => import('@/views/operations/DataStats')
   ),
   page(
-    '/data/reviews',
-    'DataReviewQueue',
-    { title: '数据审核队列', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1.5, navLabel: '数据审核' },
-    () => import('@/views/operations/DataReviewQueue')
-  ),
-  page(
     '/system-config',
     'SystemConfig',
-    { title: '系统配置', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 1, navLabel: '系统配置', icon: '⚙️' },
+    { title: '系统运行状态', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 1, navLabel: '系统状态', icon: '⚙️' },
     () => import('@/views/operations/SystemConfig')
   ),
   page(
