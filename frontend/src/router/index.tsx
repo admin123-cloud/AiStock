@@ -52,12 +52,6 @@ export const routes: AppRoute[] = [
     () => import('@/views/operations/KlineCheck')
   ),
   page(
-    '/gen3/state-alpha/mainwave-evidence',
-    'MainwaveEvidence',
-    { title: '主升行业证据', group: 'gen3', hiddenInNav: true },
-    () => import('@/views/g3/Gen3StateAlphaMainwave')
-  ),
-  page(
     '/',
     'Home',
     { title: '首页', group: 'market', groupLabel: '市场', groupOrder: 1, navOrder: 1, navLabel: '首页', icon: '🏠' },
@@ -106,100 +100,35 @@ export const routes: AppRoute[] = [
     () => import('@/views/market/SectorDetail')
   ),
   page(
-    '/gen2/live',
-    'Gen2Live',
-    { title: '第二代策略实盘交易', group: 'gen2', groupLabel: '第二代策略', groupOrder: 2.5, navOrder: 0.5, navLabel: '实盘交易', hiddenInNav: true, icon: 'G2' },
-    () => import('@/views/g2/Gen2Live')
+    '/g3/desk',
+    'G3Desk',
+    { title: 'G3 做T实战台', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1, navLabel: '做T实战台' },
+    () => import('@/views/g3/G3Desk')
   ),
   page(
-    '/gen2/selection-pool',
-    'Gen2SelectionPool',
-    { title: '第二代策略选股池', group: 'gen2', groupLabel: '第二代策略', groupOrder: 2.5, navOrder: 0.7, navLabel: '策略选股池', hiddenInNav: true, icon: 'G2' },
-    () => import('@/views/g2/Gen2SelectionPool')
+    '/g3/review',
+    'G3Review',
+    { title: 'G3 复盘与影子台账', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 2, navLabel: '做T复盘' },
+    () => import('@/views/g3/G3Review')
   ),
   page(
-    '/gen2/mainline-hotspots',
-    'Gen2MainlineHotspots',
-    { title: '第二代主线热点', group: 'gen2', groupLabel: '第二代策略', groupOrder: 2.5, navOrder: 0.8, navLabel: '主线热点', hiddenInNav: true, icon: 'G2' },
-    () => import('@/views/g2/Gen2MainlineHotspots')
-  ),
-  page(
-    '/gen2/lab',
-    'Gen2StrategyLab',
-    { title: '第二代策略实验台', group: 'gen2', groupLabel: '第二代策略', groupOrder: 2.5, navOrder: 1, navLabel: '策略实验台', hiddenInNav: true, icon: 'G2' },
-    () => import('@/views/g2/Gen2StrategyLab')
-  ),
-  page(
-    '/gen2/backtest',
-    'Gen2Backtest',
-    { title: '第二代策略历史回测', group: 'gen2', groupLabel: '第二代策略', groupOrder: 2.5, navOrder: 2, navLabel: '历史回测', hiddenInNav: true, icon: 'G2' },
-    () => import('@/views/g2/Gen2Backtest')
-  ),
-  page(
-    '/gen2/factors',
-    'Gen2FactorLab',
-    { title: '第二代策略量化因子库', group: 'gen2', groupLabel: '第二代策略', groupOrder: 2.5, navOrder: 2.2, navLabel: '量化因子库', hiddenInNav: true, icon: 'G2' },
-    () => import('@/views/g2/Gen2FactorLab')
-  ),
-  page(
-    '/gen2/timing',
-    'Gen2Timing',
-    { title: '第二代策略交易择时', group: 'gen2', groupLabel: '第二代策略', groupOrder: 2.5, navOrder: 3, navLabel: '交易择时', hiddenInNav: true, icon: 'G2' },
-    () => import('@/views/g2/Gen2Timing')
-  ),
-  page(
-    '/gen3/state-alpha',
-    'Gen3StateAlpha',
-    { title: 'G3 工作台', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1, navLabel: '工作台' },
-    () => import('@/views/g3/Gen3StateAlpha')
-  ),
-  page(
-    '/gen3/state-alpha/candidates',
-    'Gen3StateAlphaCandidates',
-    { title: 'G3 State Alpha 候选池', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.05, navLabel: '候选池', hiddenInNav: true, icon: '' },
-    () => import('@/views/g3/Gen3StateAlphaCandidates')
-  ),
-  page(
-    '/gen3/state-alpha/holding-ticks',
-    'Gen3StateAlphaHoldingTicks',
-    { title: '做T交易', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.03, navLabel: '做T交易' },
-    () => import('@/views/g3/Gen3StateAlphaHoldingTicks')
-  ),
-  page(
-    '/gen3/state-alpha/holding-t-review',
-    'Gen3HoldingTReview',
-    { title: '做T复盘', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.04, navLabel: '做T复盘' },
-    () => import('@/views/g3/Gen3HoldingTReview')
-  ),
-  page(
-    '/gen3/state-alpha/mainwave',
-    'Gen3StateAlphaMainwaveDaily',
-    { title: '主升每日跟踪', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.06, navLabel: '主升每日跟踪' },
+    '/g3/mainwave',
+    'G3MainwaveDaily',
+    { title: '主升浪每日选股池', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 3, navLabel: '主升每日选股' },
     () => import('@/views/g3/MainwaveDaily')
   ),
   page(
-    '/gen3/state-alpha/routes',
-    'Gen3StateAlphaRoutes',
-    { title: '策略有效性诊断', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.08, navLabel: '有效性诊断' },
-    () => import('@/views/g3/Gen3StateAlphaRoutes')
+    '/g3/settings',
+    'G3Settings',
+    { title: 'G3 策略合约与风控', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 4, navLabel: '策略与风控' },
+    () => import('@/views/g3/G3Settings')
   ),
+  // 兼容旧书签路径，自动落入新做T实战台
   page(
-    '/gen3/state-alpha/risk',
-    'Gen3StateAlphaRisk',
-    { title: '风控合同', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.1, navLabel: '风控合同' },
-    () => import('@/views/g3/Gen3StateAlphaRisk')
-  ),
-  page(
-    '/gen3/state-alpha/trades',
-    'Gen3StateAlphaTrades',
-    { title: '历史成交复盘', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.09, navLabel: '历史成交复盘' },
-    () => import('@/views/g3/Gen3StateAlphaTrades')
-  ),
-  page(
-    '/gen3/state-alpha/replacement',
-    'Gen3StateAlphaReplacement',
-    { title: 'G3融合状态', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1.25, navLabel: '融合验收', hiddenInNav: true, icon: '' },
-    () => import('@/views/g3/Gen3StateAlphaReplacement')
+    '/gen3/state-alpha',
+    'Gen3LegacyRedirect',
+    { title: 'G3 做T实战台', group: 'gen3', hiddenInNav: true },
+    () => import('@/views/g3/G3Desk')
   ),
   page(
     '/data-stats',

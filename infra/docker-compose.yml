@@ -45,6 +45,8 @@ services:
       - F:/Aistock/runtime/gen3_state_alpha:/aistock/data/runtime/gen3_state_alpha:ro
       - F:/Aistock/runtime/gen3_state_alpha/holding_t_watchlist:/aistock/data/runtime/gen3_state_alpha/holding_t_watchlist
       - F:/Aistock/runtime/t_tracker:/aistock/data/runtime/t_tracker:ro
+      - F:/Aistock/runtime/signal_quality:/aistock/data/runtime/signal_quality:ro
+      - F:/Aistock/runtime/daily_review:/aistock/data/runtime/daily_review:ro
       - F:/Aistock/runtime/market_mood:/aistock/data/runtime/market_mood:ro
       - F:/Aistock/runtime/postclose_control:/aistock/data/runtime/postclose_control:ro
       - F:/Aistock/runtime/ths_read_account:/aistock/data/runtime/ths_read_account:ro

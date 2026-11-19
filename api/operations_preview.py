@@ -43,6 +43,7 @@ os.environ.setdefault("AISTOCK_READFACE_PREVIEW", "1")
 
 from fastapi import FastAPI
 from api.accounts import router as accounts_router
+from api.g3 import router as g3_router
 from api.operations import router as operations_router
 from api.backtest import router as backtest_router
 from api.cls_news import router as cls_news_router
@@ -55,7 +56,6 @@ from api.market_board import router as market_board_router
 from api.sectors import router as sectors_router
 from api.stocks import router as stocks_router
 from api.system_config import router as system_router
-from api.trading import router as trading_router
 from api.watchlist import router as watchlist_router
 from services.operations.health import read_snapshot
 from utils.paths import runtime_path
@@ -74,9 +74,9 @@ app.include_router(market_overview_router, prefix='/api')
 app.include_router(sectors_router, prefix='/api')
 app.include_router(stocks_router, prefix='/api')
 app.include_router(system_router, prefix='/api', tags=['system'])
-app.include_router(trading_router, prefix='/api')
 app.include_router(watchlist_router, prefix='/api')
 app.include_router(accounts_router, prefix='/api')
+app.include_router(g3_router, prefix='/api')
 
 
 @app.get('/api/health/runtime')
@@ -114,6 +114,11 @@ def health_check():
 _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/accounts/overview',
     '/api/accounts/{account_id}',
+    '/api/g3/desk',
+    '/api/g3/review/daily',
+    '/api/g3/review/shadow',
+    '/api/g3/review/signal-quality',
+    '/api/g3/settings',
     '/api/backtest/progress/{task_id}',
     '/api/backtest/result/{task_id}',
     '/api/backtest/strategies',
@@ -249,29 +254,6 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/system/task-status/{task_name}',
     '/api/system/tdx-gateway/diagnostics',
     '/api/system/trade-calendar/status',
-    '/api/trading/gen2/backtest',
-    '/api/trading/gen2/backtest/update-task/{task_id}',
-    '/api/trading/gen2/daily-trade-ticket',
-    '/api/trading/gen2/daily-trade-ticket/execution',
-    '/api/trading/gen2/factors/registry',
-    '/api/trading/gen2/factors/test',
-    '/api/trading/gen2/lab',
-    '/api/trading/gen2/live',
-    '/api/trading/gen2/mainline-hotspots',
-    '/api/trading/gen2/mainline-hotspots/update-task/{task_id}',
-    '/api/trading/gen2/official-rebuild/update-task/{task_id}',
-    '/api/trading/gen2/open-signals',
-    '/api/trading/gen2/risk-cool-shadow',
-    '/api/trading/gen2/risk-cool-shadow/update-task/{task_id}',
-    '/api/trading/gen2/selection-pool',
-    '/api/trading/gen2/shadow-monitor/status',
-    '/api/trading/gen2/strategy-refresh/status',
-    '/api/trading/gen2/timing',
-    '/api/trading/gen2/workflow/lineage',
-    '/api/trading/gen2/workflow/status',
-    '/api/trading/v4/manual-holdings/entry-backtest',
-    '/api/trading/v4/manual-holdings/monitor/status',
-    '/api/trading/v4/market-gate',
     '/api/watchlist/',
     '/api/watchlist/check/{code}',
     '/api/watchlist/groups',
@@ -284,6 +266,8 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
 # gen3_state_alpha 其余文件（broker_state.json 等）保持只读。
 _SCOPED_WRITE_PREVIEW_PATHS = frozenset({
     '/api/accounts/sync',
+    '/api/g3/watchlist/upsert',
+    '/api/g3/watchlist/sync-ths',
     '/api/gen3-state-alpha/holding-t/watchlist-upsert',
     '/api/gen3-state-alpha/holding-t/watchlist-sync-ths',
 })

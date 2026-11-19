@@ -20,7 +20,6 @@ from api.market_overview import router as market_router
 from api.sectors import router as sectors_router
 from api.stocks import router as stocks_router
 from api.system_config import router as system_router
-from api.trading import router as trading_router
 from api.watchlist import router as watchlist_router
 from services.operations.health import build_live_snapshot, read_snapshot
 from utils.logger import get_logger
@@ -64,8 +63,6 @@ async def lifespan(app: FastAPI):
             maybe_run_startup_reference_sync,
         )
         from api.gen3_state_alpha import init_gen3_state_alpha_monitor_scheduler_from_config
-        from api.trading import (
-            init_gen2_strategy_refresh_scheduler_from_config,
             init_gen2_shadow_buy_monitor_scheduler_from_config,
             init_v4_manual_holdings_monitor_scheduler_from_config,
         )
@@ -79,8 +76,6 @@ async def lifespan(app: FastAPI):
         logger.info(f"V4 manual holdings monitor scheduler initialized: {v4_monitor_status}")
         gen2_shadow_monitor_status = init_gen2_shadow_buy_monitor_scheduler_from_config()
         logger.info(f"G2 shadow buy monitor scheduler initialized: {gen2_shadow_monitor_status}")
-        gen2_strategy_refresh_status = init_gen2_strategy_refresh_scheduler_from_config()
-        logger.info(f"G2 strategy refresh scheduler initialized: {gen2_strategy_refresh_status}")
         gen3_state_alpha_monitor_status = init_gen3_state_alpha_monitor_scheduler_from_config()
         logger.info(f"G3 State Alpha monitor scheduler initialized: {gen3_state_alpha_monitor_status}")
         if maybe_run_startup_reference_sync():
@@ -152,7 +147,6 @@ app.include_router(stocks_router, prefix="/api")
 app.include_router(market_board_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(sectors_router, prefix="/api")
-app.include_router(trading_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(system_router, prefix="/api", tags=["system"])
 app.include_router(kline_check_router, prefix="/api", tags=["kline-check"])
