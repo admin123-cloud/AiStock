@@ -135,12 +135,19 @@ def trading_days_gate(client: Any, days: Sequence[str]) -> List[str]:
 
 def fetch_missing_keys(client: Any, table: str, days: Sequence[str],
                        ch_win: Sequence[str]) -> List[Tuple[str, str]]:
-    """以日线股票全集为基准，反连接出 (day, code) 缺失清单（只读；窗口参数化）。"""
+    """以日线股票 + 冻结 11 大主要指数为基准，反连接出 (day, code) 缺失清单（只读；窗口参数化）。"""
+    frozen_idx_sql = (
+        "'000001.SH','000016.SH','000300.SH','000680.SH','000688.SH',"
+        "'000852.SH','000905.SH','399001.SZ','399006.SZ','399106.SZ','899050.BJ'"
+    )
     rows = _ro(client, f"""
 WITH u AS (SELECT trade_date AS td, code FROM stock.kline_daily
       WHERE trade_date IN ({_sql_str(days)})
-        AND NOT (match(code,'^(000|880)[0-9]{{3}}\\\\.SH$') OR match(code,'^399[0-9]{{3}}\\\\.SZ$')
-                 OR match(code,'^899[0-9]{{3}}\\\\.BJ$'))),
+        AND (
+            NOT (match(code,'^(000|880)[0-9]{{3}}\\\\.SH$') OR match(code,'^399[0-9]{{3}}\\\\.SZ$')
+                 OR match(code,'^899[0-9]{{3}}\\\\.BJ$'))
+            OR code IN ({frozen_idx_sql})
+        )),
 m AS (SELECT DISTINCT toDate(datetime) AS td, code FROM {table}
       WHERE datetime >= toDateTime('{ch_win[0]}', 'Asia/Shanghai') AND datetime < toDateTime('{ch_win[1]}', 'Asia/Shanghai'))
 SELECT u.td AS td, u.code AS code FROM u LEFT ANTI JOIN m ON u.code=m.code AND u.td=m.td

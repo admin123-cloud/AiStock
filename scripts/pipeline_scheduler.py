@@ -163,6 +163,8 @@ STAGE_AGG = "minute_agg"
 STAGE_ORDER = (STAGE_DAILY, STAGE_MINUTE, STAGE_AGG)
 # Owner 2026-11-13 裁决：Stage1 日线主源切本地 lday；官网包保留为自动回退源
 STAGE_DAILY_FALLBACK = "daily_kline_pkg_fallback"
+# 2026-11-19：Stage2 5m 主源切本地 tdx_lc5；东财保留为自动回退源
+STAGE_MINUTE_FALLBACK = "minute_collect_east_fallback"
 
 # daily_kline_pipeline 失败重试 3 次（首次 + 3 次重试 = 最多 4 次尝试）
 DAILY_RETRY_MAX = 3
@@ -292,8 +294,18 @@ def build_stage_commands(run_date: date, out_dir: Path) -> dict[str, dict[str, A
             "report_path": daily_pkg_report,
         },
         STAGE_MINUTE: {
+            # 2026-11-19 起：主源=容器内本地 /d/TDX/vipdoc lc5（覆盖全市场 A 股 + 11 大主要指数）
             "cmd": [
                 sys.executable, str(SCRIPTS_DIR / "minute_collect_auto.py"),
+                "--source", "tdx_lc5",
+                "--mode", "formal-write", "--out-dir", str(out_dir),
+            ],
+            "report_glob": "report_formal-write_*.json",
+        },
+        STAGE_MINUTE_FALLBACK: {
+            "cmd": [
+                sys.executable, str(SCRIPTS_DIR / "minute_collect_auto.py"),
+                "--source", "east",
                 "--mode", "formal-write", "--out-dir", str(out_dir),
             ],
             "report_glob": "report_formal-write_*.json",
@@ -636,15 +648,29 @@ def run_postclose_pipelines(
             failed_stage = stage
             reason = "daily_local_lday_and_pkg_both_failed"
             break
-        failed_stage = stage
         if stage == STAGE_MINUTE:
-            if rc == MINUTE_COLLECT_ALARM_RC:
-                alarm = True
+            # 2026-11-19：本地 tdx_lc5 主源失败 → 自动回退东财并置 alarm
+            log.error(
+                "[minute] 本地 tdx_lc5 源失败（rc=%s），自动回退东财源并置 alarm", rc)
+            fallback = _run_stage(
+                STAGE_MINUTE_FALLBACK, specs[STAGE_MINUTE_FALLBACK],
+                out_dir=out_dir, run_date=resolved_date, runner=run,
+                retry_max=0, retry_interval_sec=retry_interval_sec,
+                sleep_fn=sleep, log=log,
+            )
+            stage_results[STAGE_MINUTE_FALLBACK] = fallback
+            alarm = True
+            if fallback["rc"] in MINUTE_COLLECT_CONTINUE_RC:
+                reason = "minute_local_tdx_lc5_failed_east_fallback_ok"
+                continue
+            failed_stage = stage
+            if fallback["rc"] == MINUTE_COLLECT_ALARM_RC:
                 reason = "minute_collect_alarm_rc3_source_unreachable"
             else:
-                reason = f"minute_collect_unexpected_rc_fail_closed: {rc}"
-        else:
-            reason = f"minute_agg_failed_rc: {rc}"
+                reason = f"minute_collect_unexpected_rc_fail_closed: {fallback['rc']}"
+            break
+        failed_stage = stage
+        reason = f"minute_agg_failed_rc: {rc}"
         break
 
     status = "success" if failed_stage is None else "failure"

@@ -247,24 +247,50 @@ def test_minute_collect_rc1_continues(tmp_path):
 
 
 def test_minute_collect_rc3_alarm_terminates(tmp_path):
-    runner = FakeRunner([_ok(), {"returncode": 3, "stdout": "unreachable", "stderr": ""}])
+    runner = FakeRunner([
+        _ok(),
+        {"returncode": 3, "stdout": "unreachable", "stderr": ""},
+        {"returncode": 3, "stdout": "fallback_unreachable", "stderr": ""},
+    ])
     report, _ = _run(tmp_path, runner)
     assert report["status"] == "failure"
     assert report["failed_stage"] == ps.STAGE_MINUTE
     assert report["alarm"] is True
     assert "rc3" in report["reason"]
-    assert len(runner.calls) == 2  # 聚合未执行
+    assert len(runner.calls) == 3  # daily + minute(tdx_lc5) + minute_fallback(east)；聚合未执行
+    assert ps.STAGE_MINUTE_FALLBACK in report["stages"]
     assert ps.STAGE_AGG not in report["stages"]
 
 
 def test_minute_collect_unexpected_rc_fails_closed(tmp_path):
-    runner = FakeRunner([_ok(), {"returncode": 4, "stdout": "degraded", "stderr": ""}])
+    runner = FakeRunner([
+        _ok(),
+        {"returncode": 4, "stdout": "degraded", "stderr": ""},
+        {"returncode": 4, "stdout": "fallback_degraded", "stderr": ""},
+    ])
     report, _ = _run(tmp_path, runner)
     assert report["status"] == "failure"
     assert report["failed_stage"] == ps.STAGE_MINUTE
-    assert report["alarm"] is False
+    assert report["alarm"] is True
     assert "unexpected_rc_fail_closed" in report["reason"]
-    assert len(runner.calls) == 2
+    assert len(runner.calls) == 3
+    assert ps.STAGE_AGG not in report["stages"]
+
+
+def test_minute_collect_tdx_lc5_fallback_to_east_succeeds(tmp_path):
+    runner = FakeRunner([
+        _ok(),
+        {"returncode": 3, "stdout": "local_lc5_failed", "stderr": ""},
+        _ok(),
+        _ok(),
+    ])
+    report, _ = _run(tmp_path, runner)
+    assert report["status"] == "success"
+    assert report["alarm"] is True
+    assert report["reason"] == "minute_local_tdx_lc5_failed_east_fallback_ok"
+    assert ps.STAGE_MINUTE_FALLBACK in report["stages"]
+    assert ps.STAGE_AGG in report["stages"]
+    assert len(runner.calls) == 4
 
 
 def test_agg_failure_marks_failure(tmp_path):

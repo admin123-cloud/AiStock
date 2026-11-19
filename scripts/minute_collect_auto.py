@@ -132,15 +132,15 @@ PYTDX_PAGE = 800
 
 
 def resolve_source(choice: str) -> str:
-    """auto → 按评估结论（R22=east）；显式 east/B/A 原样返回。
+    """auto → 按评估结论（R22=east）；显式 east/B/A/tdx_lc5 原样返回。
 
     sina 评估未过（48 槽不齐/股非整百/amount 噪声）不提供为生产选项。
     """
     if choice == "auto":
         return EVALUATED_SOURCE
-    if choice in ("east", "B", "A"):
+    if choice in ("east", "B", "A", "tdx_lc5"):
         return choice
-    raise SystemExit(f"非法 --source: {choice!r}（可选 auto/east/B/A；"
+    raise SystemExit(f"非法 --source: {choice!r}（可选 auto/east/B/A/tdx_lc5；"
                      f"sina 评估未过不入生产，证据 {EVALUATION_EVIDENCE}）")
 
 
@@ -347,18 +347,39 @@ def gate_bars(code: str, day: str, bars: Sequence[dict], daily: Optional[Sequenc
                           lot, None, created_at) for b, lot in zip(bars, lots)]
         return rows, None
 
-    if source == "east":
+    if source in ("east", "tdx_lc5"):
+        from utils.tdx_lc5 import is_index_code
         for b in bars:
             v = float(b["volume"])
             if abs(v - round(v)) > 1e-9:
                 return [], f"volume 非整数（手）: {v} 疑似单位错配（fail-closed）"
             lots.append(int(round(v)))
             if b.get("amount") is None:
-                return [], "单位门禁: east 行缺 amount（源契约破坏，fail-closed）"
+                return [], f"单位门禁: {source} 行缺 amount（源契约破坏，fail-closed）"
         ns_bars = [SimpleNamespace(open=b["open"], high=b["high"], low=b["low"],
                                    close=b["close"], volume=lot, amount=float(b["amount"]))
                    for b, lot in zip(bars, lots)]
-        reason = mb.envelope_gate(ns_bars, daily)
+        if source == "tdx_lc5" and is_index_code(code):
+            # TDX 指数 .lc5 的 vol 字段存 amount/100（百元），而非日线手数；
+            # 指数走 tdx_lc5 时核验 OHLC 包络 + 成交额合计（≤3%）。
+            d_o, d_h, d_l, d_c, _d_v, d_a = daily
+            m_o, m_c = ns_bars[0].open, ns_bars[-1].close
+            m_h = max(b.high for b in ns_bars)
+            m_l = min(b.low for b in ns_bars)
+            m_a = sum(b.amount for b in ns_bars)
+            if (
+                rel_diff(m_o, d_o) > PRICE_TOL
+                or rel_diff(m_h, d_h) > PRICE_TOL
+                or rel_diff(m_l, d_l) > PRICE_TOL
+                or rel_diff(m_c, d_c) > PRICE_TOL
+            ):
+                reason = f"指数 OHLC 超差 m=({m_o},{m_h},{m_l},{m_c}) vs d=({d_o},{d_h},{d_l},{d_c})"
+            elif d_a > 0 and rel_diff(m_a, d_a) > VOL_AMT_TOL:
+                reason = f"指数成交额超差 m={m_a:.2f} vs d={d_a:.2f}"
+            else:
+                reason = None
+        else:
+            reason = mb.envelope_gate(ns_bars, daily)
         if reason:
             return [], f"日线仲裁: {reason}"
         rows = [build_row(code, b["datetime"], b["open"], b["high"], b["low"], b["close"],
@@ -406,6 +427,33 @@ def fetch_day_bars(code: str, day: str, *, source: str,
                  "volume": float(b["volume"]),
                  "amount": (None if b.get("amount") is None else float(b["amount"]))}
                 for b in bars if b["datetime"].strftime("%Y-%m-%d") == day]
+
+    if source == "tdx_lc5":
+        import os
+        from utils.tdx_lc5 import parse_lc5_file
+
+        num, suffix = code.split(".")
+        mkt = suffix.lower()
+        if mkt not in ("sh", "sz", "bj"):
+            raise RuntimeError(f"未知市场后缀: {code}")
+        vipdoc_env = os.environ.get("AISTOCK_TDX_VIPDOC_ROOT")
+        vipdoc = Path(vipdoc_env) if vipdoc_env else (
+            Path("/d/TDX/vipdoc") if Path("/d/TDX/vipdoc").is_dir() else Path("D:/TDX/vipdoc")
+        )
+        lc5_path = vipdoc / mkt / "fzline" / f"{mkt}{num}.lc5"
+        if not lc5_path.is_file():
+            return []
+        by_day = parse_lc5_file(lc5_path, code, [day])
+        recs = by_day.get(day) or []
+        return [{
+            "datetime": r.datetime,
+            "open": float(r.open),
+            "high": float(r.high),
+            "low": float(r.low),
+            "close": float(r.close),
+            "volume": float(r.volume),
+            "amount": float(r.amount),
+        } for r in recs]
 
     api = pytdx_api or _connect_pytdx()
     num, suffix = code.split(".")
@@ -801,9 +849,9 @@ def run(argv: Optional[Sequence[str]] = None, *,
         description="5 分钟数据自动采集器（R21；写路径复用 R16 窗口治理，只写 stock.kline_minute_5）")
     parser.add_argument("--mode", choices=("audit", "dry-run", "formal-write"), required=True)
     parser.add_argument("--trade-date", default=None, help="YYYY-MM-DD；缺省=自动解析最近缺口日")
-    parser.add_argument("--source", choices=("auto", "east", "B", "A"), default="auto",
-                        help="auto=按评估结论（R22=east 东财带额）；B=腾讯无额兜底；"
-                             "sina 评估未过不可选")
+    parser.add_argument("--source", choices=("auto", "east", "B", "A", "tdx_lc5"), default="auto",
+                        help="auto=按评估结论（R22=east 东财带额）；tdx_lc5=本地通达信 .lc5；"
+                             "B=腾讯无额兜底；sina 评估未过不可选")
     parser.add_argument("--max-days", type=int, default=DEFAULT_MAX_DAYS,
                         help=f"自动解析深度上限（默认 {DEFAULT_MAX_DAYS}，公共 API 深度边界）")
     parser.add_argument("--fetch-workers", type=int, default=2)

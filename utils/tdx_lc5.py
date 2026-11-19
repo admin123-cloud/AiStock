@@ -83,9 +83,13 @@ assert len(STANDARD_5M_BAR_ENDS) == 48
 
 
 def is_index_code(code: str) -> bool:
-    """TDX 指数代码：000xxx.SH（上证指数族）与 399xxx.SZ（深证指数族）。"""
+    """TDX 指数代码：000xxx.SH（上证指数族）、399xxx.SZ（深证指数族）与 899xxx.BJ（北证指数族）。"""
     code = str(code or "").strip().upper()
-    return code.startswith("000") and code.endswith(".SH") or code.startswith("399") and code.endswith(".SZ")
+    return (
+        (code.startswith("000") and code.endswith(".SH"))
+        or (code.startswith("399") and code.endswith(".SZ"))
+        or (code.startswith("899") and code.endswith(".BJ"))
+    )
 
 
 def shares_to_lots(code: str, shares: int) -> int:
