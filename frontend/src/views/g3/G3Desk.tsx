@@ -101,7 +101,7 @@ export default function G3Desk() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6">
       <PageHeader
         title="G3 做T实战台"
-        description={`交易日 ${data?.trade_date || '—'} · 三周期判定 × 1m快/5m慢双车道 × 双账号真实持仓`}
+        subtitle={`交易日 ${data?.trade_date || '—'} · 三周期判定 × 1m快/5m慢双车道 × 双账号真实持仓`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button outline onClick={handleSyncThs} disabled={syncing}>

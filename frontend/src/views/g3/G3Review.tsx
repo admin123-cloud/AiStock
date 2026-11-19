@@ -47,7 +47,7 @@ export default function G3Review() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6">
       <PageHeader
         title="G3 复盘与影子台账"
-        description="整合日终复盘、成交对账教练、R40 影子做T与每日信号质量日报"
+        subtitle="整合日终复盘、成交对账教练、R40 影子做T与每日信号质量日报"
         actions={
           <Button onClick={() => void load()} disabled={loading}>
             {loading ? '刷新中…' : '刷新'}
@@ -62,13 +62,13 @@ export default function G3Review() {
       )}
 
       <div className="flex flex-wrap gap-2">
-        <Button outline={tab !== 'daily'} onClick={() => setTab('daily')}>
+        <Button color={tab === 'daily' ? 'blue' : 'zinc'} onClick={() => setTab('daily')}>
           日终复盘与对账 ({daily?.daily_reviews?.length ?? 0})
         </Button>
-        <Button outline={tab !== 'shadow'} onClick={() => setTab('shadow')}>
+        <Button color={tab === 'shadow' ? 'blue' : 'zinc'} onClick={() => setTab('shadow')}>
           R40 影子做T台账 ({shadow?.daily_records?.length ?? 0})
         </Button>
-        <Button outline={tab !== 'quality'} onClick={() => setTab('quality')}>
+        <Button color={tab === 'quality' ? 'blue' : 'zinc'} onClick={() => setTab('quality')}>
           信号质量日报 ({quality?.reports?.length ?? 0})
         </Button>
       </div>

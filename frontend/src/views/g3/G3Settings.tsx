@@ -31,7 +31,7 @@ export default function G3Settings() {
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6">
       <PageHeader
         title="G3 策略合约与风控"
-        description="生效中的做T规则（R34 / R53 / R54 / R56）、L2 风控闸门与保留的有效策略合约"
+        subtitle="生效中的做T规则（R34 / R53 / R54 / R56）、L2 风控闸门与保留的有效策略合约"
         actions={
           <Button onClick={() => void load()} disabled={loading}>
             {loading ? '刷新中…' : '刷新'}
