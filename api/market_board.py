@@ -189,7 +189,7 @@ def _format_sector_heat_rows(df) -> List[Dict[str, Any]]:
         sector_type = str(getattr(row, "sector_type", "") or "")
         results.append({
             "code": code,
-            "name": str(getattr(row, "name", code) or code),
+            "name": _fix_mojibake(str(getattr(row, "name", code) or code)),
             "type": _SECTOR_TYPE_TO_BOARD_TYPE.get(sector_type, "concept"),
             "change_pct": _to_float(getattr(row, "change_pct", None)),
             "price": _to_float(getattr(row, "avg_price", None)),
@@ -1133,6 +1133,22 @@ def _dim_turnover_percentile_intraday(snapshot_ts: str, cal_30d: List[str]) -> D
 # ──────────────────────────────────────────────
 # 工具
 # ──────────────────────────────────────────────
+
+
+def _fix_mojibake(text: str) -> str:
+    """修复历史入库时 UTF-8 被误按 latin1 解码导致的中文乱码（如 sw_industry 板块名）。"""
+    if not text:
+        return text
+    if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        return text
+    if any("\u0080" <= ch <= "\u00ff" for ch in text):
+        try:
+            fixed = text.encode("latin1").decode("utf-8")
+            if any("\u4e00" <= ch <= "\u9fff" for ch in fixed):
+                return fixed
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return text
 
 
 def _to_float(value: Any, default: Optional[float] = None) -> Optional[float]:
