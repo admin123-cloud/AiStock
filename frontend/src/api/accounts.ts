@@ -51,6 +51,9 @@ export interface BrokerAccountDetail {
   rc: number
   generated_at?: string | null
   source_file?: string | null
+  fallback_from_legacy?: boolean
+  last_sync_status?: string | null
+  last_sync_reason?: string | null
   credentials_touched: boolean
   funds_read_ok: boolean
   funds: BrokerFunds | null
