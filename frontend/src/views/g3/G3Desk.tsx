@@ -940,6 +940,139 @@ export default function G3Desk() {
         </div>
       )}
 
+      {/* 0. Phase 1A：大盘择时总闸门 × R51 仓位水位 */}
+      {data?.market_regime_gate && (() => {
+        const gate = data.market_regime_gate
+        const wl = gate.r51_waterline
+        const src = gate.sources
+        const srcBadge = (st?: string) =>
+          st === 'fresh' ? 'emerald' as const : st === 'stale' ? 'amber' as const : 'zinc' as const
+        const srcText = (st?: string) =>
+          st === 'fresh' ? '新鲜' : st === 'stale' ? '已过期' : '缺失'
+        const actualPct = wl.actual_pct ?? 0
+        const capPct = wl.target_cap_pct
+        return (
+          <Card className={gate.regime === 'defensive' ? 'border-red-500/40 bg-red-950/10' : gate.regime === 'offensive' ? 'border-emerald-500/40 bg-emerald-950/10' : 'border-amber-500/40 bg-amber-950/10'}>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-white">大盘择时总闸门 × R51 仓位水位</span>
+                <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
+                <Badge color={gate.allow_new_mainwave ? 'emerald' : 'red'}>
+                  {gate.allow_new_mainwave ? '允许主升开新仓' : '严禁开新主升仓'}
+                </Badge>
+                <Badge color="blue">今日水位上限 ≤ {capPct.toFixed(0)}%</Badge>
+              </div>
+              <span className="font-mono text-xs text-zinc-400">
+                参考日 {gate.ref_date}
+              </span>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-12">
+              <div className="lg:col-span-7 space-y-2">
+                <div className="text-sm font-medium text-zinc-100">{gate.action_summary}</div>
+                <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/60 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-zinc-300">
+                      双账号实际水位：<b className="font-mono text-white">{wl.actual_pct != null ? `${wl.actual_pct.toFixed(1)}%` : '—'}</b>
+                      <span className="mx-2 text-zinc-600">/</span>
+                      R51 目标上限：<b className="font-mono text-blue-300">{capPct.toFixed(0)}%</b>
+                    </span>
+                    <Badge color={wl.status === 'overweight' ? 'red' : wl.status === 'underweight' ? 'blue' : wl.status === 'aligned' ? 'emerald' : 'zinc'}>
+                      {wl.status === 'overweight' ? '超配需降水位' : wl.status === 'underweight' ? '低配可分步加' : wl.status === 'aligned' ? '水位匹配' : '待同步资产'}
+                    </Badge>
+                  </div>
+                  <div className="relative mt-2 h-2.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                    <div
+                      className={wl.status === 'overweight' ? 'h-full bg-red-500/80' : 'h-full bg-blue-500/80'}
+                      style={{ width: `${Math.min(100, Math.max(0, actualPct))}%` }}
+                    />
+                    <div
+                      className="absolute top-0 bottom-0 w-0.5 bg-amber-300"
+                      style={{ left: `${Math.min(100, Math.max(0, capPct))}%` }}
+                      title={`R51 目标上限 ${capPct}%`}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-zinc-300">{wl.advice}</p>
+                </div>
+                {gate.reasons.length > 0 && (
+                  <ul className="space-y-1 text-xs text-zinc-400">
+                    {gate.reasons.map((r, idx) => (
+                      <li key={idx}>• {r}</li>
+                    ))}
+                  </ul>
+                )}
+                {gate.warnings.length > 0 && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-200">
+                    {gate.warnings.join('；')}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 lg:col-span-5">
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">1. 市场情绪</span>
+                    <Badge color={srcBadge(src.market_mood.status)}>{srcText(src.market_mood.status)}</Badge>
+                  </div>
+                  <div className="mt-1.5 font-mono text-sm font-semibold text-white">
+                    {src.market_mood.mood_label || '—'}
+                  </div>
+                  <div className="mt-1 text-[11px] text-zinc-400">
+                    涨停 {src.market_mood.limit_up_count ?? '—'} / 跌停 {src.market_mood.limit_down_count ?? '—'} · 封板{' '}
+                    {src.market_mood.seal_rate != null ? `${(src.market_mood.seal_rate * 100).toFixed(1)}%` : '—'}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">2. 上证 R51 周期</span>
+                    <Badge color={srcBadge(src.index_r51.status)}>{srcText(src.index_r51.status)}</Badge>
+                  </div>
+                  <div className="mt-1.5 font-mono text-sm font-semibold text-white">
+                    {src.index_r51.confirmed_regime === 'up' ? '上升确认' : src.index_r51.confirmed_regime === 'down' ? '下降确认' : src.index_r51.confirmed_regime === 'sideways' ? '横盘确认' : '—'}
+                  </div>
+                  <div className="mt-1 text-[11px] text-zinc-400">
+                    60日动量 {src.index_r51.index_mom60 != null ? fmtSignedPct(src.index_r51.index_mom60 * 100) : '—'} · 连续 {src.index_r51.streak_days ?? 0} 日
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">3. 市场宽度</span>
+                    <Badge color={srcBadge(src.breadth.status)}>{srcText(src.breadth.status)}</Badge>
+                  </div>
+                  <div className="mt-1.5 font-mono text-sm font-semibold text-white">
+                    {src.breadth.above_ma20_pct != null ? `${fmtNum(src.breadth.above_ma20_pct)}%` : '—'}
+                  </div>
+                  <div className="mt-1 text-[11px] text-zinc-400">
+                    站上 MA20 占比 · level={src.breadth.level || 'unknown'}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">
+                      4. {src.turnover_forecast.mode === 'daily_actual' ? '全市场成交额' : '成交额预测'}
+                    </span>
+                    <Badge color={srcBadge(src.turnover_forecast.status)}>{srcText(src.turnover_forecast.status)}</Badge>
+                  </div>
+                  <div className="mt-1.5 font-mono text-sm font-semibold text-white">
+                    {src.turnover_forecast.forecast_trillion != null ? `${src.turnover_forecast.forecast_trillion.toFixed(2)} 万亿` : '—'}
+                  </div>
+                  <div className="mt-1 text-[11px] text-zinc-400">
+                    {src.turnover_forecast.vol_ratio_5d != null
+                      ? `5日量比 ${src.turnover_forecast.vol_ratio_5d.toFixed(2)}x · ${src.turnover_forecast.trade_date || ''}`
+                      : src.turnover_forecast.trade_date
+                        ? `日期 ${src.turnover_forecast.trade_date}`
+                        : '无成交额记录'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )
+      })()}
+
       {/* 1. 今日做T总纲 + 核心作战指标 */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Card className="lg:col-span-7">

@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from services.g3.attribution import build_four_dim_attribution
 from utils.common.paths import runtime_path
 
 router = APIRouter()
@@ -100,3 +101,17 @@ def get_g3_signal_quality(limit: int = Query(10, ge=1, le=30)) -> dict[str, Any]
             "summary": _read_json_safe(json_pair),
         })
     return {"reports": reports}
+
+
+@router.get("/review/attribution")
+def get_g3_review_attribution(
+    days: int = Query(30, ge=7, le=180, description="归因回溯自然日数"),
+    benchmark: str = Query("000300.SH", description="基准指数代码，默认沪深300"),
+) -> dict[str, Any]:
+    """Phase 1B：四维收益归因看板（大盘 Beta / 选股 Alpha / 做T 净增厚 / 执行偏离诊断）。"""
+    bench_name = "上证指数" if benchmark == "000001.SH" else ("沪深300" if benchmark == "000300.SH" else benchmark)
+    return build_four_dim_attribution(
+        days=days,
+        benchmark_code=benchmark,
+        benchmark_name=bench_name,
+    )

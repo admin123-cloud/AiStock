@@ -111,6 +111,8 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/g3/desk',
     '/api/g3/desk/notify/config',
     '/api/g3/mainwave',
+    '/api/g3/market-gate',
+    '/api/g3/review/attribution',
     '/api/g3/review/daily',
     '/api/g3/review/shadow',
     '/api/g3/review/signal-quality',

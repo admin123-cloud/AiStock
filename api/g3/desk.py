@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.broker.broker_accounts import get_accounts_overview
+from services.g3.market_regime_gate import evaluate_market_regime_gate
 from services.trading.holding_t_watchlist import (
     read_watchlist,
     sync_watchlist_from_ths,
@@ -231,6 +232,13 @@ def get_g3_desk(
     bridge_info = overview.get("bridge") or {}
     avail_cash = merged_funds.get("available_cash")
 
+    # Phase 1A：大盘择时总闸门 × R51 仓位水位联动
+    market_regime_gate = evaluate_market_regime_gate(
+        breadth=effective_regime_doc.get("breadth"),
+        total_assets=merged_funds.get("total_assets"),
+        total_market_value=merged_funds.get("market_value"),
+    )
+
     cards: list[dict[str, Any]] = []
     eligible_count = 0
     ineligible_count = 0
@@ -356,6 +364,7 @@ def get_g3_desk(
             "generated_at": plan_generated_at,
         },
         "market_directive": market_directive,
+        "market_regime_gate": market_regime_gate,
         "intraday_summary": {
             **exec_summary,
             "eligible_count": eligible_count,
@@ -551,3 +560,21 @@ def post_g3_watchlist_sync_ths() -> dict[str, Any]:
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/market-gate")
+def get_g3_market_gate() -> dict[str, Any]:
+    """Phase 1A 独立接口：大盘择时总闸门 × R51 仓位水位对标（供盘前简报 Agent 与前端消费）。"""
+    now_bj = datetime.now(BJ_TZ)
+    today_str = now_bj.strftime("%Y-%m-%d")
+    tracker_dir = runtime_path("t_tracker")
+    _, regime_doc = _latest_dated_json(tracker_dir, "regime_")
+    saved_plan = load_saved_daily_plan(today_str)
+    breadth = (saved_plan.get("breadth") if saved_plan else None) or regime_doc.get("breadth")
+    overview, _ = _collect_live_holdings()
+    merged_funds = overview.get("merged") or {}
+    return evaluate_market_regime_gate(
+        breadth=breadth,
+        total_assets=merged_funds.get("total_assets"),
+        total_market_value=merged_funds.get("market_value"),
+    )

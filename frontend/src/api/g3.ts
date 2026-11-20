@@ -188,6 +188,128 @@ export interface G3NotifyConfig {
   updated_at?: string | null
 }
 
+export interface G3MarketRegimeGate {
+  schema: string
+  as_of: string
+  ref_date: string
+  regime: 'offensive' | 'balanced' | 'defensive' | string
+  regime_label: string
+  tone: 'emerald' | 'amber' | 'red' | string
+  degraded: boolean
+  target_position_cap: number
+  target_position_cap_pct: number
+  allow_new_mainwave: boolean
+  action_summary: string
+  reasons: string[]
+  warnings: string[]
+  r51_waterline: {
+    actual_ratio?: number | null
+    actual_pct?: number | null
+    target_cap_ratio: number
+    target_cap_pct: number
+    gap_ratio?: number | null
+    gap_pct?: number | null
+    max_step_pct: number
+    status: 'overweight' | 'underweight' | 'aligned' | 'unknown' | string
+    advice: string
+  }
+  sources: {
+    breadth: {
+      status: 'fresh' | 'stale' | 'missing' | string
+      date?: string | null
+      level?: string
+      above_ma20_pct?: number | null
+    }
+    market_mood: {
+      status: 'fresh' | 'stale' | 'missing' | string
+      date?: string | null
+      mode?: string
+      limit_up_count?: number
+      limit_down_count?: number
+      broke_count?: number
+      seal_rate?: number | null
+      max_streak?: number
+      mood_state?: string
+      mood_label?: string
+    }
+    index_r51: {
+      status: 'fresh' | 'stale' | 'missing' | string
+      date?: string | null
+      code?: string
+      raw_regime?: string
+      confirmed_regime?: string
+      streak_days?: number
+      close?: number | null
+      index_mom60?: number | null
+    }
+    turnover_forecast: {
+      status: 'fresh' | 'stale' | 'missing' | string
+      mode?: 'intraday_forecast' | 'daily_actual' | 'intraday_forecast_stale' | 'missing' | string
+      trade_date?: string | null
+      forecast_trillion?: number | null
+      ma5_trillion?: number | null
+      vol_ratio_5d?: number | null
+      note?: string | null
+    }
+  }
+}
+
+export interface G3AttributionDailyRow {
+  date: string
+  total_assets?: number | null
+  market_value?: number | null
+  position_pct?: number | null
+  benchmark_ret_pct?: number | null
+  total_pnl?: number | null
+  beta_pnl?: number | null
+  alpha_pnl?: number | null
+  t_trade_pnl: number
+  t_round_trips: number
+  discipline_score?: number | null
+  violations_total: number
+  unmatched_drafts: number
+  estimated_stop_drag: number
+  has_account_snapshot: boolean
+  has_ledger: boolean
+}
+
+export interface G3AttributionResponse {
+  schema: string
+  as_of: string
+  window_days: number
+  from_date: string
+  to_date: string
+  benchmark: {
+    code: string
+    name: string
+    matched_days: number
+  }
+  summary: {
+    coverage_days: number
+    account_snapshot_days: number
+    ledger_days: number
+    total_pnl?: number | null
+    beta_pnl?: number | null
+    alpha_pnl?: number | null
+    t_trade_pnl: number
+    t_round_trips: number
+    avg_discipline_score?: number | null
+    violations_total: number
+    unmatched_drafts_total: number
+    estimated_stop_drag_pnl: number
+  }
+  friction_events: Array<{
+    date: string
+    type: string
+    code: string
+    label: string
+    held_shares?: number | null
+    estimated_drag_pnl?: number | null
+  }>
+  daily_rows: G3AttributionDailyRow[]
+  data_notes: string[]
+}
+
 export interface G3DeskResponse {
   as_of: string
   today?: string
@@ -199,6 +321,7 @@ export interface G3DeskResponse {
     generated_at?: string | null
   }
   market_directive?: G3MarketDirective
+  market_regime_gate?: G3MarketRegimeGate
   intraday_summary?: {
     execution_count: number
     open_exposure_codes: number
@@ -326,6 +449,10 @@ export const syncG3WatchlistFromThs = () => request.post<unknown, Record<string,
 export const upsertG3Watchlist = (payload: { add?: Array<string | { code: string; qty?: number }>; remove?: string[] }) =>
   request.post<unknown, Record<string, unknown>>('/g3/watchlist/upsert', payload)
 
+export const getG3MarketGate = () =>
+  request.get<unknown, G3MarketRegimeGate>('/g3/market-gate')
+export const getG3ReviewAttribution = (days = 30, benchmark = '000300.SH') =>
+  request.get<unknown, G3AttributionResponse>('/g3/review/attribution', { params: { days, benchmark } })
 export const getG3DailyReview = (limit = 10) =>
   request.get<unknown, G3DailyReviewResponse>('/g3/review/daily', { params: { limit } })
 export const getG3ShadowReview = (limit = 20) =>
