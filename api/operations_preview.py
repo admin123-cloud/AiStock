@@ -68,7 +68,11 @@ app.include_router(g3_router, prefix='/api')
 
 @app.get('/api/health/runtime')
 def health():
-    return {**read_snapshot(runtime_path('health','latest.json')), 'preview':True}
+    try:
+        from services.ops.data_center_service import get_runtime_health_summary
+        return get_runtime_health_summary()
+    except Exception:
+        return {**read_snapshot(runtime_path('health', 'latest.json')), 'preview': True}
 
 
 @app.get('/api/health/check')
@@ -134,9 +138,6 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/sectors/',
     '/api/sectors/stats',
     '/api/sectors/stock-count',
-    '/api/sectors/sync-kline/status',
-    '/api/sectors/sync/status',
-    '/api/sectors/update-all-kline-stats/status',
     '/api/sectors/{code}',
     '/api/sectors/{code}/historical-stats',
     '/api/sectors/{code}/history',

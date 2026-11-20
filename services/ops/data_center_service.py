@@ -505,3 +505,51 @@ def inspect_kline(raw_code: str, days: int = 10) -> dict[str, Any]:
         "periods": period_summaries,
         "daily_rows": rows,
     }
+
+
+def get_runtime_health_summary() -> dict[str, Any]:
+    """基于 ClickHouse 物理表生成实时运行健康摘要（供顶部 RuntimeBanner 与 /api/health/runtime 使用）。"""
+    now_bj = datetime.now(BJ_TZ)
+    matrix = get_health_matrix(days=3, force_refresh=False)
+    datasets = matrix.get("datasets", [])
+    core_datasets = [d for d in datasets if d.get("id") != "sector_daily"]
+
+    latest_date = ""
+    components: list[dict[str, Any]] = []
+    all_ok = True
+    for ds in core_datasets:
+        cells = [c for c in ds.get("cells", []) if c.get("status") not in ("pending", "optional")]
+        if not cells:
+            continue
+        last_cell = cells[-1]
+        if not latest_date and last_cell.get("date"):
+            latest_date = str(last_cell["date"])
+        st = last_cell.get("status")
+        healthy = st == "ok"
+        if not healthy:
+            all_ok = False
+        components.append({
+            "name": ds.get("id", ""),
+            "label": ds.get("label", ds.get("id", "")),
+            "status": "healthy" if healthy else ("degraded" if st == "warn" else "blocked"),
+            "date": last_cell.get("date"),
+            "coverage": last_cell.get("coverage"),
+            "actual": last_cell.get("actual"),
+            "expected": last_cell.get("expected"),
+        })
+
+    return {
+        "schema_version": 2,
+        "source": "live_clickhouse",
+        "generated_at": now_bj.isoformat(timespec="seconds"),
+        "latest_trade_date": latest_date,
+        "publisher_status": "healthy",
+        "status": "healthy" if all_ok else "degraded",
+        "strategy_actionable": all_ok,
+        "summary_text": (
+            f"最新交易日 {latest_date}，股票与核心指数全周期覆盖完整"
+            if all_ok and latest_date
+            else f"最新交易日 {latest_date or '未知'} 存在部分数据缺口，详见数据健康与监控"
+        ),
+        "components": components,
+    }

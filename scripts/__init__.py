@@ -32,13 +32,9 @@ _LEGACY_MODULE_MAP: dict[str, str] = {
     "ths_desktop_bridge": "host_bridges.ths_desktop_bridge",
     "ths_read_account_task": "host_bridges.ths_read_account_task",
     # services.engines (原被 API 反向依赖的引擎模块)
-    "backtest_engine": "services.engines.backtest_engine",
     "collect_intraday_snapshots": "services.engines.collect_intraday_snapshots",
-    "gen2_update_live_shadow": "services.engines.gen2_update_live_shadow",
     "generate_emotion_cycle": "services.engines.generate_emotion_cycle",
-    "generate_sector_kline": "services.engines.generate_sector_kline",
     "repair_kline_daily_metrics": "services.engines.repair_kline_daily_metrics",
-    "sync_sectors_and_mapping": "services.engines.sync_sectors_and_mapping",
     "sync_trade_calendar": "services.engines.sync_trade_calendar",
 }
 
