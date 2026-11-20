@@ -2013,9 +2013,10 @@ def serve(
         else:
             logger.warning("[tdx_sector_sync] 同步失败 rc=%s stderr=%s", res.get("rc"), (res.get("stderr") or "")[-300:])
 
+    from apscheduler.triggers.cron import CronTrigger as _TdxSectorCronTrigger
     scheduler.add_job(
         _run_tdx_sector_sync_job,
-        trigger=CronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=16, minute=45, timezone=BJ_TZ),
+        trigger=_TdxSectorCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=16, minute=45, timezone=BJ_TZ),
         id="tdx_sector_sync",
         name="通达信标准板块主档/成分股/日线盘后增量同步（工作日 16:45）",
         max_instances=1,
