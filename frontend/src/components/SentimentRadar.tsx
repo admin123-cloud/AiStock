@@ -28,6 +28,7 @@ interface DimensionItem {
 interface RadarData {
   date: string
   as_of: string
+  data_mode?: 'intraday' | 'postclose'
   composite_score: number
   dimensions: Record<string, DimensionItem>
   weights: Record<string, number>
@@ -111,11 +112,12 @@ export default function SentimentRadar({ data, loading }: SentimentRadarProps) {
       },
       radar: {
         indicator: indicators,
-        radius: '65%',
-        center: ['50%', '55%'],
+        radius: '56%',
+        center: ['50%', '52%'],
+        axisNameGap: 8,
         axisName: {
           color: '#a0aec0',
-          fontSize: 11
+          fontSize: 10
         },
         splitArea: {
           areaStyle: {
@@ -133,10 +135,12 @@ export default function SentimentRadar({ data, loading }: SentimentRadarProps) {
           type: 'radar',
           data: [
             {
-              values: Object.values(data.dimensions).map(d => d.value),
-              name: '今日情绪',
+              value: values,
+              name: data.data_mode === 'intraday' ? '盘中情绪' : '盘后情绪',
+              symbol: 'circle',
+              symbolSize: 5,
               areaStyle: {
-                color: 'rgba(84, 112, 198, 0.3)'
+                color: 'rgba(84, 112, 198, 0.35)'
               },
               lineStyle: {
                 color: '#5470c6',
@@ -195,7 +199,10 @@ export default function SentimentRadar({ data, loading }: SentimentRadarProps) {
       <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
         <div className="mb-1 text-xs text-zinc-400">综合评分</div>
         <ScoreGauge score={data.composite_score} />
-        <div className="mt-1 text-right text-xs text-zinc-500">数据日期: {data.date}</div>
+        <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
+          <span>{data.data_mode === 'intraday' ? '盘中采集快照' : '盘后正式表'}</span>
+          <span>数据日期: {data.date}</span>
+        </div>
       </div>
 
       {/* 雷达图 */}
