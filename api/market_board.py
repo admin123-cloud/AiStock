@@ -205,43 +205,37 @@ def _format_sector_heat_rows(df) -> List[Dict[str, Any]]:
 
 
 def _sector_members_cte(board_type: Optional[str]) -> Optional[Tuple[str, List[Any]]]:
-    """构建板块成员关系 CTE：行业优先走干净的申万二级主档 sectors+sector_stocks，概念走 source_sector_stocks(tdx_sector)。"""
-    if board_type == "industry" and clickhouse_table_exists("sectors") and clickhouse_table_exists("sector_stocks"):
+    """统一读取通达信标准板块主档 sectors + sector_stocks（行业=145标准行业，概念=269通达信概念）。"""
+    if not (clickhouse_table_exists("sectors") and clickhouse_table_exists("sector_stocks")):
+        return None
+    if board_type in ("industry", "concept", "style", "region"):
         return (
             """
             SELECT DISTINCT
-                'sw_industry' AS sector_type,
+                s.type AS sector_type,
                 s.code AS sector_code,
-                replaceOne(s.name, 'SW2', '') AS sector_name,
+                s.name AS sector_name,
                 ss.stock_code AS canonical_code
-            FROM sectors s
-            JOIN sector_stocks ss ON ss.sector_code = s.code
-            WHERE s.type = 'industry'
+            FROM sectors s FINAL
+            JOIN sector_stocks ss FINAL ON ss.sector_code = s.code
+            WHERE s.type = ?
               AND ss.stock_code != ''
             """,
-            [],
+            [board_type],
         )
-    if not clickhouse_table_exists("source_sector_stocks"):
-        return None
-    if board_type == "concept":
-        return (
-            """
-            SELECT DISTINCT sector_type, sector_code, sector_name, canonical_code
-            FROM source_sector_stocks
-            WHERE sector_type = 'tdx_sector'
-              AND canonical_code != ''
-            """,
-            [],
-        )
-    where_clause, extra_params = _sector_type_filter(board_type)
     return (
-        f"""
-        SELECT DISTINCT sector_type, sector_code, sector_name, canonical_code
-        FROM source_sector_stocks ss
-        WHERE {where_clause}
-          AND canonical_code != ''
+        """
+        SELECT DISTINCT
+            s.type AS sector_type,
+            s.code AS sector_code,
+            s.name AS sector_name,
+            ss.stock_code AS canonical_code
+        FROM sectors s FINAL
+        JOIN sector_stocks ss FINAL ON ss.sector_code = s.code
+        WHERE s.type IN ('industry', 'concept')
+          AND ss.stock_code != ''
         """,
-        extra_params,
+        [],
     )
 
 
@@ -278,7 +272,7 @@ def _query_sector_heat_from_intraday(
             WHERE q.snapshot_ts = ?
               AND q.price > 0
             GROUP BY m.sector_type, m.sector_code
-            HAVING total_count >= 5
+            HAVING total_count >= 3
             ORDER BY {order_col}
             LIMIT ?
             """,
@@ -297,13 +291,48 @@ def _query_sector_heat_from_formal(
     sort_by: str,
     top_n: int,
 ) -> List[Dict[str, Any]]:
+    """盘后优先直查通达信官方板块指数日线 sector_kline_daily（含涨跌家数），不可用时回退成分股聚合。"""
     if not clickhouse_available():
         return []
+    order_col = "up_count DESC, change_pct DESC" if sort_by == "up_count" else "change_pct DESC, up_count DESC"
+    if clickhouse_table_exists("sector_kline_daily") and clickhouse_table_exists("sectors"):
+        type_cond = "s.type = ?" if board_type in ("industry", "concept", "style", "region") else "s.type IN ('industry', 'concept')"
+        type_params: List[Any] = [board_type] if board_type in ("industry", "concept", "style", "region") else []
+        try:
+            df = clickhouse_query_df(
+                f"""
+                SELECT
+                    s.type AS sector_type,
+                    k.code AS sector_code,
+                    s.name AS name,
+                    round(coalesce(k.change_pct, 0), 2) AS change_pct,
+                    round(coalesce(k.close, 0), 2) AS avg_price,
+                    coalesce(k.total_volume, 0) AS volume,
+                    coalesce(k.total_amount, 0) AS amount,
+                    k.rise_count AS up_count,
+                    k.fall_count AS down_count,
+                    k.stock_count AS total_count
+                FROM sector_kline_daily k FINAL
+                JOIN sectors s FINAL ON s.code = k.code
+                WHERE k.trade_date = ?
+                  AND {type_cond}
+                  AND k.close > 0
+                ORDER BY {order_col}
+                LIMIT ?
+                """,
+                [trade_date] + type_params + [int(top_n)],
+                raw=True,
+            )
+            rows = _format_sector_heat_rows(df)
+            if rows:
+                return rows
+        except Exception as exc:
+            logger.warning(f"_query_sector_heat_from_formal(sector_kline_daily) failed: {exc}")
+
     cte = _sector_members_cte(board_type)
     if cte is None:
         return []
     members_sql, extra_params = cte
-    order_col = "up_count DESC, change_pct DESC" if sort_by == "up_count" else "change_pct DESC, up_count DESC"
     try:
         df = clickhouse_query_df(
             f"""
@@ -324,7 +353,7 @@ def _query_sector_heat_from_formal(
             WHERE k.trade_date = ?
               AND k.open > 0
             GROUP BY m.sector_type, m.sector_code
-            HAVING total_count >= 5
+            HAVING total_count >= 3
             ORDER BY {order_col}
             LIMIT ?
             """,
@@ -338,9 +367,9 @@ def _query_sector_heat_from_formal(
 
 
 def _sector_stock_members_sql(code: str) -> Tuple[str, List[Any]]:
-    if code.startswith("qmt:") and clickhouse_table_exists("sector_stocks"):
+    if clickhouse_table_exists("sector_stocks"):
         return (
-            "SELECT DISTINCT stock_code AS canonical_code FROM sector_stocks WHERE sector_code = ? AND stock_code != ''",
+            "SELECT DISTINCT stock_code AS canonical_code FROM sector_stocks FINAL WHERE sector_code = ? AND stock_code != ''",
             [code],
         )
     return (

@@ -106,9 +106,9 @@ export default function DataCenter() {
           hint={`核心维护指数 ${s?.core_indices ?? 11} 只`}
         />
         <StatCard
-          label="SW2 行业板块"
+          label="通达信标准行业"
           value={s ? `${s.industry_sectors} 个` : '—'}
-          hint="ClickHouse 直连零假警报"
+          hint="通达信板块统一体系"
         />
       </div>
 

@@ -1997,6 +1997,32 @@ def serve(
         MARKET_MOOD_FINALIZE_WINDOW_END.strftime("%H:%M"),
         mood_next.isoformat() if mood_next else "pending",
     )
+    # 每日盘后 16:45 增量同步通达信标准板块主档、成分股与近 10 日板块指数日线
+    def _run_tdx_sector_sync_job() -> None:
+        now_bj = cn_now()
+        try:
+            if not _default_is_trading_day(now_bj.date()):
+                return
+        except Exception as exc:
+            logger.warning("[tdx_sector_sync] 交易日判断失败: %s", exc)
+            return
+        cmd = [sys.executable, "-m", "pipelines.jobs.tdx_sector_sync", "--formal-write", "--recent-days", "10"]
+        res = _run_subprocess(cmd, timeout=600)
+        if res.get("rc") == 0:
+            logger.info("[tdx_sector_sync] 盘后板块增量同步完成")
+        else:
+            logger.warning("[tdx_sector_sync] 同步失败 rc=%s stderr=%s", res.get("rc"), (res.get("stderr") or "")[-300:])
+
+    scheduler.add_job(
+        _run_tdx_sector_sync_job,
+        trigger=CronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=16, minute=45, timezone=BJ_TZ),
+        id="tdx_sector_sync",
+        name="通达信标准板块主档/成分股/日线盘后增量同步（工作日 16:45）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：tdx_sector_sync cron=[day_of_week=%s 16:45 Asia/Shanghai]（通达信标准板块盘后同步）", CRON_DAY_OF_WEEK)
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown
     except (KeyboardInterrupt, SystemExit):

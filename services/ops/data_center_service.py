@@ -268,11 +268,13 @@ def get_health_matrix(days: int = 10, *, force_refresh: bool = False) -> dict[st
     )
     idx_daily_map = {str(r[0]): int(r[1]) for r in idx_daily_rows}
 
-    # 6. 行业板块日线（可选派生）
+    # 6. 通达信标准板块日线（行业/概念/风格/地区）
+    total_sectors_rows = _query("SELECT count() FROM stock.sectors FINAL")
+    expected_sectors = int(total_sectors_rows[0][0]) if total_sectors_rows and int(total_sectors_rows[0][0]) > 0 else 604
     sec_rows = _query(
         f"""
         SELECT toString(trade_date) AS d, uniqExact(code) AS cnt
-        FROM stock.sector_kline_daily
+        FROM stock.sector_kline_daily FINAL
         WHERE trade_date >= toDate('{start_date}')
         GROUP BY d
         """
@@ -366,19 +368,9 @@ def get_health_matrix(days: int = 10, *, force_refresh: bool = False) -> dict[st
         },
         {
             "id": "sector_daily",
-            "label": "行业板块日线 (可选派生)",
-            "note": "SW2 131 行业派生表（未启用盘后自动派生时显示未生成）",
-            "cells": [
-                {
-                    "date": d,
-                    "actual": sec_map.get(d, 0),
-                    "expected": 131,
-                    "coverage": round((sec_map.get(d, 0) / 131) * 100.0, 1) if sec_map.get(d, 0) > 0 else 0.0,
-                    "missing": max(0, 131 - sec_map.get(d, 0)),
-                    "status": "ok" if sec_map.get(d, 0) >= 125 else "optional",
-                }
-                for d in dates
-            ],
+            "label": f"通达信板块日线 ({expected_sectors}个)",
+            "note": f"通达信标准行业/概念/风格/地区板块官方指数日线（分母 = {expected_sectors} 个）",
+            "cells": _build_cells(sec_map, lambda _: expected_sectors, ok_threshold=0.95),
         },
     ]
 
