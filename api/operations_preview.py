@@ -165,6 +165,9 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
 # R45 scoped-write 白名单：唯一放行的写端点（其余 POST/PUT/DELETE 一律封禁）。
 _SCOPED_WRITE_PREVIEW_PATHS = frozenset({
     '/api/accounts/sync',
+    '/api/g3/desk/execution',
+    '/api/g3/desk/execution/delete',
+    '/api/g3/desk/generate-plan',
     '/api/g3/watchlist/sync-ths',
     '/api/g3/watchlist/upsert',
 })

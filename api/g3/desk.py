@@ -450,14 +450,18 @@ def post_g3_execution(req: TExecutionRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.delete("/desk/execution/{exec_id}")
-def delete_g3_execution(exec_id: str) -> dict[str, Any]:
-    """撤销一条当日误记的做T成交记录。"""
+class TExecutionDeleteRequest(BaseModel):
+    exec_id: str
+
+
+@router.post("/desk/execution/delete")
+def post_g3_execution_delete(req: TExecutionDeleteRequest) -> dict[str, Any]:
+    """撤销一条当日误记的做T成交记录（scoped-write POST）。"""
     today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
-    ok = delete_t_execution(today_str, exec_id)
+    ok = delete_t_execution(today_str, req.exec_id)
     if not ok:
         raise HTTPException(status_code=404, detail="未找到该成交记录")
-    return {"status": "ok", "deleted_id": exec_id}
+    return {"status": "ok", "deleted_id": req.exec_id}
 
 
 class WatchlistUpsertRequest(BaseModel):

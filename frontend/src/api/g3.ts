@@ -284,7 +284,7 @@ export const recordG3TExecution = (payload: {
   note?: string
 }) => request.post<unknown, { status: string; entry: G3TExecution }>('/g3/desk/execution', payload)
 export const deleteG3TExecution = (execId: string) =>
-  request.delete<unknown, { status: string; deleted_id: string }>(`/g3/desk/execution/${execId}`)
+  request.post<unknown, { status: string; deleted_id: string }>('/g3/desk/execution/delete', { exec_id: execId })
 export const syncG3WatchlistFromThs = () => request.post<unknown, Record<string, unknown>>('/g3/watchlist/sync-ths')
 export const upsertG3Watchlist = (payload: { add?: Array<string | { code: string; qty?: number }>; remove?: string[] }) =>
   request.post<unknown, Record<string, unknown>>('/g3/watchlist/upsert', payload)

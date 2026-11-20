@@ -281,7 +281,7 @@ def resolve_effective_params(
             sell_hi = round(max(sell_lo * 1.018, (ma10 or anchor * 1.038)), 2)
             buy_hi = round(min(ref_px * 0.985, anchor * 0.98), 2)
             buy_lo = round(min(buy_hi * 0.975, eff_lo20), 2)
-            dyn_stop = round(min(eff_lo20, ref_px) * 0.985, 2)
+            dyn_stop = round(min(buy_lo, eff_lo20, ref_px) * 0.985, 2)
             eff = {
                 **params,
                 "source": "dynamic-down-rebased" if stale else "dynamic-down-derived",
