@@ -253,11 +253,24 @@ class ILinkBridge:
                 "【AiStock × Antigravity 微信指令】\n"
                 "1. 规划 / 做T ：查今日大盘定调与各票买卖带/现价/RSI\n"
                 "2. 持仓 / 敞口 ：查双账号资金、持仓浮盈与今日T仓敞口\n"
-                "3. 刷新 ：立即重算今日做T规划\n"
-                "4. 记卖 002015 12.20 1000 ：登记一笔卖出T成交\n"
-                "5. 记买 002015 11.90 1000 ：登记一笔买入T成交\n"
-                "6. 其它任意问题/开发指令：自动转交本地 Antigravity Agent 处理并回复！"
+                "3. 任务 / 状态 ：查当前运行中的调度任务与服务健康\n"
+                "4. 刷新 ：立即重算今日做T规划\n"
+                "5. 记卖 002015 12.20 1000 ：登记一笔卖出T成交\n"
+                "6. 记买 002015 11.90 1000 ：登记一笔买入T成交\n"
+                "7. 其它任意问题/开发指令：自动转交本地 Antigravity Agent 处理并回复！"
             )
+
+        if low in ("任务", "运行任务", "状态", "tasks"):
+            res = self._call_aistock("GET", "/operations/tasks")
+            tasks = res.get("tasks") or res.get("items") or (res if isinstance(res, list) else [])
+            running = [t for t in tasks if str(t.get("status") or "").lower() in ("running", "active", "enabled")]
+            lines = [f"⚙️ AiStock 运行任务概览（共 {len(tasks)} 项，活跃 {len(running)} 项）"]
+            for t in (running or tasks)[:12]:
+                name = t.get("name") or t.get("title") or t.get("task_id") or "—"
+                st = t.get("status") or "—"
+                sched = t.get("schedule") or t.get("cron") or t.get("last_run_at") or ""
+                lines.append(f"• {name} [{st}] {sched}".strip())
+            return "\n".join(lines)
 
         if low in ("规划", "做t", "计划", "plan"):
             d = self._call_aistock("GET", "/g3/desk?refresh_quotes=true")
@@ -326,18 +339,43 @@ class ILinkBridge:
 
     # ── Antigravity Python SDK 指令转发 ────────────────────────
 
+    def _resolve_gemini_api_key(self) -> str:
+        """优先读环境变量 GEMINI_API_KEY，其次读 runtime/weixin_ilink/antigravity.env（热读取，无需重启）。"""
+        key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+        if key:
+            return key
+        env_file = self.state_dir / "antigravity.env"
+        if env_file.is_file():
+            for line in env_file.read_text(encoding="utf-8-sig", errors="ignore").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() in ("GEMINI_API_KEY", "GOOGLE_API_KEY") and v.strip():
+                    return v.strip().strip('"').strip("'")
+        return ""
+
     def _run_antigravity_prompt(self, prompt: str) -> str:
         """通过官方 google-antigravity Python SDK 执行自然语言指令并返回精炼回复。"""
         if not self._check_sdk():
             return (
                 "⚠️ 本地尚未安装 google-antigravity Python SDK，暂无法执行自由开发指令。\n"
-                "当前快捷交易指令完全可用：回复「规划」「持仓」「刷新」「帮助」即可。"
+                "当前快捷交易指令完全可用：回复「规划」「持仓」「任务」「刷新」「帮助」即可。"
+            )
+        api_key = self._resolve_gemini_api_key()
+        if not api_key:
+            return (
+                "⚠️ 尚未配置 GEMINI_API_KEY（Antigravity Python SDK 需要 API Key 才能独立运行）。\n"
+                "配置方法：在 F:\\Aistock\\runtime\\weixin_ilink\\antigravity.env 写入一行 GEMINI_API_KEY=你的Key（热生效，无需重启）。\n"
+                "当前快捷指令可直接用：规划 / 持仓 / 任务 / 刷新 / 帮助"
             )
 
         async def _invoke() -> str:
             from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
 
             cfg = LocalAgentConfig(
+                api_key=api_key,
+                workspaces=[self.workspace],
                 system_instructions=(
                     f"你是运行在用户本机工作区 {self.workspace} 的 Antigravity 交易与工程助手。"
                     "请使用简体中文精炼回复，适合在微信手机端阅读（尽量控制在 600 字以内，重点用条列展示）。"
