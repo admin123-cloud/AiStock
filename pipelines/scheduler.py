@@ -5,9 +5,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+ROOT = str(Path(__file__).resolve().parents[1])
+# 防止 python pipelines/scheduler.py 时 sys.path[0]=/app/pipelines 遮蔽顶层 scheduler 包
+sys.path[:] = [p for p in sys.path if p != SCRIPT_DIR]
+if ROOT in sys.path:
+    sys.path.remove(ROOT)
+sys.path.insert(0, ROOT)
 
 from scripts.pipeline_scheduler import main  # noqa: E402
 

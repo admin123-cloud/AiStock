@@ -98,7 +98,7 @@ services:
       - F:/Aistock/storage/logs:/aistock/logs
       # 通达信本地盘后下载产物只读挂载
       - D:/TDX:/d/TDX:ro
-    command: ["python", "pipelines/scheduler.py"]
+    command: ["python", "-m", "pipelines.scheduler"]
 
   postclose-watcher:
     image: aistock-worker:${AISTOCK_MAIN_VERSION:?必须经部署脚本注入}
