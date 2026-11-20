@@ -33,7 +33,7 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 CLOSE_DEADLINE = time(15, 5)
 CLEAN_DEADLINE = time(16, 15)
-PUBLISH_DEADLINE = time(16, 40)
+PUBLISH_DEADLINE = time(16, 45)
 
 POST_CLOSE_OK_STATUSES = frozenset({
     "INTRADAY_CLOSED",
@@ -194,9 +194,10 @@ def inspect_postclose_deadlines(
     generation = int(state.get("generation") or 0)
     last_cert = str(state.get("last_certified_date") or "")
 
-    # 4) 处于非当日旧文件且已过 15:05
+    # 4) 处于非当日旧文件：盘后管道 16:15 才启动，仅在交易日超过 16:45 仍未切到当日时才告警，
+    # 避免 15:06（尚未到盘后补数窗口）或非交易日误报。
     if state_date != today_iso:
-        if wall >= CLOSE_DEADLINE:
+        if is_trading_day and wall >= PUBLISH_DEADLINE:
             _emit(
                 target_date=today_iso,
                 plan_id=plan_id,

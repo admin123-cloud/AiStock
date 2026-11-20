@@ -302,6 +302,107 @@ def load_sanitized_smtp_config(
     return transport_cfg, summary
 
 
+_REASON_GUIDES: dict[str, tuple[str, str, str, list[str]]] = {
+    "stale_control_state_previous_day": (
+        "盘后数据未按时更新",
+        "截至 16:45，{target_date} 的盘后正式数据仍未完成入库认证，当前最新认证数据仍停留在 {last_cert}。",
+        "首页收盘数据、个股最新日线/分钟线、板块日线及 G3 主升选股暂无法切到今日收盘，将继续展示昨日数据。",
+        [
+            "检查本机通达信客户端 16:05 盘后下载是否正常完成；",
+            "打开任务中心（http://127.0.0.1:3000/operations/tasks）查看「盘后正式日线与分钟线管道」状态与报错；",
+            "查看容器日志：docker logs --tail 80 aistock-pipeline-runner。",
+        ],
+    ),
+    "publish_deadline_1640_missed": (
+        "盘后认证发布超时",
+        "截至 16:45，{target_date} 盘后管道已启动但尚未完成最终认证发布。",
+        "今日盘后数据可能只写入了一半或卡在门禁校验环节，前台暂不切换至今日数据。",
+        [
+            "打开任务中心（http://127.0.0.1:3000/operations/tasks）查看卡在日线、5分钟采集还是分钟聚合阶段；",
+            "打开数据健康与监控（http://127.0.0.1:3000/data/health）核对今日覆盖率。",
+        ],
+    ),
+    "clean_deadline_1615_missed": (
+        "盘后数据清理/准备超时",
+        "{target_date} 盘后管道在 16:15 节点仍未进入入库阶段。",
+        "今日盘后补数进度落后，可能导致收盘数据延迟发布。",
+        [
+            "查看任务中心与 aistock-pipeline-runner 日志，确认盘后任务是否卡住或等待锁超时。",
+        ],
+    ),
+    "runner_heartbeat_missing": (
+        "调度守护进程心跳缺失",
+        "未能检测到盘后调度控制面的心跳文件（heartbeat.json 缺失）。",
+        "盘中/盘后定时采集与自动补数可能未在运行。",
+        [
+            "检查 Docker 容器 aistock-pipeline-runner 是否正常运行（docker ps）；",
+            "若容器异常退出，检查日志后重启容器。",
+        ],
+    ),
+    "runner_heartbeat_stale": (
+        "调度守护进程心跳超时",
+        "盘后调度心跳已超过 5 分钟未更新，疑似调度进程卡死或已停止。",
+        "盘中 5 分钟快照采集、盘后自动补数及板块同步可能已中断。",
+        [
+            "检查容器 aistock-pipeline-runner 状态与最近日志；",
+            "必要时重启 aistock-pipeline-runner 容器恢复调度。",
+        ],
+    ),
+    "control_root_missing": (
+        "盘后控制目录缺失",
+        "未能访问控制面目录 postclose_control（路径缺失或容器挂载异常）。",
+        "盘后认证状态无法读写，首页可能显示未认证提示。",
+        [
+            "检查宿主机 F:\\Aistock\\runtime\\postclose_control 目录及 Docker 卷挂载。",
+        ],
+    ),
+    "control_state_corrupt": (
+        "盘后状态文件损坏",
+        "控制面 state.json 内容无法解析或结构异常。",
+        "首页认证状态与盘后巡检无法识别当前最新数据日。",
+        [
+            "检查 F:\\Aistock\\runtime\\postclose_control\\state.json 文件内容，修复或重新触发盘后认证。",
+        ],
+    ),
+}
+
+
+def format_human_alert_email(safe: Mapping[str, Any]) -> tuple[str, str]:
+    """将脱敏告警载荷渲染为清晰易懂的中文标题与正文（同时保留底部脱敏技术明细）。"""
+    sev = str(safe.get("severity") or "critical").upper()
+    target_date = str(safe.get("target_date") or "未知日期")
+    last_cert = str(safe.get("last_certified_date") or "未知")
+    reason_code = str(safe.get("reason_code") or "unknown")
+    created_at = str(safe.get("created_at") or "")[:19].replace("T", " ")
+
+    guide = _REASON_GUIDES.get(reason_code)
+    if guide is not None:
+        short_title, what_tpl, impact, actions = guide
+        what = what_tpl.format(target_date=target_date, last_cert=last_cert)
+    else:
+        short_title = f"盘后治理异常 ({reason_code})"
+        what = f"{target_date} 盘后治理巡检触发异常（阶段：{safe.get('phase')}，代码：{reason_code}）。"
+        impact = "当日盘后正式数据可能未完整发布，前台暂维持上一认证日数据。"
+        actions = [
+            "打开任务中心（http://127.0.0.1:3000/operations/tasks）查看实时运行状态；",
+            "打开数据健康与监控（http://127.0.0.1:3000/data/health）核对今日数据完整性。",
+        ]
+
+    subject = f"[AiStock][{sev}] {target_date} {short_title}"
+    action_lines = [f"  {idx}. {item}" for idx, item in enumerate(actions, start=1)]
+    body_lines = [
+        f"【告警级别】{sev}（触发时间：{created_at or '未知'}）",
+        f"【发生了什么】{what}",
+        f"【当前影响】{impact}",
+        "【建议你怎么做】",
+        *action_lines,
+        "",
+        "──────── 技术明细（脱敏白名单，无账户/凭据信息）────────",
+        json.dumps(safe, ensure_ascii=False, sort_keys=True, indent=2),
+    ]
+    return subject, "\n".join(body_lines)
+
+
 class SmtpAlertMailer:
     """S11 脱敏 SMTP 邮件发送器（复用 utils.email_transport，绝不泄露秘密）。"""
 
@@ -313,16 +414,7 @@ class SmtpAlertMailer:
         import socket
 
         safe = sanitize_alert_event(payload)
-        subject = (
-            f"[AiStock][{safe['severity'].upper()}][{safe['phase']}] "
-            f"{safe['target_date']} {safe['reason_code']}"
-        )
-        body_lines = [
-            "AiStock 盘后治理脱敏告警（严格白名单字段，无账户/凭据信息）：",
-            "",
-            json.dumps(safe, ensure_ascii=False, sort_keys=True, indent=2),
-        ]
-        body = "\n".join(body_lines)
+        subject, body = format_human_alert_email(safe)
         send_fn = self._sender_fn
         if send_fn is None:
             from utils.email_transport import send_plain_email
