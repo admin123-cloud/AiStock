@@ -72,6 +72,64 @@ def recovery_summary(root: Path, *, now: datetime | None = None) -> dict:
     return {}
 
 
+def _compact_ingestion(raw: dict) -> dict:
+    """裁剪盘中采集快照，仅保留任务中心渲染所需的摘要与泳道字段，避免 800KB+ 响应膨胀。"""
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    lanes = []
+    for lane in raw.get('lanes') or []:
+        if not isinstance(lane, dict):
+            continue
+        res = lane.get('result') if isinstance(lane.get('result'), dict) else {}
+        errors = res.get('errors') if isinstance(res.get('errors'), dict) else {}
+        compact_res = {}
+        if 'universe_count' in res:
+            compact_res['universe_count'] = res['universe_count']
+        if 'source_fresh_300s' in res:
+            compact_res['source_fresh_300s'] = res['source_fresh_300s']
+        if errors:
+            compact_res['errors'] = dict(list(errors.items())[:5])
+        lanes.append({
+            'name': lane.get('name'),
+            'status': lane.get('status'),
+            'duration_seconds': lane.get('duration_seconds'),
+            'running_seconds': lane.get('running_seconds'),
+            'error': lane.get('error'),
+            **({'result': compact_res} if compact_res else {}),
+        })
+    return {
+        'generated_at': raw.get('generated_at'),
+        'phase': raw.get('phase'),
+        'snapshot_target_seconds': raw.get('snapshot_target_seconds'),
+        'lanes': lanes,
+    }
+
+
+def _compact_weekly_audit(raw: dict) -> dict:
+    """裁剪周度审计快照，去掉逐日逐股明细，仅保留顶层指标与数据集摘要。"""
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    datasets = []
+    for ds in raw.get('datasets') or []:
+        if not isinstance(ds, dict):
+            continue
+        datasets.append({
+            'id': ds.get('id'),
+            'label': ds.get('label'),
+            'checked_days': ds.get('checked_days'),
+            'problem_days': ds.get('problem_days'),
+            'missing_keys': ds.get('missing_keys'),
+        })
+    return {
+        'status': raw.get('status'),
+        'publisher_status': raw.get('publisher_status'),
+        'generated_at': raw.get('generated_at'),
+        'days': raw.get('days'),
+        'problem_days': raw.get('problem_days'),
+        'datasets': datasets,
+    }
+
+
 def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live: dict | None = None) -> dict:
     health = read_snapshot(root / 'health/latest.json', now=now)
     host = read_snapshot(root / 'operations/host_tasks.json', now=now)
@@ -113,7 +171,7 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
         rows = [x for x in rows if x['executor'] != 'API']
         rows.extend({**x, 'status': x['status'] if api_fresh else 'unknown',
                      'source_stale': not api_fresh} for x in api_state['tasks'])
-    ingestion = read_json(root / 'operations/intraday_ingestion.json')
+    ingestion = _compact_ingestion(read_json(root / 'operations/intraday_ingestion.json'))
     for row in rows:
         if row['name'] == 'AiStock QMT xtquant Intraday Collector':
             row['ingestion'] = ingestion
@@ -129,7 +187,7 @@ def task_board(root: Path, manifest: dict, *, now: datetime | None = None, live:
     rows, groups = describe_tasks(rows, read_json(root/'operations/task_transitions.json'))
     return {'generated_at': datetime.now(BUSINESS_TZ).isoformat(timespec='seconds'), 'tasks': rows, 'groups':groups,
             'historical_recovery': recovery_summary(root, now=now),
-            'weekly_audit':read_snapshot(root/'operations/weekly_audit/latest.json',now=now,max_age_seconds=8*86400),
+            'weekly_audit': _compact_weekly_audit(read_snapshot(root/'operations/weekly_audit/latest.json',now=now,max_age_seconds=8*86400)),
             'source_metrics': read_source_metrics(root/'operations/source_metrics.sqlite',now=now),
             'api_runtime': {**api_state, 'fresh': api_fresh, 'source': 'live' if live is not None else 'snapshot',
                             'ready': bool(api_fresh and api_state.get('ready'))},

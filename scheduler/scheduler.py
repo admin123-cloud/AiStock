@@ -23,7 +23,6 @@ class TaskScheduler:
             "realtime_indices": self._build_task("RealtimeIndicesTask"),
             "intraday_sentiment": self._build_task("IntradaySentimentTask"),
             "minute_kline": self._build_task("MinuteKlineTask"),
-            "cls_news": self._build_task("ClsNewsTask"),
         }
         self._running = False
         self._scheduled_tasks = []
@@ -72,8 +71,6 @@ class TaskScheduler:
             self._scheduled_tasks.append(asyncio.create_task(self._schedule_intraday_sentiment()))
         if jobs.get("minute_kline", {}).get("enabled", False) and self.tasks.get("minute_kline"):
             self._scheduled_tasks.append(asyncio.create_task(self._schedule_minute_kline()))
-        if jobs.get("cls_news", {}).get("enabled", False) and self.tasks.get("cls_news"):
-            self._scheduled_tasks.append(asyncio.create_task(self._schedule_cls_news()))
 
     def _build_task(self, class_name: str):
         cls = getattr(task_exports, class_name, None)
@@ -187,23 +184,6 @@ class TaskScheduler:
                 break
             except Exception as exc:
                 logger.error(f"minute_kline schedule failed: {exc}")
-                await asyncio.sleep(interval)
-
-    async def _schedule_cls_news(self):
-        job_config = SCHEDULER_CONFIG["jobs"]["cls_news"]
-        interval = int(job_config.get("interval", 3600))
-        pages = int(job_config.get("pages", 1))
-        rn = int(job_config.get("rn", 50))
-        logger.info(f"Scheduled cls_news every {interval}s")
-        while self._running:
-            try:
-                await asyncio.to_thread(self.tasks["cls_news"].execute, pages=pages, rn=rn)
-                await asyncio.sleep(interval)
-            except asyncio.CancelledError:
-                logger.info("cls_news task cancelled")
-                break
-            except Exception as exc:
-                logger.error(f"cls_news schedule failed: {exc}")
                 await asyncio.sleep(interval)
 
     def register_signal_handlers(self):

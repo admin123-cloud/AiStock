@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.accounts import router as accounts_router
-from api.cls_news import router as cls_news_router
 from api.data_center import router as data_center_router
 from api.market_board import router as market_board_router
 from api.market_overview import router as market_router
@@ -71,22 +70,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Core data maintenance scheduler did not start: {exc}")
 
-    try:
-        from scheduler.cls_news_scheduler import start_cls_news_scheduler
-
-        cls_news_scheduler_status = start_cls_news_scheduler()
-        logger.info(f"CLS news scheduler initialized: {cls_news_scheduler_status}")
-    except Exception as exc:
-        logger.warning(f"CLS news scheduler did not start: {exc}")
-
     yield
-
-    try:
-        from scheduler.cls_news_scheduler import stop_cls_news_scheduler
-
-        stop_cls_news_scheduler()
-    except Exception as exc:
-        logger.warning(f"CLS news scheduler did not stop cleanly: {exc}")
 
     logger.info("AiStock Backend API stopped")
 
@@ -135,7 +119,6 @@ app.include_router(market_router, prefix="/api")
 app.include_router(sectors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(system_router, prefix="/api", tags=["system"])
-app.include_router(cls_news_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
 
 

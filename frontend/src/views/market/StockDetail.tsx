@@ -37,11 +37,6 @@ interface StockBoard {
   type?: string
 }
 
-interface SyncResponse {
-  success?: boolean
-  message?: string
-}
-
 interface NavigationResponse {
   previous?: { code?: string } | null
   next?: { code?: string } | null
@@ -150,8 +145,6 @@ export default function StockDetail() {
   const [klineLimit, setKlineLimit] = useState(100)
   const [loadingMoreKline, setLoadingMoreKline] = useState(false)
   const [hasMoreHistory, setHasMoreHistory] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [syncMessage, setSyncMessage] = useState('')
   const [tradeMarkers, setTradeMarkers] = useState<TradeMarkerItem[]>([])
   const [stockBoards, setStockBoards] = useState<StockBoard[]>([])
   const [boardsLoading, setBoardsLoading] = useState(false)
@@ -333,34 +326,6 @@ export default function StockDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code])
 
-  // —— 同步数据 ——
-  const syncData = useCallback(async () => {
-    if (!code) return
-    setSyncing(true)
-    setSyncMessage('正在同步数据...')
-    try {
-      const data = (await request.post(`/stocks/${code}/sync`)) as unknown as SyncResponse
-      if (data?.success) {
-        setSyncMessage(`同步完成！${data.message || ''}`)
-        await loadKlineStats()
-        await loadKlineData()
-        setTimeout(() => setSyncMessage(''), 3000)
-      } else {
-        setSyncMessage(`同步失败：${data?.message || '未知错误'}`)
-      }
-    } catch (error) {
-      console.error('同步数据失败:', error)
-      const detail =
-        (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (error as Error)?.message ||
-        '网络错误'
-      setSyncMessage(`同步失败：${detail}`)
-      setTimeout(() => setSyncMessage(''), 5000)
-    } finally {
-      setSyncing(false)
-    }
-  }, [code, loadKlineStats, loadKlineData])
-
   // —— 上一个 / 下一个股票 ——
   const navigateToAdjacent = useCallback(
     async (direction: 'previous' | 'next') => {
@@ -387,12 +352,6 @@ export default function StockDetail() {
     () => Object.entries(klineStats?.periods || {}) as [string, { count: number; table?: string }][],
     [klineStats],
   )
-
-  const syncMessageTone = syncMessage.includes('完成')
-    ? 'success'
-    : syncMessage.includes('失败')
-      ? 'error'
-      : 'info'
 
   return (
     <div className="min-h-[calc(100vh-60px)] bg-zinc-50 p-5 dark:bg-zinc-950">
@@ -449,9 +408,6 @@ export default function StockDetail() {
                   </Badge>
                   <Badge color="emerald">{getTypeLabel(stockInfo.type)}</Badge>
                 </div>
-                <Button color="green" disabled={syncing} onClick={syncData}>
-                  {syncing ? '同步中...' : '同步数据'}
-                </Button>
               </div>
               <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
                 <div className="flex items-center gap-2 text-[15px] text-zinc-700 dark:text-zinc-200">
@@ -521,18 +477,6 @@ export default function StockDetail() {
           />
           {klineStatsLoading ? (
             <PageLoading />
-          ) : syncMessage ? (
-            <div
-              className={`mb-5 rounded-lg px-4 py-4 text-center text-sm font-medium ${
-                syncMessageTone === 'success'
-                  ? 'border border-green-500 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400'
-                  : syncMessageTone === 'error'
-                    ? 'border border-red-500 bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400'
-                    : 'border border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300'
-              }`}
-            >
-              {syncMessage}
-            </div>
           ) : klineStats ? (
             <div>
               <div className="mb-6 flex flex-col gap-4 sm:flex-row">
@@ -624,7 +568,7 @@ export default function StockDetail() {
             </div>
           )}
           {!chartLoading && bars.length === 0 && (
-            <EmptyState text="暂无K线数据，点击“同步数据”按钮获取数据" />
+            <EmptyState text="暂无K线数据" />
           )}
         </Card>
 

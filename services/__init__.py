@@ -14,7 +14,6 @@ from types import ModuleType
 
 _LEGACY_MODULE_MAP: dict[str, str] = {
     # market
-    "cls_news_service": "services.market.cls_news_service",
     "intraday_market_snapshot": "services.market.intraday_market_snapshot",
     "intraday_phase_gate": "services.market.intraday_phase_gate",
     "intraday_price_feed": "services.market.intraday_price_feed",

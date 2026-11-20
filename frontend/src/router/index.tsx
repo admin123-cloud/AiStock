@@ -70,12 +70,6 @@ export const routes: AppRoute[] = [
     () => import('@/views/market/LimitUpLadder')
   ),
   page(
-    '/news/cls-radar',
-    'ClsNewsRadar',
-    { title: '财联社消息雷达', group: 'market', groupLabel: '市场', groupOrder: 1, navOrder: 2.7, navLabel: '财联社消息雷达', icon: 'N' },
-    () => import('@/views/market/ClsNewsRadar')
-  ),
-  page(
     '/stock/:code',
     'StockDetail',
     { title: '股票详情', group: 'market', groupLabel: '市场', hiddenInNav: true, parentPath: '/stocks' },

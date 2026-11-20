@@ -56,11 +56,3 @@ def test_unknown_change_is_not_inferred_into_limit_up():
  from types import SimpleNamespace
  stock=SimpleNamespace(code='600000.SH',name='测试',market='SH',st=False)
  assert not _is_limit_up_day(stock,SimpleNamespace(change_pct=None,open=1,close=2))
-
-def test_capital_analysis_excludes_unknown_turnover(monkeypatch):
- from services import cls_news_service as news
- import pandas as pd
- frame=pd.DataFrame([{'code':'000001.SZ','trade_date':'1991-04-03','amount':100000,'change_pct':1,'turnover_rate':None}])
- monkeypatch.setattr(news,'clickhouse_query_df',lambda *a,**k:frame.copy())
- result=news._stock_capital_context_map(['000001.SZ'])['000001.SZ']
- assert result['capital_proxy_score'] is None and result['quality_usable'] is False

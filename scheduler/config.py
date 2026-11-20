@@ -47,14 +47,6 @@ SCHEDULER_CONFIG: Dict[str, Any] = {
             "trading_hours": {"start": "09:30", "end": "15:00"},
             "interval": 900,
         },
-        "cls_news": {
-            "enabled": True,
-            "description": "Hourly CLS telegraph news refresh and event signal scoring",
-            "trading_days_only": False,
-            "interval": 3600,
-            "pages": 1,
-            "rn": 50,
-        },
         "t_trade_monitor": {
             "enabled": True,
             "description": "L2做T盘中监控：东财实时行情30s轮询+RSI计算+信号→弹窗→下单",
