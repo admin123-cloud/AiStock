@@ -46,7 +46,11 @@ function BreadthCard({ breadth }: { breadth: any | null }) {
     <Card className="flex flex-col gap-3 px-4 pb-4 pt-4">
       <div className="flex items-baseline justify-between">
         <div className="text-sm font-medium text-zinc-500 dark:text-zinc-400">市场宽度</div>
-        <div className="text-xs text-zinc-400 tabular-nums dark:text-zinc-500">{breadth?.date || ''}</div>
+        <div className="text-xs text-zinc-400 tabular-nums dark:text-zinc-500">
+          {breadth?.mode === 'intraday'
+            ? `盘中 ${breadth.as_of || breadth.date || ''}`
+            : breadth?.date || ''}
+        </div>
       </div>
       {rows.length === 0 ? (
         <EmptyState className="py-8" text="宽度数据不可用" />

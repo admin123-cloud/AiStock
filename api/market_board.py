@@ -531,6 +531,15 @@ def get_auction_anomaly(
             result["anomaly_summary"] = _build_anomaly_summary(snap1, snap2)
         return result
 
+    # 盘中存在新鲜全市场快照（且未指定历史日期）时：基于今日实时快照计算大涨/大跌与放量异动
+    if not date:
+        intraday = _latest_fresh_intraday_snapshot()
+        if intraday is not None:
+            snapshot_ts, snap_date = intraday
+            live_payload = _compute_intraday_auction_anomaly(snapshot_ts, snap_date)
+            if live_payload is not None:
+                return live_payload
+
     # 盘后或当日无竞价快照：使用正式表 kline_daily 最新交易日（或指定日期）计算开盘跳空与放量异动
     formal_date = date or _latest_formal_trade_date()
     if formal_date:
@@ -547,6 +556,105 @@ def get_auction_anomaly(
         "snap1": [],
         "snap2": [],
     }
+
+
+def _compute_intraday_auction_anomaly(snapshot_ts: str, snap_date: str) -> Optional[Dict[str, Any]]:
+    """盘中无 9:20/9:24 竞价 CSV 时，基于当日新鲜 intraday_market_snapshot × 近 30 日均量计算实时涨跌与放量异动。"""
+    if not clickhouse_available():
+        return None
+    cache_key = f"intraday|{snapshot_ts}"
+    now = time.monotonic()
+    cached = _AUCTION_FORMAL_CACHE.get(cache_key)
+    if cached is not None and now < float(cached.get("expires_at") or 0.0):
+        return cached["payload"]
+
+    formal_date = _latest_formal_trade_date()
+    hist_dates = _latest_30_trade_dates(formal_date or snap_date)
+    if not hist_dates:
+        return None
+    ph_hist = ",".join(["?"] * len(hist_dates))
+
+    try:
+        df = clickhouse_query_df(
+            f"""
+            WITH vol_30d AS (
+                SELECT code, avg(volume) AS avg_vol
+                FROM kline_daily FINAL
+                WHERE trade_date IN ({ph_hist})
+                  AND volume > 0
+                GROUP BY code
+            )
+            SELECT
+                q.code AS code,
+                coalesce(nullIf(q.name, ''), s.name, q.code) AS name,
+                round(q.change_pct, 2) AS gap_pct,
+                toInt64(coalesce(q.volume, 0)) AS volume,
+                if(v.avg_vol > 0, round(q.volume / v.avg_vol, 2), NULL) AS vol_ratio_30d
+            FROM {SNAPSHOT_TABLE} q FINAL
+            LEFT JOIN vol_30d v ON v.code = q.code
+            LEFT JOIN stocks s ON s.code = q.code
+            WHERE q.snapshot_ts = ?
+              AND q.price > 0
+              AND q.change_pct IS NOT NULL
+            """,
+            hist_dates + [snapshot_ts],
+            raw=True,
+        )
+        if df is None or df.empty:
+            return None
+
+        items: List[Dict[str, Any]] = []
+        for row in df.itertuples(index=False):
+            chg = _to_float(getattr(row, "gap_pct", None))
+            vol_ratio = _to_float(getattr(row, "vol_ratio_30d", None))
+            vol = int(getattr(row, "volume", 0) or 0)
+            items.append({
+                "code": str(getattr(row, "code", "") or ""),
+                "name": str(getattr(row, "name", "") or ""),
+                "gap_pct_920": None,
+                "gap_pct_924": chg,
+                "gap_delta": chg,
+                "vol_920": 0,
+                "vol_924": vol,
+                "vol_ratio_30d": vol_ratio,
+            })
+
+        gap_big = [m for m in items if m["gap_pct_924"] is not None and m["gap_pct_924"] >= 5.0]
+        gap_mid = [m for m in items if m["gap_pct_924"] is not None and 3.0 <= m["gap_pct_924"] < 5.0]
+        vol_spike = sorted(
+            [m for m in items if m["vol_ratio_30d"] is not None and m["vol_ratio_30d"] >= 2.0],
+            key=lambda x: x["vol_ratio_30d"] or 0.0,
+            reverse=True,
+        )
+        top_gap_up = sorted(
+            [m for m in items if m["gap_pct_924"] is not None],
+            key=lambda x: abs(x["gap_pct_924"] or 0.0),
+            reverse=True,
+        )[:10]
+
+        payload = {
+            "date": snap_date,
+            "as_of": snapshot_ts[:16],
+            "available": True,
+            "source": SNAPSHOT_TABLE,
+            "data_mode": "intraday",
+            "anomaly_summary": {
+                "total_merged": len(items),
+                "gap_ge_5pct": len(gap_big),
+                "gap_3_to_5pct": len(gap_mid),
+                "vol_spike_ge_2x": len(vol_spike),
+                "top_gap_up": top_gap_up,
+                "top_vol_spike": vol_spike[:10],
+            },
+        }
+        _AUCTION_FORMAL_CACHE[cache_key] = {
+            "expires_at": now + _AUCTION_FORMAL_TTL,
+            "payload": payload,
+        }
+        return payload
+    except Exception as exc:
+        logger.warning(f"_compute_intraday_auction_anomaly({snapshot_ts}) failed: {exc}")
+        return None
 
 
 def _compute_formal_auction_anomaly(trade_date: str) -> Optional[Dict[str, Any]]:

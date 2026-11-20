@@ -219,10 +219,127 @@ def _resolve_latest_and_check(trade_date: Optional[str]):
     return latest, None
 
 
+def build_intraday_breadth_sql() -> str:
+    """盘中实时宽度聚合 SQL：以 intraday_market_snapshot 最新帧作为 rn=0，
+    拼接 kline_daily 近 59 个正式交易日（rn=1..59），实时计算 MA5/20/60 与 60 日新高/新低。
+    """
+    return """
+WITH
+    dates AS (
+        SELECT trade_date, row_number() OVER (ORDER BY trade_date DESC) AS rn
+        FROM (SELECT DISTINCT trade_date FROM stock.kline_daily
+              WHERE trade_date < toDate({snap_date}) ORDER BY trade_date DESC LIMIT 59)
+    ),
+    hist_bars AS (
+        SELECT k.code AS code, d.rn AS rn,
+               argMax(k.close, k.created_at) AS close
+        FROM stock.kline_daily AS k
+        INNER JOIN dates AS d ON d.trade_date = k.trade_date
+        WHERE k.code IN (SELECT code FROM stock.stocks WHERE type = 'stock')
+        GROUP BY k.code, d.rn
+        HAVING close > 0
+    ),
+    live_bars AS (
+        SELECT q.code AS code, toUInt64(0) AS rn,
+               argMax(q.price, q.created_at) AS close
+        FROM stock.intraday_market_snapshot AS q
+        WHERE q.snapshot_ts = toDateTime({snap_ts}, 'Asia/Shanghai')
+          AND q.code IN (SELECT code FROM stock.stocks WHERE type = 'stock')
+        GROUP BY q.code
+        HAVING close > 0
+    ),
+    bars AS (
+        SELECT code, rn, close FROM live_bars
+        UNION ALL
+        SELECT code, rn, close FROM hist_bars
+    ),
+    per_stock AS (
+        SELECT code,
+               maxIf(close, rn = 0) AS c0,
+               countIf(rn < 5) AS n5,  sumIf(close, rn < 5) AS s5,
+               countIf(rn < 20) AS n20, sumIf(close, rn < 20) AS s20,
+               countIf(rn < 60) AS n60, sumIf(close, rn < 60) AS s60,
+               max(close) AS hh60, min(close) AS lo60
+        FROM bars GROUP BY code
+    )
+SELECT
+    countIf(c0 > 0) AS total,
+    countIf(n5 = 5 AND c0 > 0) AS ma5_base,
+    countIf(n5 = 5 AND c0 > 0 AND c0 >= s5 / 5 - 1e-6) AS above_ma5,
+    countIf(n20 = 20 AND c0 > 0) AS ma20_base,
+    countIf(n20 = 20 AND c0 > 0 AND c0 >= s20 / 20 - 1e-6) AS above_ma20,
+    countIf(n60 = 60 AND c0 > 0) AS ma60_base,
+    countIf(n60 = 60 AND c0 > 0 AND c0 >= s60 / 60 - 1e-6) AS above_ma60,
+    countIf(n60 = 60 AND c0 > 0 AND c0 >= hh60) AS new_high_60d,
+    countIf(n60 = 60 AND c0 > 0 AND c0 <= lo60) AS new_low_60d
+FROM per_stock
+"""
+
+
+def _fresh_intraday_breadth_snapshot() -> Optional[tuple[str, str]]:
+    """检查是否存在新鲜的盘中全市场快照（≤600s 且覆盖 ≥1000 只）。"""
+    try:
+        from services.market.intraday_market_snapshot import (
+            MIN_COVERED_COUNT,
+            SNAPSHOT_TABLE,
+            _coerce_beijing_dt,
+            is_fresh,
+        )
+        if not clickhouse_table_exists(SNAPSHOT_TABLE):
+            return None
+        df = clickhouse_query_df(
+            f"""
+            SELECT
+                max(snapshot_ts) AS latest_ts,
+                countIf(snapshot_ts = (SELECT max(snapshot_ts) FROM {SNAPSHOT_TABLE})) AS cnt
+            FROM {SNAPSHOT_TABLE}
+            """,
+            raw=True,
+        )
+        if df is None or df.empty:
+            return None
+        ts_dt = _coerce_beijing_dt(df.iloc[0].get("latest_ts"))
+        cnt = int(df.iloc[0].get("cnt") or 0)
+        if ts_dt is None or cnt < MIN_COVERED_COUNT or not is_fresh(ts_dt):
+            return None
+        return ts_dt.strftime("%Y-%m-%d %H:%M:%S"), ts_dt.strftime("%Y-%m-%d")
+    except Exception as exc:
+        logger.debug(f"intraday breadth snapshot check skipped: {exc}")
+        return None
+
+
 def market_breadth(trade_date: Optional[str] = None) -> Dict[str, Any]:
-    """市场宽度（历史任一日可查；默认=最新交易日）。fail-closed 返回 error payload。"""
+    """市场宽度（历史任一日可查；默认盘中优先用实时快照拼接近 59 日，盘后回退正式日线）。"""
     if not clickhouse_available():
         return {"error": "clickhouse_unavailable"}
+
+    # 未指定历史日期时，盘中优先采用新鲜采集快照计算实时宽度
+    if trade_date is None:
+        live = _fresh_intraday_breadth_snapshot()
+        if live is not None:
+            snap_ts, snap_date = live
+            cache_key = f"breadth|intraday|{snap_ts}"
+            now = time.monotonic()
+            cached = _breadth_cache.get(cache_key)
+            if cached and now < cached.get("expires_at", 0.0):
+                return cached["payload"]
+            sql = (
+                build_intraday_breadth_sql()
+                .replace("{snap_ts}", f"'{snap_ts}'")
+                .replace("{snap_date}", f"'{snap_date}'")
+            )
+            try:
+                df = clickhouse_query_df(sql, raw=True)
+                if df is not None and not df.empty and int(df.iloc[0].get("total") or 0) > 0:
+                    payload = parse_breadth_row(df.iloc[0], snap_date)
+                    payload["mode"] = "intraday"
+                    payload["as_of"] = snap_ts[:16]
+                    payload["source"] = "clickhouse:intraday_market_snapshot+kline_daily"
+                    _breadth_cache[cache_key] = {"expires_at": now + _CACHE_TTL_SEC, "payload": payload}
+                    return payload
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"intraday breadth aggregation failed, fallback formal: {exc}")
+
     effective, err = _resolve_latest_and_check(trade_date)
     if err is not None:
         return err
@@ -243,6 +360,7 @@ def market_breadth(trade_date: Optional[str] = None) -> Dict[str, Any]:
         return {"error": "no_data_for_date", "date": effective}
 
     payload = parse_breadth_row(df.iloc[0], effective)
+    payload["mode"] = "postclose"
     _breadth_cache[cache_key] = {"expires_at": now + _CACHE_TTL_SEC, "payload": payload}
     return payload
 

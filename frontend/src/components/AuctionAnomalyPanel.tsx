@@ -134,7 +134,8 @@ export default function AuctionAnomalyPanel() {
                 ) : (
                   item.gap_pct_924 !== null && item.gap_pct_924 !== undefined && (
                     <span className={`font-mono ${item.gap_pct_924 >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                      开盘 {item.gap_pct_924 >= 0 ? '+' : ''}{item.gap_pct_924.toFixed(2)}%
+                      {data.source === 'intraday_market_snapshot' ? '实时 ' : '开盘 '}
+                      {item.gap_pct_924 >= 0 ? '+' : ''}{item.gap_pct_924.toFixed(2)}%
                     </span>
                   )
                 )}
@@ -174,7 +175,12 @@ export default function AuctionAnomalyPanel() {
 
       <div className="flex justify-between text-[10px]">
         <span className="text-zinc-600">
-          {data.data_mode === 'intraday' ? '盘中竞价快照' : '盘后正式表'} · {data.date}
+          {data.source === 'intraday_market_snapshot'
+            ? '盘中采集快照'
+            : data.data_mode === 'intraday'
+              ? '盘中竞价快照'
+              : '盘后正式表'}{' '}
+          · {data.date}
         </span>
         <button onClick={fetchData} className="text-blue-400 underline">刷新</button>
       </div>
