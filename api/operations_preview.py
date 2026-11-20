@@ -108,10 +108,12 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/data-center/health-matrix',
     '/api/data-center/kline-inspect',
     '/api/data-center/overview',
+    '/api/g3/ai-screening',
     '/api/g3/desk',
     '/api/g3/desk/notify/config',
     '/api/g3/mainwave',
     '/api/g3/market-gate',
+    '/api/g3/premarket-brief',
     '/api/g3/review/attribution',
     '/api/g3/review/daily',
     '/api/g3/review/shadow',
@@ -168,11 +170,14 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
 # R45 scoped-write 白名单：唯一放行的写端点（其余 POST/PUT/DELETE 一律封禁）。
 _SCOPED_WRITE_PREVIEW_PATHS = frozenset({
     '/api/accounts/sync',
+    '/api/g3/ai-screening/ingest',
     '/api/g3/desk/execution',
     '/api/g3/desk/execution/delete',
     '/api/g3/desk/generate-plan',
     '/api/g3/desk/notify/config',
     '/api/g3/desk/notify/test',
+    '/api/g3/premarket-brief/generate',
+    '/api/g3/premarket-brief/push-wechat',
     '/api/g3/watchlist/sync-ths',
     '/api/g3/watchlist/upsert',
 })

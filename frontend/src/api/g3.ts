@@ -310,6 +310,77 @@ export interface G3AttributionResponse {
   data_notes: string[]
 }
 
+export interface G3AiScreeningItem {
+  code: string
+  code6?: string
+  name?: string
+  industry?: string
+  risk_light: 'green' | 'yellow' | 'red' | string
+  risk_flags: string[]
+  catalyst_score: number
+  catalyst_type: string
+  one_line_thesis: string
+  source: 'agent_enriched' | 'rule_baseline' | string
+  updated_at?: string
+}
+
+export interface G3AiScreeningSummary {
+  schema: string
+  decision_date?: string
+  mode: 'agent_enriched' | 'rule_baseline' | string
+  agent_enriched_count: number
+  total_candidates: number
+  counts: { green: number; yellow: number; red: number }
+  allow_new_mainwave: boolean
+  market_gate_regime?: string | null
+  gate_notice: string
+  agent_summary_note?: string | null
+  generated_at?: string
+  top_picks: Array<{
+    code?: string
+    name?: string
+    industry?: string
+    score?: number | string | null
+    resonance?: number | string | null
+    stage?: string
+    risk_light: string
+    catalyst_score: number
+    catalyst_type: string
+    one_line_thesis: string
+    source: string
+  }>
+}
+
+export interface G3PremarketBrief {
+  schema: string
+  date: string
+  generated_at: string
+  source: string
+  market_stance: {
+    regime: string
+    regime_label: string
+    tone: string
+    allow_new_mainwave: boolean
+    target_cap_pct: number
+    actual_pct?: number | null
+    waterline_status?: string | null
+    waterline_advice?: string | null
+  }
+  core_themes: Array<{
+    industry: string
+    candidate_count: number
+    green_count: number
+    avg_score: number
+    representatives: string[]
+    strength_score: number
+  }>
+  top_picks: G3AiScreeningSummary['top_picks']
+  overnight_notes: string[]
+  agent_thesis?: string | null
+  action_checklist: string[]
+  markdown_text: string
+}
+
 export interface G3DeskResponse {
   as_of: string
   today?: string
@@ -322,6 +393,7 @@ export interface G3DeskResponse {
   }
   market_directive?: G3MarketDirective
   market_regime_gate?: G3MarketRegimeGate
+  premarket_brief?: G3PremarketBrief | null
   intraday_summary?: {
     execution_count: number
     open_exposure_codes: number
@@ -451,6 +523,13 @@ export const upsertG3Watchlist = (payload: { add?: Array<string | { code: string
 
 export const getG3MarketGate = () =>
   request.get<unknown, G3MarketRegimeGate>('/g3/market-gate')
+export const generateG3PremarketBrief = (payload?: {
+  overnight_notes?: string[]
+  agent_thesis?: string
+  source?: string
+}) => request.post<unknown, G3PremarketBrief>('/g3/premarket-brief/generate', payload || {}, { timeout: 60000 })
+export const pushG3PremarketBriefWechat = () =>
+  request.post<unknown, { status: string; ok: boolean; date?: string; channel: string; detail: string }>('/g3/premarket-brief/push-wechat', {}, { timeout: 30000 })
 export const getG3ReviewAttribution = (days = 30, benchmark = '000300.SH') =>
   request.get<unknown, G3AttributionResponse>('/g3/review/attribution', { params: { days, benchmark } })
 export const getG3DailyReview = (limit = 10) =>

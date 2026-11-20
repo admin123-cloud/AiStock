@@ -10,7 +10,14 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.broker.broker_accounts import get_accounts_overview
+from services.g3.ai_screening import merge_screening_into_mainwave
+from services.g3.mainwave_scanner import scan_mainwave_daily
 from services.g3.market_regime_gate import evaluate_market_regime_gate
+from services.g3.premarket_brief import (
+    generate_premarket_brief,
+    load_latest_premarket_brief,
+    push_premarket_brief_wechat,
+)
 from services.trading.holding_t_watchlist import (
     read_watchlist,
     sync_watchlist_from_ths,
@@ -365,6 +372,7 @@ def get_g3_desk(
         },
         "market_directive": market_directive,
         "market_regime_gate": market_regime_gate,
+        "premarket_brief": load_latest_premarket_brief(today_str),
         "intraday_summary": {
             **exec_summary,
             "eligible_count": eligible_count,
@@ -578,3 +586,53 @@ def get_g3_market_gate() -> dict[str, Any]:
         total_assets=merged_funds.get("total_assets"),
         total_market_value=merged_funds.get("market_value"),
     )
+
+
+class PremarketBriefGenerateRequest(BaseModel):
+    overnight_notes: list[str] = Field(default_factory=list)
+    agent_thesis: str | None = None
+    source: str = "auto_baseline"
+
+
+@router.get("/premarket-brief")
+def get_g3_premarket_brief(trade_date: str | None = Query(default=None)) -> dict[str, Any]:
+    """Phase 2B：读取当日或最新盘前 09:15 市场主线简报。"""
+    brief = load_latest_premarket_brief(trade_date)
+    if brief:
+        return brief
+    gate = get_g3_market_gate()
+    try:
+        mw = merge_screening_into_mainwave(scan_mainwave_daily(force_refresh=False), market_gate=gate)
+    except Exception:
+        mw = {}
+    return generate_premarket_brief(market_gate=gate, mainwave_payload=mw, source="auto_baseline")
+
+
+@router.post("/premarket-brief/generate")
+def post_g3_premarket_brief_generate(
+    req: PremarketBriefGenerateRequest | None = None,
+) -> dict[str, Any]:
+    """Scoped-write：生成并落盘当日盘前主线简报（支持 Agent 传入隔夜要闻与主线研判）。"""
+    body = req or PremarketBriefGenerateRequest()
+    gate = get_g3_market_gate()
+    try:
+        mw = merge_screening_into_mainwave(scan_mainwave_daily(force_refresh=False), market_gate=gate)
+    except Exception:
+        mw = {}
+    return generate_premarket_brief(
+        market_gate=gate,
+        mainwave_payload=mw,
+        overnight_notes=body.overnight_notes,
+        agent_thesis=body.agent_thesis,
+        source=body.source,
+    )
+
+
+@router.post("/premarket-brief/push-wechat")
+def post_g3_premarket_brief_push_wechat() -> dict[str, Any]:
+    """Scoped-write：将最新盘前市场主线简报一键推送至已配置的微信通道。"""
+    brief = load_latest_premarket_brief()
+    if not brief:
+        brief = post_g3_premarket_brief_generate()
+    res = push_premarket_brief_wechat(brief)
+    return {"status": "ok" if res.get("ok") else "failed", "date": brief.get("date"), **res}

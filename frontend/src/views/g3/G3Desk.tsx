@@ -7,7 +7,9 @@ import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import {
   deleteG3TExecution,
   generateG3DailyPlan,
+  generateG3PremarketBrief,
   getG3Desk,
+  pushG3PremarketBriefWechat,
   recordG3TExecution,
   saveG3NotifyConfig,
   syncG3WatchlistFromThs,
@@ -252,6 +254,8 @@ export default function G3Desk() {
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [briefBusy, setBriefBusy] = useState(false)
+  const [pushingBrief, setPushingBrief] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [countdown, setCountdown] = useState(15)
   const [showIneligible, setShowIneligible] = useState(false)
@@ -508,6 +512,41 @@ export default function G3Desk() {
     }, 1000)
     return () => window.clearInterval(timer)
   }, [autoRefresh, load])
+
+  const handleGenerateBrief = async () => {
+    setBriefBusy(true)
+    setMsg('')
+    setError('')
+    try {
+      const brief = await generateG3PremarketBrief()
+      setMsg(`已生成盘前主线简报（${brief.date} · ${brief.market_stance.regime_label}）`)
+      await load(false, false)
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '生成盘前简报失败')
+    } finally {
+      setBriefBusy(false)
+    }
+  }
+
+  const handlePushBriefWechat = async () => {
+    setPushingBrief(true)
+    setMsg('')
+    setError('')
+    try {
+      const res = await pushG3PremarketBriefWechat()
+      if (res.ok) {
+        setMsg(`已通过 ${res.channel} 推送盘前主线简报（${res.date || ''}）`)
+      } else {
+        setError(`盘前简报微信推送未成功：${res.detail}`)
+      }
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '推送微信失败')
+    } finally {
+      setPushingBrief(false)
+    }
+  }
 
   const handleGeneratePlan = async () => {
     setGenerating(true)
@@ -1072,6 +1111,83 @@ export default function G3Desk() {
           </Card>
         )
       })()}
+
+      {/* 0.5 Phase 2B：盘前 09:15 市场主线简报 */}
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-white">盘前 09:15 市场主线简报（Phase 2B）</span>
+            {data?.premarket_brief ? (
+              <>
+                <Badge color={data.premarket_brief.source === 'agent_enriched' ? 'emerald' : 'blue'}>
+                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : '自动基线版'}
+                </Badge>
+                <span className="font-mono text-xs text-zinc-400">
+                  {data.premarket_brief.date} · {fmtTimeOnly(data.premarket_brief.generated_at)}
+                </span>
+              </>
+            ) : (
+              <Badge color="zinc">尚未生成今日简报</Badge>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button outline onClick={() => void handleGenerateBrief()} disabled={briefBusy}>
+              {briefBusy ? '生成中…' : '生成/刷新简报'}
+            </Button>
+            <Button outline onClick={() => void handlePushBriefWechat()} disabled={pushingBrief}>
+              {pushingBrief ? '推送中…' : '一键推微信'}
+            </Button>
+          </div>
+        </div>
+
+        {data?.premarket_brief ? (
+          <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <div className="lg:col-span-7 space-y-2 text-xs">
+              {data.premarket_brief.agent_thesis && (
+                <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-blue-200">
+                  <b>AI 主线研判：</b>{data.premarket_brief.agent_thesis}
+                </div>
+              )}
+              <div className="space-y-1.5 text-zinc-200">
+                {data.premarket_brief.action_checklist.map((line, i) => (
+                  <div key={i} className="leading-relaxed">{i + 1}. {line}</div>
+                ))}
+              </div>
+              {data.premarket_brief.overnight_notes.length > 0 && (
+                <div className="text-zinc-400">
+                  隔夜要点：{data.premarket_brief.overnight_notes.join('；')}
+                </div>
+              )}
+            </div>
+            <div className="lg:col-span-5 space-y-2 text-xs">
+              <div className="font-medium text-zinc-300">主升共振核心板块主线</div>
+              {data.premarket_brief.core_themes.length > 0 ? (
+                <div className="space-y-1.5">
+                  {data.premarket_brief.core_themes.map((t) => (
+                    <div key={t.industry} className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-2.5 py-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-white">{t.industry}</span>
+                        <Badge color="blue">{t.candidate_count} 只（绿灯 {t.green_count}）</Badge>
+                      </div>
+                      <div className="mt-1 text-[11px] text-zinc-400">
+                        代表：{t.representatives.join(' / ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-zinc-400">
+                  当前暂无明显板块主升共振主线
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-2.5 text-xs text-zinc-400">
+            点击右上角「生成/刷新简报」或通过 09:15 定时 Agent 工作流自动生成当日市场主线、核心板块与作战清单。
+          </p>
+        )}
+      </Card>
 
       {/* 1. 今日做T总纲 + 核心作战指标 */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">

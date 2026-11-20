@@ -10,7 +10,7 @@ import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import {
   dateTime, reasonText, statusLabel, statusTone, type StatusTone,
 } from '@/api/operations'
-import { getG3MainwaveDaily } from '@/api/g3'
+import { getG3MainwaveDaily, type G3AiScreeningItem, type G3AiScreeningSummary } from '@/api/g3'
 
 interface MainwaveCandidate {
   code?: string
@@ -27,6 +27,7 @@ interface MainwaveCandidate {
   reference_price?: number | string | null
   entry_date?: string
   decision_date?: string
+  ai_screening?: G3AiScreeningItem
 }
 
 interface MainwaveCheck { name?: string; message?: string; ok?: boolean }
@@ -61,16 +62,24 @@ interface MainwaveDailyData {
     }
   }
   contract_metadata?: { strategy_id?: string; sha256?: string }
+  ai_screening_summary?: G3AiScreeningSummary
 }
 
-type FilterKey = 'all' | 'data_blocked' | 'waiting_30m' | 'confirmed'
+type FilterKey = 'all' | 'green_only' | 'data_blocked' | 'waiting_30m' | 'confirmed'
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: '全部' },
+  { key: 'green_only', label: '绿灯精选' },
   { key: 'data_blocked', label: '数据阻断' },
   { key: 'waiting_30m', label: '待确认' },
   { key: 'confirmed', label: '已确认' },
 ]
+
+const lightBadge = (light?: string) => {
+  if (light === 'green') return { label: '绿灯通过', color: 'emerald' as const }
+  if (light === 'red') return { label: '红灯否决', color: 'red' as const }
+  return { label: '黄灯留意', color: 'amber' as const }
+}
 
 const toneBadge = (tone: StatusTone) =>
   tone === 'danger' ? 'red' : tone === 'success' ? 'emerald' : 'amber'
@@ -111,9 +120,15 @@ export default function MainwaveDaily() {
 
   const blockedChecks = useMemo(() => (data.checks || []).filter((x) => !x.ok), [data.checks])
   const candidates = useMemo(
-    () => (data.candidates || []).filter((x) => filter === 'all' || x.stage === filter),
+    () =>
+      (data.candidates || []).filter((x) => {
+        if (filter === 'all') return true
+        if (filter === 'green_only') return x.ai_screening?.risk_light === 'green'
+        return x.stage === filter
+      }),
     [data.candidates, filter],
   )
+  const aiSummary = data.ai_screening_summary
   const alertTone = statusTone(data.state ?? '')
   const minimumScore = data.contract?.entry?.minimum_score
 
@@ -156,6 +171,58 @@ export default function MainwaveDaily() {
         ))}
       </div>
 
+      {aiSummary && (
+        <Card className={aiSummary.allow_new_mainwave ? 'border-emerald-500/30 bg-emerald-950/10' : 'border-amber-500/40 bg-amber-950/10'}>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <SectionTitle title="AI 候选股排雷与催化精选（Phase 2A）" />
+              <Badge color={aiSummary.mode === 'agent_enriched' ? 'emerald' : 'blue'}>
+                {aiSummary.mode === 'agent_enriched'
+                  ? `Agent 深度穿透 (${aiSummary.agent_enriched_count}/${aiSummary.total_candidates})`
+                  : '确定性底线排雷（待 Agent 穿透）'}
+              </Badge>
+              <Badge color={aiSummary.allow_new_mainwave ? 'emerald' : 'red'}>
+                {aiSummary.allow_new_mainwave ? '大盘允许开仓' : '大盘防守·仅观察'}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <Badge color="emerald">绿灯 {aiSummary.counts.green}</Badge>
+              <Badge color="amber">黄灯 {aiSummary.counts.yellow}</Badge>
+              <Badge color="red">红灯 {aiSummary.counts.red}</Badge>
+            </div>
+          </div>
+
+          <p className="mt-2 text-xs leading-relaxed text-zinc-300">{aiSummary.gate_notice}</p>
+          {aiSummary.agent_summary_note && (
+            <p className="mt-1 text-xs text-blue-300">Agent 摘要：{aiSummary.agent_summary_note}</p>
+          )}
+
+          {aiSummary.top_picks.length > 0 && (
+            <div className="mt-3 grid grid-cols-1 gap-2.5 md:grid-cols-2 lg:grid-cols-3">
+              {aiSummary.top_picks.map((pick) => (
+                <div
+                  key={pick.code}
+                  className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-white">
+                      {pick.name || pick.code} <span className="font-mono text-zinc-400">{pick.code}</span>
+                    </span>
+                    <Badge color="emerald">催化 {pick.catalyst_score}/5</Badge>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-400">
+                    <span>{pick.industry || '—'}</span>
+                    <span>· 主升 {score(pick.score)}</span>
+                    <span>· {pick.catalyst_type}</span>
+                  </div>
+                  <p className="mt-1.5 line-clamp-2 leading-relaxed text-zinc-300">{pick.one_line_thesis}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
       {blockedChecks.length > 0 && (
         <Card>
           <SectionTitle title="今天先处理这些问题" />
@@ -194,17 +261,20 @@ export default function MainwaveDaily() {
                 <TableHeader className="min-w-[9rem]">当前阶段</TableHeader>
                 <TableHeader>主升分 / 门槛</TableHeader>
                 <TableHeader>同业共振</TableHeader>
-                <TableHeader className="min-w-[11rem]">阻断原因</TableHeader>
+                <TableHeader className="min-w-[8rem]">AI 排雷 / 催化</TableHeader>
+                <TableHeader className="min-w-[14rem]">核心逻辑 / 阻断说明</TableHeader>
               </TableRow>
             </TableHead>
             <TableBody>
               {candidates.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                  <TableCell colSpan={7} className="py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
                     本批次无可展示候选；请先查看上方数据状态
                   </TableCell>
                 </TableRow>
-              ) : candidates.map((row) => (
+              ) : candidates.map((row) => {
+                const lb = lightBadge(row.ai_screening?.risk_light)
+                return (
                 <TableRow key={row.code} className="cursor-pointer" onClick={() => setSelected(row)}>
                   <TableCell>
                     <button type="button" className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
@@ -219,9 +289,20 @@ export default function MainwaveDaily() {
                   </TableCell>
                   <TableCell className="tabular-nums">{score(row.score)} / {minimumScore ?? '--'}</TableCell>
                   <TableCell className="tabular-nums">{row.resonance ?? '--'}</TableCell>
-                  <TableCell className="max-w-[18rem] truncate text-zinc-500 dark:text-zinc-400">{reasonText(row.reason)}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge color={lb.color}>{lb.label}</Badge>
+                      {row.ai_screening?.catalyst_score != null && (
+                        <Badge color="blue">{row.ai_screening.catalyst_score}/5</Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="max-w-[20rem] truncate text-xs text-zinc-400">
+                    {row.ai_screening?.one_line_thesis || reasonText(row.reason)}
+                  </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
         </div>
@@ -299,6 +380,23 @@ export default function MainwaveDaily() {
               <p>原因：{reasonText(selected.reason)}</p>
               <p>参考价格：{selected.reference_price || '未提供'}</p>
               <p>执行日 {selected.entry_date}；决策日 {selected.decision_date}</p>
+              {selected.ai_screening && (
+                <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-white">AI 排雷与催化评估</span>
+                    <Badge color={lightBadge(selected.ai_screening.risk_light).color}>
+                      {lightBadge(selected.ai_screening.risk_light).label}
+                    </Badge>
+                    <Badge color="blue">
+                      催化 {selected.ai_screening.catalyst_score}/5 · {selected.ai_screening.catalyst_type}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-zinc-200">{selected.ai_screening.one_line_thesis}</p>
+                  {selected.ai_screening.risk_flags.length > 0 && (
+                    <p className="text-xs text-amber-300">风险标签：{selected.ai_screening.risk_flags.join('；')}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </DialogBody>

@@ -49,6 +49,8 @@ services:
       - F:/Aistock/runtime/daily_review:/aistock/data/runtime/daily_review:ro
       - F:/Aistock/runtime/market_mood:/aistock/data/runtime/market_mood:ro
       - F:/Aistock/runtime/market_turnover_forecast:/aistock/data/runtime/market_turnover_forecast
+      - F:/Aistock/runtime/g3_ai_screening:/aistock/data/runtime/g3_ai_screening
+      - F:/Aistock/runtime/g3_premarket_brief:/aistock/data/runtime/g3_premarket_brief
       - F:/Aistock/runtime/postclose_control:/aistock/data/runtime/postclose_control:ro
       - F:/Aistock/runtime/intraday_snapshot:/aistock/data/runtime/intraday_snapshot:ro
       - F:/Aistock/runtime/postclose_auto:/aistock/data/runtime/postclose_auto:ro
