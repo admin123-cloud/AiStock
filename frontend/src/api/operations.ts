@@ -1,6 +1,66 @@
 import request from '@/utils/request'
 
-/** 任务中心：任务看板 / 异常记录（axios 拦截器已解包 data，此处断言为具体负载） */
+/** 新版任务中心（task_center/2）：直采 ClickHouse 与 runtime 真实运行态 */
+export interface TaskCenterServiceItem {
+  id: string
+  name: string
+  status: 'ok' | 'warn' | 'error'
+  detail: string
+  heartbeat: string
+}
+
+export interface TaskCenterTaskItem {
+  id: string
+  name: string
+  category: string
+  schedule: string
+  status: 'ok' | 'warn' | 'error' | 'idle'
+  last_run: string
+  duration_sec: number | null
+  summary: string
+  target: string
+}
+
+export interface TaskCenterDeliveryItem {
+  id: string
+  label: string
+  checked_days: number
+  ok_days: number
+  warn_days: number
+  missing_days: number
+  latest_date: string | null
+  latest_coverage: number | null
+  status: 'ok' | 'warn' | 'error'
+}
+
+export interface TaskCenterBoard {
+  schema: string
+  generated_at: string
+  today: string
+  trading_now: boolean
+  summary: {
+    services_ok: number
+    services_total: number
+    tasks_total: number
+    tasks_ok: number
+    tasks_warn: number
+    tasks_error: number
+    latest_intraday_ts: string | null
+    intraday_today_rounds: number
+    latest_certified_date: string | null
+    latest_daily_date: string | null
+  }
+  services: TaskCenterServiceItem[]
+  tasks: TaskCenterTaskItem[]
+  delivery_summary: TaskCenterDeliveryItem[]
+}
+
+export const getTaskCenterBoard = (forceRefresh = false) =>
+  request.get('/operations/tasks', {
+    params: forceRefresh ? { force_refresh: true } : undefined,
+  }) as unknown as Promise<TaskCenterBoard>
+
+/** 兼容旧调用 */
 export const getTasks = () =>
   request.get('/operations/tasks') as unknown as Promise<OperationsBoard>
 export const getIncidents = () =>

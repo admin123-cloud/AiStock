@@ -238,10 +238,9 @@ def create_data_review_action(action: DataReviewAction):
 
 
 @router.get('/tasks')
-def tasks(request: Request):
-    manifest = json.loads((Path(__file__).resolve().parents[1]/'config/runtime_orchestration_manifest.json').read_text(encoding='utf-8'))
-    telemetry = getattr(request.app.state, 'scheduler_registry', None)
-    return task_board(runtime_path(), manifest, live=telemetry.snapshot() if telemetry else None)
+def tasks(request: Request, force_refresh: bool = Query(False)):
+    from services.ops.task_center_service import get_task_center_board
+    return get_task_center_board(force_refresh=force_refresh)
 
 
 @router.get('/incidents')
