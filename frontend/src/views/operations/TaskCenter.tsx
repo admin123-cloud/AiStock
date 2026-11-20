@@ -153,15 +153,18 @@ export default function TaskCenter() {
           <SectionTitle title="在运定时调度任务" />
           <div className="flex items-center gap-1.5">
             {['all', '盘中实时', '盘后数据', '策略监控'].map((cat) => (
-              <Button
+              <button
                 key={cat}
-                plain={categoryFilter !== cat}
-                outline={categoryFilter === cat}
+                type="button"
                 onClick={() => setCategoryFilter(cat)}
-                className="px-2.5 py-1 text-xs"
+                className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                  categoryFilter === cat
+                    ? 'border border-zinc-600 bg-zinc-800 text-zinc-100'
+                    : 'border border-transparent text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
+                }`}
               >
                 {cat === 'all' ? '全部' : cat}
-              </Button>
+              </button>
             ))}
           </div>
         </div>
