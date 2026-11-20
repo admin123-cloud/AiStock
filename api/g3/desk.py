@@ -13,6 +13,7 @@ from services.broker.broker_accounts import get_accounts_overview
 from services.g3.ai_screening import merge_screening_into_mainwave
 from services.g3.mainwave_scanner import scan_mainwave_daily
 from services.g3.market_regime_gate import evaluate_market_regime_gate
+from services.g3.order_prefill import evaluate_and_build_prefill_draft
 from services.g3.premarket_brief import (
     generate_premarket_brief,
     load_latest_premarket_brief,
@@ -451,13 +452,14 @@ class TExecutionRequest(BaseModel):
     side: str = Field(..., description="BUY 或 SELL")
     price: float
     shares: int
+    order_type: str = Field(default="t_trade", description="t_trade（做T单）或 base_rebalance（R51水位调仓单）")
     account_label: str = ""
     note: str = ""
 
 
 @router.post("/desk/execution")
 def post_g3_execution(req: TExecutionRequest) -> dict[str, Any]:
-    """登记一笔当日手工做T成交，实时更新日内敞口与做T盈亏。"""
+    """登记一笔当日手工成交（R51 分型：做T单 vs 水位调仓单）。"""
     today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
     try:
         entry = append_t_execution(
@@ -467,12 +469,59 @@ def post_g3_execution(req: TExecutionRequest) -> dict[str, Any]:
             side=req.side,
             price=req.price,
             shares=req.shares,
+            order_type=req.order_type,
             account_label=req.account_label,
             note=req.note,
         )
         return {"status": "ok", "entry": entry}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class PrefillCheckRequest(BaseModel):
+    code: str
+    name: str = ""
+    side: str = Field(..., description="BUY 或 SELL")
+    price: float
+    shares: int
+    order_type: str = Field(default="t_trade", description="t_trade | base_rebalance")
+    account_id: str = "acct1"
+
+
+@router.post("/desk/prefill-check")
+def post_g3_desk_prefill_check(req: PrefillCheckRequest) -> dict[str, Any]:
+    """Phase 3C：执行 L2 硬风控预检并生成人工确认预填单草案（零自动下单）。"""
+    code6 = str(req.code or "").split(".")[0].strip().zfill(6)
+    overview, live_holdings = _collect_live_holdings()
+    merged_funds = overview.get("merged") or {}
+    h_list = [h for h in live_holdings if h.get("code") == code6]
+    total_shares = sum(int(x.get("shares") or 0) for x in h_list)
+    available_shares = sum(int(x.get("available_shares") or 0) for x in h_list)
+
+    quotes = fetch_batch_live_quotes([code6])
+    live_px = (quotes.get(code6) or {}).get("price")
+    if not live_px and h_list:
+        live_px = h_list[0].get("current_price")
+
+    try:
+        gate = get_g3_market_gate()
+    except Exception:
+        gate = None
+
+    return evaluate_and_build_prefill_draft(
+        code=code6,
+        name=req.name or (h_list[0].get("name") if h_list else code6),
+        side=req.side,
+        price=req.price,
+        shares=req.shares,
+        order_type=req.order_type,
+        account_id=req.account_id,
+        live_price=float(live_px) if live_px else None,
+        total_shares=total_shares,
+        available_shares=available_shares,
+        available_cash=float(merged_funds["available_cash"]) if merged_funds.get("available_cash") is not None else None,
+        market_gate=gate,
+    )
 
 
 class TExecutionDeleteRequest(BaseModel):

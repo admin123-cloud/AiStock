@@ -9,6 +9,7 @@ import {
   generateG3DailyPlan,
   generateG3PremarketBrief,
   getG3Desk,
+  prefillCheckG3Order,
   pushG3PremarketBriefWechat,
   recordG3TExecution,
   saveG3NotifyConfig,
@@ -18,6 +19,7 @@ import {
   type G3DeskCard,
   type G3DeskResponse,
   type G3NotifyConfig,
+  type G3PrefillCheckResponse,
   type G3PriceGauge,
 } from '@/api/g3'
 
@@ -221,6 +223,7 @@ interface ExecFormState {
   code: string
   name: string
   side: 'BUY' | 'SELL'
+  order_type: 't_trade' | 'base_rebalance'
   price: string
   shares: string
   account_label: string
@@ -232,6 +235,7 @@ const EMPTY_EXEC_FORM: ExecFormState = {
   code: '',
   name: '',
   side: 'SELL',
+  order_type: 't_trade',
   price: '',
   shares: '100',
   account_label: '',
@@ -256,6 +260,8 @@ export default function G3Desk() {
   const [generating, setGenerating] = useState(false)
   const [briefBusy, setBriefBusy] = useState(false)
   const [pushingBrief, setPushingBrief] = useState(false)
+  const [prefillBusy, setPrefillBusy] = useState(false)
+  const [prefillRes, setPrefillRes] = useState<G3PrefillCheckResponse | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [countdown, setCountdown] = useState(15)
   const [showIneligible, setShowIneligible] = useState(false)
@@ -618,16 +624,45 @@ export default function G3Desk() {
   ) => {
     const px = presetPrice ?? card.live_quote?.price ?? card.prev_close ?? 0
     const lot = presetLot && presetLot >= 100 ? presetLot : Math.max(100, card.daily_plan?.recommended_lot || card.t_lot_cap || 100)
+    setPrefillRes(null)
     setExecForm({
       open: true,
       code: card.code,
       name: card.name,
       side,
+      order_type: 't_trade',
       price: px ? Number(px).toFixed(2) : '',
       shares: String(lot),
       account_label: card.holdings[0]?.account_label || '',
       note,
     })
+  }
+
+  const handlePrefillCheck = async () => {
+    const price = Number(execForm.price)
+    const shares = Number(execForm.shares)
+    if (!execForm.code || !Number.isFinite(price) || price <= 0 || !Number.isFinite(shares) || shares < 100 || shares % 100 !== 0) {
+      setError('请先填写有效的委托价与整百股数再执行 L2 风控预检')
+      return
+    }
+    setPrefillBusy(true)
+    setError('')
+    try {
+      const res = await prefillCheckG3Order({
+        code: execForm.code,
+        name: execForm.name,
+        side: execForm.side,
+        price,
+        shares,
+        order_type: execForm.order_type,
+      })
+      setPrefillRes(res)
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || 'L2 风控预检失败')
+    } finally {
+      setPrefillBusy(false)
+    }
   }
 
   const handleSubmitExec = async () => {
@@ -645,13 +680,16 @@ export default function G3Desk() {
         code: execForm.code,
         name: execForm.name,
         side: execForm.side,
+        order_type: execForm.order_type,
         price,
         shares,
         account_label: execForm.account_label,
         note: execForm.note,
       })
-      setMsg(`已登记做T成交：${execForm.name} ${execForm.side === 'BUY' ? '买入' : '卖出'} ${shares} 股 @ ${price.toFixed(2)}`)
+      const typeLabel = execForm.order_type === 'base_rebalance' ? 'R51水位调仓' : '做T'
+      setMsg(`已登记${typeLabel}成交：${execForm.name} ${execForm.side === 'BUY' ? '买入' : '卖出'} ${shares} 股 @ ${price.toFixed(2)}`)
       setExecForm(EMPTY_EXEC_FORM)
+      setPrefillRes(null)
       await load(false, false)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
@@ -1276,34 +1314,45 @@ export default function G3Desk() {
         </div>
       </Card>
 
-      {/* 快捷手工做T登记面板（内联弹出，不遮挡盯盘） */}
+      {/* 快捷手工成交登记 + Phase 3B R51分型 + Phase 3C L2风控预检面板 */}
       {execForm.open && (
         <Card className="border-blue-500/50 bg-blue-950/20">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
             <div className="text-sm font-semibold text-white">
-              登记当日做T成交 · {execForm.name} ({execForm.code})
+              登记当日成交 / L2 风控预检 · {execForm.name} ({execForm.code})
             </div>
-            <Button plain onClick={() => setExecForm(EMPTY_EXEC_FORM)}>取消</Button>
+            <Button plain onClick={() => { setExecForm(EMPTY_EXEC_FORM); setPrefillRes(null) }}>取消</Button>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-6">
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-7">
+            <div>
+              <label className="block text-xs text-zinc-400">单据分型（R51）</label>
+              <select
+                value={execForm.order_type}
+                onChange={(e) => { setExecForm((f) => ({ ...f, order_type: e.target.value as 't_trade' | 'base_rebalance' })); setPrefillRes(null) }}
+                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
+              >
+                <option value="t_trade">做T滚动单 (t_trade)</option>
+                <option value="base_rebalance">R51水位调仓 (rebalance)</option>
+              </select>
+            </div>
             <div>
               <label className="block text-xs text-zinc-400">方向</label>
               <select
                 value={execForm.side}
-                onChange={(e) => setExecForm((f) => ({ ...f, side: e.target.value as 'BUY' | 'SELL' }))}
+                onChange={(e) => { setExecForm((f) => ({ ...f, side: e.target.value as 'BUY' | 'SELL' })); setPrefillRes(null) }}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
               >
-                <option value="SELL">卖出T（先卖/高抛）</option>
-                <option value="BUY">买入T（低吸/接回）</option>
+                <option value="SELL">卖出（先卖/高抛/减水位）</option>
+                <option value="BUY">买入（低吸/接回/加底仓）</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs text-zinc-400">成交价</label>
+              <label className="block text-xs text-zinc-400">价格</label>
               <input
                 type="number"
                 step="0.01"
                 value={execForm.price}
-                onChange={(e) => setExecForm((f) => ({ ...f, price: e.target.value }))}
+                onChange={(e) => { setExecForm((f) => ({ ...f, price: e.target.value })); setPrefillRes(null) }}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 font-mono text-sm text-white"
               />
             </div>
@@ -1314,19 +1363,24 @@ export default function G3Desk() {
                 step="100"
                 min="100"
                 value={execForm.shares}
-                onChange={(e) => setExecForm((f) => ({ ...f, shares: e.target.value }))}
+                onChange={(e) => { setExecForm((f) => ({ ...f, shares: e.target.value })); setPrefillRes(null) }}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 font-mono text-sm text-white"
               />
             </div>
-            <div className="col-span-2">
+            <div>
               <label className="block text-xs text-zinc-400">备注（选填）</label>
               <input
                 type="text"
                 value={execForm.note}
                 onChange={(e) => setExecForm((f) => ({ ...f, note: e.target.value }))}
-                placeholder="如：反T卖1成交 / 急杀接回"
+                placeholder="如：反T卖1 / R51减仓"
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
               />
+            </div>
+            <div className="flex items-end">
+              <Button outline onClick={() => void handlePrefillCheck()} disabled={prefillBusy} className="w-full">
+                {prefillBusy ? '预检中…' : 'L2 风控预检'}
+              </Button>
             </div>
             <div className="flex items-end">
               <Button onClick={handleSubmitExec} disabled={submittingExec} className="w-full">
@@ -1334,6 +1388,40 @@ export default function G3Desk() {
               </Button>
             </div>
           </div>
+
+          {prefillRes && (
+            <div
+              className={`mt-3 rounded-lg border p-3 text-xs ${
+                prefillRes.approved
+                  ? 'border-emerald-500/40 bg-emerald-950/20'
+                  : 'border-red-500/40 bg-red-950/20'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge color={prefillRes.approved ? 'emerald' : 'red'}>
+                    {prefillRes.approved ? 'L2 预检通过 · 人工核对后下单' : 'L2 硬风控拦截'}
+                  </Badge>
+                  <span className="font-mono text-zinc-300">放行码 {prefillRes.draft_id}</span>
+                  <Badge color="blue">{prefillRes.order.order_type_label}</Badge>
+                </div>
+                <span className="font-mono text-zinc-300">
+                  预计金额 ¥{fmtNum(prefillRes.order.amount)}
+                </span>
+              </div>
+              <p className="mt-1.5 font-medium text-zinc-100">{prefillRes.summary}</p>
+              <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                {prefillRes.checks.map((c, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5 text-[11px]">
+                    <span>{c.ok ? '✅' : c.hard ? '⛔' : '⚠️'}</span>
+                    <span className={c.ok ? 'text-zinc-300' : c.hard ? 'text-red-300' : 'text-amber-200'}>
+                      {c.detail}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       )}
 

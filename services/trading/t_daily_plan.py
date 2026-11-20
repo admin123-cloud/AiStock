@@ -772,15 +772,19 @@ def append_t_execution(
     side: str,
     price: float,
     shares: int,
+    order_type: str = "t_trade",
     account_label: str = "",
     note: str = "",
 ) -> dict[str, Any]:
-    """登记一笔当日手工做T成交。side ∈ {'BUY', 'SELL'}。"""
+    """登记一笔当日手工成交。side ∈ {'BUY', 'SELL'}；order_type ∈ {'t_trade', 'base_rebalance'}。"""
     side_u = side.upper().strip()
     if side_u not in ("BUY", "SELL"):
         raise ValueError("side 必须为 BUY 或 SELL")
     if price <= 0 or shares <= 0 or shares % 100 != 0:
         raise ValueError("price 必须 > 0，shares 必须为 100 的正整数倍")
+    otype = str(order_type or "t_trade").strip().lower()
+    if otype not in ("t_trade", "base_rebalance"):
+        raise ValueError("order_type 必须为 t_trade 或 base_rebalance")
     code6 = str(code).split(".")[0].zfill(6)
     entry = {
         "id": uuid.uuid4().hex[:10],
@@ -789,6 +793,7 @@ def append_t_execution(
         "code": code6,
         "name": name or code6,
         "side": side_u,
+        "order_type": otype,
         "price": round(float(price), 3),
         "shares": int(shares),
         "amount": round(float(price) * int(shares), 2),
@@ -820,9 +825,28 @@ def delete_t_execution(trade_date: str, exec_id: str) -> bool:
 
 
 def summarize_intraday_executions(executions: Sequence[Mapping[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    """按股票汇总当日 T 仓净敞口（+买未卖 / -卖未买）及已配对做T预估净盈亏。"""
+    """R51 分型汇总：t_trade（做T单）计日内敞口与配对盈亏；base_rebalance（水位调仓单）独立记账不触发未平T敞口告警。"""
     by_code: dict[str, dict[str, Any]] = {}
+    t_exec_count = 0
+    rebal_count = 0
+    rebal_buy_amount = 0.0
+    rebal_sell_amount = 0.0
+
     for e in executions:
+        otype = str(e.get("order_type") or "t_trade").strip().lower()
+        sh = int(e.get("shares") or 0)
+        amt = float(e.get("amount") or 0.0)
+        side_u = str(e.get("side") or "").upper()
+
+        if otype == "base_rebalance":
+            rebal_count += 1
+            if side_u == "BUY":
+                rebal_buy_amount += amt
+            else:
+                rebal_sell_amount += amt
+            continue
+
+        t_exec_count += 1
         c = str(e.get("code") or "")
         st = by_code.setdefault(c, {
             "buy_shares": 0,
@@ -835,9 +859,7 @@ def summarize_intraday_executions(executions: Sequence[Mapping[str, Any]]) -> tu
             "status": "flat",
             "status_label": "已平",
         })
-        sh = int(e.get("shares") or 0)
-        amt = float(e.get("amount") or 0.0)
-        if str(e.get("side")).upper() == "BUY":
+        if side_u == "BUY":
             st["buy_shares"] += sh
             st["buy_amount"] += amt
         else:
@@ -879,6 +901,11 @@ def summarize_intraday_executions(executions: Sequence[Mapping[str, Any]]) -> tu
 
     summary = {
         "execution_count": len(executions),
+        "t_trade_count": t_exec_count,
+        "rebalance_count": rebal_count,
+        "rebalance_buy_amount": round(rebal_buy_amount, 2),
+        "rebalance_sell_amount": round(rebal_sell_amount, 2),
+        "rebalance_net_amount": round(rebal_buy_amount - rebal_sell_amount, 2),
         "open_exposure_codes": open_codes,
         "open_exposure_shares": total_open_abs,
         "realized_t_pnl": round(total_realized, 2),

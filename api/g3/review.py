@@ -5,9 +5,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
+from api.g3.desk import get_g3_market_gate
 from services.g3.attribution import build_four_dim_attribution
+from services.g3.trading_coach import build_trading_coach_report, save_agent_coach_notes
 from utils.common.paths import runtime_path
 
 router = APIRouter()
@@ -115,3 +118,38 @@ def get_g3_review_attribution(
         benchmark_code=benchmark,
         benchmark_name=bench_name,
     )
+
+
+class CoachNotesIngestRequest(BaseModel):
+    report_date: str
+    headline: str
+    weekly_diagnosis: str
+    red_lines: list[str] = Field(default_factory=list)
+    agent_name: str = "antigravity_agent"
+
+
+@router.get("/review/coach")
+def get_g3_review_coach(
+    days: int = Query(14, ge=7, le=90, description="行为体检回溯自然日数"),
+) -> dict[str, Any]:
+    """Phase 3A：盘后 AI 交易教练与周度行为体检报告。"""
+    try:
+        gate = get_g3_market_gate()
+    except Exception:
+        gate = None
+    return build_trading_coach_report(days=days, market_gate=gate)
+
+
+@router.post("/review/coach/ingest")
+def post_g3_review_coach_ingest(req: CoachNotesIngestRequest) -> dict[str, Any]:
+    """Scoped-write：供现有 Agent 提交盘后/周度深度复盘教练点评。"""
+    if not req.headline.strip():
+        raise HTTPException(status_code=400, detail="headline 不能为空")
+    doc = save_agent_coach_notes(
+        report_date=req.report_date,
+        headline=req.headline,
+        weekly_diagnosis=req.weekly_diagnosis,
+        red_lines=req.red_lines,
+        agent_name=req.agent_name,
+    )
+    return {"status": "ok", "date": doc["date"], "generated_at": doc["generated_at"]}

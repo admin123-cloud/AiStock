@@ -99,11 +99,80 @@ export interface G3TExecution {
   code: string
   name: string
   side: 'BUY' | 'SELL' | string
+  order_type?: 't_trade' | 'base_rebalance' | string
   price: number
   shares: number
   amount: number
   account_label?: string
   note?: string
+}
+
+export interface G3PrefillCheckResponse {
+  schema: string
+  draft_id: string
+  created_at: string
+  approved: boolean
+  execution_mode: string
+  in_trading_session: boolean
+  order: {
+    account_id: string
+    code: string
+    name: string
+    side: string
+    order_type: string
+    order_type_label: string
+    price: number
+    shares: number
+    amount: number
+  }
+  checks: Array<{ check: string; ok: boolean; hard: boolean; detail: string }>
+  blockers: string[]
+  warnings: string[]
+  summary: string
+}
+
+export interface G3TradingCoachResponse {
+  schema: string
+  as_of: string
+  window_days: number
+  from_date: string
+  to_date: string
+  grade: string
+  metrics: {
+    avg_discipline_score?: number | null
+    violations_total: number
+    stop_ignored_codes: number
+    knife_catch_total: number
+    off_plan_total: number
+    unmatched_drafts_total: number
+    t_trade_pnl: number
+    estimated_stop_drag_pnl: number
+  }
+  bleeding_points: Array<{
+    tag: string
+    severity: 'critical' | 'high' | 'medium' | string
+    title: string
+    detail: string
+    impact_estimate?: number | null
+    dates: string[]
+  }>
+  next_week_red_lines: string[]
+  agent_notes?: {
+    date: string
+    generated_at: string
+    agent_name: string
+    headline: string
+    weekly_diagnosis: string
+    red_lines: string[]
+  } | null
+  recent_daily_discipline: Array<{
+    date: string
+    discipline_score?: number | null
+    violations_total: number
+    unmatched_drafts: number
+    t_trade_pnl: number
+    estimated_stop_drag: number
+  }>
 }
 
 export interface G3MarketDirective {
@@ -497,9 +566,19 @@ export const recordG3TExecution = (payload: {
   side: 'BUY' | 'SELL'
   price: number
   shares: number
+  order_type?: 't_trade' | 'base_rebalance'
   account_label?: string
   note?: string
 }) => request.post<unknown, { status: string; entry: G3TExecution }>('/g3/desk/execution', payload)
+export const prefillCheckG3Order = (payload: {
+  code: string
+  name?: string
+  side: 'BUY' | 'SELL'
+  price: number
+  shares: number
+  order_type?: 't_trade' | 'base_rebalance'
+  account_id?: string
+}) => request.post<unknown, G3PrefillCheckResponse>('/g3/desk/prefill-check', payload)
 export const deleteG3TExecution = (execId: string) =>
   request.post<unknown, { status: string; deleted_id: string }>('/g3/desk/execution/delete', { exec_id: execId })
 export const getG3NotifyConfig = () =>
@@ -532,6 +611,8 @@ export const pushG3PremarketBriefWechat = () =>
   request.post<unknown, { status: string; ok: boolean; date?: string; channel: string; detail: string }>('/g3/premarket-brief/push-wechat', {}, { timeout: 30000 })
 export const getG3ReviewAttribution = (days = 30, benchmark = '000300.SH') =>
   request.get<unknown, G3AttributionResponse>('/g3/review/attribution', { params: { days, benchmark } })
+export const getG3ReviewCoach = (days = 14) =>
+  request.get<unknown, G3TradingCoachResponse>('/g3/review/coach', { params: { days } })
 export const getG3DailyReview = (limit = 10) =>
   request.get<unknown, G3DailyReviewResponse>('/g3/review/daily', { params: { limit } })
 export const getG3ShadowReview = (limit = 20) =>

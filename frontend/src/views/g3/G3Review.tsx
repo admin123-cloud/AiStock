@@ -6,15 +6,17 @@ import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import {
   getG3DailyReview,
   getG3ReviewAttribution,
+  getG3ReviewCoach,
   getG3ShadowReview,
   getG3SignalQuality,
   type G3AttributionResponse,
   type G3DailyReviewResponse,
   type G3ShadowReviewResponse,
   type G3SignalQualityResponse,
+  type G3TradingCoachResponse,
 } from '@/api/g3'
 
-type TabKey = 'attribution' | 'daily' | 'shadow' | 'quality'
+type TabKey = 'attribution' | 'coach' | 'daily' | 'shadow' | 'quality'
 
 const fmtMoney = (v?: number | null): string => {
   if (v == null || !Number.isFinite(Number(v))) return '—'
@@ -38,6 +40,7 @@ export default function G3Review() {
   const [windowDays, setWindowDays] = useState<number>(30)
   const [benchmark, setBenchmark] = useState<string>('000300.SH')
   const [attribution, setAttribution] = useState<G3AttributionResponse | null>(null)
+  const [coach, setCoach] = useState<G3TradingCoachResponse | null>(null)
   const [daily, setDaily] = useState<G3DailyReviewResponse | null>(null)
   const [shadow, setShadow] = useState<G3ShadowReviewResponse | null>(null)
   const [quality, setQuality] = useState<G3SignalQualityResponse | null>(null)
@@ -48,13 +51,15 @@ export default function G3Review() {
     setLoading(true)
     setError('')
     try {
-      const [attr, d, s, q] = await Promise.all([
+      const [attr, c, d, s, q] = await Promise.all([
         getG3ReviewAttribution(windowDays, benchmark),
+        getG3ReviewCoach(14),
         getG3DailyReview(10),
         getG3ShadowReview(20),
         getG3SignalQuality(10),
       ])
       setAttribution(attr)
+      setCoach(c)
       setDaily(d)
       setShadow(s)
       setQuality(q)
@@ -91,6 +96,9 @@ export default function G3Review() {
       <div className="flex flex-wrap gap-2">
         <Button color={tab === 'attribution' ? 'blue' : 'zinc'} onClick={() => setTab('attribution')}>
           四维收益归因 ({attribution?.daily_rows?.length ?? 0} 天)
+        </Button>
+        <Button color={tab === 'coach' ? 'blue' : 'zinc'} onClick={() => setTab('coach')}>
+          AI 交易教练 ({coach?.bleeding_points?.length ?? 0} 项出血点)
         </Button>
         <Button color={tab === 'daily' ? 'blue' : 'zinc'} onClick={() => setTab('daily')}>
           日终复盘与对账 ({daily?.daily_reviews?.length ?? 0})
@@ -240,6 +248,88 @@ export default function G3Review() {
                   <li key={i}>• {n}</li>
                 ))}
               </ul>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {tab === 'coach' && (
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="近 14 日纪律评级"
+              value={coach?.grade || '—'}
+              hint={`平均纪律分 ${coach?.metrics?.avg_discipline_score ?? '—'}`}
+            />
+            <StatCard
+              label="止损违约标的"
+              value={`${coach?.metrics?.stop_ignored_codes ?? 0} 只`}
+              hint={`估算风险拖延 ${fmtMoney(coach?.metrics?.estimated_stop_drag_pnl)}`}
+            />
+            <StatCard
+              label="接飞刀 / 计划外交易"
+              value={`${coach?.metrics?.knife_catch_total ?? 0} / ${coach?.metrics?.off_plan_total ?? 0}`}
+              hint={`总违约 ${coach?.metrics?.violations_total ?? 0} 次`}
+            />
+            <StatCard
+              label="近 14 日做T净增厚"
+              value={fmtMoney(coach?.metrics?.t_trade_pnl)}
+              hint={`未跟单草案 ${coach?.metrics?.unmatched_drafts_total ?? 0} 条`}
+            />
+          </div>
+
+          <Card className="border-red-500/40 bg-red-950/10">
+            <div className="mb-2 flex items-center justify-between">
+              <SectionTitle title="下周必须守住的行为红线（Phase 3A）" />
+              <Badge color="red">止血铁律</Badge>
+            </div>
+            <ul className="space-y-2 text-sm text-zinc-100">
+              {(coach?.next_week_red_lines || []).map((line, i) => (
+                <li key={i} className="rounded-md border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </Card>
+
+          {coach?.agent_notes && (
+            <Card className="border-blue-500/40 bg-blue-950/10">
+              <div className="mb-2 flex items-center justify-between">
+                <SectionTitle title={`Agent 深度教练点评 · ${coach.agent_notes.headline}`} />
+                <Badge color="blue">{coach.agent_notes.date}</Badge>
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-200">
+                {coach.agent_notes.weekly_diagnosis}
+              </p>
+            </Card>
+          )}
+
+          <Card>
+            <div className="mb-2 flex items-center justify-between">
+              <SectionTitle title="行为出血点诊断清单" />
+              <Badge color="amber">{coach?.bleeding_points?.length ?? 0} 项</Badge>
+            </div>
+            {!coach?.bleeding_points?.length ? (
+              <div className="py-6 text-center text-sm text-emerald-300">近 14 日未检出显著行为出血点，继续保持纪律！</div>
+            ) : (
+              <div className="space-y-2">
+                {coach.bleeding_points.map((bp, idx) => (
+                  <div key={`${bp.tag}-${idx}`} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Badge color={bp.severity === 'critical' ? 'red' : bp.severity === 'high' ? 'amber' : 'blue'}>
+                          {bp.severity === 'critical' ? '严重' : bp.severity === 'high' ? '高危' : '关注'}
+                        </Badge>
+                        <span className="text-sm font-semibold text-white">{bp.title}</span>
+                      </div>
+                      {bp.impact_estimate != null && (
+                        <span className="font-mono text-amber-300">估算影响 {fmtMoney(bp.impact_estimate)}</span>
+                      )}
+                    </div>
+                    <p className="mt-1.5 text-zinc-300">{bp.detail}</p>
+                  </div>
+                ))}
+              </div>
             )}
           </Card>
         </div>

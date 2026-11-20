@@ -115,6 +115,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/g3/market-gate',
     '/api/g3/premarket-brief',
     '/api/g3/review/attribution',
+    '/api/g3/review/coach',
     '/api/g3/review/daily',
     '/api/g3/review/shadow',
     '/api/g3/review/signal-quality',
@@ -176,8 +177,10 @@ _SCOPED_WRITE_PREVIEW_PATHS = frozenset({
     '/api/g3/desk/generate-plan',
     '/api/g3/desk/notify/config',
     '/api/g3/desk/notify/test',
+    '/api/g3/desk/prefill-check',
     '/api/g3/premarket-brief/generate',
     '/api/g3/premarket-brief/push-wechat',
+    '/api/g3/review/coach/ingest',
     '/api/g3/watchlist/sync-ths',
     '/api/g3/watchlist/upsert',
 })
