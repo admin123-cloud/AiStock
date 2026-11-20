@@ -79,6 +79,7 @@ def generate_premarket_brief(
     *,
     market_gate: Mapping[str, Any],
     mainwave_payload: Optional[Mapping[str, Any]] = None,
+    strategy_matrix: Optional[Mapping[str, Any]] = None,
     overnight_notes: Optional[Sequence[str]] = None,
     agent_thesis: Optional[str] = None,
     source: str = "auto_baseline",
@@ -130,6 +131,18 @@ def generate_premarket_brief(
     elif top_picks and not allow_new:
         checklist.append(f"【观察名单】绿灯池现有 {len(top_picks)} 只储备标的，因大盘防守仅观察不开仓。")
 
+    # 融合 Phase 4 三腿配额到作战清单与 Markdown 简报
+    alloc = (strategy_matrix or {}).get("allocation") if isinstance(strategy_matrix, Mapping) else None
+    alloc_line = None
+    if isinstance(alloc, Mapping):
+        alloc_line = (
+            f"进攻腿(主升) {alloc.get('offense_pct', 0):.0f}%｜"
+            f"稳健腿(ETF) {alloc.get('defense_etf_pct', 0):.0f}%｜"
+            f"增强腿(做T) {alloc.get('t_enhance_pct', 0):.0f}%｜"
+            f"现金留存 {alloc.get('cash_pct', 0):.0f}%"
+        )
+        checklist.append(f"【三腿配额】{alloc_line}")
+
     # 生成一页式 Markdown 简报（适合前端展示与微信推送）
     turnover_str = f"{tf['forecast_trillion']}万亿" if tf.get("forecast_trillion") is not None else "—"
     actual_str = f"{actual_pct:.1f}%" if actual_pct is not None else "待同步"
@@ -139,6 +152,8 @@ def generate_premarket_brief(
         f"■ 当前水位：{actual_str}（{wl.get('status') or 'unknown'}）",
         f"■ 核心盘面：上证R51={idx.get('confirmed_regime') or '—'}（连续{idx.get('streak_days') or 0}日）｜情绪={mood.get('mood_label') or '—'}（涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}）｜成交额={turnover_str}",
     ]
+    if alloc_line:
+        lines.append(f"■ 三腿配额：{alloc_line}")
     if agent_thesis:
         lines.append(f"■ AI 主线研判：{agent_thesis.strip()}")
     if overnight_notes:

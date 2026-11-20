@@ -120,6 +120,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/g3/review/shadow',
     '/api/g3/review/signal-quality',
     '/api/g3/settings',
+    '/api/g3/strategy-matrix',
     '/api/health/check',
     '/api/health/runtime',
     '/api/market/advance-decline-distribution',

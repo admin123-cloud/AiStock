@@ -1083,6 +1083,40 @@ export default function G3Desk() {
                     {gate.warnings.join('；')}
                   </div>
                 )}
+                {data?.strategy_allocation?.allocation && (
+                  <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/60 p-2.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-zinc-200">
+                        三腿动态配额（全站联动）
+                        {data.strategy_allocation.defense_auto_cash && (
+                          <span className="ml-2 text-[11px] text-amber-300">· 宽基全破位，稳健腿已自动转现金</span>
+                        )}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Link to="/g3/mainwave" className="text-blue-400 hover:underline">主升选股 →</Link>
+                        <Link to="/g3/settings" className="text-blue-400 hover:underline">策略总控台 →</Link>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-4 gap-2 font-mono text-[11px]">
+                      <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
+                        <div className="text-zinc-400">进攻·主升</div>
+                        <div className="text-sm font-semibold text-white">{data.strategy_allocation.allocation.offense_pct}%</div>
+                      </div>
+                      <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
+                        <div className="text-zinc-400">稳健·ETF</div>
+                        <div className="text-sm font-semibold text-blue-300">{data.strategy_allocation.allocation.defense_etf_pct}%</div>
+                      </div>
+                      <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
+                        <div className="text-zinc-400">增强·做T</div>
+                        <div className="text-sm font-semibold text-emerald-300">{data.strategy_allocation.allocation.t_enhance_pct}%</div>
+                      </div>
+                      <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
+                        <div className="text-zinc-400">现金留存</div>
+                        <div className="text-sm font-semibold text-amber-300">{data.strategy_allocation.allocation.cash_pct}%</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-2.5 lg:col-span-5">

@@ -450,6 +450,69 @@ export interface G3PremarketBrief {
   markdown_text: string
 }
 
+export interface G3StrategyLeg {
+  leg_id: 'offense' | 'defense_etf' | 't_enhance' | string
+  name: string
+  role: string
+  target_pct: number
+  base_pct: number
+  status: 'active' | 'throttled' | 'halted' | 'cash_defense' | 'observe_only' | 'review_needed' | string
+  status_label: string
+  contracts_count: number
+  contracts: Array<{
+    file: string
+    strategy_id: string
+    name: string
+    leg: string
+    status: string
+    version?: string | null
+    description?: string
+  }>
+  action_route: string
+  action_label: string
+  feedback_note: string
+}
+
+export interface G3DefenseEtfSignal {
+  index_code: string
+  index_name: string
+  etf_code: string
+  etf_name: string
+  style: string
+  as_of_date?: string | null
+  signal: 'long_trend' | 'neutral' | 'cash_defense' | 'missing' | string
+  signal_label: string
+  close?: number | null
+  ma20?: number | null
+  ma60?: number | null
+  ret_20d_pct?: number | null
+  ann_vol_20d_pct?: number | null
+  vol_target_weight_pct: number
+}
+
+export interface G3StrategyMatrix {
+  schema: string
+  as_of: string
+  regime: string
+  regime_label: string
+  allow_new_mainwave: boolean
+  defense_auto_cash: boolean
+  allocation: {
+    offense_pct: number
+    defense_etf_pct: number
+    t_enhance_pct: number
+    cash_pct: number
+    total_invest_cap_pct: number
+    actual_position_pct?: number | null
+    waterline_status?: string | null
+  }
+  legs: G3StrategyLeg[]
+  defense_etf_signals: G3DefenseEtfSignal[]
+  r40_shadow_progress: Record<string, unknown>
+  governance_pipeline: Array<{ stage: string; rule: string; status: string }>
+  contracts_total: number
+}
+
 export interface G3DeskResponse {
   as_of: string
   today?: string
@@ -462,6 +525,18 @@ export interface G3DeskResponse {
   }
   market_directive?: G3MarketDirective
   market_regime_gate?: G3MarketRegimeGate
+  strategy_allocation?: {
+    allocation?: G3StrategyMatrix['allocation']
+    defense_auto_cash?: boolean
+    legs?: Array<{
+      leg_id: string
+      name: string
+      target_pct: number
+      status: string
+      status_label: string
+      action_route: string
+    }>
+  } | null
   premarket_brief?: G3PremarketBrief | null
   intraday_summary?: {
     execution_count: number
@@ -549,6 +624,7 @@ export interface G3SettingsResponse {
       lunch_gate: string
     }
   }
+  strategy_matrix?: G3StrategyMatrix
   l2_risk_config: Record<string, unknown>
   contract_stops: Record<string, unknown>
   strategy_contracts: G3StrategyContract[]

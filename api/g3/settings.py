@@ -7,6 +7,10 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from api.g3.desk import get_g3_market_gate
+from services.g3.attribution import build_four_dim_attribution
+from services.g3.strategy_matrix import build_strategy_matrix
+from services.g3.trading_coach import build_trading_coach_report
 from utils.common.paths import PROJECT_ROOT, runtime_path
 
 router = APIRouter()
@@ -47,6 +51,7 @@ def get_g3_settings() -> dict[str, Any]:
                 "risk": data.get("risk") or {},
             })
 
+    matrix = _build_live_matrix()
     return {
         "t_trade_rules": {
             "regime_engine": "R34 日线三周期判定（MA5/MA10/MA20 + pos20）",
@@ -65,7 +70,34 @@ def get_g3_settings() -> dict[str, Any]:
                 "lunch_gate": "R56 午休闸（建议不等于成交）",
             },
         },
+        "strategy_matrix": matrix,
         "l2_risk_config": l2_risk,
         "contract_stops": contract_stop,
         "strategy_contracts": contracts,
     }
+
+
+def _build_live_matrix() -> dict[str, Any]:
+    try:
+        gate = get_g3_market_gate()
+    except Exception:
+        gate = None
+    try:
+        attr_sum = build_four_dim_attribution(days=30).get("summary")
+    except Exception:
+        attr_sum = None
+    try:
+        coach = build_trading_coach_report(days=14, market_gate=gate)
+    except Exception:
+        coach = None
+    return build_strategy_matrix(
+        market_gate=gate,
+        attribution_summary=attr_sum,
+        coach_report=coach,
+    )
+
+
+@router.get("/strategy-matrix")
+def get_g3_strategy_matrix() -> dict[str, Any]:
+    """Phase 4：三腿互补策略矩阵、动态资金配额、6 大宽基 ETF 趋势与治理门禁。"""
+    return _build_live_matrix()

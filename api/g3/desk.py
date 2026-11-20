@@ -19,6 +19,7 @@ from services.g3.premarket_brief import (
     load_latest_premarket_brief,
     push_premarket_brief_wechat,
 )
+from services.g3.strategy_matrix import build_strategy_matrix
 from services.trading.holding_t_watchlist import (
     read_watchlist,
     sync_watchlist_from_ths,
@@ -361,6 +362,27 @@ def get_g3_desk(
     # 按实战优先级排序：可做T & 风险/机会高优先排前，不可做T零股排后
     cards.sort(key=lambda x: (x["daily_plan"].get("priority", 99), -x["t_lot_cap"], x["code"]))
 
+    # Phase 4 全站联动：基于当前大盘闸门计算三腿动态配额摘要
+    try:
+        _matrix_snap = build_strategy_matrix(market_gate=market_regime_gate)
+        strategy_allocation = {
+            "allocation": _matrix_snap.get("allocation"),
+            "defense_auto_cash": _matrix_snap.get("defense_auto_cash"),
+            "legs": [
+                {
+                    "leg_id": lg["leg_id"],
+                    "name": lg["name"],
+                    "target_pct": lg["target_pct"],
+                    "status": lg["status"],
+                    "status_label": lg["status_label"],
+                    "action_route": lg["action_route"],
+                }
+                for lg in (_matrix_snap.get("legs") or [])
+            ],
+        }
+    except Exception:
+        strategy_allocation = None
+
     return {
         "as_of": now_bj.isoformat(timespec="seconds"),
         "today": today_str,
@@ -373,6 +395,7 @@ def get_g3_desk(
         },
         "market_directive": market_directive,
         "market_regime_gate": market_regime_gate,
+        "strategy_allocation": strategy_allocation,
         "premarket_brief": load_latest_premarket_brief(today_str),
         "intraday_summary": {
             **exec_summary,
@@ -668,9 +691,14 @@ def post_g3_premarket_brief_generate(
         mw = merge_screening_into_mainwave(scan_mainwave_daily(force_refresh=False), market_gate=gate)
     except Exception:
         mw = {}
+    try:
+        matrix = build_strategy_matrix(market_gate=gate)
+    except Exception:
+        matrix = None
     return generate_premarket_brief(
         market_gate=gate,
         mainwave_payload=mw,
+        strategy_matrix=matrix,
         overnight_notes=body.overnight_notes,
         agent_thesis=body.agent_thesis,
         source=body.source,
