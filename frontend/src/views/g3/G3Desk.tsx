@@ -275,8 +275,8 @@ export default function G3Desk() {
   })
   const [liveBanner, setLiveBanner] = useState<LiveAlertBanner | null>(null)
   const [notifyCfg, setNotifyCfg] = useState<G3NotifyConfig | null>(null)
-  const [wxEnabled, setWxEnabled] = useState(false)
-  const [wxChannel, setWxChannel] = useState('pushplus')
+  const [wxEnabled, setWxEnabled] = useState(true)
+  const [wxChannel, setWxChannel] = useState('ilink_bridge')
   const [wxPushplusToken, setWxPushplusToken] = useState('')
   const [wxWecomWebhook, setWxWecomWebhook] = useState('')
   const [wxServerchanKey, setWxServerchanKey] = useState('')
@@ -809,12 +809,27 @@ export default function G3Desk() {
                     onChange={(e) => setWxChannel(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
                   >
-                    <option value="pushplus">PushPlus 推送加（推荐，个人微信免费200条/天）</option>
-                    <option value="wecom_webhook">企业微信群机器人 Webhook（免费无上限，微信可收）</option>
-                    <option value="serverchan">Server酱 Turbo（SendKey 个人微信）</option>
+                    <option value="ilink_bridge">AiStock 专属微信（iLink 双向免费，接管原 Hermes 通道）</option>
                     <option value="qq_email">QQ 邮箱微信提醒（系统已配SMTP，零注册即用）</option>
+                    <option value="wecom_webhook">企业微信群机器人 Webhook（免费无上限）</option>
+                    <option value="serverchan">Server酱 Turbo（SendKey 个人微信）</option>
+                    <option value="pushplus">PushPlus 推送加</option>
                   </select>
                 </div>
+
+                {wxChannel === 'ilink_bridge' && (
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-2 text-xs text-zinc-300">
+                    <div>
+                      桥接状态：
+                      <span className={notifyCfg?.ilink_bridge_online ? 'font-semibold text-emerald-400' : 'font-semibold text-amber-400'}>
+                        {notifyCfg?.ilink_bridge_online ? '在线（已连接微信）' : '离线（请启动宿主机 weixin_ilink_bridge）'}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-zinc-400">
+                      账号 {notifyCfg?.ilink_account_id || 'f9fe6b0d0535@im.bot'} · Antigravity SDK {notifyCfg?.ilink_sdk_available ? '已就绪' : '未安装'}
+                    </div>
+                  </div>
+                )}
 
                 {wxChannel === 'pushplus' && (
                   <div>

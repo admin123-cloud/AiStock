@@ -169,7 +169,11 @@ export interface G3DeskCard {
 
 export interface G3NotifyConfig {
   enabled: boolean
-  channel: 'pushplus' | 'wecom_webhook' | 'serverchan' | 'qq_email' | string
+  channel: 'ilink_bridge' | 'pushplus' | 'wecom_webhook' | 'serverchan' | 'qq_email' | string
+  ilink_bridge_url?: string
+  ilink_bridge_online?: boolean
+  ilink_account_id?: string
+  ilink_sdk_available?: boolean
   has_pushplus_token: boolean
   pushplus_token_masked: string
   has_wecom_webhook: boolean

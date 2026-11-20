@@ -53,8 +53,9 @@ def _notified_path(trade_date: str) -> Path:
 
 def _default_config() -> dict[str, Any]:
     return {
-        "enabled": False,
-        "channel": "pushplus",  # pushplus | wecom_webhook | serverchan | qq_email
+        "enabled": True,
+        "channel": "ilink_bridge",  # ilink_bridge | pushplus | wecom_webhook | serverchan | qq_email
+        "ilink_bridge_url": os.getenv("AISTOCK_WEIXIN_BRIDGE_URL", "http://host.docker.internal:8789"),
         "pushplus_token": "",
         "wecom_webhook": "",
         "serverchan_sendkey": "",
@@ -88,13 +89,30 @@ def _mask_secret(val: str) -> str:
     return f"{s[:4]}****{s[-4:]}"
 
 
+def _check_ilink_bridge_health(url: str) -> dict[str, Any]:
+    base = (url or "http://host.docker.internal:8789").rstrip("/")
+    try:
+        req = urllib.request.Request(f"{base}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            return {"online": bool(data.get("ok")), **data}
+    except Exception:  # noqa: BLE001
+        return {"online": False}
+
+
 def get_public_notify_config() -> dict[str, Any]:
     """返回脱敏后的通知配置，供前端表单展示。"""
     cfg = load_notify_config()
     smtp = _load_smtp_settings()
+    bridge_url = str(cfg.get("ilink_bridge_url") or os.getenv("AISTOCK_WEIXIN_BRIDGE_URL", "http://host.docker.internal:8789"))
+    ilink_health = _check_ilink_bridge_health(bridge_url)
     return {
         "enabled": bool(cfg.get("enabled")),
-        "channel": str(cfg.get("channel") or "pushplus"),
+        "channel": str(cfg.get("channel") or "ilink_bridge"),
+        "ilink_bridge_url": bridge_url,
+        "ilink_bridge_online": bool(ilink_health.get("online")),
+        "ilink_account_id": ilink_health.get("account_id") or "",
+        "ilink_sdk_available": bool(ilink_health.get("sdk_available")),
         "has_pushplus_token": bool(cfg.get("pushplus_token")),
         "pushplus_token_masked": _mask_secret(str(cfg.get("pushplus_token") or "")),
         "has_wecom_webhook": bool(cfg.get("wecom_webhook")),
@@ -115,7 +133,7 @@ def save_notify_config(patch: Mapping[str, Any]) -> dict[str, Any]:
     cfg = load_notify_config()
     if "enabled" in patch:
         cfg["enabled"] = bool(patch["enabled"])
-    if "channel" in patch and str(patch["channel"]) in ("pushplus", "wecom_webhook", "serverchan", "qq_email"):
+    if "channel" in patch and str(patch["channel"]) in ("ilink_bridge", "pushplus", "wecom_webhook", "serverchan", "qq_email"):
         cfg["channel"] = str(patch["channel"])
     for key in ("pushplus_token", "wecom_webhook", "serverchan_sendkey"):
         if key in patch and patch[key] is not None:
@@ -176,9 +194,22 @@ def send_wechat_notification(
 ) -> dict[str, Any]:
     """按当前配置发送一条单向微信通知。返回 {ok, channel, detail}。"""
     cfg = dict(config) if config is not None else load_notify_config()
-    channel = str(cfg.get("channel") or "pushplus")
+    channel = str(cfg.get("channel") or "ilink_bridge")
 
     try:
+        if channel == "ilink_bridge":
+            base = str(cfg.get("ilink_bridge_url") or os.getenv("AISTOCK_WEIXIN_BRIDGE_URL", "http://host.docker.internal:8789")).rstrip("/")
+            payload = json.dumps({"title": title, "text": markdown_body}, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                f"{base}/send",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                res = json.loads(resp.read().decode("utf-8", errors="replace"))
+            return {"ok": bool(res.get("ok")), "channel": channel, "detail": str(res.get("detail") or res)}
+
         if channel == "pushplus":
             token = str(cfg.get("pushplus_token") or "").strip()
             if not token:
