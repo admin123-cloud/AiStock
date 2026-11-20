@@ -806,6 +806,49 @@ def load_t_pool(*, watchlist_store: Optional[Path] = None) -> dict[str, Any]:
     项与其重复时去重）。
     """
     pool = load_broker_holdings()
+    # 若双账号同花顺最新采集快照（ths_read_account/latest_multi.json）比 broker_state 更新，
+    # 自动同步最新真实持仓股数，避免沿用数天前的过期底仓（fail-safe，缺件回退 broker_state）。
+    try:
+        import sys
+        proj = Path(__file__).resolve().parents[2]
+        if str(proj) not in sys.path:
+            sys.path.insert(0, str(proj))
+        from utils.paths import runtime_path as _rt_path
+        multi_path = _rt_path("ths_read_account", "latest_multi.json")
+        multi_doc = _load_json(multi_path)
+        if isinstance(multi_doc, dict) and isinstance(multi_doc.get("accounts"), dict):
+            multi_ts = str(multi_doc.get("generated_at") or "")
+            broker_ts = str(pool.get("updated_at") or "")
+            if multi_ts and (not broker_ts or multi_ts > broker_ts):
+                live_list: list[dict[str, Any]] = []
+                for acct_id, entry in (multi_doc.get("accounts") or {}).items():
+                    ra = (entry or {}).get("read_account") if isinstance(entry, dict) else None
+                    for h in (ra or {}).get("holdings") or []:
+                        if not isinstance(h, dict):
+                            continue
+                        code6 = str(h.get("code") or "").split(".")[0].zfill(6)
+                        if not code6 or code6 == "000000":
+                            continue
+                        try:
+                            sh = int(round(float(h.get("quantity") or h.get("shares") or h.get("qty") or 0)))
+                        except (TypeError, ValueError):
+                            sh = 0
+                        if sh <= 0:
+                            continue
+                        live_list.append({
+                            "code": code6,
+                            "name": str(h.get("name") or ""),
+                            "shares": sh,
+                            "account": str(acct_id),
+                            "source": "ths_read_account",
+                        })
+                if live_list:
+                    pool = dict(pool)
+                    pool["holdings"] = live_list
+                    pool["updated_at"] = multi_ts
+                    pool["holding_source"] = "ths_read_account_latest_multi"
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[pool] 读取 ths_read_account/latest_multi.json 失败，继续用 broker_state: %s", exc)
     # A2（2026-11-13 Owner 裁决）：0 < shares < 200 的微型底仓不入 T 票池
     # （如 300054 鼎龙 100 股——不做 T、不参与判定，免每拍 t_lot_below_min 空转）。
     # shares=0/null 的纯观察票保留（watchlist 设计语义）。对 broker 与最终
@@ -1139,6 +1182,7 @@ def evaluate_code(
     holding: Mapping[str, Any],
     holdings_updated_at: str = "",
     allowed_trigger_kinds: Optional[frozenset] = None,
+    market_breadth: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """单票一拍：触发判定 + 预检门 → 草案（或抑制原因）。纯逻辑、零 IO。
 
@@ -1348,6 +1392,27 @@ def evaluate_code(
                                            "max_sec": FRESHNESS_MAX_SEC})
             continue
 
+        # 风控门禁（大盘极弱冰点 & 破位止损保护）：
+        # 仅在有反T空腿待接回时放行回补买单；否则在极弱市场或跌破止损位时硬性拦截正T开仓买入。
+        is_buy_entry = side in (SIDE_BUY, "buy") and subtype == "entry"
+        if is_buy_entry:
+            acct_id = str(holding.get("account") or "acct1")
+            rev_open = ((state.data.get("fill_closure") or {}).get(acct_id) or {}).get("reverse_t_open") or {}
+            has_reverse_leg = isinstance(rev_open.get(code), dict) and int(rev_open[code].get("qty") or 0) > 0
+            if not has_reverse_leg:
+                if isinstance(market_breadth, Mapping):
+                    b_level = str(market_breadth.get("level") or "").lower()
+                    b_ma20 = market_breadth.get("above_ma20_pct")
+                    if b_level == "weak" or (isinstance(b_ma20, (int, float)) and float(b_ma20) < 20.0):
+                        suppress("weak_market_block_forward_buy", {
+                            "breadth_level": b_level, "above_ma20_pct": b_ma20,
+                        })
+                        continue
+                p_stop = params.get("stop")
+                if p_stop is not None and px < float(p_stop) * 0.995:
+                    suppress("below_stop_block_buy", {"px": px, "stop": float(p_stop)})
+                    continue
+
         qty = lot
         target_band = None
         stop = params.get("stop")
@@ -1365,7 +1430,7 @@ def evaluate_code(
                 continue
             target_band = open_t.get("target_band")
             stop = open_t.get("stop")
-        elif side == SIDE_BUY:
+        elif side in (SIDE_BUY, "buy"):
             target_band = params.get("sell_band")
         elif subtype == "zone":
             target_band = params.get("buy_band")
@@ -1379,7 +1444,7 @@ def evaluate_code(
             "px": px, "px_source": px_source,
             "trigger": {
                 "kind": cand["trigger_kind"],
-                "band": params.get("buy_band") if side == SIDE_BUY else (
+                "band": params.get("buy_band") if side in (SIDE_BUY, "buy") else (
                     open_t.get("target_band") if subtype in ("exit", "fallback_eod") else params.get("sell_band")),
                 "rsi5": round(rsi5, 1), "rsi15": round(rsi15, 1),
                 "vwap": round(vwap, 3) if vwap else None,
@@ -1790,6 +1855,7 @@ def run_beat(
                 bars5=bars5, bars15=bars15, px=px, px_source=px_source, now=now,
                 state=state, drafts_today=drafts_today + new_drafts, holding=holding,
                 holdings_updated_at=str(holdings.get("updated_at") or ""),
+                market_breadth=regime.get("breadth"),
             )
             results[res_key] = res
             if res.get("draft"):
@@ -1967,6 +2033,16 @@ def _fast_settle_holds(spec: Mapping[str, Any], px_c: float,
         if stop is not None and px_c <= float(stop):
             return True, ""
         return False, "px_above_stop"
+    if kind in ("l2_rsi5_rollup", "l2_3k_bottom", "l2_price_rise_ma5", "l2_bottom_divergence"):
+        if spec.get("rsi5_max") is not None and not (
+                rsi5 is not None and rsi5 <= float(spec["rsi5_max"]) + 10.0):
+            return False, "rsi5_above_max"
+        return True, ""
+    if kind in ("l2_rsi5_drop", "l2_3k_top", "l2_price_break_ma5", "l2_top_divergence"):
+        if spec.get("rsi5_min") is not None and not (
+                rsi5 is not None and rsi5 >= float(spec["rsi5_min"]) - 10.0):
+            return False, "rsi5_below_min"
+        return True, ""
     return False, "unknown_kind"
 
 
@@ -2152,6 +2228,7 @@ def run_fast_tick(
                 state=state, drafts_today=drafts_today + new_drafts, holding=holding,
                 holdings_updated_at=str(holdings.get("updated_at") or ""),
                 allowed_trigger_kinds=FAST_TRIGGER_KINDS,
+                market_breadth=regime.get("breadth"),
             )
             res["lane"] = FAST_LANE
             # 结算锚 = 触发时的末根 bar（形成中 bar 优先；无形成中 bar 的退化
