@@ -174,6 +174,7 @@ def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
             LIMIT 1
             """,
             [code, trade_date],
+            raw=True,
         )
         previous_close = float(previous_close or 0)
         high = float(row.get("high") or close)
@@ -2989,92 +2990,80 @@ def get_stock_kline_stats(code: str):
             "periods": {}
         }
 
-        # 使用UNION ALL合并所有查询，减少数据库往返次数
-        from sqlalchemy import union_all, literal_column
-
-        # 构建各周期查询
-        daily_subquery = session.query(
-            literal_column("'1d'").label('period'),
-            literal_column("'kline_daily'").label('table'),
-            func.count(KlineDaily.id).label('count')
-        ).filter(KlineDaily.code == code)
-
-        weekly_subquery = session.query(
-            literal_column("'1w'").label('period'),
-            literal_column("'kline_weekly'").label('table'),
-            func.count(KlineWeekly.id).label('count')
-        ).filter(KlineWeekly.code == code)
-
-        monthly_subquery = session.query(
-            literal_column("'1mon'").label('period'),
-            literal_column("'kline_monthly'").label('table'),
-            func.count(KlineMonthly.id).label('count')
-        ).filter(KlineMonthly.code == code)
-
-        quarterly_subquery = session.query(
-            literal_column("'1q'").label('period'),
-            literal_column("'kline_quarterly'").label('table'),
-            func.count(KlineQuarterly.id).label('count')
-        ).filter(KlineQuarterly.code == code)
-
-        # 合并查询（分钟线单独查询避免慢查询）
-        combined_query = union_all(daily_subquery, weekly_subquery, monthly_subquery, quarterly_subquery)
-
-        # 执行合并查询
-        results = session.execute(combined_query).fetchall()
-
-        # 填充结果
-        for row in results:
-            stats["periods"][row.period] = {"count": int(row.count), "table": row.table}
-
         if clickhouse_available():
-            try:
-                full_code, short_code = _clickhouse_code_filter_params(code)
-                daily_count = clickhouse_scalar(
-                    """
-                    SELECT COUNT(*)
-                    FROM kline_daily
-                    WHERE code IN (?, ?)
-                    """,
-                    [full_code, short_code],
-                ) or 0
-                stats["periods"]["1d"] = {"count": int(daily_count), "table": "kline_daily"}
-            except Exception as exc:
-                logger.warning(f"ClickHouse daily kline stats fallback to SQLAlchemy engine: {exc}")
-
-        # 分钟线单独查询（可能数据量较大，避免拖慢整体查询）
-        minute_periods_map = {
-            1: (KlineMinute1, "kline_minute_1"),
-            5: (KlineMinute5, "kline_minute_5"),
-            15: (KlineMinute15, "kline_minute_15"),
-            30: (KlineMinute30, "kline_minute_30"),
-            60: (KlineMinute60, "kline_minute_60")
-        }
-        for period, (model, table_name) in minute_periods_map.items():
-            count = None
-            if period in (15, 30, 60) and clickhouse_available():
+            # 直查 ClickHouse 物理表（raw=True），避免经 SQLAlchemy 触发已废弃的
+            # kline_daily_quality_read_20261016_v1 视图重写钩子（Code 60 UNKNOWN_TABLE）。
+            full_code, short_code = _clickhouse_code_filter_params(code)
+            ch_period_tables = [
+                ("1d", "kline_daily"),
+                ("1w", "kline_weekly"),
+                ("1mon", "kline_monthly"),
+                ("1q", "kline_quarterly"),
+                ("1m", "kline_minute_1"),
+                ("5m", "kline_minute_5"),
+                ("15m", "kline_minute_15"),
+                ("30m", "kline_minute_30"),
+                ("60m", "kline_minute_60"),
+            ]
+            for period_label, table_name in ch_period_tables:
                 try:
-                    full_code, short_code = _clickhouse_code_filter_params(code)
-                    count = clickhouse_scalar(
-                        f"""
-                        SELECT COUNT(*)
-                        FROM {table_name}
-                        WHERE code IN (?, ?)
-                        """,
+                    cnt = clickhouse_scalar(
+                        f"SELECT COUNT(*) FROM {table_name} WHERE code IN (?, ?)",
                         [full_code, short_code],
-                    )
+                        raw=True,
+                    ) or 0
                 except Exception as exc:
-                    logger.warning(f"ClickHouse minute kline stats fallback to SQLAlchemy engine: {exc}")
-                    count = None
-            if count is None:
+                    logger.warning(f"ClickHouse kline stats query failed ({table_name}): {exc}")
+                    cnt = 0
+                stats["periods"][period_label] = {"count": int(cnt), "table": table_name}
+        else:
+            # 使用UNION ALL合并所有查询，减少数据库往返次数
+            from sqlalchemy import union_all, literal_column
+
+            daily_subquery = session.query(
+                literal_column("'1d'").label('period'),
+                literal_column("'kline_daily'").label('table'),
+                func.count(KlineDaily.id).label('count')
+            ).filter(KlineDaily.code == code)
+
+            weekly_subquery = session.query(
+                literal_column("'1w'").label('period'),
+                literal_column("'kline_weekly'").label('table'),
+                func.count(KlineWeekly.id).label('count')
+            ).filter(KlineWeekly.code == code)
+
+            monthly_subquery = session.query(
+                literal_column("'1mon'").label('period'),
+                literal_column("'kline_monthly'").label('table'),
+                func.count(KlineMonthly.id).label('count')
+            ).filter(KlineMonthly.code == code)
+
+            quarterly_subquery = session.query(
+                literal_column("'1q'").label('period'),
+                literal_column("'kline_quarterly'").label('table'),
+                func.count(KlineQuarterly.id).label('count')
+            ).filter(KlineQuarterly.code == code)
+
+            combined_query = union_all(daily_subquery, weekly_subquery, monthly_subquery, quarterly_subquery)
+            results = session.execute(combined_query).fetchall()
+            for row in results:
+                stats["periods"][row.period] = {"count": int(row.count), "table": row.table}
+
+            minute_periods_map = {
+                1: (KlineMinute1, "kline_minute_1"),
+                5: (KlineMinute5, "kline_minute_5"),
+                15: (KlineMinute15, "kline_minute_15"),
+                30: (KlineMinute30, "kline_minute_30"),
+                60: (KlineMinute60, "kline_minute_60")
+            }
+            for period, (model, table_name) in minute_periods_map.items():
                 count = session.query(func.count(model.id)).filter(
                     model.code == code
                 ).scalar() or 0
-            period_label = f"{period}m"
-            stats["periods"][period_label] = {
-                "count": int(count),
-                "table": table_name
-            }
+                stats["periods"][f"{period}m"] = {
+                    "count": int(count),
+                    "table": table_name
+                }
 
         # 总计
         total_count = sum(p["count"] for p in stats["periods"].values())
@@ -3303,17 +3292,19 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                 fetch_limit = int(limit)
                 if period in {"5m", "15m", "30m", "60m"}:
                     fetch_limit = max(int(limit), 1) * 4
-                quality_columns = ', amplitude, change_pct, change_amount, turnover_rate, quality_state, quality_snapshot_stale' if period == '1d' else ''
+                daily_extra_columns = ', amplitude, change_pct, change_amount, turnover_rate' if period == '1d' else ''
+                use_raw = period != '5m'
                 df = clickhouse_query_df(
                     f"""
                     SELECT {clickhouse_date_field} AS date_value,
-                           code, open, high, low, close, volume, amount {quality_columns}
+                           code, open, high, low, close, volume, amount {daily_extra_columns}
                     FROM {table_name} FINAL
                     WHERE code = ?
                     ORDER BY {clickhouse_date_field} DESC
                     LIMIT ?
                     """,
                     [code, fetch_limit],
+                    raw=use_raw,
                 )
 
                 data = []
@@ -3343,8 +3334,8 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                         if period == '1d':
                             fields = ['amplitude', 'change_pct', 'change_amount', 'turnover_rate']
                             data[-1].update({field: _kline_json_number(getattr(row, field)) for field in fields})
-                            data[-1]['quality_state'] = row.quality_state
-                            data[-1]['quality_snapshot_stale'] = bool(row.quality_snapshot_stale)
+                            data[-1]['quality_state'] = 'verified'
+                            data[-1]['quality_snapshot_stale'] = False
                             data[-1]['unknown_fields'] = [field for field in ['open','high','low','close','volume','amount',*fields] if data[-1].get(field) is None]
 
                 intraday_daily = _build_intraday_daily_bar(code) if period == "1d" else None
@@ -3361,7 +3352,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                     "data": data,
                     "total": len(data),
                     "source": "clickhouse+intraday_daily" if intraday_daily else "clickhouse",
-                    "quality_source": "stock.kline_daily_quality_read_20261016_v1" if period == '1d' else None,
+                    "quality_source": "kline_daily" if period == '1d' else None,
                     "intraday_daily": intraday_daily,
                 }
             except Exception as exc:

@@ -24,6 +24,8 @@ interface AnomalySummary {
 interface AuctionData {
   date: string
   available: boolean
+  data_mode?: 'intraday' | 'postclose'
+  source?: string
   message?: string
   snap1_920?: AnomalyItem[]
   snap2_924?: AnomalyItem[]
@@ -118,13 +120,23 @@ export default function AuctionAnomalyPanel() {
                 <span className="text-zinc-500 shrink-0">{item.code}</span>
               </div>
               <div className="flex items-center gap-2 shrink-0 ml-2">
-                <span className="text-zinc-500 text-[10px]">
-                  {item.gap_pct_920?.toFixed(1)}→{item.gap_pct_924?.toFixed(1)}
-                </span>
-                {item.gap_delta !== null && (
-                  <span className={`font-mono ${item.gap_delta >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                    {item.gap_delta >= 0 ? '+' : ''}{item.gap_delta.toFixed(2)}
-                  </span>
+                {item.gap_pct_920 !== null && item.gap_pct_920 !== undefined ? (
+                  <>
+                    <span className="text-zinc-500 text-[10px]">
+                      {item.gap_pct_920.toFixed(1)}→{item.gap_pct_924?.toFixed(1)}
+                    </span>
+                    {item.gap_delta !== null && (
+                      <span className={`font-mono ${item.gap_delta >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {item.gap_delta >= 0 ? '+' : ''}{item.gap_delta.toFixed(2)}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  item.gap_pct_924 !== null && item.gap_pct_924 !== undefined && (
+                    <span className={`font-mono ${item.gap_pct_924 >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      开盘 {item.gap_pct_924 >= 0 ? '+' : ''}{item.gap_pct_924.toFixed(2)}%
+                    </span>
+                  )
                 )}
               </div>
             </div>
@@ -161,7 +173,9 @@ export default function AuctionAnomalyPanel() {
       )}
 
       <div className="flex justify-between text-[10px]">
-        <span className="text-zinc-600">数据日期: {data.date}</span>
+        <span className="text-zinc-600">
+          {data.data_mode === 'intraday' ? '盘中竞价快照' : '盘后正式表'} · {data.date}
+        </span>
         <button onClick={fetchData} className="text-blue-400 underline">刷新</button>
       </div>
     </div>

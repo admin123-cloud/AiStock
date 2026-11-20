@@ -34,6 +34,7 @@ function ChangePct({ value }: { value: number | null }) {
 
 export default function SectorHeatPanel({ boardType, compact }: SectorHeatProps) {
   const [sectors, setSectors] = useState<SectorItem[]>([])
+  const [meta, setMeta] = useState<{ date?: string | null; dataMode?: string; source?: string }>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedCode, setExpandedCode] = useState<string | null>(null)
@@ -47,6 +48,7 @@ export default function SectorHeatPanel({ boardType, compact }: SectorHeatProps)
     getSectorHeat({ board_type: tab, top_n: compact ? 10 : 20, sort_by: 'change_pct' })
       .then((res: any) => {
         setSectors(res?.items || [])
+        setMeta({ date: res?.date, dataMode: res?.data_mode, source: res?.source })
       })
       .catch((err) => {
         setError(err?.detail || '数据加载失败')
@@ -147,7 +149,10 @@ export default function SectorHeatPanel({ boardType, compact }: SectorHeatProps)
         ))}
       </div>
 
-      <div className="text-[10px] text-zinc-600 text-right">东财数据 | 10s 缓存</div>
+      <div className="text-[10px] text-zinc-600 text-right">
+        {meta.dataMode === 'intraday' ? '盘中采集快照' : '盘后正式表'}
+        {meta.date ? ` · ${meta.date}` : ''}
+      </div>
     </div>
   )
 }
