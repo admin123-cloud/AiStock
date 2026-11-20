@@ -267,7 +267,8 @@ def _latest_daily_trade_date_from_calendar():
               ON c.trade_date = k.trade_date
              AND c.market = 'SH'
              AND c.is_trading = 1
-            """.format(kline_table=kline_table)
+            """.format(kline_table=kline_table),
+            raw=True,
         )
     except Exception as exc:
         logger.warning(f"latest daily trade date calendar query failed: {exc}")
@@ -883,7 +884,7 @@ def _compute_market_indices(code: Optional[str] = None):
                     stocks_sql += " AND code = ?"
                     params.append(code)
                 stocks_sql += " ORDER BY code"
-                stocks_df = clickhouse_query_df(stocks_sql, params)
+                stocks_df = clickhouse_query_df(stocks_sql, params, raw=True)
                 if stocks_df is not None and not stocks_df.empty:
                     stocks = [
                         SimpleNamespace(code=str(row.code), name=str(row.name or row.code))
@@ -902,6 +903,8 @@ def _compute_market_indices(code: Optional[str] = None):
                     # ~5 年压到 ~40 个交易日；本端点语义只需最近 20 个交易日（原
                     # LIMIT 20 DESC），窗口不改变结果，但消除对 17.6M 行 kline_daily
                     # 的无界全表 GROUP BY（CH code 241 内存超限根因）。
+                    # 同时 raw=True 绕过已废弃的 kline_daily_quality_read 视图钩子，避免
+                    # 缺失底层表 daily_history_quality_closure_20261016_v1 触发 Code 60。
                     indices_since = (
                         datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=60)
                     ).isoformat()
@@ -921,6 +924,7 @@ def _compute_market_indices(code: Optional[str] = None):
                         LIMIT 20
                         """.format(kline_table=kline_table, stocks_table=stocks_table),
                         [indices_since],
+                        raw=True,
                     )
                     latest_date = None
                     if date_counts_df is not None and not date_counts_df.empty:
@@ -935,13 +939,12 @@ def _compute_market_indices(code: Optional[str] = None):
                         latest_date = _date_text(latest_date)
                         previous_date = None
                         try:
-                            previous_date = session.execute(
-                                text(
-                                    "SELECT MAX(trade_date) FROM trade_calendar "
-                                    "WHERE trade_date < :latest_date AND is_trading = 1"
-                                ),
-                                {"latest_date": latest_date},
-                            ).scalar()
+                            previous_date = clickhouse_scalar(
+                                "SELECT MAX(trade_date) FROM trade_calendar "
+                                "WHERE market = 'SH' AND trade_date < ? AND is_trading = 1",
+                                [latest_date],
+                                raw=True,
+                            )
                         except Exception as exc:
                             logger.warning(f"ClickHouse indices previous trade date fallback failed: {exc}")
 
@@ -960,11 +963,12 @@ def _compute_market_indices(code: Optional[str] = None):
                             kline_df = clickhouse_query_df(
                                 """
                                 SELECT code, trade_date, close, volume, amount
-                                FROM {kline_table}
+                                FROM {kline_table} FINAL
                                 WHERE trade_date IN (?, ?)
                                   AND code IN ({placeholders})
                                 """.format(kline_table=kline_table, placeholders=placeholders),
                                 params,
+                                raw=True,
                             )
                             if kline_df is not None and not kline_df.empty:
                                 for row in kline_df.itertuples(index=False):
@@ -1276,10 +1280,11 @@ def get_market_indices(code: Optional[str] = None):
     if cached is not None and now < float(cached.get("expires_at") or 0.0):
         return cached["payload"]
     payload = _compute_market_indices(code)
-    _MARKET_INDICES_RESULT_CACHE[cache_key] = {
-        "expires_at": now + _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS,
-        "payload": payload,
-    }
+    if payload.get("indices"):
+        _MARKET_INDICES_RESULT_CACHE[cache_key] = {
+            "expires_at": now + _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS,
+            "payload": payload,
+        }
     return payload
 
 
