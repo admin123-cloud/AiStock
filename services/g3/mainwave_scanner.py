@@ -309,7 +309,7 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
     qualified.sort(key=lambda x: (-x["score"], -x["resonance"], -x["amount_yi"]))
     top_candidates = qualified[:30]
 
-    # 7. 查询 Top 候选股的 30m K线做突破确认（ClickHouse 按时间去重）
+    # 7. 查询 Top 候选股的 30m K线做突破确认（ClickHouse 按时间去重；盘中自动衔接 10:00 快照）
     m30_map: dict[str, dict[str, Any]] = {}
     if top_candidates:
         codes_sql = ", ".join(f"'{c['code']}'" for c in top_candidates)
@@ -328,9 +328,37 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
             ORDER BY code, datetime
             """
         )
+
+        # 盘中 kline_minute_30 尚未盘后聚合落盘时，取 entry_date 10:00~10:15 最早一帧盘中快照作为首根 30m 确认源
+        intraday_1000_map: dict[str, dict[str, Any]] = {}
+        try:
+            snap_df = _query_df(
+                f"""
+                SELECT
+                    code,
+                    argMin(snapshot_ts, snapshot_ts) AS snap_ts,
+                    argMin(price, snapshot_ts) AS close,
+                    argMin(volume, snapshot_ts) AS volume
+                FROM stock.intraday_market_snapshot FINAL
+                WHERE code IN ({codes_sql})
+                  AND snapshot_ts >= toDateTime('{entry_date} 10:00:00', 'Asia/Shanghai')
+                  AND snapshot_ts <= toDateTime('{entry_date} 10:15:00', 'Asia/Shanghai')
+                  AND price > 0
+                GROUP BY code
+                """
+            )
+            for srow in snap_df.itertuples(index=False):
+                intraday_1000_map[str(srow.code)] = {
+                    "datetime": str(srow.snap_ts)[:19],
+                    "close": float(srow.close or 0),
+                    "volume": float(srow.volume or 0),
+                }
+        except Exception as exc:
+            logger.debug(f"intraday 10:00 30m snapshot lookup skipped: {exc}")
+
         for code, grp in m30_df.groupby("code", sort=False):
-            if len(grp) < 21:
-                m30_map[code] = {"stage": "waiting_30m", "source": "clickhouse_30m", "reason": "等待首根30m确认"}
+            if len(grp) < 20:
+                m30_map[code] = {"stage": "waiting_30m", "source": "clickhouse_30m", "reason": "历史30m样本不足20根"}
                 continue
             dt_series = pd.to_datetime(grp["datetime"])
             entry_bars = grp[dt_series.dt.strftime("%Y-%m-%d") == entry_date]
@@ -340,15 +368,39 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
                 prior = grp.loc[:first_idx].iloc[:-1].tail(20)
                 prior_hi = float(prior["high"].max()) if not prior.empty else 0.0
                 prior_vol = float(prior["volume"].mean()) if not prior.empty else 0.0
-                confirmed = float(first_bar["close"]) > prior_hi and float(first_bar["volume"]) > prior_vol
+                bar_close = float(first_bar["close"])
+                bar_vol = float(first_bar["volume"])
+                confirmed = bar_close > prior_hi and bar_vol > prior_vol
                 m30_map[code] = {
                     "stage": "confirmed" if confirmed else "waiting_30m",
                     "source": "clickhouse_30m",
                     "confirmation_time": str(first_bar["datetime"]),
-                    "reason": "首根30m放量突破前20根高点" if confirmed else "首根30m未满足放量突破条件",
+                    "reason": (
+                        f"首根30m放量突破前20高（{bar_close:.2f}>{prior_hi:.2f}，量{bar_vol:.0f}>{prior_vol:.0f}）"
+                        if confirmed
+                        else f"10:00首根30m未放量突破（价{bar_close:.2f}/前20高{prior_hi:.2f}，量{bar_vol:.0f}/均量{prior_vol:.0f}）"
+                    ),
+                }
+            elif code in intraday_1000_map:
+                live_bar = intraday_1000_map[code]
+                prior = grp.tail(20)
+                prior_hi = float(prior["high"].max()) if not prior.empty else 0.0
+                prior_vol = float(prior["volume"].mean()) if not prior.empty else 0.0
+                bar_close = live_bar["close"]
+                bar_vol = live_bar["volume"]
+                confirmed = bar_close > prior_hi and bar_vol > prior_vol
+                m30_map[code] = {
+                    "stage": "confirmed" if confirmed else "waiting_30m",
+                    "source": "intraday_snapshot",
+                    "confirmation_time": live_bar["datetime"],
+                    "reason": (
+                        f"首根30m放量突破前20高（盘中快照 {bar_close:.2f}>{prior_hi:.2f}，量{bar_vol:.0f}>{prior_vol:.0f}）"
+                        if confirmed
+                        else f"10:00首根30m未放量突破（盘中快照 价{bar_close:.2f}/前20高{prior_hi:.2f}，量{bar_vol:.0f}/均量{prior_vol:.0f}）"
+                    ),
                 }
             else:
-                # 盘后状态：尚未到次日 10:00 首根 30m
+                # 盘前/盘后状态：尚未到次日 10:00 首根 30m
                 last_dt = str(grp["datetime"].iloc[-1])
                 m30_map[code] = {
                     "stage": "waiting_30m",
@@ -364,7 +416,7 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
             "code": c["code"],
             "name": c["name"],
             "industry": c["industry"],
-            "industry_source": "SW2",
+            "industry_source": "TDX",
             "stage": m30_info["stage"],
             "score": c["score"],
             "resonance": c["resonance"],
