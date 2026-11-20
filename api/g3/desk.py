@@ -1,4 +1,4 @@
-"""G3 做T实战台 API：打通双账号真实持仓 + 做T观察名单 + 09:25 周期与带位参数 + 快慢车道草案。"""
+"""G3 做T实战台 API：打通双账号真实持仓 + 观察名单 + 每日做T作战规划 + 盘中实时行情/RSI + 日内敞口台账。"""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.broker.broker_accounts import get_accounts_overview
@@ -14,6 +14,19 @@ from services.trading.holding_t_watchlist import (
     read_watchlist,
     sync_watchlist_from_ths,
     upsert_watchlist,
+)
+from services.trading.t_daily_plan import (
+    append_t_execution,
+    build_market_directive,
+    build_stock_daily_plan,
+    delete_t_execution,
+    fetch_batch_live_quotes,
+    fetch_live_rsi_snapshot,
+    generate_and_save_daily_plan,
+    load_intraday_executions,
+    load_saved_daily_plan,
+    resolve_effective_params,
+    summarize_intraday_executions,
 )
 from utils.common.paths import runtime_path
 
@@ -134,9 +147,12 @@ def _collect_live_holdings() -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 
 @router.get("/desk")
-def get_g3_desk() -> dict[str, Any]:
-    """G3 做T实战台一站式聚合：双账号持仓 + 观察名单 + 周期判定 + 实时布防态 + 当日草案。"""
+def get_g3_desk(
+    refresh_quotes: bool = Query(default=False, description="是否跳过短期内存缓存强制刷新实时行情"),
+) -> dict[str, Any]:
+    """G3 做T实战台一站式聚合：双账号持仓 + 每日做T规划 + 实时行情/VWAP/RSI + 布防态 + 日内敞口台账。"""
     now_bj = datetime.now(BJ_TZ)
+    today_str = now_bj.strftime("%Y-%m-%d")
     tracker_dir = runtime_path("t_tracker")
 
     overview, live_holdings = _collect_live_holdings()
@@ -145,12 +161,38 @@ def get_g3_desk() -> dict[str, Any]:
     watchlist_items = watchlist_doc.get("entries") or watchlist_doc.get("items") or []
 
     regime_file, regime_doc = _latest_dated_json(tracker_dir, "regime_")
-    trade_date = str(regime_doc.get("date") or now_bj.strftime("%Y-%m-%d"))
+    saved_plan = load_saved_daily_plan(today_str)
+
+    # 优先采用今日最新规划：若今日手动/按需规划存在，合并覆盖 t_tracker 的 regime（补齐新标的并刷新日期）
+    regime_date = str(regime_doc.get("date") or "")
+    effective_regime_doc = dict(regime_doc)
+    plan_source = "t_tracker_regime"
+    plan_generated_at = regime_doc.get("generated_at")
+    if saved_plan and str(saved_plan.get("date") or "") == today_str:
+        merged_codes = dict(regime_doc.get("codes") or {})
+        merged_codes.update(saved_plan.get("codes") or {})
+        effective_regime_doc = {
+            **regime_doc,
+            "date": today_str,
+            "generated_at": saved_plan.get("generated_at") or plan_generated_at,
+            "version": saved_plan.get("version") or regime_doc.get("version"),
+            "codes": merged_codes,
+            "breadth": saved_plan.get("breadth") or regime_doc.get("breadth"),
+        }
+        regime_date = today_str
+        plan_source = "desk_daily_plan"
+        plan_generated_at = saved_plan.get("generated_at")
+
+    trade_date = regime_date or today_str
+    is_stale_regime = (regime_date != today_str)
     state_file, state_doc = _latest_dated_json(tracker_dir, "state_")
     contract_stop = _read_json_safe(tracker_dir / "contract_stop.json")
-    drafts = _load_today_drafts(tracker_dir, trade_date)
+    price_cache = _read_json_safe(tracker_dir / "price_cache.json")
+    drafts = _load_today_drafts(tracker_dir, today_str)
+    if not drafts and trade_date != today_str:
+        drafts = _load_today_drafts(tracker_dir, trade_date)
 
-    # 聚合每只股票的三层视图：持仓 + 观察名单 + 周期参数 + 实时布防
+    # 聚合持仓与观察名单
     holding_by_code: dict[str, list[dict[str, Any]]] = {}
     for h in live_holdings:
         holding_by_code.setdefault(h["code"], []).append(h)
@@ -161,16 +203,40 @@ def get_g3_desk() -> dict[str, Any]:
         if code and code != "000000":
             watch_by_code[code] = w
 
-    regime_codes = regime_doc.get("codes") or {}
+    regime_codes = effective_regime_doc.get("codes") or {}
     all_codes = sorted(set(holding_by_code.keys()) | set(watch_by_code.keys()) | set(regime_codes.keys()))
 
+    # 批量拉取实时行情（现价、涨跌幅、VWAP）
+    live_quotes = fetch_batch_live_quotes(
+        all_codes,
+        price_cache=price_cache,
+        force_refresh=refresh_quotes,
+    )
+
+    # 市场总纲
+    market_directive = build_market_directive(effective_regime_doc.get("breadth"))
+
+    # 当日手工做T执行台账与敞口汇总
+    executions = load_intraday_executions(today_str)
+    exposure_by_code, exec_summary = summarize_intraday_executions(executions)
+
+    merged_funds = overview.get("merged") or {}
+    bridge_info = overview.get("bridge") or {}
+    avail_cash = merged_funds.get("available_cash")
+
     cards: list[dict[str, Any]] = []
+    eligible_count = 0
+    ineligible_count = 0
+    stale_param_count = 0
+    stop_alert_count = 0
+
     for code in all_codes:
         h_list = holding_by_code.get(code, [])
         w_item = watch_by_code.get(code)
         r_info = regime_codes.get(code) or {}
         s_info = state_doc.get(code) or {}
         total_shares = sum(int(x.get("shares") or 0) for x in h_list)
+        available_shares = sum(int(x.get("available_shares") or 0) for x in h_list)
         t_lot_cap = (total_shares // 3 // 100) * 100 if total_shares >= 300 else 0
         name = (
             r_info.get("name")
@@ -178,38 +244,122 @@ def get_g3_desk() -> dict[str, Any]:
             or (w_item.get("name") if w_item else "")
             or code
         )
+
+        # 实时行情 + 实时 RSI（仅对可做T或有周期数据的标的拉取分钟K，减少外部请求）
+        q = dict(live_quotes.get(code) or {})
+        if not q.get("price") and h_list:
+            fallback_px = h_list[0].get("current_price")
+            if fallback_px:
+                q["price"] = float(fallback_px)
+                q["source"] = "holding_snapshot"
+        if t_lot_cap >= 100 or r_info:
+            rsi_snap = fetch_live_rsi_snapshot(code, q.get("price"), force_refresh=refresh_quotes)
+            q["rsi5m"] = rsi_snap.get("rsi5m")
+            q["rsi15m"] = rsi_snap.get("rsi15m")
+            if not q.get("vwap") and rsi_snap.get("vwap_5m"):
+                q["vwap"] = rsi_snap.get("vwap_5m")
+                if q.get("price") and q["vwap"]:
+                    q["vwap_dev_pct"] = round((float(q["price"]) - float(q["vwap"])) / float(q["vwap"]) * 100.0, 2)
+
+        raw_params = r_info.get("params") or {}
+        regime = str(r_info.get("regime") or "unknown")
+        prev_close = r_info.get("close") or q.get("prev_close")
+
+        effective_params, params_stale, params_stale_reason = resolve_effective_params(
+            regime=regime,
+            raw_params=raw_params,
+            ma5=r_info.get("ma5"),
+            ma10=r_info.get("ma10"),
+            ma20=r_info.get("ma20"),
+            hi20=r_info.get("hi20"),
+            lo20=r_info.get("lo20"),
+            prev_close=prev_close,
+            live_price=q.get("price"),
+        )
+
+        daily_plan = build_stock_daily_plan(
+            code=code,
+            name=name,
+            regime=regime,
+            total_shares=total_shares,
+            available_shares=available_shares,
+            t_lot_cap=t_lot_cap,
+            available_cash=float(avail_cash) if avail_cash is not None else None,
+            effective_params=effective_params,
+            params_stale=params_stale,
+            params_stale_reason=params_stale_reason,
+            live_quote=q,
+            ma5=r_info.get("ma5"),
+            ma10=r_info.get("ma10"),
+            ma20=r_info.get("ma20"),
+            prev_close=prev_close,
+            market_directive=market_directive,
+        )
+
+        if daily_plan["eligible"]:
+            eligible_count += 1
+        else:
+            ineligible_count += 1
+        if params_stale:
+            stale_param_count += 1
+        if daily_plan.get("action_mode") == "stop_alert":
+            stop_alert_count += 1
+
         cards.append({
             "code": code,
             "name": name,
             "in_holdings": bool(h_list),
             "in_watchlist": bool(w_item),
             "total_shares": total_shares,
+            "available_shares": available_shares,
             "t_lot_cap": t_lot_cap,
             "holdings": h_list,
             "watchlist": w_item,
-            "regime": r_info.get("regime") or "unknown",
+            "regime": regime,
             "ma5": r_info.get("ma5"),
             "ma10": r_info.get("ma10"),
             "ma20": r_info.get("ma20"),
             "pos20": r_info.get("pos20"),
             "hi20": r_info.get("hi20"),
             "lo20": r_info.get("lo20"),
-            "prev_close": r_info.get("close"),
+            "prev_close": prev_close,
             "chg5d_pct": r_info.get("chg5d_pct"),
-            "params": r_info.get("params") or {},
+            "params": raw_params,
+            "effective_params": effective_params,
+            "params_stale": params_stale,
+            "params_stale_reason": params_stale_reason,
+            "live_quote": q,
+            "daily_plan": daily_plan,
+            "open_t_exposure": exposure_by_code.get(code),
             "armed_sides": s_info.get("sides") or {},
             "hard_stop": contract_stop.get(code),
         })
 
-    merged_funds = overview.get("merged") or {}
-    bridge_info = overview.get("bridge") or {}
+    # 按实战优先级排序：可做T & 风险/机会高优先排前，不可做T零股排后
+    cards.sort(key=lambda x: (x["daily_plan"].get("priority", 99), -x["t_lot_cap"], x["code"]))
+
     return {
         "as_of": now_bj.isoformat(timespec="seconds"),
+        "today": today_str,
         "trade_date": trade_date,
+        "is_stale_regime": is_stale_regime,
+        "plan_meta": {
+            "source": plan_source,
+            "date": regime_date or None,
+            "generated_at": plan_generated_at,
+        },
+        "market_directive": market_directive,
+        "intraday_summary": {
+            **exec_summary,
+            "eligible_count": eligible_count,
+            "ineligible_count": ineligible_count,
+            "stale_param_count": stale_param_count,
+            "stop_alert_count": stop_alert_count,
+        },
         "accounts_summary": {
             "total_assets": merged_funds.get("total_assets"),
             "total_market_value": merged_funds.get("market_value"),
-            "total_cash": merged_funds.get("available_cash"),
+            "total_cash": avail_cash,
             "total_floating_profit": merged_funds.get("floating_profit"),
             "account_count": overview.get("accounts_total") or len(overview.get("accounts") or []),
             "accounts_ready": overview.get("accounts_ready"),
@@ -218,17 +368,96 @@ def get_g3_desk() -> dict[str, Any]:
         },
         "regime_meta": {
             "file": regime_file,
-            "generated_at": regime_doc.get("generated_at"),
-            "version": regime_doc.get("version"),
+            "generated_at": plan_generated_at,
+            "version": effective_regime_doc.get("version"),
         },
         "state_meta": {
             "file": state_file,
         },
         "cards": cards,
         "drafts": drafts,
+        "executions": executions,
         "watchlist_count": len(watchlist_items),
         "holding_count": len(holding_by_code),
     }
+
+
+@router.post("/desk/generate-plan")
+def post_g3_generate_plan() -> dict[str, Any]:
+    """一键生成/刷新今日做T规划（基于 ClickHouse 最新日线 + 全市场宽度 + 当前双账号持仓/观察名单）。"""
+    now_bj = datetime.now(BJ_TZ)
+    today_str = now_bj.strftime("%Y-%m-%d")
+    tracker_dir = runtime_path("t_tracker")
+    _, regime_doc = _latest_dated_json(tracker_dir, "regime_")
+
+    _, live_holdings = _collect_live_holdings()
+    store_path, legacy_path = _watchlist_paths()
+    watchlist_doc = read_watchlist(store_path, legacy_path=legacy_path)
+    watchlist_items = watchlist_doc.get("entries") or watchlist_doc.get("items") or []
+
+    code_names: dict[str, str] = {}
+    for h in live_holdings:
+        code_names[h["code"]] = h.get("name") or code_names.get(h["code"], "")
+    for w in watchlist_items:
+        c = str(w.get("code") or "").split(".")[0].zfill(6)
+        if c and c != "000000":
+            code_names.setdefault(c, str(w.get("name") or ""))
+
+    if not code_names:
+        raise HTTPException(status_code=400, detail="当前无持仓或观察标的，无法生成今日规划")
+
+    plan = generate_and_save_daily_plan(
+        codes=sorted(code_names.items()),
+        trade_date=today_str,
+        fallback_breadth=regime_doc.get("breadth"),
+    )
+    return {
+        "status": "ok",
+        "date": plan["date"],
+        "generated_at": plan["generated_at"],
+        "codes_count": len(plan.get("codes") or {}),
+        "errors": plan.get("errors") or {},
+    }
+
+
+class TExecutionRequest(BaseModel):
+    code: str
+    name: str = ""
+    side: str = Field(..., description="BUY 或 SELL")
+    price: float
+    shares: int
+    account_label: str = ""
+    note: str = ""
+
+
+@router.post("/desk/execution")
+def post_g3_execution(req: TExecutionRequest) -> dict[str, Any]:
+    """登记一笔当日手工做T成交，实时更新日内敞口与做T盈亏。"""
+    today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+    try:
+        entry = append_t_execution(
+            trade_date=today_str,
+            code=req.code,
+            name=req.name,
+            side=req.side,
+            price=req.price,
+            shares=req.shares,
+            account_label=req.account_label,
+            note=req.note,
+        )
+        return {"status": "ok", "entry": entry}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/desk/execution/{exec_id}")
+def delete_g3_execution(exec_id: str) -> dict[str, Any]:
+    """撤销一条当日误记的做T成交记录。"""
+    today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+    ok = delete_t_execution(today_str, exec_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="未找到该成交记录")
+    return {"status": "ok", "deleted_id": exec_id}
 
 
 class WatchlistUpsertRequest(BaseModel):
