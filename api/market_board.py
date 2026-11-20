@@ -204,25 +204,64 @@ def _format_sector_heat_rows(df) -> List[Dict[str, Any]]:
     return results
 
 
+def _sector_members_cte(board_type: Optional[str]) -> Optional[Tuple[str, List[Any]]]:
+    """构建板块成员关系 CTE：行业优先走干净的申万二级主档 sectors+sector_stocks，概念走 source_sector_stocks(tdx_sector)。"""
+    if board_type == "industry" and clickhouse_table_exists("sectors") and clickhouse_table_exists("sector_stocks"):
+        return (
+            """
+            SELECT DISTINCT
+                'sw_industry' AS sector_type,
+                s.code AS sector_code,
+                replaceOne(s.name, 'SW2', '') AS sector_name,
+                ss.stock_code AS canonical_code
+            FROM sectors s
+            JOIN sector_stocks ss ON ss.sector_code = s.code
+            WHERE s.type = 'industry'
+              AND ss.stock_code != ''
+            """,
+            [],
+        )
+    if not clickhouse_table_exists("source_sector_stocks"):
+        return None
+    if board_type == "concept":
+        return (
+            """
+            SELECT DISTINCT sector_type, sector_code, sector_name, canonical_code
+            FROM source_sector_stocks
+            WHERE sector_type = 'tdx_sector'
+              AND canonical_code != ''
+            """,
+            [],
+        )
+    where_clause, extra_params = _sector_type_filter(board_type)
+    return (
+        f"""
+        SELECT DISTINCT sector_type, sector_code, sector_name, canonical_code
+        FROM source_sector_stocks ss
+        WHERE {where_clause}
+          AND canonical_code != ''
+        """,
+        extra_params,
+    )
+
+
 def _query_sector_heat_from_intraday(
     snapshot_ts: str,
     board_type: Optional[str],
     sort_by: str,
     top_n: int,
 ) -> List[Dict[str, Any]]:
-    if not clickhouse_available() or not clickhouse_table_exists("source_sector_stocks"):
+    if not clickhouse_available():
         return []
-    where_clause, extra_params = _sector_type_filter(board_type)
+    cte = _sector_members_cte(board_type)
+    if cte is None:
+        return []
+    members_sql, extra_params = cte
     order_col = "up_count DESC, change_pct DESC" if sort_by == "up_count" else "change_pct DESC, up_count DESC"
     try:
         df = clickhouse_query_df(
             f"""
-            WITH members AS (
-                SELECT DISTINCT sector_type, sector_code, sector_name, canonical_code
-                FROM source_sector_stocks ss
-                WHERE {where_clause}
-                  AND canonical_code != ''
-            )
+            WITH members AS ({members_sql})
             SELECT
                 m.sector_type AS sector_type,
                 m.sector_code AS sector_code,
@@ -258,19 +297,17 @@ def _query_sector_heat_from_formal(
     sort_by: str,
     top_n: int,
 ) -> List[Dict[str, Any]]:
-    if not clickhouse_available() or not clickhouse_table_exists("source_sector_stocks"):
+    if not clickhouse_available():
         return []
-    where_clause, extra_params = _sector_type_filter(board_type)
+    cte = _sector_members_cte(board_type)
+    if cte is None:
+        return []
+    members_sql, extra_params = cte
     order_col = "up_count DESC, change_pct DESC" if sort_by == "up_count" else "change_pct DESC, up_count DESC"
     try:
         df = clickhouse_query_df(
             f"""
-            WITH members AS (
-                SELECT DISTINCT sector_type, sector_code, sector_name, canonical_code
-                FROM source_sector_stocks ss
-                WHERE {where_clause}
-                  AND canonical_code != ''
-            )
+            WITH members AS ({members_sql})
             SELECT
                 m.sector_type AS sector_type,
                 m.sector_code AS sector_code,
@@ -300,23 +337,32 @@ def _query_sector_heat_from_formal(
         return []
 
 
+def _sector_stock_members_sql(code: str) -> Tuple[str, List[Any]]:
+    if code.startswith("qmt:") and clickhouse_table_exists("sector_stocks"):
+        return (
+            "SELECT DISTINCT stock_code AS canonical_code FROM sector_stocks WHERE sector_code = ? AND stock_code != ''",
+            [code],
+        )
+    return (
+        "SELECT DISTINCT canonical_code FROM source_sector_stocks WHERE sector_code = ? AND canonical_code != ''",
+        [code],
+    )
+
+
 @router.get("/sector-heat/{code}/stocks")
 def get_sector_heat_stocks(code: str):
     """成分股钻取：盘中取实时采集快照，盘后取正式表 kline_daily。"""
-    if not clickhouse_available() or not clickhouse_table_exists("source_sector_stocks"):
+    if not clickhouse_available():
         return {"code": code, "total": 0, "stocks": [], "source": "kline_daily", "data_mode": "postclose"}
 
+    members_sql, member_params = _sector_stock_members_sql(code)
     intraday = _latest_fresh_intraday_snapshot()
     if intraday is not None:
         snapshot_ts, data_date = intraday
         try:
             df = clickhouse_query_df(
                 f"""
-                WITH members AS (
-                    SELECT DISTINCT canonical_code
-                    FROM source_sector_stocks
-                    WHERE sector_code = ? AND canonical_code != ''
-                )
+                WITH members AS ({members_sql})
                 SELECT
                     q.code AS code,
                     coalesce(nullIf(q.name, ''), s.name, q.code) AS name,
@@ -332,7 +378,7 @@ def get_sector_heat_stocks(code: str):
                 ORDER BY q.change_pct DESC
                 LIMIT 200
                 """,
-                [code, snapshot_ts],
+                member_params + [snapshot_ts],
                 raw=True,
             )
             stocks = _format_sector_stocks(df)
@@ -354,12 +400,8 @@ def get_sector_heat_stocks(code: str):
 
     try:
         df = clickhouse_query_df(
-            """
-            WITH members AS (
-                SELECT DISTINCT canonical_code
-                FROM source_sector_stocks
-                WHERE sector_code = ? AND canonical_code != ''
-            )
+            f"""
+            WITH members AS ({members_sql})
             SELECT
                 k.code AS code,
                 coalesce(nullIf(s.name, ''), k.code) AS name,
@@ -375,7 +417,7 @@ def get_sector_heat_stocks(code: str):
             ORDER BY k.change_pct DESC
             LIMIT 200
             """,
-            [code, trade_date],
+            member_params + [trade_date],
             raw=True,
         )
         stocks = _format_sector_stocks(df)
@@ -1136,17 +1178,17 @@ def _dim_turnover_percentile_intraday(snapshot_ts: str, cal_30d: List[str]) -> D
 
 
 def _fix_mojibake(text: str) -> str:
-    """修复历史入库时 UTF-8 被误按 latin1 解码导致的中文乱码（如 sw_industry 板块名）。"""
+    """修复历史入库时 UTF-8 被误按 latin1 解码（含末尾字节截断）导致的中文乱码。"""
     if not text:
         return text
     if any("\u4e00" <= ch <= "\u9fff" for ch in text):
         return text
     if any("\u0080" <= ch <= "\u00ff" for ch in text):
         try:
-            fixed = text.encode("latin1").decode("utf-8")
+            fixed = text.encode("latin1", errors="ignore").decode("utf-8", errors="ignore").strip()
             if any("\u4e00" <= ch <= "\u9fff" for ch in fixed):
                 return fixed
-        except (UnicodeEncodeError, UnicodeDecodeError):
+        except Exception:
             pass
     return text
 
