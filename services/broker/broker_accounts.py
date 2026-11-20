@@ -75,14 +75,20 @@ def _parse_iso_dt(value: Any) -> Optional[datetime]:
         return None
 
 
-def _pick_best_account_raw(root: Path, account_id: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
-    """优先读分账号 latest_<acct>.json；若其未采集成功，则兼容回退单账号 latest.json（仅限同账号）。"""
+def _pick_best_account_raw(
+    root: Path, account_id: str
+) -> tuple[Optional[dict[str, Any]], Optional[str], Optional[dict[str, Any]]]:
+    """优先读分账号 latest_<acct>.json；若其未采集成功，则兼容回退单账号 latest.json（仅限同账号）。
+
+    返回 (selected_raw, source_file, failed_latest_raw)：
+    当发生回退时，failed_latest_raw 保留本次 latest_<acct>.json 的失败摘要供前端诚实透出。
+    """
     per_acct_path = root / f"latest_{account_id}.json"
     per_acct = _read_json_safe(per_acct_path)
     if per_acct is not None:
         ra = _extract_read_payload(per_acct)
         if ra and ra.get("funds_read_ok"):
-            return per_acct, per_acct_path.name
+            return per_acct, per_acct_path.name, None
 
     legacy_path = root / "latest.json"
     legacy = _read_json_safe(legacy_path)
@@ -90,11 +96,11 @@ def _pick_best_account_raw(root: Path, account_id: str) -> tuple[Optional[dict[s
         ra_leg = _extract_read_payload(legacy)
         leg_acct = (ra_leg or {}).get("account") or legacy.get("account_requested")
         if leg_acct == account_id and ra_leg and ra_leg.get("funds_read_ok"):
-            return legacy, legacy_path.name
+            return legacy, legacy_path.name, per_acct
 
     if per_acct is not None:
-        return per_acct, per_acct_path.name
-    return None, None
+        return per_acct, per_acct_path.name, None
+    return None, None, None
 
 
 def get_account_detail(account_id: str, *, root: Optional[Path] = None) -> dict[str, Any]:
@@ -105,8 +111,11 @@ def get_account_detail(account_id: str, *, root: Optional[Path] = None) -> dict[
         raise KeyError(f"unknown account_id: {acct}")
 
     base = Path(root) if root is not None else default_accounts_root()
-    raw, source_file = _pick_best_account_raw(base, acct)
+    raw, source_file, failed_latest = _pick_best_account_raw(base, acct)
     ra = _extract_read_payload(raw)
+    fallback_from_legacy = bool(failed_latest is not None)
+    last_sync_status = str(failed_latest.get("status") or "") or None if isinstance(failed_latest, dict) else None
+    last_sync_reason = str(failed_latest.get("reason") or "") or None if isinstance(failed_latest, dict) else None
 
     if ra is None:
         return {
@@ -117,6 +126,9 @@ def get_account_detail(account_id: str, *, root: Optional[Path] = None) -> dict[
             "rc": (raw or {}).get("rc", 4),
             "generated_at": (raw or {}).get("generated_at"),
             "source_file": source_file,
+            "fallback_from_legacy": False,
+            "last_sync_status": None,
+            "last_sync_reason": None,
             "credentials_touched": False,
             "funds_read_ok": False,
             "funds": None,
@@ -132,7 +144,46 @@ def get_account_detail(account_id: str, *, root: Optional[Path] = None) -> dict[
     funds = ra.get("funds") if isinstance(ra.get("funds"), dict) else None
     holdings = list(ra.get("holdings") or [])
     fills_obj = ra.get("fills") if isinstance(ra.get("fills"), dict) else {}
-    fills_rows = list(fills_obj.get("rows") or [])
+    today_obj = ra.get("today_fills") if isinstance(ra.get("today_fills"), dict) else {}
+    raw_fills_rows = [dict(r) for r in (fills_obj.get("rows") or []) if isinstance(r, dict)]
+    raw_today_rows = [dict(r) for r in (today_obj.get("rows") or []) if isinstance(r, dict)]
+
+    # 优先用完整 today_fills 还原当日全部拆单（兼容旧版被误去重的历史快照），非当日历史成交原样保留
+    if raw_today_rows:
+        today_dates = {
+            str(r.get("date") or "").replace("-", "").strip()
+            for r in raw_today_rows
+            if str(r.get("date") or "").strip()
+        }
+        fills_rows = list(raw_today_rows) + [
+            r for r in raw_fills_rows
+            if str(r.get("date") or "").replace("-", "").strip() not in today_dates
+        ]
+    else:
+        fills_rows = raw_fills_rows
+
+    # 统一补齐缺失的成交额与发生额（当日成交未清算前按买卖方向标明预估发生额：买负卖正）
+    for r in fills_rows:
+        amt = r.get("amount")
+        if amt is None and r.get("price") is not None and (r.get("quantity") is not None or r.get("qty") is not None):
+            try:
+                q_val = r.get("quantity") if r.get("quantity") is not None else r.get("qty")
+                amt = round(float(r["price"]) * float(q_val), 2)
+                r["amount"] = amt
+            except (TypeError, ValueError):
+                amt = None
+        if r.get("net_amount") is None and amt is not None:
+            try:
+                amt_f = abs(float(amt))
+                side_l = str(r.get("side") or "").strip().lower()
+                if side_l in ("buy", "b", "买入", "证券买入") or "买" in side_l:
+                    r["net_amount"] = round(-amt_f, 2)
+                    r["net_amount_estimated"] = True
+                elif side_l in ("sell", "s", "卖出", "证券卖出") or "卖" in side_l:
+                    r["net_amount"] = round(amt_f, 2)
+                    r["net_amount_estimated"] = True
+            except (TypeError, ValueError):
+                pass
     identity = ra.get("identity") if isinstance(ra.get("identity"), dict) else {}
     coverage = ra.get("coverage") if isinstance(ra.get("coverage"), dict) else {}
 
@@ -167,6 +218,9 @@ def get_account_detail(account_id: str, *, root: Optional[Path] = None) -> dict[
         "rc": int(ra.get("rc", 4)),
         "generated_at": ra.get("generated_at") or (raw or {}).get("generated_at"),
         "source_file": source_file,
+        "fallback_from_legacy": fallback_from_legacy,
+        "last_sync_status": last_sync_status,
+        "last_sync_reason": last_sync_reason,
         "credentials_touched": False,
         "funds_read_ok": bool(ra.get("funds_read_ok")),
         "funds": funds,
@@ -310,6 +364,8 @@ def enqueue_sync_request(
         "schema": "ths_desktop_bridge_request/1",
         "request_id": req_id,
         "action": "read_accounts",
+        "trigger": "manual_ui",
+        "idle_guard_seconds": 5.0,
         "accounts": target_accounts,
         "with_fills": bool(with_fills),
         "allow_order": False,

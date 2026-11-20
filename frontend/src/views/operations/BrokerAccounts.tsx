@@ -28,7 +28,8 @@ export default function BrokerAccounts() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<string>('all')
   const [syncing, setSyncing] = useState(false)
-  const [syncNotice, setSyncNotice] = useState<string | null>(null)
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null)
+  const [syncNotice, setSyncNotice] = useState<{ tone: 'info' | 'success' | 'warn'; text: string } | null>(null)
 
   const loadData = useCallback(async () => {
     try {
@@ -48,19 +49,48 @@ export default function BrokerAccounts() {
     return () => clearInterval(timer)
   }, [loadData])
 
+  useEffect(() => {
+    if (!pendingRequestId || !data?.bridge?.latest_completed) return
+    const done = data.bridge.latest_completed as Record<string, unknown>
+    if (String(done.request_id || '') !== pendingRequestId) return
+    const rc = Number(done.rc ?? 1)
+    if (rc === 0) {
+      setSyncNotice({
+        tone: 'success',
+        text: `✅ 同步已完成（${pendingRequestId}），已自动最小化同花顺交易界面并刷新最新资金与持仓。`,
+      })
+    } else {
+      setSyncNotice({
+        tone: 'warn',
+        text: `同步已结束（${pendingRequestId}，状态：${String(done.status || 'partial_or_failed')}），请查看各账号卡片详情。`,
+      })
+    }
+    setPendingRequestId(null)
+  }, [pendingRequestId, data])
+
   const handleSync = async (targetAccounts?: string[]) => {
     try {
       setSyncing(true)
       setSyncNotice(null)
       const res = await triggerAccountsSync(targetAccounts, true)
+      setPendingRequestId(res.request_id)
       if (res.status === 'already_queued') {
-        setSyncNotice(`已有只读同步指令排队中（${res.request_id}），请等待宿主机桌面桥空闲窗口执行。`)
+        setSyncNotice({
+          tone: 'info',
+          text: `已有只读同步指令排队中（${res.request_id}），请等待宿主机桌面桥空闲窗口执行。`,
+        })
       } else {
-        setSyncNotice(`已下发只读同步指令（${res.request_id}），宿主机桌面桥将在满足 90 秒空闲守卫后采集。`)
+        setSyncNotice({
+          tone: 'info',
+          text: `已下发只读同步指令（${res.request_id}），松开鼠标键盘 5 秒后将自动采集双账号（完成后会自动最小化同花顺界面并提示）。`,
+        })
       }
       await loadData()
     } catch (err) {
-      setSyncNotice(err instanceof Error ? `同步指令下发失败：${err.message}` : '同步指令下发失败')
+      setSyncNotice({
+        tone: 'warn',
+        text: err instanceof Error ? `同步指令下发失败：${err.message}` : '同步指令下发失败',
+      })
     } finally {
       setSyncing(false)
     }
@@ -158,8 +188,16 @@ export default function BrokerAccounts() {
       )}
 
       {syncNotice && (
-        <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">
-          {syncNotice}
+        <div
+          className={`rounded-lg border px-4 py-3 text-xs ${
+            syncNotice.tone === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200'
+              : syncNotice.tone === 'warn'
+                ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200'
+                : 'border-indigo-200 bg-indigo-50 text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200'
+          }`}
+        >
+          {syncNotice.text}
         </div>
       )}
 
@@ -275,38 +313,45 @@ export default function BrokerAccounts() {
             </div>
 
             {acct.funds ? (
-              <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
-                <div>
-                  <div className="text-zinc-500 dark:text-zinc-400">总资产</div>
-                  <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.total_assets)}</div>
-                </div>
-                <div>
-                  <div className="text-zinc-500 dark:text-zinc-400">股票市值</div>
-                  <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.market_value)}</div>
-                </div>
-                <div>
-                  <div className="text-zinc-500 dark:text-zinc-400">可用资金</div>
-                  <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.available)}</div>
-                </div>
-                <div>
-                  <div className="text-zinc-500 dark:text-zinc-400">当日盈亏</div>
-                  <div className={`mt-0.5 font-semibold tabular-nums ${pnlColor(acct.funds.daily_profit)}`}>
-                    {fmtSigned(acct.funds.daily_profit)} ({fmtSigned(acct.funds.daily_profit_ratio, '%')})
+              <>
+                <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <div className="text-zinc-500 dark:text-zinc-400">总资产</div>
+                    <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.total_assets)}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500 dark:text-zinc-400">股票市值</div>
+                    <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.market_value)}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500 dark:text-zinc-400">可用资金</div>
+                    <div className="mt-0.5 font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{fmtMoney(acct.funds.available)}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500 dark:text-zinc-400">当日盈亏</div>
+                    <div className={`mt-0.5 font-semibold tabular-nums ${pnlColor(acct.funds.daily_profit)}`}>
+                      {fmtSigned(acct.funds.daily_profit)} ({fmtSigned(acct.funds.daily_profit_ratio, '%')})
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500 dark:text-zinc-400">持仓盈亏</div>
+                    <div className={`mt-0.5 font-semibold tabular-nums ${pnlColor(acct.funds.holding_profit)}`}>
+                      {fmtSigned(acct.funds.holding_profit)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500 dark:text-zinc-400">采集时间</div>
+                    <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+                      {acct.generated_at ? acct.generated_at.slice(0, 19).replace('T', ' ') : '--'}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <div className="text-zinc-500 dark:text-zinc-400">持仓盈亏</div>
-                  <div className={`mt-0.5 font-semibold tabular-nums ${pnlColor(acct.funds.holding_profit)}`}>
-                    {fmtSigned(acct.funds.holding_profit)}
+                {acct.fallback_from_legacy && acct.last_sync_status && (
+                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300">
+                    最近一次同步未成功（{acct.last_sync_status}）：{acct.last_sync_reason || '未更新'}，当前展示历史快照
                   </div>
-                </div>
-                <div>
-                  <div className="text-zinc-500 dark:text-zinc-400">采集时间</div>
-                  <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
-                    {acct.generated_at ? acct.generated_at.slice(0, 19).replace('T', ' ') : '--'}
-                  </div>
-                </div>
-              </div>
+                )}
+              </>
             ) : (
               <div className="mt-3 text-xs text-zinc-500">暂无有效资金快照（{acct.reason || '未采集'}）</div>
             )}
@@ -396,34 +441,39 @@ export default function BrokerAccounts() {
                   </td>
                 </tr>
               ) : (
-                mergedFills.map((f, idx) => (
-                  <tr key={`${f._account_id}-${f.contract_no || idx}`} className="hover:bg-zinc-50/70 dark:hover:bg-zinc-800/40">
-                    <td className="px-4 py-2.5 font-mono text-zinc-600 dark:text-zinc-300">{f._account_id}</td>
-                    <td className="px-4 py-2.5 font-mono text-zinc-600 dark:text-zinc-300">
-                      {f.date || '--'} {f.time || ''}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className="font-mono font-medium text-zinc-900 dark:text-white">{f.code || '--'}</span>
-                      <span className="ml-2 text-zinc-600 dark:text-zinc-300">{f.name || ''}</span>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
-                          String(f.side || '').toLowerCase() === 'buy'
-                            ? 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300'
-                            : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
-                        }`}
-                      >
-                        {String(f.side || '').toLowerCase() === 'buy' ? '买入' : f.side || '--'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{f.quantity ?? '--'}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{f.price ?? '--'}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
-                      {fmtMoney(f.amount)} / {fmtMoney(f.net_amount)}
-                    </td>
-                  </tr>
-                ))
+                mergedFills.map((f, idx) => {
+                  const est = Boolean((f as unknown as Record<string, unknown>).net_amount_estimated)
+                  const sideLow = String(f.side || '').toLowerCase()
+                  return (
+                    <tr key={`${f._account_id}-${f.contract_no || 'f'}-${idx}`} className="hover:bg-zinc-50/70 dark:hover:bg-zinc-800/40">
+                      <td className="px-4 py-2.5 font-mono text-zinc-600 dark:text-zinc-300">{f._account_id}</td>
+                      <td className="px-4 py-2.5 font-mono text-zinc-600 dark:text-zinc-300">
+                        {f.date || '--'} {f.time || ''}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className="font-mono font-medium text-zinc-900 dark:text-white">{f.code || '--'}</span>
+                        <span className="ml-2 text-zinc-600 dark:text-zinc-300">{f.name || ''}</span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                            sideLow === 'buy'
+                              ? 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300'
+                              : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                          }`}
+                        >
+                          {sideLow === 'buy' ? '买入' : sideLow === 'sell' ? '卖出' : f.side || '--'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{f.quantity ?? '--'}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{f.price ?? '--'}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
+                        {fmtMoney(f.amount)} / {fmtMoney(f.net_amount)}
+                        {est && <span className="ml-1 text-[10px] text-zinc-400">(估)</span>}
+                      </td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>

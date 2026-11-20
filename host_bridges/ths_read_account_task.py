@@ -773,6 +773,26 @@ def _merge_today_fills_into_read_report(
         if d_norm:
             today_dates.add(d_norm)
         row.setdefault("row_seq", seq)
+        # 当日成交尚未日终清算，若缺失发生额（net_amount），按买卖方向补齐预估发生额（买为负、卖为正）
+        amt = row.get("amount")
+        if amt is None and row.get("price") is not None and row.get("quantity") is not None:
+            try:
+                amt = round(float(row["price"]) * float(row["quantity"]), 2)
+                row["amount"] = amt
+            except (TypeError, ValueError):
+                amt = None
+        if row.get("net_amount") is None and amt is not None:
+            try:
+                amt_f = abs(float(amt))
+                side_l = str(row.get("side") or "").strip().lower()
+                if side_l in ("buy", "b", "买入", "证券买入") or "买" in side_l:
+                    row["net_amount"] = round(-amt_f, 2)
+                    row["net_amount_estimated"] = True
+                elif side_l in ("sell", "s", "卖出", "证券卖出") or "卖" in side_l:
+                    row["net_amount"] = round(amt_f, 2)
+                    row["net_amount_estimated"] = True
+            except (TypeError, ValueError):
+                pass
         merged.append(row)
 
     # 2) 历史成交页中只保留非当日的记录，避免跨页重复；同时保留历史页内独立拆单
