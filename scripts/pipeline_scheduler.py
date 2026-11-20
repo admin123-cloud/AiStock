@@ -2007,16 +2007,19 @@ def serve(
             logger.warning("[tdx_sector_sync] 交易日判断失败: %s", exc)
             return
         cmd = [sys.executable, "-m", "pipelines.jobs.tdx_sector_sync", "--formal-write", "--recent-days", "10"]
-        res = _run_subprocess(cmd, timeout=600)
-        if res.get("rc") == 0:
-            logger.info("[tdx_sector_sync] 盘后板块增量同步完成")
-        else:
-            logger.warning("[tdx_sector_sync] 同步失败 rc=%s stderr=%s", res.get("rc"), (res.get("stderr") or "")[-300:])
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if proc.returncode == 0:
+                logger.info("[tdx_sector_sync] 盘后板块增量同步完成")
+            else:
+                logger.warning("[tdx_sector_sync] 同步失败 rc=%s stderr=%s", proc.returncode, (proc.stderr or "")[-300:])
+        except Exception as exc:
+            logger.warning("[tdx_sector_sync] 执行异常: %s", exc)
 
     from apscheduler.triggers.cron import CronTrigger as _TdxSectorCronTrigger
     scheduler.add_job(
         _run_tdx_sector_sync_job,
-        trigger=_TdxSectorCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=16, minute=45, timezone=BJ_TZ),
+        trigger=_TdxSectorCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=16, minute=45, timezone=BEIJING_TZ),
         id="tdx_sector_sync",
         name="通达信标准板块主档/成分股/日线盘后增量同步（工作日 16:45）",
         max_instances=1,
