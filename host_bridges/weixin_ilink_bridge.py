@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
-"""AiStock 专属微信双向桥接服务（腾讯 iLink Bot 协议 + Antigravity SDK 指令路由）。
+"""AiStock 专属微信交易助手桥接服务（腾讯 iLink Bot 协议，零外部依赖）。
 
 职责：
 1. 独占托管已绑定的 iLink Bot（凭证位于 F:/Aistock/runtime/weixin_ilink/）：
-   - 长轮询 ilink/bot/getupdates 接收 Owner 微信消息并自动刷新 context_token；
+   - 长轮询 ilink/bot/getupdates 接收 Owner 微信指令并自动刷新 context_token；
    - 提供本地 HTTP 接口（默认 0.0.0.0:8789）：
-     * GET  /health -> 返回在线状态、账号 ID、绑定用户与 Antigravity SDK 可用性
+     * GET  /health -> 返回在线状态、账号 ID、最近收发时间
      * POST /send   -> 供 AiStock 后端（Docker 通过 host.docker.internal:8789）单向推送做T提醒
-2. 微信双向指令路由（仅响应白名单 Owner）：
-   - 快捷交易指令（秒级直连 AiStock http://127.0.0.1:3000/api/g3/desk）：
-     * 帮助 / help
-     * 规划 / 做T / 计划
-     * 持仓 / 敞口
-     * 刷新 / 重算
-     * 记卖 <代码> <价格> <股数>  |  记买 <代码> <价格> <股数>
-   - 其它自然语言指令 -> 转发给本地 Antigravity Python SDK (google-antigravity) 在 F:/Aistock 执行并回传微信。
+2. 微信快捷交易指令（秒级直连 AiStock http://127.0.0.1:3000/api）：
+   - 帮助 / help
+   - 规划 / 做T / 计划
+   - 持仓 / 敞口 / 资金
+   - 任务 / 状态
+   - 刷新 / 重算
+   - 6位代码或股票名（如 002015 / 协鑫能科）-> 单票详细作战剧本
+   - 记卖 <代码> <价格> <股数>  |  记买 <代码> <价格> <股数>
 """
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -48,7 +47,6 @@ ITEM_TEXT = 1
 
 DEFAULT_STATE_DIR = Path(os.getenv("AISTOCK_WEIXIN_DIR", r"F:\Aistock\runtime\weixin_ilink"))
 DEFAULT_API_BASE = os.getenv("AISTOCK_API_BASE", "http://127.0.0.1:3000/api")
-DEFAULT_WORKSPACE = os.getenv("AISTOCK_WORKSPACE", r"F:\Aistock")
 DEFAULT_PORT = int(os.getenv("AISTOCK_WEIXIN_BRIDGE_PORT", "8789"))
 
 LOG_PATH = Path(r"F:\Aistock\storage\logs\weixin_ilink_bridge.log")
@@ -115,10 +113,9 @@ def _ilink_post(base_url: str, endpoint: str, token: str, payload: dict[str, Any
 class ILinkBridge:
     """iLink 凭证管理、单向推送与双向长轮询控制器。"""
 
-    def __init__(self, state_dir: Path, api_base: str, workspace: str):
+    def __init__(self, state_dir: Path, api_base: str):
         self.state_dir = state_dir
         self.api_base = api_base.rstrip("/")
-        self.workspace = workspace
         self._lock = threading.Lock()
         self._seen_msg_ids: dict[str, float] = {}
         self.account_id: str = ""
@@ -129,16 +126,7 @@ class ILinkBridge:
         self.default_peer: str = ""
         self.last_rx_at: Optional[str] = None
         self.last_tx_at: Optional[str] = None
-        self.sdk_available: bool = self._check_sdk()
         self._load_state()
-
-    @staticmethod
-    def _check_sdk() -> bool:
-        try:
-            import google.antigravity  # noqa: F401
-            return True
-        except Exception:  # noqa: BLE001
-            return False
 
     def _load_state(self) -> None:
         acct_files = [
@@ -174,10 +162,9 @@ class ILinkBridge:
             self.sync_buf = str(sy.get("get_updates_buf") or "")
 
         logger.info(
-            "iLink 凭证加载完成: account=%s, peer=%s, sdk_available=%s",
+            "iLink 凭证加载完成: account=%s, peer=%s",
             self.account_id,
             self.default_peer[:12] + "..." if self.default_peer else "none",
-            self.sdk_available,
         )
 
     def _save_context_tokens(self) -> None:
@@ -250,14 +237,14 @@ class ILinkBridge:
 
         if low in ("帮助", "help", "?", "？", "指令"):
             return (
-                "【AiStock × Antigravity 微信指令】\n"
+                "【AiStock 专属微信交易助手】\n"
                 "1. 规划 / 做T ：查今日大盘定调与各票买卖带/现价/RSI\n"
                 "2. 持仓 / 敞口 ：查双账号资金、持仓浮盈与今日T仓敞口\n"
-                "3. 任务 / 状态 ：查当前运行中的调度任务与服务健康\n"
+                "3. 任务 / 状态 ：查当前运行中的调度任务\n"
                 "4. 刷新 ：立即重算今日做T规划\n"
-                "5. 记卖 002015 12.20 1000 ：登记一笔卖出T成交\n"
-                "6. 记买 002015 11.90 1000 ：登记一笔买入T成交\n"
-                "7. 其它任意问题/开发指令：自动转交本地 Antigravity Agent 处理并回复！"
+                "5. 发股票代码或名称（如 002015 / 协鑫能科）：查单票做T剧本\n"
+                "6. 记卖 002015 12.20 1000 ：登记卖出T成交\n"
+                "7. 记买 002015 11.90 1000 ：登记买入T成交"
             )
 
         if low in ("任务", "运行任务", "状态", "tasks"):
@@ -335,65 +322,28 @@ class ILinkBridge:
             ent = res.get("entry") or {}
             return f"✅ 已登记{act}：{ent.get('code')} {ent.get('shares')}股 @ {ent.get('price')}（{ent.get('ts')}）。回复「敞口」查看最新敞口。"
 
+        # 单票精准查询（输入 6 位代码或股票名称关键字）
+        if re.fullmatch(r"\d{6}", cmd) or (2 <= len(cmd) <= 6 and not any(ch.isspace() for ch in cmd)):
+            d = self._call_aistock("GET", "/g3/desk?refresh_quotes=true")
+            for c in d.get("cards") or []:
+                if cmd == str(c.get("code")) or (cmd in str(c.get("name") or "")):
+                    q = c.get("live_quote") or {}
+                    eff = c.get("effective_params") or {}
+                    plan = c.get("daily_plan") or {}
+                    bb = eff.get("buy_band") or []
+                    sb = eff.get("sell_band") or []
+                    lines = [
+                        f"📌 {c.get('name')}({c.get('code')}) · {plan.get('action_label', '—')}",
+                        f"现价：{q.get('price', '—')} ({q.get('change_pct', '—')}%) | 均价：{q.get('vwap', '—')}",
+                        f"RSI5m：{q.get('rsi5m', '—')} | RSI15m：{q.get('rsi15m', '—')}",
+                        f"买带：{bb[0] if len(bb)==2 else '—'}~{bb[1] if len(bb)==2 else '—'} | 卖带：{sb[0] if len(sb)==2 else '—'}~{sb[1] if len(sb)==2 else '—'}",
+                        f"止损：{eff.get('stop', '—')} | 建议单笔：{plan.get('recommended_lot', 0)} 股",
+                    ]
+                    for sc in (plan.get("scenarios") or [])[:3]:
+                        lines.append(f"• [{sc.get('tag')}] {sc.get('text')}")
+                    return "\n".join(lines)
+
         return None
-
-    # ── Antigravity Python SDK 指令转发 ────────────────────────
-
-    def _resolve_gemini_api_key(self) -> str:
-        """优先读环境变量 GEMINI_API_KEY，其次读 runtime/weixin_ilink/antigravity.env（热读取，无需重启）。"""
-        key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-        if key:
-            return key
-        env_file = self.state_dir / "antigravity.env"
-        if env_file.is_file():
-            for line in env_file.read_text(encoding="utf-8-sig", errors="ignore").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                if k.strip() in ("GEMINI_API_KEY", "GOOGLE_API_KEY") and v.strip():
-                    return v.strip().strip('"').strip("'")
-        return ""
-
-    def _run_antigravity_prompt(self, prompt: str) -> str:
-        """通过官方 google-antigravity Python SDK 执行自然语言指令并返回精炼回复。"""
-        if not self._check_sdk():
-            return (
-                "⚠️ 本地尚未安装 google-antigravity Python SDK，暂无法执行自由开发指令。\n"
-                "当前快捷交易指令完全可用：回复「规划」「持仓」「任务」「刷新」「帮助」即可。"
-            )
-        api_key = self._resolve_gemini_api_key()
-        if not api_key:
-            return (
-                "⚠️ 尚未配置 GEMINI_API_KEY（Antigravity Python SDK 需要 API Key 才能独立运行）。\n"
-                "配置方法：在 F:\\Aistock\\runtime\\weixin_ilink\\antigravity.env 写入一行 GEMINI_API_KEY=你的Key（热生效，无需重启）。\n"
-                "当前快捷指令可直接用：规划 / 持仓 / 任务 / 刷新 / 帮助"
-            )
-
-        async def _invoke() -> str:
-            from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
-
-            cfg = LocalAgentConfig(
-                api_key=api_key,
-                workspaces=[self.workspace],
-                system_instructions=(
-                    f"你是运行在用户本机工作区 {self.workspace} 的 Antigravity 交易与工程助手。"
-                    "请使用简体中文精炼回复，适合在微信手机端阅读（尽量控制在 600 字以内，重点用条列展示）。"
-                ),
-                capabilities=CapabilitiesConfig(),
-            )
-            chunks: list[str] = []
-            async with Agent(cfg) as agent:
-                resp = await agent.chat(f"[来自用户微信指令，工作区 {self.workspace}]\n{prompt}")
-                async for token in resp:
-                    chunks.append(str(token))
-            return "".join(chunks).strip() or "（Antigravity 执行完成，无文本输出）"
-
-        try:
-            return asyncio.run(asyncio.wait_for(_invoke(), timeout=180.0))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Antigravity SDK 执行异常")
-            return f"⚠️ Antigravity 执行失败：{type(exc).__name__}: {exc}"
 
     def _dispatch_incoming(self, sender: str, text: str) -> None:
         try:
@@ -402,10 +352,16 @@ class ILinkBridge:
                 self.send_text(quick, peer=sender)
                 return
 
-            # 自由指令 -> 转交 Antigravity SDK
-            self.send_text("⏳ 已收到指令，正在转交本地 Antigravity 处理，请稍候…", peer=sender)
-            reply = self._run_antigravity_prompt(text)
-            self.send_text(reply, peer=sender)
+            self.send_text(
+                "未识别指令。可用指令：\n"
+                "• 规划 / 做T ：今日大盘定调与各票买卖带\n"
+                "• 持仓 / 敞口 ：资金与日内T仓敞口\n"
+                "• 任务 ：当前运行任务\n"
+                "• 刷新 ：重算今日做T规划\n"
+                "• 发股票代码或简称（如 002015 / 协鑫能科）：单票剧本\n"
+                "• 记卖/记买 代码 价格 股数 ：登记做T成交",
+                peer=sender,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("处理微信消息失败")
             self.send_text(f"⚠️ 指令处理出错：{type(exc).__name__}: {exc}", peer=sender)
@@ -510,7 +466,6 @@ def run_http_server(bridge: ILinkBridge, port: int) -> ThreadingHTTPServer:
                     "ok": True,
                     "account_id": bridge.account_id,
                     "peer_ready": bool(bridge.default_peer),
-                    "sdk_available": bridge._check_sdk(),
                     "last_rx_at": bridge.last_rx_at,
                     "last_tx_at": bridge.last_tx_at,
                 })
@@ -542,7 +497,7 @@ def run_http_server(bridge: ILinkBridge, port: int) -> ThreadingHTTPServer:
 
 
 def main() -> None:
-    bridge = ILinkBridge(DEFAULT_STATE_DIR, DEFAULT_API_BASE, DEFAULT_WORKSPACE)
+    bridge = ILinkBridge(DEFAULT_STATE_DIR, DEFAULT_API_BASE)
     run_http_server(bridge, DEFAULT_PORT)
     bridge.poll_forever()
 

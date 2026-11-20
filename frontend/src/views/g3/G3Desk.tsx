@@ -826,7 +826,7 @@ export default function G3Desk() {
                       </span>
                     </div>
                     <div className="mt-0.5 text-[11px] text-zinc-400">
-                      账号 {notifyCfg?.ilink_account_id || 'f9fe6b0d0535@im.bot'} · Antigravity SDK {notifyCfg?.ilink_sdk_available ? '已就绪' : '未安装'}
+                      账号 {notifyCfg?.ilink_account_id || 'f9fe6b0d0535@im.bot'} · 支持主动推做T信号与微信指令查询
                     </div>
                   </div>
                 )}
