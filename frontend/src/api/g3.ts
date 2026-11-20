@@ -167,6 +167,23 @@ export interface G3DeskCard {
   hard_stop?: Record<string, unknown> | null
 }
 
+export interface G3NotifyConfig {
+  enabled: boolean
+  channel: 'pushplus' | 'wecom_webhook' | 'serverchan' | 'qq_email' | string
+  has_pushplus_token: boolean
+  pushplus_token_masked: string
+  has_wecom_webhook: boolean
+  wecom_webhook_masked: string
+  has_serverchan_sendkey: boolean
+  serverchan_sendkey_masked: string
+  qq_email_to: string
+  smtp_ready: boolean
+  only_trading_hours: boolean
+  notify_on_draft: boolean
+  notify_on_stop_alert: boolean
+  updated_at?: string | null
+}
+
 export interface G3DeskResponse {
   as_of: string
   today?: string
@@ -209,6 +226,7 @@ export interface G3DeskResponse {
   cards: G3DeskCard[]
   drafts: Array<Record<string, unknown>>
   executions?: G3TExecution[]
+  notify_config?: G3NotifyConfig
   watchlist_count: number
   holding_count: number
 }
@@ -285,6 +303,21 @@ export const recordG3TExecution = (payload: {
 }) => request.post<unknown, { status: string; entry: G3TExecution }>('/g3/desk/execution', payload)
 export const deleteG3TExecution = (execId: string) =>
   request.post<unknown, { status: string; deleted_id: string }>('/g3/desk/execution/delete', { exec_id: execId })
+export const getG3NotifyConfig = () =>
+  request.get<unknown, G3NotifyConfig>('/g3/desk/notify/config')
+export const saveG3NotifyConfig = (payload: {
+  enabled?: boolean
+  channel?: string
+  pushplus_token?: string
+  wecom_webhook?: string
+  serverchan_sendkey?: string
+  qq_email_to?: string
+  only_trading_hours?: boolean
+  notify_on_draft?: boolean
+  notify_on_stop_alert?: boolean
+}) => request.post<unknown, { status: string; config: G3NotifyConfig }>('/g3/desk/notify/config', payload)
+export const testG3WechatNotify = () =>
+  request.post<unknown, { status: string; ok: boolean; channel: string; detail: string }>('/g3/desk/notify/test', {}, { timeout: 20000 })
 export const syncG3WatchlistFromThs = () => request.post<unknown, Record<string, unknown>>('/g3/watchlist/sync-ths')
 export const upsertG3Watchlist = (payload: { add?: Array<string | { code: string; qty?: number }>; remove?: string[] }) =>
   request.post<unknown, Record<string, unknown>>('/g3/watchlist/upsert', payload)

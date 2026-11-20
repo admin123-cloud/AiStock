@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
@@ -9,12 +9,83 @@ import {
   generateG3DailyPlan,
   getG3Desk,
   recordG3TExecution,
+  saveG3NotifyConfig,
   syncG3WatchlistFromThs,
+  testG3WechatNotify,
   upsertG3Watchlist,
   type G3DeskCard,
   type G3DeskResponse,
+  type G3NotifyConfig,
   type G3PriceGauge,
 } from '@/api/g3'
+
+/** 使用 Web Audio API 合成做T提示音（不依赖外部音频文件，支持买/卖/风控三种音色） */
+function playAlertTone(kind: 'buy' | 'sell' | 'danger' | 'info' = 'info') {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const notes: Array<[number, number, number]> =
+      kind === 'buy'
+        ? [[660, 0, 0.14], [880, 0.16, 0.22]]
+        : kind === 'sell'
+          ? [[880, 0, 0.12], [988, 0.14, 0.12], [1175, 0.28, 0.24]]
+          : kind === 'danger'
+            ? [[520, 0, 0.15], [390, 0.18, 0.15], [520, 0.36, 0.22]]
+            : [[784, 0, 0.15], [1046, 0.18, 0.18]]
+
+    notes.forEach(([freq, startOffset, dur]) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = kind === 'danger' ? 'sawtooth' : 'sine'
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + startOffset)
+      gain.gain.setValueAtTime(0.001, ctx.currentTime + startOffset)
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + startOffset + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startOffset + dur)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime + startOffset)
+      osc.stop(ctx.currentTime + startOffset + dur + 0.02)
+    })
+  } catch {
+    // 浏览器未交互前自动播放可能受限，静默降级
+  }
+}
+
+/** 触发 Windows 浏览器系统级桌面通知（即使页面在后台也能弹窗） */
+function fireDesktopNotification(title: string, body: string, tag?: string): boolean {
+  if (typeof window === 'undefined' || !('Notification' in window)) return false
+  if (Notification.permission !== 'granted') return false
+  try {
+    const n = new Notification(title, {
+      body,
+      tag: tag || `g3-desk-${Date.now()}`,
+      requireInteraction: true,
+    })
+    n.onclick = () => {
+      window.focus()
+      n.close()
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+const fmtTimeOnly = (raw?: unknown): string => {
+  const s = String(raw || '').trim()
+  if (!s) return '—'
+  if (s.includes(' ')) return s.split(' ')[1]?.slice(0, 8) || s
+  if (s.includes('T')) return s.split('T')[1]?.slice(0, 8) || s
+  return s.slice(0, 8)
+}
+
+const draftStatusBadge = (statusRaw: string) => {
+  if (statusRaw === 'open') return { label: '待确认', color: 'amber' as const }
+  if (statusRaw === 'confirmed_bar') return { label: '已确认', color: 'emerald' as const }
+  if (statusRaw === 'expired_unconfirmed') return { label: '已过期', color: 'zinc' as const }
+  return { label: statusRaw || '—', color: 'zinc' as const }
+}
 
 const fmtNum = (v?: number | null, digits = 2): string =>
   v != null && Number.isFinite(Number(v))
@@ -165,6 +236,17 @@ const EMPTY_EXEC_FORM: ExecFormState = {
   note: '',
 }
 
+interface LiveAlertBanner {
+  id: string
+  tone: 'buy' | 'sell' | 'danger' | 'info'
+  title: string
+  body: string
+  ts: string
+  code?: string
+  side?: 'BUY' | 'SELL'
+  price?: number | null
+}
+
 export default function G3Desk() {
   const [data, setData] = useState<G3DeskResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -179,19 +261,234 @@ export default function G3Desk() {
   const [execForm, setExecForm] = useState<ExecFormState>(EMPTY_EXEC_FORM)
   const [submittingExec, setSubmittingExec] = useState(false)
 
+  // Windows 桌面通知 + 声音 + 单向微信推送设置
+  const [notifyPanelOpen, setNotifyPanelOpen] = useState(false)
+  const [desktopPerm, setDesktopPerm] = useState<NotificationPermission | 'unsupported'>(() =>
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+  )
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('g3_desk_sound') !== '0'
+    } catch {
+      return true
+    }
+  })
+  const [liveBanner, setLiveBanner] = useState<LiveAlertBanner | null>(null)
+  const [notifyCfg, setNotifyCfg] = useState<G3NotifyConfig | null>(null)
+  const [wxEnabled, setWxEnabled] = useState(false)
+  const [wxChannel, setWxChannel] = useState('pushplus')
+  const [wxPushplusToken, setWxPushplusToken] = useState('')
+  const [wxWecomWebhook, setWxWecomWebhook] = useState('')
+  const [wxServerchanKey, setWxServerchanKey] = useState('')
+  const [wxQqEmail, setWxQqEmail] = useState('')
+  const [wxOnlyTrading, setWxOnlyTrading] = useState(true)
+  const [savingNotify, setSavingNotify] = useState(false)
+  const [testingWechat, setTestingWechat] = useState(false)
+
+  const initializedRef = useRef(false)
+  const seenDraftIdsRef = useRef<Set<string>>(new Set())
+  const alertCooldownRef = useRef<Map<string, number>>(new Map())
+  const baseTitleRef = useRef<string>(typeof document !== 'undefined' ? document.title : 'AiStock')
+
+  const triggerSignalAlert = useCallback(
+    (banner: LiveAlertBanner) => {
+      setLiveBanner(banner)
+      if (soundEnabled) {
+        playAlertTone(banner.tone)
+      }
+      fireDesktopNotification(banner.title, banner.body, banner.id)
+      // 浏览器标签页闪烁提醒，直到用户切回或关闭横幅
+      if (typeof document !== 'undefined') {
+        document.title = `🔔 ${banner.title}`
+      }
+    },
+    [soundEnabled]
+  )
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (typeof document !== 'undefined') {
+        document.title = baseTitleRef.current
+      }
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      if (typeof document !== 'undefined') {
+        document.title = baseTitleRef.current
+      }
+    }
+  }, [])
+
+  const syncNotifyFormFromServer = useCallback((cfg?: G3NotifyConfig) => {
+    if (!cfg) return
+    setNotifyCfg(cfg)
+    setWxEnabled(Boolean(cfg.enabled))
+    setWxChannel(cfg.channel || 'pushplus')
+    setWxQqEmail(cfg.qq_email_to || '')
+    setWxOnlyTrading(cfg.only_trading_hours !== false)
+  }, [])
+
   const load = useCallback(async (refreshQuotes = false, silent = false) => {
     if (!silent) setLoading(true)
     setError('')
     try {
       const res = await getG3Desk(refreshQuotes)
       setData(res)
+      if (res.notify_config && !initializedRef.current) {
+        syncNotifyFormFromServer(res.notify_config)
+      }
+
+      // 首次加载：把历史已有草案记为已见，避免一打开页面弹出旧提醒
+      const draftsList = res.drafts || []
+      if (!initializedRef.current) {
+        draftsList.forEach((d, idx) => {
+          const id = String(d.id || `${d.ts || ''}_${d.code || ''}_${idx}`)
+          seenDraftIdsRef.current.add(id)
+        })
+        initializedRef.current = true
+        return
+      }
+
+      // 后续轮询：检测新触发的做T信号草案
+      for (let i = 0; i < draftsList.length; i++) {
+        const d = draftsList[i]
+        const id = String(d.id || `${d.ts || ''}_${d.code || ''}_${i}`)
+        if (seenDraftIdsRef.current.has(id)) continue
+        seenDraftIdsRef.current.add(id)
+        const status = String(d.bar_status || d.status || '')
+        if (status === 'expired_unconfirmed') continue
+        const code = String(d.code || '')
+        const card = (res.cards || []).find((x) => x.code === code)
+        const name = String(d.name || card?.name || code)
+        const sideStr = String(d.side || '')
+        const isBuy = sideStr.toLowerCase().includes('buy')
+        const px = Number(d.price ?? d.trigger_price ?? d.px ?? 0)
+        const qty = Number(d.qty || card?.daily_plan?.recommended_lot || card?.t_lot_cap || 0)
+        triggerSignalAlert({
+          id,
+          tone: isBuy ? 'buy' : 'sell',
+          title: `${isBuy ? '买入T信号' : '卖出T信号'} · ${name}(${code}) @ ${px ? px.toFixed(2) : '—'}`,
+          body: `建议 ${isBuy ? '买入' : '卖出'} ${qty || '—'} 股 · 触发时间 ${fmtTimeOnly(d.ts || d.created_at)}`,
+          ts: fmtTimeOnly(d.ts || d.created_at),
+          code,
+          side: isBuy ? 'BUY' : 'SELL',
+          price: px || null,
+        })
+      }
+
+      // 同时检测可做T标的的实时止损跌破/超买超卖强机会（5 分钟同事件冷却）
+      const nowMs = Date.now()
+      for (const c of res.cards || []) {
+        const plan = c.daily_plan
+        if (!plan?.eligible) continue
+        const px = c.live_quote?.price
+        const zone = plan.price_gauge?.zone
+        if (zone === 'below_stop' && px) {
+          const key = `stop_${c.code}`
+          if (nowMs - (alertCooldownRef.current.get(key) || 0) > 5 * 60 * 1000) {
+            alertCooldownRef.current.set(key, nowMs)
+            triggerSignalAlert({
+              id: `${key}_${nowMs}`,
+              tone: 'danger',
+              title: `⚠️ 止损风控预警 · ${c.name}(${c.code}) @ ${px.toFixed(2)}`,
+              body: `现价已低于风控止损线 ${fmtNum(c.effective_params?.stop)}，请严禁低吸并关注防守`,
+              ts: c.live_quote?.quote_ts || new Date().toTimeString().slice(0, 8),
+              code: c.code,
+              side: 'SELL',
+              price: px,
+            })
+          }
+        }
+      }
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
       setError(err.response?.data?.detail || err.message || '加载失败')
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [])
+  }, [syncNotifyFormFromServer, triggerSignalAlert])
+
+  const handleRequestDesktopPermission = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setError('当前浏览器不支持系统桌面通知，请使用 Chrome / Edge 打开')
+      return
+    }
+    const perm = await Notification.requestPermission()
+    setDesktopPerm(perm)
+    if (perm === 'granted') {
+      setMsg('已开启 Windows 桌面通知！即使浏览器切到后台看同花顺也能弹出提醒')
+      fireDesktopNotification('AiStock 做T实战台', 'Windows 桌面通知已就绪，触发做T信号时将实时弹出提醒！', 'g3-perm-ok')
+      if (soundEnabled) playAlertTone('info')
+    } else if (perm === 'denied') {
+      setError('浏览器已拦截通知权限，请点击地址栏左侧锁图标 → 允许「通知」')
+    }
+  }
+
+  const handleTestDesktopNotify = async () => {
+    setError('')
+    if (desktopPerm === 'default') {
+      await handleRequestDesktopPermission()
+      return
+    }
+    if (desktopPerm === 'denied') {
+      setError('浏览器已拦截通知权限，请在地址栏左侧图标中允许「通知」后再试')
+      return
+    }
+    triggerSignalAlert({
+      id: `test_${Date.now()}`,
+      tone: 'sell',
+      title: '【测试】卖出T信号 · 协鑫能科(002015) @ 12.66',
+      body: 'Windows 桌面弹窗 + 提示音工作正常！真实信号触发时会立即如此提醒。',
+      ts: new Date().toTimeString().slice(0, 8),
+      code: '002015',
+      side: 'SELL',
+      price: 12.66,
+    })
+    setMsg('已触发 Windows 桌面通知与提示音测试')
+  }
+
+  const handleSaveWechatConfig = async () => {
+    setSavingNotify(true)
+    setError('')
+    setMsg('')
+    try {
+      const res = await saveG3NotifyConfig({
+        enabled: wxEnabled,
+        channel: wxChannel,
+        pushplus_token: wxPushplusToken || undefined,
+        wecom_webhook: wxWecomWebhook || undefined,
+        serverchan_sendkey: wxServerchanKey || undefined,
+        qq_email_to: wxQqEmail,
+        only_trading_hours: wxOnlyTrading,
+      })
+      syncNotifyFormFromServer(res.config)
+      setWxPushplusToken('')
+      setWxWecomWebhook('')
+      setWxServerchanKey('')
+      setMsg('单向微信通知配置已保存！可点击「发一条测试微信」立即验证')
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '保存配置失败')
+    } finally {
+      setSavingNotify(false)
+    }
+  }
+
+  const handleTestWechatNotify = async () => {
+    setTestingWechat(true)
+    setError('')
+    setMsg('')
+    try {
+      const res = await testG3WechatNotify()
+      setMsg(`微信测试通知发送成功（${res.channel}）：${res.detail}`)
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '微信测试发送失败')
+    } finally {
+      setTestingWechat(false)
+    }
+  }
 
   useEffect(() => {
     void load(false, false)
@@ -369,6 +666,14 @@ export default function G3Desk() {
             </Button>
             <Button
               outline
+              onClick={() => setNotifyPanelOpen((v) => !v)}
+            >
+              {desktopPerm === 'granted' || notifyCfg?.enabled
+                ? `通知设置 (${desktopPerm === 'granted' ? '桌面开' : '桌面关'} / ${notifyCfg?.enabled ? '微信开' : '微信关'})`
+                : '🔔 开启做T通知'}
+            </Button>
+            <Button
+              outline
               onClick={() => {
                 setAutoRefresh((v) => !v)
                 setCountdown(15)
@@ -385,6 +690,216 @@ export default function G3Desk() {
           </div>
         }
       />
+
+      {/* 实时做T信号顶部强提醒横幅 */}
+      {liveBanner && (
+        <div
+          className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg ${
+            liveBanner.tone === 'buy'
+              ? 'border-emerald-400/70 bg-emerald-500/20 text-emerald-100'
+              : liveBanner.tone === 'sell'
+                ? 'border-rose-400/70 bg-rose-500/20 text-rose-100'
+                : 'border-red-400/70 bg-red-500/20 text-red-100'
+          }`}
+        >
+          <div>
+            <div className="font-semibold">🔔 {liveBanner.title}</div>
+            <div className="mt-0.5 text-xs opacity-90">{liveBanner.body}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {liveBanner.code && (
+              <Button
+                onClick={() => {
+                  const matched = cards.find((x) => x.code === liveBanner.code)
+                  if (matched) {
+                    openExecModal(matched, liveBanner.side || 'SELL', liveBanner.price, matched.daily_plan?.recommended_lot, '实时通知跟单')
+                  }
+                  setLiveBanner(null)
+                  if (typeof document !== 'undefined') document.title = baseTitleRef.current
+                }}
+              >
+                去登记执行
+              </Button>
+            )}
+            <Button
+              outline
+              onClick={() => {
+                setLiveBanner(null)
+                if (typeof document !== 'undefined') document.title = baseTitleRef.current
+              }}
+            >
+              知道了
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Windows 桌面通知 + 单向微信推送配置面板 */}
+      {notifyPanelOpen && (
+        <Card className="border-blue-500/40 bg-zinc-900/90">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+            <div>
+              <div className="text-sm font-semibold text-white">做T实时通知中心（Windows 桌面弹窗 + 单向微信推送）</div>
+              <div className="mt-0.5 text-xs text-zinc-400">
+                摒弃复杂双向机器人，直接单向推送：浏览器后台弹 Windows 系统通知，服务端 10 秒轮询草案自动单向推微信。
+              </div>
+            </div>
+            <Button plain onClick={() => setNotifyPanelOpen(false)}>收起</Button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* 左：Windows 页面与桌面通知 */}
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-white">1. Windows 桌面弹窗 & 提示音</span>
+                <Badge color={desktopPerm === 'granted' ? 'emerald' : desktopPerm === 'denied' ? 'red' : 'amber'}>
+                  {desktopPerm === 'granted' ? '已授权' : desktopPerm === 'denied' ? '已被浏览器拦截' : '待授权'}
+                </Badge>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-zinc-400">
+                开启后，即使把浏览器切到后台或最小化看同花顺，只要触发做T信号或止损预警，Windows 右下角会立即弹出通知并播放提示音。
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {desktopPerm !== 'granted' && (
+                  <Button onClick={() => void handleRequestDesktopPermission()}>
+                    一键开启 Windows 桌面通知
+                  </Button>
+                )}
+                <Button
+                  outline
+                  onClick={() => {
+                    const next = !soundEnabled
+                    setSoundEnabled(next)
+                    try {
+                      localStorage.setItem('g3_desk_sound', next ? '1' : '0')
+                    } catch {
+                      // ignore
+                    }
+                    if (next) playAlertTone('info')
+                  }}
+                >
+                  {soundEnabled ? '🔊 提示音：开' : '🔇 提示音：关'}
+                </Button>
+                <Button outline onClick={() => void handleTestDesktopNotify()}>
+                  测试 Windows 弹窗 + 提示音
+                </Button>
+              </div>
+            </div>
+
+            {/* 右：单向微信推送 */}
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-white">2. 单向微信推送（服务端自动发）</span>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-zinc-200">
+                  <input
+                    type="checkbox"
+                    checked={wxEnabled}
+                    onChange={(e) => setWxEnabled(e.target.checked)}
+                    className="h-4 w-4 rounded border-zinc-600 bg-zinc-900"
+                  />
+                  启用微信推送
+                </label>
+              </div>
+
+              <div className="mt-2.5 grid grid-cols-1 gap-2.5 text-xs sm:grid-cols-2">
+                <div>
+                  <label className="block text-zinc-400">推送通道（任选其一）</label>
+                  <select
+                    value={wxChannel}
+                    onChange={(e) => setWxChannel(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
+                  >
+                    <option value="pushplus">PushPlus 推送加（推荐，个人微信免费200条/天）</option>
+                    <option value="wecom_webhook">企业微信群机器人 Webhook（免费无上限，微信可收）</option>
+                    <option value="serverchan">Server酱 Turbo（SendKey 个人微信）</option>
+                    <option value="qq_email">QQ 邮箱微信提醒（系统已配SMTP，零注册即用）</option>
+                  </select>
+                </div>
+
+                {wxChannel === 'pushplus' && (
+                  <div>
+                    <label className="block text-zinc-400">
+                      PushPlus Token {notifyCfg?.has_pushplus_token ? `（已配: ${notifyCfg.pushplus_token_masked}）` : ''}
+                    </label>
+                    <input
+                      type="password"
+                      value={wxPushplusToken}
+                      onChange={(e) => setWxPushplusToken(e.target.value)}
+                      placeholder={notifyCfg?.has_pushplus_token ? '留空保持原 Token' : '在 pushplus.plus 扫码获取 Token'}
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
+                    />
+                  </div>
+                )}
+
+                {wxChannel === 'wecom_webhook' && (
+                  <div>
+                    <label className="block text-zinc-400">
+                      企业微信 Webhook {notifyCfg?.has_wecom_webhook ? `（已配: ${notifyCfg.wecom_webhook_masked}）` : ''}
+                    </label>
+                    <input
+                      type="text"
+                      value={wxWecomWebhook}
+                      onChange={(e) => setWxWecomWebhook(e.target.value)}
+                      placeholder={notifyCfg?.has_wecom_webhook ? '留空保持原 Webhook' : 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'}
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
+                    />
+                  </div>
+                )}
+
+                {wxChannel === 'serverchan' && (
+                  <div>
+                    <label className="block text-zinc-400">
+                      Server酱 SendKey {notifyCfg?.has_serverchan_sendkey ? `（已配: ${notifyCfg.serverchan_sendkey_masked}）` : ''}
+                    </label>
+                    <input
+                      type="password"
+                      value={wxServerchanKey}
+                      onChange={(e) => setWxServerchanKey(e.target.value)}
+                      placeholder={notifyCfg?.has_serverchan_sendkey ? '留空保持原 SendKey' : 'SCT...'}
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
+                    />
+                  </div>
+                )}
+
+                {wxChannel === 'qq_email' && (
+                  <div>
+                    <label className="block text-zinc-400">
+                      接收 QQ 邮箱 {notifyCfg?.smtp_ready ? '（SMTP 已就绪）' : '（SMTP 未就绪）'}
+                    </label>
+                    <input
+                      type="email"
+                      value={wxQqEmail}
+                      onChange={(e) => setWxQqEmail(e.target.value)}
+                      placeholder="例如 290402028@qq.com（微信开启QQ邮箱提醒即可收）"
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={wxOnlyTrading}
+                    onChange={(e) => setWxOnlyTrading(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-zinc-600 bg-zinc-900"
+                  />
+                  仅交易时段（09:15~15:05）自动推
+                </label>
+                <div className="flex items-center gap-2">
+                  <Button outline onClick={() => void handleSaveWechatConfig()} disabled={savingNotify}>
+                    {savingNotify ? '保存中…' : '保存配置'}
+                  </Button>
+                  <Button onClick={() => void handleTestWechatNotify()} disabled={testingWechat}>
+                    {testingWechat ? '发送中…' : '发一条测试微信'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* 规划过期强告警 */}
       {data?.is_stale_regime && (
@@ -837,19 +1352,24 @@ export default function G3Desk() {
                 {data.drafts.map((d, i) => {
                   const code = String(d.code || '')
                   const matchedCard = cards.find((x) => x.code === code)
+                  const stockName = String(d.name || matchedCard?.name || '')
                   const sideStr = String(d.side || '')
                   const side: 'BUY' | 'SELL' = sideStr.toLowerCase().includes('buy') ? 'BUY' : 'SELL'
                   const px = Number(d.price ?? d.trigger_price ?? d.px ?? 0)
+                  const st = draftStatusBadge(String(d.bar_status || d.status || ''))
                   return (
                     <TableRow key={i}>
-                      <TableCell className="font-mono text-xs text-zinc-300">{String(d.ts || d.created_at || '—')}</TableCell>
-                      <TableCell className="font-mono text-zinc-100">{code || '—'}</TableCell>
-                      <TableCell>
-                        <Badge color={side === 'BUY' ? 'emerald' : 'red'}>{sideStr || '—'}</Badge>
+                      <TableCell className="font-mono text-xs text-zinc-300">{fmtTimeOnly(d.ts || d.created_at)}</TableCell>
+                      <TableCell className="text-xs text-zinc-100">
+                        {stockName ? `${stockName} ` : ''}
+                        <span className="font-mono text-zinc-400">{code || '—'}</span>
                       </TableCell>
-                      <TableCell className="font-mono">{px ? fmtNum(px) : '—'}</TableCell>
                       <TableCell>
-                        <Badge color="zinc">{String(d.bar_status || d.status || '—')}</Badge>
+                        <Badge color={side === 'BUY' ? 'emerald' : 'red'}>{side === 'BUY' ? '买入T' : '卖出T'}</Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{px ? fmtNum(px) : '—'}</TableCell>
+                      <TableCell>
+                        <Badge color={st.color}>{st.label}</Badge>
                       </TableCell>
                       <TableCell>
                         {matchedCard && (
@@ -857,7 +1377,7 @@ export default function G3Desk() {
                             plain
                             onClick={() => openExecModal(matchedCard, side, px || null, matchedCard.t_lot_cap, `跟单草案 ${String(d.trigger_kind || '')}`)}
                           >
-                            登记执行
+                            登记
                           </Button>
                         )}
                       </TableCell>

@@ -109,6 +109,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/data-center/kline-inspect',
     '/api/data-center/overview',
     '/api/g3/desk',
+    '/api/g3/desk/notify/config',
     '/api/g3/mainwave',
     '/api/g3/review/daily',
     '/api/g3/review/shadow',
@@ -168,6 +169,8 @@ _SCOPED_WRITE_PREVIEW_PATHS = frozenset({
     '/api/g3/desk/execution',
     '/api/g3/desk/execution/delete',
     '/api/g3/desk/generate-plan',
+    '/api/g3/desk/notify/config',
+    '/api/g3/desk/notify/test',
     '/api/g3/watchlist/sync-ths',
     '/api/g3/watchlist/upsert',
 })

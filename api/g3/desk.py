@@ -28,6 +28,12 @@ from services.trading.t_daily_plan import (
     resolve_effective_params,
     summarize_intraday_executions,
 )
+from services.trading.t_notify import (
+    ensure_draft_watcher_started,
+    get_public_notify_config,
+    save_notify_config,
+    send_wechat_notification,
+)
 from utils.common.paths import runtime_path
 
 router = APIRouter()
@@ -151,6 +157,7 @@ def get_g3_desk(
     refresh_quotes: bool = Query(default=False, description="是否跳过短期内存缓存强制刷新实时行情"),
 ) -> dict[str, Any]:
     """G3 做T实战台一站式聚合：双账号持仓 + 每日做T规划 + 实时行情/VWAP/RSI + 布防态 + 日内敞口台账。"""
+    ensure_draft_watcher_started()
     now_bj = datetime.now(BJ_TZ)
     today_str = now_bj.strftime("%Y-%m-%d")
     tracker_dir = runtime_path("t_tracker")
@@ -377,6 +384,7 @@ def get_g3_desk(
         "cards": cards,
         "drafts": drafts,
         "executions": executions,
+        "notify_config": get_public_notify_config(),
         "watchlist_count": len(watchlist_items),
         "holding_count": len(holding_by_code),
     }
@@ -462,6 +470,50 @@ def post_g3_execution_delete(req: TExecutionDeleteRequest) -> dict[str, Any]:
     if not ok:
         raise HTTPException(status_code=404, detail="未找到该成交记录")
     return {"status": "ok", "deleted_id": req.exec_id}
+
+
+class NotifyConfigUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    channel: str | None = None
+    pushplus_token: str | None = None
+    wecom_webhook: str | None = None
+    serverchan_sendkey: str | None = None
+    qq_email_to: str | None = None
+    only_trading_hours: bool | None = None
+    notify_on_draft: bool | None = None
+    notify_on_stop_alert: bool | None = None
+
+
+@router.get("/desk/notify/config")
+def get_g3_notify_config() -> dict[str, Any]:
+    """读取脱敏后的做T单向微信推送配置。"""
+    ensure_draft_watcher_started()
+    return get_public_notify_config()
+
+
+@router.post("/desk/notify/config")
+def post_g3_notify_config(req: NotifyConfigUpdateRequest) -> dict[str, Any]:
+    """保存做T单向微信推送配置（仅写 runtime/g3_desk_plans/notify_config.json）。"""
+    ensure_draft_watcher_started()
+    patch = {k: v for k, v in req.model_dump().items() if v is not None}
+    return {"status": "ok", "config": save_notify_config(patch)}
+
+
+@router.post("/desk/notify/test")
+def post_g3_notify_test() -> dict[str, Any]:
+    """发送一条单向微信测试消息，立即验证通道连通性。"""
+    now_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    res = send_wechat_notification(
+        title="【做T实战台】单向微信通知测试成功",
+        markdown_body=(
+            f"- **发送时间**：`{now_str}`\n"
+            "- **说明**：这是一条来自 AiStock G3 做T实战台的单向推送测试。\n"
+            "- **生效范围**：盘中触发买入T / 卖出T 信号草案后 10 秒内将自动推送到你的微信。"
+        ),
+    )
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=f"发送失败（{res.get('channel')}）：{res.get('detail')}")
+    return {"status": "ok", **res}
 
 
 class WatchlistUpsertRequest(BaseModel):
