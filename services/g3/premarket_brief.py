@@ -134,7 +134,7 @@ def generate_premarket_brief(
         )
 
     if wl.get("advice"):
-        checklist.append(f"【R51水位】{wl['advice']}")
+        checklist.append(f"【AR1水位】{wl['advice']}")
 
     if core_themes:
         theme_str = "、".join(f"{t['industry']}({t['candidate_count']}只)" for t in core_themes)
@@ -174,7 +174,7 @@ def generate_premarket_brief(
         f"【AiStock 盘前主线简报 · {d_str}】",
         f"■ 市场定位：{regime_label}｜仓位上限 ≤{cap_pct:.0f}%｜{'允许开新主升' if allow_new else '严禁开新主升'}",
         f"■ 当前水位：{actual_str}（{wl.get('status') or 'unknown'}）",
-        f"■ 核心盘面：上证R51={idx.get('confirmed_regime') or '—'}（连续{idx.get('streak_days') or 0}日）｜情绪={mood.get('mood_label') or '—'}（涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}）｜成交额={turnover_str}",
+        f"■ 核心盘面：上证AR1趋势={idx.get('confirmed_regime') or '—'}（连续{idx.get('streak_days') or 0}日）｜情绪={mood.get('mood_label') or '—'}（涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}）｜成交额={turnover_str}",
     ]
     if alloc_line:
         lines.append(f"■ 三腿配额：{alloc_line}")

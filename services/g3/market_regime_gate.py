@@ -26,14 +26,21 @@ from utils.common.paths import runtime_path
 
 BJ_TZ = timezone(timedelta(hours=8))
 
-# R51 定稿水位映射（2026-11-20 纳入主线）
-R51_POSITION_CAPS: dict[str, float] = {
-    "offensive": 0.75,
-    "balanced": 0.50,
-    "defensive": 0.25,
+# AR1（AI Research #1）全市场 4,995 股实证定稿水位与步长（2026-11-21 全面替代旧 R51）
+AR1_POSITION_CAPS: dict[str, float] = {
+    "extreme_offensive": 0.85,
+    "offensive": 0.80,
+    "balanced": 0.35,
+    "defensive": 0.10,
+    "extreme_panic": 0.10,
 }
-R51_MAX_STEP_RATIO = 0.15  # 单次调仓步长上限 1.5 成
-R51_DEADBAND_RATIO = 0.05  # 水位匹配死区 ±5%
+AR1_MAX_STEP_RATIO = 0.30  # AR1 实证果断调仓步长上限 3.0 成/日（原 R51 为 1.5 成）
+AR1_DEADBAND_RATIO = 0.05  # 水位匹配死区 ±5%
+
+# 向后兼容别名（统一指向 AR1 实证参数）
+R51_POSITION_CAPS = AR1_POSITION_CAPS
+R51_MAX_STEP_RATIO = AR1_MAX_STEP_RATIO
+R51_DEADBAND_RATIO = AR1_DEADBAND_RATIO
 
 _INDEX_CACHE: dict[str, Any] = {"expires_at": 0.0, "date_key": None, "payload": None}
 _TURNOVER_CACHE: dict[str, Any] = {"expires_at": 0.0, "date_key": None, "payload": None}
@@ -507,7 +514,7 @@ def evaluate_market_regime_gate(
     elif is_idx_down or is_breadth_weak or is_mood_freezing:
         regime = "defensive"
         if is_idx_down:
-            reasons.append(f"上证指数 R51 确认处于下降周期（连续 {idx_r51.get('streak_days')} 日）")
+            reasons.append(f"上证指数 AR1 趋势确认处于下降周期（连续 {idx_r51.get('streak_days')} 日）")
         if is_breadth_weak:
             reasons.append(f"全市场宽度弱势（站上MA20占比 {breadth_src.get('above_ma20_pct')}%）")
         if is_mood_freezing:
@@ -516,49 +523,50 @@ def evaluate_market_regime_gate(
             )
     elif (is_idx_up and is_breadth_strong and not is_mood_weak) or (is_idx_up and is_mood_warm and not is_breadth_weak):
         regime = "offensive"
-        reasons.append("指数 R51 确认上升周期且市场宽度/情绪配合良好，允许按上限积极布局")
+        reasons.append("AR1 复合状态机确认主升进攻周期（宽度/趋势/情绪共振），允许按上限积极布局")
     else:
         regime = "balanced"
         if is_mood_weak:
             reasons.append(
-                f"情绪偏弱（跌停 {mood_src.get('limit_down_count')} 家、封板率 {round((mood_src.get('seal_rate') or 0) * 100, 1)}%），控制半仓以内"
+                f"情绪偏弱（跌停 {mood_src.get('limit_down_count')} 家、封板率 {round((mood_src.get('seal_rate') or 0) * 100, 1)}%），AR1 实证控制 ≤35% 轻仓"
             )
         else:
-            reasons.append("指数与市场宽度处于结构震荡区，维持中性半仓并依托带位做T")
+            reasons.append("AR1 复合状态机判定横盘平衡区（全市场无系统性贝塔），控仓 ≤35% 聚焦主线补涨与做T")
 
     # 额外检查 index_mom60（对齐主升浪 Score88 合约 <= 5% 诊断）
     mom60 = idx_r51.get("index_mom60")
     if mom60 is not None and mom60 > 0.05:
         warnings.append(f"上证 60 日动量 {mom60 * 100:.1f}% > 5%（主升浪合约过热提示，追高需谨慎）")
 
-    # 6. 映射 R51 v2.1 仓位上限、五态细分（含两个极端态）与实盘水位对标
-    target_cap = R51_POSITION_CAPS[regime]
+    # 6. 映射 AR1 实证五态细分与水位上限（全面替代旧 R51）
     allow_new_mainwave = regime != "defensive"
 
-    # 五态细分识别（在三档硬仓位上限之上叠加两个极端态剧本提示）
+    # 五态细分识别（在三档基础态之上叠加极端恐慌与极端高潮两个极端态）
     ld_cnt = int(mood_src.get("limit_down_count") or 0) if mood_src.get("status") == "fresh" else 0
     lu_cnt = int(mood_src.get("limit_up_count") or 0) if mood_src.get("status") == "fresh" else 0
     sr_val = _safe_float(mood_src.get("seal_rate")) if mood_src.get("status") == "fresh" else None
     ma20_val = _safe_float(breadth_src.get("above_ma20_pct")) if breadth_src.get("status") == "fresh" else None
 
-    if regime == "defensive" and ld_cnt >= 80 and ld_cnt > lu_cnt and (ma20_val is None or ma20_val < 15.0):
+    if regime == "defensive" and ld_cnt >= 80 and ld_cnt > lu_cnt and (ma20_val is None or ma20_val <= 18.0):
         phase_5 = "extreme_panic"
         regime_label = "极端防守·恐慌冰点"
         tone = "red"
-        action_summary = "死守现金严禁开新主升仓 · 等首次缩量止跌且经AI定性非衰退后才可≤10%试错宽基/红利"
+        action_summary = "AR1实证：死守现金严禁开新主升仓 · 宽度≤18%进入物极必反区，等首次缩量止跌且AI排除衰退后才可≤10%试错宽基/红利"
     elif regime == "offensive" and lu_cnt >= 80 and (sr_val is None or sr_val >= 0.75) and (ma20_val is None or ma20_val >= 65.0):
         phase_5 = "extreme_offensive"
         regime_label = "极端进攻·情绪高潮"
         tone = "emerald"
-        action_summary = "主升绿灯池积极布局 + 卖晚买早正T · 同步盯防高潮转分歧预警"
+        action_summary = "AR1实证：高潮期满额顺势持有（≤85%）+ 卖晚买早正T · 同步盯防高潮转分歧预警"
     else:
         phase_5 = regime
         meta_map = {
-            "offensive": ("常态进攻·温和上升", "emerald", "允许主升浪精选开新仓 + 积极正T"),
-            "balanced": ("常态震荡·箱体轮动", "amber", "仅限高确定性精选主升 + 双向带位做T + 关注稳健腿ETF"),
-            "defensive": ("常态防守·趋势下跌", "red", "严禁开新主升仓 · 确认转弱果断分步降水位，不傻等5日反弹"),
+            "offensive": ("主升进攻·趋势上升", "emerald", "AR1实证（胜率61%核心赚钱窗）：激活主升冠军策略 + 宽基ETF顺势腿（≤80%）"),
+            "balanced": ("横盘平衡·结构轮动", "amber", "AR1实证（大盘微负期望）：严控水位 ≤35%，仅做强主线补涨策略与双向做T"),
+            "defensive": ("防守退潮·趋势下跌", "red", "AR1实证（主跌亏钱浪）：严禁开新仓，确认转弱果断按 ≤30%/日 分步降水位至 ≤10%"),
         }
         regime_label, tone, action_summary = meta_map[regime]
+
+    target_cap = AR1_POSITION_CAPS.get(phase_5, AR1_POSITION_CAPS[regime])
 
     assets_val = _safe_float(total_assets)
     mv_val = _safe_float(total_market_value)
@@ -570,29 +578,30 @@ def evaluate_market_regime_gate(
     if assets_val is not None and assets_val > 0 and mv_val is not None and mv_val >= 0:
         actual_ratio = round(mv_val / assets_val, 4)
         gap_ratio = round(actual_ratio - target_cap, 4)
-        if gap_ratio > R51_DEADBAND_RATIO:
-            step_pct = min(round(gap_ratio * 100, 1), round(R51_MAX_STEP_RATIO * 100, 1))
+        if gap_ratio > AR1_DEADBAND_RATIO:
+            step_pct = min(round(gap_ratio * 100, 1), round(AR1_MAX_STEP_RATIO * 100, 1))
             rebalance_status = "overweight"
             rebalance_advice = (
-                f"当前实际水位 {actual_ratio * 100:.1f}% 高于今日上限 {target_cap * 100:.0f}%（超配 {gap_ratio * 100:.1f}%）："
-                f"按 R51 v2.1（300股大样本实证），次日开盘/盘中果断分步减仓 ≤{step_pct:.1f}%，勿傻等5日反弹卖带"
+                f"当前实际水位 {actual_ratio * 100:.1f}% 高于 AR1 上限 {target_cap * 100:.0f}%（超配 {gap_ratio * 100:.1f}%）："
+                f"按 AR1 实证宪法（4995股回测），次日开盘/盘中果断分步减仓 ≤{step_pct:.1f}%，2~3日内降至目标水位"
             )
-        elif gap_ratio < -R51_DEADBAND_RATIO and allow_new_mainwave:
-            step_pct = min(round(abs(gap_ratio) * 100, 1), round(R51_MAX_STEP_RATIO * 100, 1))
+        elif gap_ratio < -AR1_DEADBAND_RATIO and allow_new_mainwave:
+            step_pct = min(round(abs(gap_ratio) * 100, 1), round(AR1_MAX_STEP_RATIO * 100, 1))
             rebalance_status = "underweight"
             rebalance_advice = (
-                f"当前实际水位 {actual_ratio * 100:.1f}% 低于目标上限 {target_cap * 100:.0f}%："
-                f"按 R51 v2.1（N=3 确认），次日开盘/盘中分步加仓 ≤{step_pct:.1f}% 或切入主升绿灯精选"
+                f"当前实际水位 {actual_ratio * 100:.1f}% 低于 AR1 目标上限 {target_cap * 100:.0f}%："
+                f"按 AR1 实证宪法，次日开盘/盘中分步加仓 ≤{step_pct:.1f}% 或切入生效周期冠军策略"
             )
         else:
             rebalance_status = "aligned"
             rebalance_advice = (
-                f"当前实际水位 {actual_ratio * 100:.1f}% 符合今日目标上限 {target_cap * 100:.0f}%，"
-                "维持现有底仓专注带位做T降本"
+                f"当前实际水位 {actual_ratio * 100:.1f}% 符合 AR1 目标上限 {target_cap * 100:.0f}%，"
+                "维持现有底仓专注纪律执行与做T降本"
             )
 
     return {
         "schema": "g3_market_regime_gate/1",
+        "decision_framework": "AR1",
         "as_of": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
         "ref_date": ref_date_str,
         "regime": regime,

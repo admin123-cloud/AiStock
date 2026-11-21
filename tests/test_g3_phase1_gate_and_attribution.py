@@ -89,13 +89,13 @@ def test_market_regime_gate_freezing_mood_forces_defensive_and_overweight(tmp_pa
     )
 
     assert res["regime"] == "defensive"
-    assert res["target_position_cap"] == 0.25
+    assert res["target_position_cap"] == 0.10
     assert res["allow_new_mainwave"] is False
     assert res["sources"]["turnover_forecast"]["status"] == "stale"
     assert any("已过期" in w for w in res["warnings"])
     assert res["r51_waterline"]["status"] == "overweight"
     assert res["r51_waterline"]["actual_pct"] == 68.0
-    assert "≤15.0%" in res["r51_waterline"]["advice"]
+    assert "≤30.0%" in res["r51_waterline"]["advice"]
 
 
 def test_market_regime_gate_offensive_and_underweight(tmp_path: Path):
@@ -126,7 +126,7 @@ def test_market_regime_gate_offensive_and_underweight(tmp_path: Path):
         turnover_fetcher=lambda _: None,
     )
     assert res["regime"] == "offensive"
-    assert res["target_position_cap"] == 0.75
+    assert res["target_position_cap"] == 0.85
     assert res["allow_new_mainwave"] is True
     assert res["r51_waterline"]["status"] == "underweight"
 

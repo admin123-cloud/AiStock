@@ -349,7 +349,7 @@ def build_strategy_matrix(
         {
             "leg_id": "t_enhance",
             "name": "增强腿 · G3 三周期底仓做T",
-            "role": "底仓之上滚动降本增厚（R34/R51/R54/R56 + L2 硬风控）",
+            "role": "底仓之上滚动降本增厚（AR1 实证纪律 + L2 硬风控）",
             "target_pct": effective_alloc["t_enhance_pct"],
             "base_pct": base_alloc["t_enhance_pct"],
             "status": t_status,

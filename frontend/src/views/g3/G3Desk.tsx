@@ -758,7 +758,7 @@ export default function G3Desk() {
         account_label: execForm.account_label,
         note: execForm.note,
       })
-      const typeLabel = execForm.order_type === 'base_rebalance' ? 'R51水位调仓' : '做T'
+      const typeLabel = execForm.order_type === 'base_rebalance' ? 'AR1水位调仓' : '做T'
       setMsg(`已登记${typeLabel}成交：${execForm.name} ${execForm.side === 'BUY' ? '买入' : '卖出'} ${shares} 股 @ ${price.toFixed(2)}`)
       setExecForm(EMPTY_EXEC_FORM)
       setPrefillRes(null)
@@ -1219,7 +1219,7 @@ export default function G3Desk() {
                             {h.suggested_shares > 0 && (
                               <div className="mt-1 font-mono text-[11px] font-semibold text-amber-300">
                                 建议卖出 {h.suggested_shares.toLocaleString()} 股（
-                                {h.suggested_order_type === 'base_rebalance' ? 'R51减仓' : '反T卖'}）
+                                {h.suggested_order_type === 'base_rebalance' ? 'AR1减仓' : '反T卖'}）
                               </div>
                             )}
                           </TableCell>
@@ -1332,7 +1332,7 @@ export default function G3Desk() {
           <Card className={gate.regime === 'defensive' ? 'border-red-500/40 bg-red-950/10' : gate.regime === 'offensive' ? 'border-emerald-500/40 bg-emerald-950/10' : 'border-amber-500/40 bg-amber-950/10'}>
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-white">大盘择时总闸门 × R51 仓位水位</span>
+                <span className="text-sm font-semibold text-white">大盘择时总闸门 × AR1 实证仓位水位</span>
                 <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
                 <Badge color={gate.allow_new_mainwave ? 'emerald' : 'red'}>
                   {gate.allow_new_mainwave ? '允许主升开新仓' : '严禁开新主升仓'}
@@ -1352,7 +1352,7 @@ export default function G3Desk() {
                     <span className="text-zinc-300">
                       双账号实际水位：<b className="font-mono text-white">{wl.actual_pct != null ? `${wl.actual_pct.toFixed(1)}%` : '—'}</b>
                       <span className="mx-2 text-zinc-600">/</span>
-                      R51 目标上限：<b className="font-mono text-blue-300">{capPct.toFixed(0)}%</b>
+                      AR1 目标上限：<b className="font-mono text-blue-300">{capPct.toFixed(0)}%</b>
                     </span>
                     <Badge color={wl.status === 'overweight' ? 'red' : wl.status === 'underweight' ? 'blue' : wl.status === 'aligned' ? 'emerald' : 'zinc'}>
                       {wl.status === 'overweight' ? '超配需降水位' : wl.status === 'underweight' ? '低配可分步加' : wl.status === 'aligned' ? '水位匹配' : '待同步资产'}
@@ -1366,7 +1366,7 @@ export default function G3Desk() {
                     <div
                       className="absolute top-0 bottom-0 w-0.5 bg-amber-300"
                       style={{ left: `${Math.min(100, Math.max(0, capPct))}%` }}
-                      title={`R51 目标上限 ${capPct}%`}
+                      title={`AR1 目标上限 ${capPct}%`}
                     />
                   </div>
                   <p className="mt-2 text-xs leading-relaxed text-zinc-300">{wl.advice}</p>
@@ -1436,7 +1436,7 @@ export default function G3Desk() {
 
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-zinc-400">2. 上证 R51 周期</span>
+                    <span className="text-zinc-400">2. 上证 AR1 复合周期</span>
                     <Badge color={srcBadge(src.index_r51.status)}>{srcText(src.index_r51.status)}</Badge>
                   </div>
                   <div className="mt-1.5 font-mono text-sm font-semibold text-white">
@@ -1772,14 +1772,14 @@ export default function G3Desk() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-7">
             <div>
-              <label className="block text-xs text-zinc-400">单据分型（R51）</label>
+              <label className="block text-xs text-zinc-400">单据分型（AR1）</label>
               <select
                 value={execForm.order_type}
                 onChange={(e) => { setExecForm((f) => ({ ...f, order_type: e.target.value as 't_trade' | 'base_rebalance' })); setPrefillRes(null) }}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
               >
                 <option value="t_trade">做T滚动单 (t_trade)</option>
-                <option value="base_rebalance">R51水位调仓 (rebalance)</option>
+                <option value="base_rebalance">AR1水位调仓 (rebalance)</option>
               </select>
             </div>
             <div>
@@ -1820,7 +1820,7 @@ export default function G3Desk() {
                 type="text"
                 value={execForm.note}
                 onChange={(e) => setExecForm((f) => ({ ...f, note: e.target.value }))}
-                placeholder="如：反T卖1 / R51减仓"
+                placeholder="如：反T卖1 / AR1减仓"
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
               />
             </div>
@@ -2320,7 +2320,7 @@ export default function G3Desk() {
                           {ex.side === 'BUY' ? '买入' : '卖出'}
                         </Badge>
                         <Badge color={ex.order_type === 'base_rebalance' ? 'amber' : 'blue'}>
-                          {ex.order_type === 'base_rebalance' ? 'R51调仓' : '做T'}
+                          {ex.order_type === 'base_rebalance' ? 'AR1调仓' : '做T'}
                         </Badge>
                       </div>
                     </TableCell>

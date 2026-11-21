@@ -29,11 +29,11 @@ def compile_daily_trading_command(
     regime = str(market_gate.get("regime") or "defensive")
     regime_label = str(market_gate.get("regime_label") or "防守模式")
     allow_new = bool(market_gate.get("allow_new_mainwave", False))
-    cap_pct = float(market_gate.get("target_position_cap_pct") or 25.0)
+    cap_pct = float(market_gate.get("target_position_cap_pct") or 10.0)
     wl = market_gate.get("r51_waterline") if isinstance(market_gate.get("r51_waterline"), Mapping) else {}
     actual_pct = wl.get("actual_pct")
     gap_pct = float(wl.get("gap_pct") or 0.0)
-    max_step_pct = float(wl.get("max_step_pct") or 15.0)
+    max_step_pct = float(wl.get("max_step_pct") or 30.0)
     is_defensive = regime in ("defensive", "extreme_panic") or not allow_new
 
     sr = dict(strategy_router or {})
@@ -42,10 +42,10 @@ def compile_daily_trading_command(
         sr.get("active_strategy_name") or ("现金防守 / 严禁开新仓" if is_defensive else "周期生效策略")
     )
 
-    # 1. 允许 / 禁止交易模式
+    # 1. 允许 / 禁止交易模式（AR1 实证宪法 v1.0）
     if is_defensive:
         allowed_modes = [
-            "R51 水位减仓单（base_rebalance，优先降超配水位）",
+            "AR1 水位减仓单（base_rebalance，果断 ≤30%/日 降超配水位）",
             "已有持仓反T降本（t_trade，严格先卖后买，接不回顺势减仓）",
         ]
         forbidden_modes = [
@@ -55,7 +55,7 @@ def compile_daily_trading_command(
         ]
     elif regime == "balanced":
         allowed_modes = [
-            f"周期轮动补涨买单（{active_strategy_name}，受 R51 水位上限 ≤{cap_pct:.0f}% 约束）",
+            f"AR1 平衡轮动补涨买单（{active_strategy_name}，受 AR1 水位上限 ≤{cap_pct:.0f}% 约束）",
             "已有持仓双向做T（t_trade，优先反T + 低位支撑正T）",
         ]
         forbidden_modes = [
@@ -64,7 +64,7 @@ def compile_daily_trading_command(
         ]
     else:
         allowed_modes = [
-            f"主升进攻龙头买单（{active_strategy_name}，受水位上限 ≤{cap_pct:.0f}% 约束）",
+            f"AR1 主升进攻龙头买单（{active_strategy_name}，受 AR1 水位上限 ≤{cap_pct:.0f}% 约束）",
             "已有持仓顺势做T（t_trade，均线支撑低吸高抛）",
         ]
         forbidden_modes = [
@@ -134,7 +134,7 @@ def compile_daily_trading_command(
         if ai_light == "yellow":
             reasons.append("AI哨兵黄灯（" + (ai_flags[0] if ai_flags else "存在减持或业绩压力") + "）")
         if need_reduce_pct > 0:
-            reasons.append(f"双账号水位 {actual_pct:.1f}% 超配 {gap_pct:.1f}%，须执行 R51 分步减仓")
+            reasons.append(f"双账号水位 {actual_pct:.1f}% 超配 {gap_pct:.1f}%，须执行 AR1 果断分步减仓（≤{max_step_pct:.0f}%/日）")
 
         suggested_reduce_shares = 0
         verdict = "HOLD_T"

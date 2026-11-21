@@ -48,7 +48,7 @@ export default function G3Settings() {
     <div className="flex w-full flex-col gap-5">
       <PageHeader
         title="G3 策略矩阵与风控总控台"
-        subtitle="Phase 4 三腿互补矩阵 × 动态资金配额 × 6 大宽基 ETF 波动率目标趋势 × R34/R51/L2 风控门禁"
+        subtitle="AR1 实证三腿互补矩阵 × 动态资金配额 × 6 大宽基 ETF 波动率目标趋势 × AR1/L2 硬风控门禁"
         actions={
           <Button onClick={() => void load()} disabled={loading}>
             {loading ? '刷新中…' : '刷新'}
