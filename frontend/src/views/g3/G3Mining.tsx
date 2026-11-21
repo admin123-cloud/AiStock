@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/catalyst/table'
@@ -494,24 +494,24 @@ export default function G3Mining() {
             <StatCard
               label="流动性达标样本池"
               value={`${activeRun.universe.unique_stocks.toLocaleString()} 只`}
-              sub={`≥${activeRun.universe.min_amt_20d_wan}万 · ${activeRun.universe.trade_days} 交易日`}
+              hint={`≥${activeRun.universe.min_amt_20d_wan}万 · ${activeRun.universe.trade_days} 交易日`}
             />
             <StatCard
               label="OOS 盲测样本外区间"
               value={`${activeRun.splits.oos.from.slice(2)}`}
-              sub={`至 ${activeRun.splits.oos.to}（绝不参与调参）`}
+              hint={`至 ${activeRun.splits.oos.to}（绝不参与调参）`}
             />
             <StatCard
               label="通过 5 道硬门禁"
               value={`${activeRun.summary.passed_all_gates} / ${activeRun.summary.candidates_evaluated}`}
-              sub="严格淘汰过拟合候选"
-              tone={activeRun.summary.passed_all_gates > 0 ? 'emerald' : 'amber'}
+              hint="严格淘汰过拟合候选"
+              tone={activeRun.summary.passed_all_gates > 0 ? 'info' : 'warning'}
             />
             <StatCard
               label="最高挖掘综合分"
               value={`${activeRun.summary.best_mining_score.toFixed(1)}`}
-              sub={activeRun.summary.best_rule_id || '—'}
-              tone={activeRun.summary.best_mining_score >= 65 ? 'emerald' : 'blue'}
+              hint={activeRun.summary.best_rule_id || '—'}
+              tone={activeRun.summary.best_mining_score >= 65 ? 'info' : 'default'}
             />
           </div>
 
@@ -581,7 +581,7 @@ export default function G3Mining() {
                           <Button
                             outline
                             disabled={exportingRuleId === item.rule.rule_id}
-                            onClick={(e: React.MouseEvent) => {
+                            onClick={(e: MouseEvent) => {
                               e.stopPropagation()
                               void handleExportContract(activeRun.run_id, item.rule.rule_id)
                             }}
