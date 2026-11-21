@@ -1088,6 +1088,235 @@ export default function G3Desk() {
         </div>
       )}
 
+      {/* 0.0 今日一页式交易执行指令单（环境 → 策略 → 模式 → 持仓逐股处置 → 候选储备与排雷） */}
+      {data?.trading_command && (() => {
+        const cmd = data.trading_command
+        const env = cmd.environment
+        const strat = cmd.strategy
+        return (
+          <Card
+            className={
+              env.is_defensive
+                ? 'border-red-500/50 bg-zinc-950/90 ring-1 ring-red-500/20'
+                : 'border-emerald-500/50 bg-zinc-950/90 ring-1 ring-emerald-500/20'
+            }
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-base font-bold text-white">今日交易执行指令单</span>
+                <Badge color={env.is_defensive ? 'red' : 'emerald'}>{env.regime_label}</Badge>
+                <Badge color={strat.mode === 'cash_defense' ? 'amber' : 'blue'}>
+                  生效策略：{strat.active_strategy_name}
+                </Badge>
+                {env.overweight_pct > 0 && (
+                  <Badge color="red">
+                    超配 {env.overweight_pct}% · 今日目标减仓 ≤{env.today_reduce_step_pct}%（约 ¥{fmtNum(env.today_reduce_target_yuan, 0)}）
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-3 text-xs">
+                <Link to="/g3/mainwave" className="text-blue-400 hover:text-blue-300">周期选股排雷 →</Link>
+                <Link to="/g3/mining" className="text-zinc-400 hover:text-zinc-200">策略路由配置 →</Link>
+              </div>
+            </div>
+
+            {/* 1~3. 允许与禁止交易模式 */}
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 text-xs">
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/15 p-2.5">
+                <div className="font-semibold text-emerald-300">✅ 今日允许交易模式</div>
+                <ul className="mt-1 space-y-1 text-zinc-200">
+                  {strat.allowed_modes.map((m, i) => (
+                    <li key={i}>• {m}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-lg border border-red-500/30 bg-red-950/15 p-2.5">
+                <div className="font-semibold text-red-300">⛔ 今日禁止红线</div>
+                <ul className="mt-1 space-y-1 text-zinc-200">
+                  {strat.forbidden_modes.map((m, i) => (
+                    <li key={i}>• {m}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            {/* 4. 当前已持仓逐股处置计划（明确告知是否应减仓及建议股数） */}
+            <div className="mt-4">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-white">
+                  当前持仓逐股处置计划（{cmd.holding_actions.length} 只 · 明确告知应留/应减与建议股数）
+                </span>
+                <span className="text-[11px] text-zinc-400">
+                  点击右侧按钮直接带入 L2 风控预检与同花顺远航预填（仅填单不提交）
+                </span>
+              </div>
+              {cmd.holding_actions.length === 0 ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-xs text-zinc-400">
+                  当前双账号无持仓。
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-zinc-800">
+                  <Table dense>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeader>持仓标的</TableHeader>
+                        <TableHeader>持仓 / 浮盈</TableHeader>
+                        <TableHeader>AI 哨兵 & 周期</TableHeader>
+                        <TableHeader>今日处置结论</TableHeader>
+                        <TableHeader>处置依据与风险点</TableHeader>
+                        <TableHeader>执行操作</TableHeader>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {cmd.holding_actions.map((h) => (
+                        <TableRow key={h.code}>
+                          <TableCell className="text-xs">
+                            <Link to={`/stock/${h.code}`} className="font-semibold text-white hover:text-blue-400">
+                              {h.name} <span className="font-mono text-zinc-400">{h.code}</span>
+                            </Link>
+                            <div className="font-mono text-[11px] text-zinc-400">
+                              现价 {fmtNum(h.current_price)} · 成本 {fmtNum(h.cost_price, 3)}
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <div className="text-zinc-100">{h.total_shares.toLocaleString()} 股（可用 {h.available_shares.toLocaleString()}）</div>
+                            <div className={Number(h.profit_pct || 0) >= 0 ? 'text-rose-400' : 'text-emerald-400'}>
+                              {fmtSignedPct(h.profit_pct)} · ¥{fmtNum(h.market_value, 0)}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <div className="flex flex-wrap items-center gap-1">
+                              <Badge
+                                color={
+                                  h.ai_risk_light === 'red'
+                                    ? 'red'
+                                    : h.ai_risk_light === 'yellow'
+                                      ? 'amber'
+                                      : h.ai_risk_light === 'green'
+                                        ? 'emerald'
+                                        : 'zinc'
+                                }
+                              >
+                                {h.ai_risk_light === 'red'
+                                  ? '红灯'
+                                  : h.ai_risk_light === 'yellow'
+                                    ? '黄灯'
+                                    : h.ai_risk_light === 'green'
+                                      ? '绿灯'
+                                      : '待评'}
+                                {h.ai_catalyst_score != null ? ` ${h.ai_catalyst_score}/5` : ''}
+                              </Badge>
+                              <Badge color={regimeBadge(h.regime).color}>{regimeBadge(h.regime).label}</Badge>
+                            </div>
+                            {h.broken_stop && (
+                              <div className="mt-0.5 text-[11px] font-semibold text-red-400">
+                                ⛔ 已破止损 {fmtNum(h.stop_price)}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            <Badge color={toneToBadgeColor(h.verdict_tone)}>{h.verdict_label}</Badge>
+                            {h.suggested_shares > 0 && (
+                              <div className="mt-1 font-mono text-[11px] font-semibold text-amber-300">
+                                建议卖出 {h.suggested_shares.toLocaleString()} 股（
+                                {h.suggested_order_type === 'base_rebalance' ? 'R51减仓' : '反T卖'}）
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className="max-w-xs text-[11px] text-zinc-300">
+                            {h.reasons.join('；') || h.ai_thesis || '—'}
+                          </TableCell>
+                          <TableCell>
+                            {h.suggested_shares > 0 ? (
+                              <Button
+                                outline
+                                onClick={() => {
+                                  setPrefillRes(null)
+                                  setPrefillExecStatus(null)
+                                  setExecForm({
+                                    open: true,
+                                    code: h.code,
+                                    name: h.name,
+                                    side: 'SELL',
+                                    order_type: h.suggested_order_type === 'base_rebalance' ? 'base_rebalance' : 't_trade',
+                                    price: h.current_price ? h.current_price.toFixed(2) : '',
+                                    shares: String(h.suggested_shares),
+                                    account_label: '',
+                                    note: `${h.verdict_label}：${h.reasons[0] || ''}`,
+                                  })
+                                }}
+                              >
+                                一键预检卖出
+                              </Button>
+                            ) : (
+                              <span className="text-[11px] text-zinc-500">暂不动</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            {/* 5. 新开仓与候选储备票（评分 + 绿灯储备 + 红灯雷区） */}
+            <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-12 text-xs">
+              <div className="lg:col-span-8 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-white">
+                    {cmd.new_entries.can_open_new
+                      ? `今日允许新开仓标的（${cmd.new_entries.active_picks.length} 只）`
+                      : `候选储备观察池（今日严禁买入 · 绿灯 ${cmd.new_entries.reserve_counts.green ?? 0} / 黄灯 ${cmd.new_entries.reserve_counts.yellow ?? 0} / 红灯 ${cmd.new_entries.reserve_counts.red ?? 0}）`}
+                  </span>
+                  {!cmd.new_entries.can_open_new && <Badge color="amber">今日开新仓：0 只（仅观察待转暖）</Badge>}
+                </div>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {(cmd.new_entries.reserve_top_picks || []).slice(0, 4).map((p, i) => (
+                    <div key={`${p.code}-${i}`} className="rounded-md border border-zinc-800 bg-zinc-950/70 p-2">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-semibold text-zinc-100">
+                          {p.name} <span className="font-mono text-zinc-400">{String(p.code || '').split('.')[0]}</span>
+                        </span>
+                        <span className="font-mono text-[11px] text-emerald-300">
+                          分 {p.score ?? '—'} · 绿灯 {p.catalyst_score}/5
+                        </span>
+                      </div>
+                      <div className="mt-0.5 line-clamp-2 text-[11px] text-zinc-400">{p.one_line_thesis}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="lg:col-span-4 rounded-lg border border-red-500/30 bg-red-950/15 p-3">
+                <div className="font-semibold text-red-300">
+                  ⛔ AI 红灯一票否决雷区（{cmd.new_entries.red_blocked.length} 只已剔除）
+                </div>
+                {cmd.new_entries.red_blocked.length === 0 ? (
+                  <div className="mt-2 text-zinc-400">当前候选池无红灯雷区</div>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {cmd.new_entries.red_blocked.map((rb) => (
+                      <div key={rb.code} className="rounded-md border border-red-500/25 bg-zinc-950/60 p-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-red-200">
+                            {rb.name} <span className="font-mono text-zinc-400">{rb.code}</span>
+                          </span>
+                          <span className="font-mono text-[11px] text-zinc-400">原量化分 {rb.score ?? '—'}</span>
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-red-200/90">
+                          {rb.risk_flags[0] || rb.one_line_thesis}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+        )
+      })()}
+
       {/* 0. Phase 1A：大盘择时总闸门 × R51 仓位水位 */}
       {data?.market_regime_gate && (() => {
         const gate = data.market_regime_gate

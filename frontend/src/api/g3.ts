@@ -568,6 +568,67 @@ export interface G3SyncFillsResponse {
   entries: G3TExecution[]
 }
 
+export interface G3TradingCommandHoldingAction {
+  code: string
+  name: string
+  total_shares: number
+  available_shares: number
+  cost_price?: number | null
+  current_price?: number | null
+  market_value: number
+  profit_pct?: number | null
+  regime: string
+  stop_price?: number | null
+  broken_stop: boolean
+  ai_risk_light: string
+  ai_catalyst_score?: number | null
+  ai_thesis: string
+  verdict: string
+  verdict_label: string
+  verdict_tone: string
+  suggested_side: 'SELL' | 'HOLD' | string
+  suggested_order_type: 'base_rebalance' | 't_trade' | string
+  suggested_shares: number
+  reasons: string[]
+}
+
+export interface G3DailyTradingCommand {
+  schema: string
+  environment: {
+    regime: string
+    regime_label: string
+    is_defensive: boolean
+    actual_position_pct?: number | null
+    target_cap_pct: number
+    overweight_pct: number
+    today_reduce_step_pct: number
+    today_reduce_target_yuan: number
+  }
+  strategy: {
+    mode: string
+    active_strategy_id: string
+    active_strategy_name: string
+    allowed_modes: string[]
+    forbidden_modes: string[]
+    summary: string
+  }
+  holding_actions: G3TradingCommandHoldingAction[]
+  new_entries: {
+    can_open_new: boolean
+    active_picks: G3StrategyRouterPick[]
+    reserve_counts: { green?: number; yellow?: number; red?: number }
+    reserve_top_picks: G3AiScreeningSummary['top_picks']
+    red_blocked: Array<{
+      code: string
+      name: string
+      industry: string
+      score?: number | string | null
+      risk_flags: string[]
+      one_line_thesis: string
+    }>
+  }
+}
+
 export interface G3DeskResponse {
   as_of: string
   today?: string
@@ -593,6 +654,7 @@ export interface G3DeskResponse {
     }>
   } | null
   strategy_router?: G3LiveStrategyRouter | null
+  trading_command?: G3DailyTradingCommand | null
   premarket_brief?: G3PremarketBrief | null
   prefill_bridge?: G3PrefillBridgeStatus
   fill_sync_meta?: {

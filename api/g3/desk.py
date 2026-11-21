@@ -26,6 +26,7 @@ from services.g3.premarket_brief import (
     push_premarket_brief_wechat,
 )
 from services.g3.strategy_matrix import build_strategy_matrix
+from services.g3.trading_plan_compiler import compile_daily_trading_command
 from services.mining.live_router import scan_active_strategy_signals
 from services.trading.holding_t_watchlist import (
     read_watchlist,
@@ -409,6 +410,35 @@ def get_g3_desk(
     except Exception:
         strategy_router = None
 
+    accounts_summary_obj = {
+        "total_assets": merged_funds.get("total_assets"),
+        "total_market_value": merged_funds.get("market_value"),
+        "total_cash": avail_cash,
+        "total_floating_profit": merged_funds.get("floating_profit"),
+        "account_count": overview.get("accounts_total") or len(overview.get("accounts") or []),
+        "accounts_ready": overview.get("accounts_ready"),
+        "bridge_online": bridge_info.get("online"),
+        "updated_at": bridge_info.get("heartbeat_at"),
+    }
+
+    # 编译唯一权威的「今日交易执行指令单」（大盘环境 → 生效策略 → 交易模式 → 持仓逐股处置 → 候选储备与红灯排雷）
+    try:
+        _mw_merged = merge_screening_into_mainwave(
+            scan_mainwave_daily(force_refresh=False),
+            market_gate=market_regime_gate,
+        )
+    except Exception:
+        _mw_merged = {}
+
+    trading_command = compile_daily_trading_command(
+        market_gate=market_regime_gate,
+        strategy_router=strategy_router,
+        cards=cards,
+        accounts_summary=accounts_summary_obj,
+        mainwave_ai_summary=_mw_merged.get("ai_screening_summary"),
+        mainwave_candidates=_mw_merged.get("candidates"),
+    )
+
     return {
         "as_of": now_bj.isoformat(timespec="seconds"),
         "today": today_str,
@@ -423,6 +453,7 @@ def get_g3_desk(
         "market_regime_gate": market_regime_gate,
         "strategy_allocation": strategy_allocation,
         "strategy_router": strategy_router,
+        "trading_command": trading_command,
         "premarket_brief": load_latest_premarket_brief(today_str),
         "prefill_bridge": get_prefill_bridge_status(),
         "fill_sync_meta": {
@@ -436,16 +467,7 @@ def get_g3_desk(
             "stale_param_count": stale_param_count,
             "stop_alert_count": stop_alert_count,
         },
-        "accounts_summary": {
-            "total_assets": merged_funds.get("total_assets"),
-            "total_market_value": merged_funds.get("market_value"),
-            "total_cash": avail_cash,
-            "total_floating_profit": merged_funds.get("floating_profit"),
-            "account_count": overview.get("accounts_total") or len(overview.get("accounts") or []),
-            "accounts_ready": overview.get("accounts_ready"),
-            "bridge_online": bridge_info.get("online"),
-            "updated_at": bridge_info.get("heartbeat_at"),
-        },
+        "accounts_summary": accounts_summary_obj,
         "regime_meta": {
             "file": regime_file,
             "generated_at": plan_generated_at,
