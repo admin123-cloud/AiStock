@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from services.mining import MINING_TEMPLATES
+from services.mining.backtest_benchmark import build_ar1_historical_backtest_report
 from services.mining.backtest_engine import RuleSpec
 from services.mining.contract_exporter import export_candidate_contract
 from services.mining.feature_store import MINING_FEATURE_META
@@ -266,3 +267,21 @@ def post_bind_mining_regime_route(req: BindRegimeRouteRequest) -> dict[str, Any]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "router_config": cfg}
+
+
+@router.get("/backtest-report")
+def get_mining_backtest_report() -> dict[str, Any]:
+    """返回 AR1 五阶段切换标准、基准 vs 阶段选股策略历史回测对比与 6 项防幻觉审计报告。"""
+    try:
+        return build_ar1_historical_backtest_report(force_rebuild=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"加载历史回测报告失败: {exc}") from exc
+
+
+@router.post("/backtest-report/rebuild")
+def post_rebuild_mining_backtest_report() -> dict[str, Any]:
+    """Scoped-write：重新运行全市场单账户零杠杆历史回测并刷新落盘报告。"""
+    try:
+        return build_ar1_historical_backtest_report(force_rebuild=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"重跑历史回测失败: {exc}") from exc

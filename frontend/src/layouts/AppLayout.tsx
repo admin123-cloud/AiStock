@@ -49,6 +49,7 @@ const NAV_ICONS: Record<string, ComponentType> = {
   '/g3/review': ClockIcon,
   '/g3/mainwave': ArrowTrendingUpIcon,
   '/g3/mining': MagnifyingGlassIcon,
+  '/g3/backtest': ChartBarIcon,
   '/g3/settings': ShieldCheckIcon,
   '/data/health': HeartIcon,
   '/kline-check': ClipboardDocumentCheckIcon,

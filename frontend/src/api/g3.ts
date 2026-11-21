@@ -1202,3 +1202,77 @@ export const bindG3MiningRouter = (payload: { regime: string; strategy_id: strin
     '/g3/mining/router/bind',
     payload
   )
+
+export interface G3BacktestPerfMetrics {
+  cum_ret_pct: number
+  ann_ret_pct: number
+  max_dd_pct: number
+  sharpe: number
+  calmar: number
+  excess_vs_hs300_pct?: number
+}
+
+export interface G3BacktestComparisonRow {
+  id: string
+  name: string
+  role: string
+  category: 'active_combo' | 'stage_strategy' | 'benchmark' | 'retired' | string
+  full: G3BacktestPerfMetrics
+  segments: Record<'is' | 'val' | 'oos', G3BacktestPerfMetrics>
+  meta: Record<string, unknown>
+}
+
+export interface G3BacktestFiveRegimeRule {
+  phase: string
+  label: string
+  tone: string
+  enter_rule: string
+  exit_switch: string
+  confirm_days: string
+  position_cap_pct: number
+  active_strategy: string
+  hist_days: number
+  hist_pct: number
+  fwd_5d_avg_pct: number
+  fwd_5d_win_pct: number
+  fwd_10d_avg_pct: number
+}
+
+export interface G3BacktestCurvePoint {
+  date: string
+  regime: string
+  hs300: number
+  all_eq: number
+  pure_etf_aw: number
+  core_sat_aw: number
+  lowvol: number
+  panic_etf: number
+  retired_mw04: number
+}
+
+export interface G3HistoricalBacktestReport {
+  schema: string
+  generated_at: string
+  period: {
+    start: string
+    end: string
+    trade_days: number
+    regime_switches: number
+  }
+  splits: Record<'is' | 'val' | 'oos', { from: string; to: string }>
+  five_regime_rules: G3BacktestFiveRegimeRule[]
+  comparisons: G3BacktestComparisonRow[]
+  curve_points: G3BacktestCurvePoint[]
+  anti_hallucination_audit: Array<{
+    id: string
+    title: string
+    status: 'PASS' | 'DISCLOSED_LIMITATION' | string
+    detail: string
+  }>
+}
+
+export const getG3BacktestReport = () =>
+  request.get<unknown, G3HistoricalBacktestReport>('/g3/mining/backtest-report', { timeout: 60000 })
+
+export const rebuildG3BacktestReport = () =>
+  request.post<unknown, G3HistoricalBacktestReport>('/g3/mining/backtest-report/rebuild', {}, { timeout: 180000 })

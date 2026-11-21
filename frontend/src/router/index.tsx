@@ -118,6 +118,12 @@ export const routes: AppRoute[] = [
     () => import('@/views/g3/G3Mining')
   ),
   page(
+    '/g3/backtest',
+    'G3Backtest',
+    { title: 'G3 历史回测与防幻觉验真', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 3.8, navLabel: '历史回测验真' },
+    () => import('@/views/g3/G3Backtest')
+  ),
+  page(
     '/g3/settings',
     'G3Settings',
     { title: 'G3 策略矩阵与风控', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 4, navLabel: '策略矩阵风控' },
