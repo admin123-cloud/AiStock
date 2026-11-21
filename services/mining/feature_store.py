@@ -178,7 +178,27 @@ def build_or_load_feature_panel(
         """
     )
     valid_codes = set(stocks_df["code"].astype(str))
-    code_to_ind = dict(zip(stocks_df["code"].astype(str), stocks_df["industry"].astype(str)))
+    code_to_ind = {
+        str(c): str(ind).strip()
+        for c, ind in zip(stocks_df["code"], stocks_df["industry"])
+        if str(ind or "").strip() and str(ind or "").strip() != "未分类"
+    }
+    # 优先从 stock.sector_stocks + stock.sectors (type='industry') 补齐真实 145 个行业归属
+    try:
+        sec_map_df = _ch_query_df(
+            """
+            SELECT ss.stock_code AS code, any(s.name) AS ind_name
+            FROM stock.sector_stocks ss
+            INNER JOIN stock.sectors s ON ss.sector_code = s.code
+            WHERE s.type = 'industry' AND length(trim(s.name)) > 0
+            GROUP BY ss.stock_code
+            """
+        )
+        for c, ind in zip(sec_map_df["code"].astype(str), sec_map_df["ind_name"].astype(str)):
+            if c not in code_to_ind or not code_to_ind[c]:
+                code_to_ind[c] = ind.strip()
+    except Exception:
+        pass
     code_to_name = dict(zip(stocks_df["code"].astype(str), stocks_df["name"].astype(str)))
 
     # 2. 往前多取 90 天用于计算 MA60 / 60日动量热身，避免窗口期前段 NaN
