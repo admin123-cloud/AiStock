@@ -229,7 +229,9 @@ def inspect_postclose_deadlines(
             evidence_id=f"state:{plan_id}:g{generation}",
         )
 
-    # 6) 15:05 / 16:15 / 16:40 节点检查
+    # 6) 15:05 / 16:15 / 16:45 节点检查（仅交易日生效）
+    if not is_trading_day:
+        return emitted
     if wall >= CLOSE_DEADLINE and status not in POST_CLOSE_OK_STATUSES:
         _emit(
             target_date=today_iso,
@@ -270,6 +272,22 @@ def inspect_postclose_deadlines(
             evidence_id=f"deadline_1640:{status}",
         )
     return emitted
+
+
+def _resolve_is_trading_day(day: date, *, force_non_trading: bool = False) -> bool:
+    """自动判断指定日期是否为 A 股交易日：
+    1. 显式 --non-trading-day → False；
+    2. 周六/周日 → False；
+    3. 工作日尝试查 TradingCalendar（法定节假日识别）；若环境无日历依赖则按工作日 True 兜底。
+    """
+    if force_non_trading or day.weekday() >= 5:
+        return False
+    try:
+        from scheduler.trading_calendar import TradingCalendar
+
+        return bool(TradingCalendar.is_trading_day(datetime(day.year, day.month, day.day)))
+    except Exception:
+        return True
 
 
 def _run_once(
@@ -355,10 +373,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0 if delivery == "smtp_accepted" else 1
 
     while True:
+        today_bj = datetime.now(BEIJING_TZ).date()
+        is_trading = _resolve_is_trading_day(today_bj, force_non_trading=bool(args.non_trading_day))
         events, mail_outcomes, smtp_summary = _run_once(
             control_root=Path(args.control_root),
             outbox=outbox,
-            is_trading_day=not args.non_trading_day,
+            is_trading_day=is_trading,
             send_email=bool(args.send_email),
             config_path=cfg_path,
             allow_uninitialized_state=bool(args.allow_uninitialized_state),
