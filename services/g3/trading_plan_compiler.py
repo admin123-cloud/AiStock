@@ -24,6 +24,7 @@ def compile_daily_trading_command(
     accounts_summary: Mapping[str, Any],
     mainwave_ai_summary: Optional[Mapping[str, Any]] = None,
     mainwave_candidates: Optional[Sequence[Mapping[str, Any]]] = None,
+    panic_rebound_signal: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """编译唯一权威的「今日交易执行指令单」。"""
     regime = str(market_gate.get("regime") or "defensive")
@@ -248,6 +249,7 @@ def compile_daily_trading_command(
             "summary": str(market_gate.get("action_summary") or ""),
         },
         "holding_actions": holding_actions,
+        "panic_rebound_signal": dict(panic_rebound_signal) if isinstance(panic_rebound_signal, Mapping) else None,
         "new_entries": {
             "can_open_new": (not is_defensive) and router_mode == "active_strategy",
             "active_picks": list(sr.get("picks") or []),

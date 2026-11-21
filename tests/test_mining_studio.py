@@ -10,6 +10,7 @@ import pandas as pd
 from services.mining.backtest_engine import RuleSpec, evaluate_rule, simulate_trade_returns, split_trade_dates
 from services.mining.contract_exporter import export_candidate_contract
 from services.mining.live_router import load_regime_router_config, scan_active_strategy_signals, update_regime_route
+from services.mining.panic_rebound_monitor import evaluate_panic_rebound_signal
 from services.mining.quality_gates import evaluate_mining_quality_gates
 
 
@@ -179,4 +180,43 @@ def test_regime_router_bind_and_live_scan(tmp_path: Path) -> None:
     assert len(sig["picks"]) == 3
     assert sig["picks"][0]["stop_loss_price"] == 9.3
     assert sig["picks"][0]["take_profit_price"] == 11.5
+
+
+def test_panic_rebound_monitor_armed_and_triggered() -> None:
+    gate_panic = {"sources": {"breadth": {"above_ma20_pct": 11.01}}}
+    fake_quotes = lambda codes: {
+        "159915": {"price": 2.100},
+        "512100": {"price": 2.500},
+    }
+
+    # 1. 冰点但双指数仍在下跌 -> ARMED_WAITING_REVERSAL，严禁触发买入
+    sig_wait = evaluate_panic_rebound_signal(
+        market_gate=gate_panic,
+        index_chg_fetcher=lambda: {
+            "399006.SZ": {"date": "2026-11-20", "close": 2100.0, "change_pct": -1.8},
+            "000852.SH": {"date": "2026-11-20", "close": 5800.0, "change_pct": -2.2},
+        },
+        etf_quote_fetcher=fake_quotes,
+    )
+    assert sig_wait["status"] == "ARMED_WAITING_REVERSAL"
+    assert sig_wait["armed"] is True
+    assert sig_wait["triggered"] is False
+    assert sig_wait["metrics"]["pair_avg_change_pct"] == -2.0
+
+    # 2. 冰点且创业板+中证1000 均涨 >= +0.50% -> TRIGGERED_BUY_ETF
+    sig_go = evaluate_panic_rebound_signal(
+        market_gate=gate_panic,
+        index_chg_fetcher=lambda: {
+            "399006.SZ": {"date": "2026-11-23", "close": 2130.0, "change_pct": 1.1},
+            "000852.SH": {"date": "2026-11-23", "close": 5850.0, "change_pct": 0.9},
+        },
+        etf_quote_fetcher=fake_quotes,
+    )
+    assert sig_go["status"] == "TRIGGERED_BUY_ETF"
+    assert sig_go["triggered"] is True
+    assert len(sig_go["etf_plans"]) == 2
+    assert sig_go["etf_plans"][0]["code"] == "159915"
+    assert sig_go["etf_plans"][0]["stop_loss_price"] == round(2.100 * 0.94, 3)
+    assert sig_go["etf_plans"][0]["take_profit_price"] == round(2.100 * 1.12, 3)
+
 

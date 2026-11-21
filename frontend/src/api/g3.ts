@@ -592,6 +592,55 @@ export interface G3TradingCommandHoldingAction {
   reasons: string[]
 }
 
+export interface G3PanicReboundEtfPlan {
+  code: string
+  name: string
+  index_code: string
+  index_name: string
+  index_date?: string | null
+  index_change_pct?: number | null
+  weight_pct: number
+  ref_price?: number | null
+  stop_loss_price?: number | null
+  take_profit_price?: number | null
+  hold_days: number
+}
+
+export interface G3PanicReboundSignal {
+  schema: string
+  strategy_id: string
+  as_of: string
+  status: 'STANDBY_OFF' | 'ARMED_WAITING_REVERSAL' | 'TRIGGERED_BUY_ETF' | string
+  status_label: string
+  tone: string
+  triggered: boolean
+  armed: boolean
+  headline: string
+  metrics: {
+    breadth_pct?: number | null
+    breadth_threshold: number
+    pair_avg_change_pct?: number | null
+    reversal_threshold_pct: number
+    cyb_change_pct?: number | null
+    zz1000_change_pct?: number | null
+    index_date?: string | null
+  }
+  exit_rules: {
+    hold_days: number
+    stop_loss_pct: number
+    take_profit_pct: number
+    exit_breadth_pct: number
+  }
+  evidence: {
+    trades_4y: number
+    win_rate_pct: number
+    avg_ret_pct: number
+    cum_ret_pct: number
+    max_dd_pct: number
+  }
+  etf_plans: G3PanicReboundEtfPlan[]
+}
+
 export interface G3DailyTradingCommand {
   schema: string
   environment: {
@@ -613,6 +662,7 @@ export interface G3DailyTradingCommand {
     summary: string
   }
   holding_actions: G3TradingCommandHoldingAction[]
+  panic_rebound_signal?: G3PanicReboundSignal | null
   new_entries: {
     can_open_new: boolean
     active_picks: G3StrategyRouterPick[]

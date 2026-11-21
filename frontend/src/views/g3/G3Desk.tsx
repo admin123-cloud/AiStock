@@ -1140,6 +1140,88 @@ export default function G3Desk() {
               </div>
             </div>
 
+            {/* 3.5 AR1 v2.1 / AR2_2A 极端冰点企稳反抽 ETF 实时雷达（仅冰点区自动展开，右侧确认后一键预填） */}
+            {cmd.panic_rebound_signal && cmd.panic_rebound_signal.armed && (() => {
+              const pr = cmd.panic_rebound_signal
+              return (
+                <div
+                  className={`mt-3 rounded-lg border p-3 text-xs ${
+                    pr.triggered
+                      ? 'border-emerald-400/60 bg-emerald-950/25 ring-1 ring-emerald-400/30'
+                      : 'border-amber-500/45 bg-amber-950/20'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-white">🎯 AR2_2A 冰点企稳反抽 ETF 雷达</span>
+                      <Badge color={pr.triggered ? 'emerald' : 'amber'}>{pr.status_label}</Badge>
+                      <span className="font-mono text-[11px] text-zinc-300">
+                        实证：4年13战 · 胜率 {pr.evidence.win_rate_pct}% · 单笔均 +{pr.evidence.avg_ret_pct}% · 回撤 {pr.evidence.max_dd_pct}%
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+                      <Badge color="emerald">
+                        ① 宽度 {pr.metrics.breadth_pct != null ? `${pr.metrics.breadth_pct.toFixed(2)}%` : '—'} ≤ {pr.metrics.breadth_threshold}% ✅
+                      </Badge>
+                      <Badge color={pr.triggered ? 'emerald' : 'amber'}>
+                        ② 创业板+中证1000均涨 {pr.metrics.pair_avg_change_pct != null ? fmtSignedPct(pr.metrics.pair_avg_change_pct) : '—'} / ≥+{pr.metrics.reversal_threshold_pct.toFixed(2)}% {pr.triggered ? '✅' : '⏳'}
+                      </Badge>
+                    </div>
+                  </div>
+                  <p className="mt-1.5 text-zinc-200">{pr.headline}</p>
+
+                  <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {pr.etf_plans.map((etf) => (
+                      <div
+                        key={etf.code}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-zinc-800 bg-zinc-950/75 px-3 py-2"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-white">
+                              {etf.name} <span className="font-mono text-zinc-400">{etf.code}</span>
+                            </span>
+                            <Badge color="blue">配额 {etf.weight_pct}%</Badge>
+                          </div>
+                          <div className="mt-0.5 font-mono text-[11px] text-zinc-400">
+                            {etf.index_name} {etf.index_change_pct != null ? fmtSignedPct(etf.index_change_pct) : '—'}
+                            {etf.ref_price != null && (
+                              <>
+                                {' '}· 现价 <b className="text-zinc-200">{etf.ref_price.toFixed(3)}</b> · 止损{' '}
+                                <span className="text-amber-300">{etf.stop_loss_price?.toFixed(3)}</span> · 止盈{' '}
+                                <span className="text-rose-300">{etf.take_profit_price?.toFixed(3)}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          outline
+                          disabled={!pr.triggered}
+                          onClick={() => {
+                            setPrefillRes(null)
+                            setPrefillExecStatus(null)
+                            setExecForm({
+                              open: true,
+                              code: etf.code,
+                              name: etf.name,
+                              side: 'BUY',
+                              order_type: 'base_rebalance',
+                              price: etf.ref_price ? etf.ref_price.toFixed(3) : '',
+                              shares: '1000',
+                              account_label: '',
+                              note: `AR2_2A冰点反抽(${pr.metrics.breadth_pct?.toFixed(1)}%) 止损-6%/止盈+12%/持5d`,
+                            })
+                          }}
+                        >
+                          {pr.triggered ? '一键预检买入 ETF' : '待企稳确认'}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* 4. 当前已持仓逐股处置计划（明确告知是否应减仓及建议股数） */}
             <div className="mt-4">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

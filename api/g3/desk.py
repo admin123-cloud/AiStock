@@ -28,6 +28,7 @@ from services.g3.premarket_brief import (
 from services.g3.strategy_matrix import build_strategy_matrix
 from services.g3.trading_plan_compiler import compile_daily_trading_command
 from services.mining.live_router import scan_active_strategy_signals
+from services.mining.panic_rebound_monitor import evaluate_panic_rebound_signal
 from services.trading.holding_t_watchlist import (
     read_watchlist,
     sync_watchlist_from_ths,
@@ -430,6 +431,11 @@ def get_g3_desk(
     except Exception:
         _mw_merged = {}
 
+    try:
+        panic_rebound_signal = evaluate_panic_rebound_signal(market_gate=market_regime_gate)
+    except Exception:
+        panic_rebound_signal = None
+
     trading_command = compile_daily_trading_command(
         market_gate=market_regime_gate,
         strategy_router=strategy_router,
@@ -437,6 +443,7 @@ def get_g3_desk(
         accounts_summary=accounts_summary_obj,
         mainwave_ai_summary=_mw_merged.get("ai_screening_summary"),
         mainwave_candidates=_mw_merged.get("candidates"),
+        panic_rebound_signal=panic_rebound_signal,
     )
 
     return {
