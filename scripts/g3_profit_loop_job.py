@@ -149,6 +149,13 @@ def run_postclose() -> int:
         f"AI交易教练体检已刷新: grade={coach.get('grade')} bleeding={len(coach.get('bleeding_points') or [])} "
         f"red_lines={coach.get('next_week_red_lines')}"
     )
+
+    fe = _http_json("/api/g3/review/forward-eval?etf_days=60", method="GET", timeout=60)
+    es = (fe.get("defense_etf_shadow") or {}).get("summary") or {}
+    _log(
+        f"前向验真与ETF影子已固化: ai_samples={(fe.get('ai_screening_forward') or {}).get('samples_total')} "
+        f"etf_cum={es.get('cum_ret_pct')}% vs hs300={es.get('bench_cum_ret_pct')}% mdd_saved={es.get('drawdown_saved_pct')}pp"
+    )
     return 0
 
 

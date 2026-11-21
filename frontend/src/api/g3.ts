@@ -701,8 +701,78 @@ export const pushG3PremarketBriefWechat = () =>
   request.post<unknown, { status: string; ok: boolean; date?: string; channel: string; detail: string }>('/g3/premarket-brief/push-wechat', {}, { timeout: 30000 })
 export const getG3ReviewAttribution = (days = 30, benchmark = '000300.SH') =>
   request.get<unknown, G3AttributionResponse>('/g3/review/attribution', { params: { days, benchmark } })
+export interface G3ForwardGroupAgg {
+  n: number
+  avg_pct?: number | null
+  win_rate_pct?: number | null
+}
+
+export interface G3ForwardEvalResponse {
+  ai_screening_forward: {
+    schema: string
+    as_of: string
+    batches_count: number
+    samples_total: number
+    alpha_green_vs_red_5d_pct?: number | null
+    by_light: Record<'green' | 'yellow' | 'red', {
+      total_samples: number
+      t5: G3ForwardGroupAgg
+      t10: G3ForwardGroupAgg
+      latest: G3ForwardGroupAgg
+    }>
+    records: Array<{
+      decision_date: string
+      code: string
+      name: string
+      industry: string
+      risk_light: string
+      catalyst_score: number
+      base_close?: number | null
+      days_elapsed: number
+      ret_latest_pct?: number | null
+      ret_5d_pct?: number | null
+      ret_10d_pct?: number | null
+      status: string
+    }>
+    note: string
+  }
+  defense_etf_shadow: {
+    schema: string
+    as_of: string
+    available: boolean
+    reason?: string
+    window_days?: number
+    from_date?: string | null
+    to_date?: string | null
+    summary?: {
+      cum_ret_pct: number
+      bench_cum_ret_pct: number
+      excess_ret_pct: number
+      max_drawdown_pct: number
+      bench_max_drawdown_pct: number
+      drawdown_saved_pct: number
+      ret_dd_ratio?: number | null
+      switch_events: number
+      latest_invested_pct: number
+      latest_active_etfs: string[]
+    }
+    daily_curve: Array<{
+      date: string
+      invested_pct: number
+      cash_pct: number
+      active_etfs: string[]
+      day_ret_pct: number
+      bench_day_ret_pct: number
+      nav: number
+      bench_nav: number
+    }>
+  }
+}
+
 export const getG3ReviewCoach = (days = 14) =>
   request.get<unknown, G3TradingCoachResponse>('/g3/review/coach', { params: { days } })
+export const getG3ReviewForwardEval = (etfDays = 60) =>
+  request.get<unknown, G3ForwardEvalResponse>('/g3/review/forward-eval', { params: { etf_days: etfDays }, timeout: 60000 })
 export const getG3DailyReview = (limit = 10) =>
   request.get<unknown, G3DailyReviewResponse>('/g3/review/daily', { params: { limit } })
 export const getG3ShadowReview = (limit = 20) =>

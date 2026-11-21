@@ -117,6 +117,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/g3/review/attribution',
     '/api/g3/review/coach',
     '/api/g3/review/daily',
+    '/api/g3/review/forward-eval',
     '/api/g3/review/shadow',
     '/api/g3/review/signal-quality',
     '/api/g3/settings',

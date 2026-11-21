@@ -7,16 +7,18 @@ import {
   getG3DailyReview,
   getG3ReviewAttribution,
   getG3ReviewCoach,
+  getG3ReviewForwardEval,
   getG3ShadowReview,
   getG3SignalQuality,
   type G3AttributionResponse,
   type G3DailyReviewResponse,
+  type G3ForwardEvalResponse,
   type G3ShadowReviewResponse,
   type G3SignalQualityResponse,
   type G3TradingCoachResponse,
 } from '@/api/g3'
 
-type TabKey = 'attribution' | 'coach' | 'daily' | 'shadow' | 'quality'
+type TabKey = 'attribution' | 'coach' | 'forward' | 'daily' | 'shadow' | 'quality'
 
 const fmtMoney = (v?: number | null): string => {
   if (v == null || !Number.isFinite(Number(v))) return '—'
@@ -41,6 +43,7 @@ export default function G3Review() {
   const [benchmark, setBenchmark] = useState<string>('000300.SH')
   const [attribution, setAttribution] = useState<G3AttributionResponse | null>(null)
   const [coach, setCoach] = useState<G3TradingCoachResponse | null>(null)
+  const [forwardEval, setForwardEval] = useState<G3ForwardEvalResponse | null>(null)
   const [daily, setDaily] = useState<G3DailyReviewResponse | null>(null)
   const [shadow, setShadow] = useState<G3ShadowReviewResponse | null>(null)
   const [quality, setQuality] = useState<G3SignalQualityResponse | null>(null)
@@ -51,15 +54,17 @@ export default function G3Review() {
     setLoading(true)
     setError('')
     try {
-      const [attr, c, d, s, q] = await Promise.all([
+      const [attr, c, fe, d, s, q] = await Promise.all([
         getG3ReviewAttribution(windowDays, benchmark),
         getG3ReviewCoach(14),
+        getG3ReviewForwardEval(60),
         getG3DailyReview(10),
         getG3ShadowReview(20),
         getG3SignalQuality(10),
       ])
       setAttribution(attr)
       setCoach(c)
+      setForwardEval(fe)
       setDaily(d)
       setShadow(s)
       setQuality(q)
@@ -99,6 +104,9 @@ export default function G3Review() {
         </Button>
         <Button color={tab === 'coach' ? 'blue' : 'zinc'} onClick={() => setTab('coach')}>
           AI 交易教练 ({coach?.bleeding_points?.length ?? 0} 项出血点)
+        </Button>
+        <Button color={tab === 'forward' ? 'blue' : 'zinc'} onClick={() => setTab('forward')}>
+          前向验真 & ETF 影子 ({forwardEval?.ai_screening_forward?.samples_total ?? 0})
         </Button>
         <Button color={tab === 'daily' ? 'blue' : 'zinc'} onClick={() => setTab('daily')}>
           日终复盘与对账 ({daily?.daily_reviews?.length ?? 0})
@@ -329,6 +337,177 @@ export default function G3Review() {
                     <p className="mt-1.5 text-zinc-300">{bp.detail}</p>
                   </div>
                 ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {tab === 'forward' && (
+        <div className="flex flex-col gap-4">
+          {/* A. 稳健腿 6 大宽基 ETF 自动影子台账 */}
+          <Card>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <SectionTitle title="稳健腿 · 6 大宽基 ETF 波动率目标自动影子台账（T-1 无未来函数回放）" />
+              {forwardEval?.defense_etf_shadow?.available && (
+                <Badge color="blue">
+                  {forwardEval.defense_etf_shadow.from_date} ~ {forwardEval.defense_etf_shadow.to_date}（{forwardEval.defense_etf_shadow.window_days} 交易日）
+                </Badge>
+              )}
+            </div>
+            {forwardEval?.defense_etf_shadow?.available && forwardEval.defense_etf_shadow.summary ? (() => {
+              const es = forwardEval.defense_etf_shadow.summary
+              return (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <StatCard
+                      label="稳健腿影子收益"
+                      value={fmtPct(es.cum_ret_pct)}
+                      hint={`沪深300 基准 ${fmtPct(es.bench_cum_ret_pct)} · 超额 ${fmtPct(es.excess_ret_pct)}`}
+                    />
+                    <StatCard
+                      label="稳健腿最大回撤"
+                      value={fmtPct(es.max_drawdown_pct)}
+                      hint={`沪深300 回撤 ${fmtPct(es.bench_max_drawdown_pct)}`}
+                    />
+                    <StatCard
+                      label="回撤保护节省"
+                      value={`${es.drawdown_saved_pct >= 0 ? '+' : ''}${es.drawdown_saved_pct.toFixed(2)} pp`}
+                      hint={`调仓切换 ${es.switch_events} 次`}
+                    />
+                    <StatCard
+                      label="最新影子仓位"
+                      value={`${es.latest_invested_pct.toFixed(1)}%`}
+                      hint={es.latest_active_etfs.length > 0 ? es.latest_active_etfs.join(' / ') : '100% 现金防守'}
+                    />
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeader>日期</TableHeader>
+                          <TableHeader>影子仓位 / 现金</TableHeader>
+                          <TableHeader>持仓宽基 ETF</TableHeader>
+                          <TableHeader>当日收益</TableHeader>
+                          <TableHeader>沪深300</TableHeader>
+                          <TableHeader>影子净值 / 基准</TableHeader>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {forwardEval.defense_etf_shadow.daily_curve.map((r) => (
+                          <TableRow key={r.date}>
+                            <TableCell className="font-mono text-xs text-zinc-200">{r.date}</TableCell>
+                            <TableCell className="font-mono text-xs text-zinc-300">
+                              {r.invested_pct.toFixed(1)}% / {r.cash_pct.toFixed(1)}%
+                            </TableCell>
+                            <TableCell className="text-xs text-zinc-300">
+                              {r.active_etfs.length > 0 ? r.active_etfs.join('、') : <Badge color="amber">现金防守</Badge>}
+                            </TableCell>
+                            <TableCell className={`font-mono text-xs ${pnlColor(r.day_ret_pct)}`}>{fmtPct(r.day_ret_pct)}</TableCell>
+                            <TableCell className={`font-mono text-xs ${pnlColor(r.bench_day_ret_pct)}`}>{fmtPct(r.bench_day_ret_pct)}</TableCell>
+                            <TableCell className="font-mono text-xs text-zinc-200">
+                              {r.nav.toFixed(4)} / <span className="text-zinc-400">{r.bench_nav.toFixed(4)}</span>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )
+            })() : (
+              <div className="py-4 text-sm text-zinc-400">{forwardEval?.defense_etf_shadow?.reason || '暂无 ETF 影子台账数据'}</div>
+            )}
+          </Card>
+
+          {/* B. AI 排雷前向绩效追踪（绿灯 vs 黄灯 vs 红灯） */}
+          <Card>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <SectionTitle title="AI 候选股排雷前向验真（绿灯 vs 黄灯 vs 红灯 T+5 / T+10）" />
+              <Badge color="emerald">
+                已锁定 {forwardEval?.ai_screening_forward?.batches_count ?? 0} 批次 · {forwardEval?.ai_screening_forward?.samples_total ?? 0} 只样本
+              </Badge>
+            </div>
+            {forwardEval?.ai_screening_forward && (
+              <div className="space-y-4">
+                <p className="text-xs text-zinc-400">{forwardEval.ai_screening_forward.note}</p>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  {(['green', 'yellow', 'red'] as const).map((light) => {
+                    const g = forwardEval.ai_screening_forward.by_light[light]
+                    const label = light === 'green' ? '🛡️ 绿灯精选池' : light === 'yellow' ? '⚠️ 黄灯留意池' : '⛔ 红灯否决池'
+                    return (
+                      <div key={light} className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-white">{label}</span>
+                          <Badge color={light === 'green' ? 'emerald' : light === 'red' ? 'red' : 'amber'}>
+                            {g?.total_samples ?? 0} 样本
+                          </Badge>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 font-mono">
+                          <div>
+                            <div className="text-zinc-400">T+5 均值 / 胜率</div>
+                            <div className="text-sm text-white">
+                              {g?.t5?.avg_pct != null ? `${fmtPct(g.t5.avg_pct)} / ${g.t5.win_rate_pct}%` : '待满5日'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-zinc-400">T+10 均值 / 胜率</div>
+                            <div className="text-sm text-white">
+                              {g?.t10?.avg_pct != null ? `${fmtPct(g.t10.avg_pct)} / ${g.t10.win_rate_pct}%` : '待满10日'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="max-h-96 overflow-auto">
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableHeader>决策日</TableHeader>
+                        <TableHeader>标的</TableHeader>
+                        <TableHeader>排雷灯 / 催化</TableHeader>
+                        <TableHeader>基准价</TableHeader>
+                        <TableHeader>已过交易日</TableHeader>
+                        <TableHeader>最新 / T+5 / T+10</TableHeader>
+                        <TableHeader>状态</TableHeader>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {forwardEval.ai_screening_forward.records.map((rec, i) => (
+                        <TableRow key={`${rec.decision_date}-${rec.code}-${i}`}>
+                          <TableCell className="font-mono text-xs text-zinc-400">{rec.decision_date}</TableCell>
+                          <TableCell className="text-xs text-white">
+                            {rec.name} <span className="font-mono text-zinc-400">{rec.code}</span>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Badge color={rec.risk_light === 'green' ? 'emerald' : rec.risk_light === 'red' ? 'red' : 'amber'}>
+                                {rec.risk_light === 'green' ? '绿灯' : rec.risk_light === 'red' ? '红灯' : '黄灯'}
+                              </Badge>
+                              <Badge color="blue">{rec.catalyst_score}/5</Badge>
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-zinc-300">{rec.base_close ?? '—'}</TableCell>
+                          <TableCell className="font-mono text-xs text-zinc-300">{rec.days_elapsed} 日</TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <span className={pnlColor(rec.ret_latest_pct)}>{fmtPct(rec.ret_latest_pct)}</span>
+                            {' / '}
+                            <span className={pnlColor(rec.ret_5d_pct)}>{fmtPct(rec.ret_5d_pct)}</span>
+                            {' / '}
+                            <span className={pnlColor(rec.ret_10d_pct)}>{fmtPct(rec.ret_10d_pct)}</span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge color={rec.status === 'pending_t1' ? 'zinc' : 'blue'}>
+                              {rec.status === 'pending_t1' ? '待T+1开盘' : rec.status === 'tracking' ? '追踪中' : '已定格'}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
             )}
           </Card>

@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field
 
 from api.g3.desk import get_g3_market_gate
 from services.g3.attribution import build_four_dim_attribution
+from services.g3.forward_eval import (
+    evaluate_ai_screening_forward,
+    evaluate_defense_etf_shadow,
+)
 from services.g3.trading_coach import build_trading_coach_report, save_agent_coach_notes
 from utils.common.paths import runtime_path
 
@@ -153,3 +157,14 @@ def post_g3_review_coach_ingest(req: CoachNotesIngestRequest) -> dict[str, Any]:
         agent_name=req.agent_name,
     )
     return {"status": "ok", "date": doc["date"], "generated_at": doc["generated_at"]}
+
+
+@router.get("/review/forward-eval")
+def get_g3_review_forward_eval(
+    etf_days: int = Query(60, ge=20, le=120, description="稳健腿 ETF 影子回放交易日数"),
+) -> dict[str, Any]:
+    """前向验真总账：AI 排雷 T+5/T+10 真实胜率追踪 + 稳健腿 6 大宽基 ETF 自动影子台账。"""
+    return {
+        "ai_screening_forward": evaluate_ai_screening_forward(),
+        "defense_etf_shadow": evaluate_defense_etf_shadow(window_trading_days=etf_days, persist=True),
+    }
