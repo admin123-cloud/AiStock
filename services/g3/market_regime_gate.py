@@ -455,10 +455,10 @@ def evaluate_market_regime_gate(
     # 2. 市场情绪
     mood_src = _load_latest_market_mood(ref_date, mood_dir=mood_dir)
 
-    # 3. 上证指数 R51 N=2 确认周期 + index_mom60
+    # 3. 上证指数 R51 v2.1（300股大样本实证最优：N=3 连续 3 日确认周期 + index_mom60）
     fetcher = index_fetcher or _fetch_sh_index_closes_from_ch
     idx_date, idx_closes = fetcher(ref_date_str)
-    idx_r51 = compute_r51_index_regime(idx_closes, confirm_days=2)
+    idx_r51 = compute_r51_index_regime(idx_closes, confirm_days=3)
     if idx_r51["status"] == "fresh":
         idx_fresh, idx_lag = _is_date_fresh(idx_date, ref_date, max_calendar_lag_days=4)
         idx_r51["status"] = "fresh" if idx_fresh else "stale"
@@ -531,16 +531,34 @@ def evaluate_market_regime_gate(
     if mom60 is not None and mom60 > 0.05:
         warnings.append(f"上证 60 日动量 {mom60 * 100:.1f}% > 5%（主升浪合约过热提示，追高需谨慎）")
 
-    # 6. 映射 R51 仓位上限与实盘水位对标
+    # 6. 映射 R51 v2.1 仓位上限、五态细分（含两个极端态）与实盘水位对标
     target_cap = R51_POSITION_CAPS[regime]
     allow_new_mainwave = regime != "defensive"
 
-    meta_map = {
-        "offensive": ("进攻模式", "emerald", "允许主升浪精选开新仓 + 积极正T"),
-        "balanced": ("震荡模式", "amber", "仅限高确定性精选主升 + 双向带位做T"),
-        "defensive": ("防守模式", "red", "严禁开新主升仓 · 优先反弹降水位与反T降本"),
-    }
-    regime_label, tone, action_summary = meta_map[regime]
+    # 五态细分识别（在三档硬仓位上限之上叠加两个极端态剧本提示）
+    ld_cnt = int(mood_src.get("limit_down_count") or 0) if mood_src.get("status") == "fresh" else 0
+    lu_cnt = int(mood_src.get("limit_up_count") or 0) if mood_src.get("status") == "fresh" else 0
+    sr_val = _safe_float(mood_src.get("seal_rate")) if mood_src.get("status") == "fresh" else None
+    ma20_val = _safe_float(breadth_src.get("above_ma20_pct")) if breadth_src.get("status") == "fresh" else None
+
+    if regime == "defensive" and ld_cnt >= 80 and ld_cnt > lu_cnt and (ma20_val is None or ma20_val < 15.0):
+        phase_5 = "extreme_panic"
+        regime_label = "极端防守·恐慌冰点"
+        tone = "red"
+        action_summary = "死守现金严禁开新主升仓 · 等首次缩量止跌且经AI定性非衰退后才可≤10%试错宽基/红利"
+    elif regime == "offensive" and lu_cnt >= 80 and (sr_val is None or sr_val >= 0.75) and (ma20_val is None or ma20_val >= 65.0):
+        phase_5 = "extreme_offensive"
+        regime_label = "极端进攻·情绪高潮"
+        tone = "emerald"
+        action_summary = "主升绿灯池积极布局 + 卖晚买早正T · 同步盯防高潮转分歧预警"
+    else:
+        phase_5 = regime
+        meta_map = {
+            "offensive": ("常态进攻·温和上升", "emerald", "允许主升浪精选开新仓 + 积极正T"),
+            "balanced": ("常态震荡·箱体轮动", "amber", "仅限高确定性精选主升 + 双向带位做T + 关注稳健腿ETF"),
+            "defensive": ("常态防守·趋势下跌", "red", "严禁开新主升仓 · 确认转弱果断分步降水位，不傻等5日反弹"),
+        }
+        regime_label, tone, action_summary = meta_map[regime]
 
     assets_val = _safe_float(total_assets)
     mv_val = _safe_float(total_market_value)
@@ -557,20 +575,20 @@ def evaluate_market_regime_gate(
             rebalance_status = "overweight"
             rebalance_advice = (
                 f"当前实际水位 {actual_ratio * 100:.1f}% 高于今日上限 {target_cap * 100:.0f}%（超配 {gap_ratio * 100:.1f}%）："
-                f"按 R51 纪律，逢反弹卖带分步减仓 ≤{step_pct:.1f}%，不杀跌"
+                f"按 R51 v2.1（300股大样本实证），次日开盘/盘中果断分步减仓 ≤{step_pct:.1f}%，勿傻等5日反弹卖带"
             )
         elif gap_ratio < -R51_DEADBAND_RATIO and allow_new_mainwave:
             step_pct = min(round(abs(gap_ratio) * 100, 1), round(R51_MAX_STEP_RATIO * 100, 1))
             rebalance_status = "underweight"
             rebalance_advice = (
                 f"当前实际水位 {actual_ratio * 100:.1f}% 低于目标上限 {target_cap * 100:.0f}%："
-                f"可回踩买带或结合主升精选池分步加仓 ≤{step_pct:.1f}%，不追高"
+                f"按 R51 v2.1（N=3 确认），次日开盘/盘中分步加仓 ≤{step_pct:.1f}% 或切入主升绿灯精选"
             )
         else:
             rebalance_status = "aligned"
             rebalance_advice = (
                 f"当前实际水位 {actual_ratio * 100:.1f}% 符合今日目标上限 {target_cap * 100:.0f}%，"
-                "维持现有底仓专注做T降本"
+                "维持现有底仓专注带位做T降本"
             )
 
     return {
@@ -578,6 +596,7 @@ def evaluate_market_regime_gate(
         "as_of": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
         "ref_date": ref_date_str,
         "regime": regime,
+        "phase_5": phase_5,
         "regime_label": regime_label,
         "tone": tone,
         "degraded": degraded,
