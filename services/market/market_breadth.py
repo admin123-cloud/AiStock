@@ -117,14 +117,18 @@ WITH
     dates AS (
         SELECT trade_date, row_number() OVER (ORDER BY trade_date DESC) - 1 AS rn
         FROM (SELECT DISTINCT trade_date FROM stock.kline_daily
-              WHERE trade_date <= {d0} ORDER BY trade_date DESC LIMIT 60)
+              WHERE trade_date >= toDate({d0}) - INTERVAL 150 DAY
+                AND trade_date <= {d0}
+              ORDER BY trade_date DESC LIMIT 60)
     ),
     bars AS (
         SELECT k.code AS code, d.rn AS rn,
                argMax(k.close, k.created_at) AS close
         FROM stock.kline_daily AS k
         INNER JOIN dates AS d ON d.trade_date = k.trade_date
-        WHERE k.code IN (SELECT code FROM stock.stocks WHERE type = 'stock')
+        WHERE k.trade_date >= toDate({d0}) - INTERVAL 150 DAY
+          AND k.trade_date <= toDate({d0})
+          AND k.code IN (SELECT code FROM stock.stocks WHERE type = 'stock')
         GROUP BY k.code, d.rn
         HAVING close > 0
     ),
@@ -228,14 +232,18 @@ WITH
     dates AS (
         SELECT trade_date, row_number() OVER (ORDER BY trade_date DESC) AS rn
         FROM (SELECT DISTINCT trade_date FROM stock.kline_daily
-              WHERE trade_date < toDate({snap_date}) ORDER BY trade_date DESC LIMIT 59)
+              WHERE trade_date >= toDate({snap_date}) - INTERVAL 150 DAY
+                AND trade_date < toDate({snap_date})
+              ORDER BY trade_date DESC LIMIT 59)
     ),
     hist_bars AS (
         SELECT k.code AS code, d.rn AS rn,
                argMax(k.close, k.created_at) AS close
         FROM stock.kline_daily AS k
         INNER JOIN dates AS d ON d.trade_date = k.trade_date
-        WHERE k.code IN (SELECT code FROM stock.stocks WHERE type = 'stock')
+        WHERE k.trade_date >= toDate({snap_date}) - INTERVAL 150 DAY
+          AND k.trade_date < toDate({snap_date})
+          AND k.code IN (SELECT code FROM stock.stocks WHERE type = 'stock')
         GROUP BY k.code, d.rn
         HAVING close > 0
     ),

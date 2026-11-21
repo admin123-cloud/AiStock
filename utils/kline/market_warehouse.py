@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -15,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WAREHOUSE_ROOT = warehouse_path()
 _CH_LOCAL = threading.local()
 _CH_LOCK = threading.Lock()
+_CH_PING_INTERVAL_SECONDS = 30.0
 
 
 def market_source() -> str:
@@ -48,39 +50,62 @@ def _new_clickhouse_client():
     )
 
 
-def clickhouse_client():
-    """
-    Thread-local ClickHouse client reuse.
-    - Avoids creating a new HTTP connection per query.
-    - Auto recreates client if ping failed.
-    """
+def _reset_thread_clickhouse_client() -> None:
     client = getattr(_CH_LOCAL, "client", None)
     if client is not None:
         try:
+            client.close()
+        except Exception:
+            pass
+    _CH_LOCAL.client = None
+    _CH_LOCAL.last_ok = 0.0
+
+
+def _is_transient_connection_error(exc: Exception) -> bool:
+    """仅识别传输/连接断开类异常用于单次重连重试，绝不吞掉服务端 SQL 异常。"""
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    cls_name = type(exc).__name__
+    if "DatabaseError" in cls_name:
+        return False
+    if "OperationalError" in cls_name or "RemoteDisconnected" in cls_name or "ProtocolError" in cls_name:
+        return True
+    msg = str(exc).lower()
+    return any(tok in msg for tok in ("connection aborted", "remote end closed", "broken pipe", "connection reset", "failed to establish"))
+
+
+def clickhouse_client():
+    """
+    Thread-local ClickHouse client reuse.
+    - Avoids creating a new HTTP connection and ping per query.
+    - Pings only when idle beyond 30s; stale connections are reset on query failure.
+    """
+    now = time.monotonic()
+    client = getattr(_CH_LOCAL, "client", None)
+    last_ok = float(getattr(_CH_LOCAL, "last_ok", 0.0) or 0.0)
+    if client is not None:
+        if (now - last_ok) < _CH_PING_INTERVAL_SECONDS:
+            return client
+        try:
             client.command("SELECT 1")
+            _CH_LOCAL.last_ok = time.monotonic()
             return client
         except Exception:
-            try:
-                client.close()
-            except Exception:
-                pass
-            _CH_LOCAL.client = None
+            _reset_thread_clickhouse_client()
 
     with _CH_LOCK:
         client = getattr(_CH_LOCAL, "client", None)
         if client is not None:
             try:
                 client.command("SELECT 1")
+                _CH_LOCAL.last_ok = time.monotonic()
                 return client
             except Exception:
-                try:
-                    client.close()
-                except Exception:
-                    pass
-                _CH_LOCAL.client = None
+                _reset_thread_clickhouse_client()
 
         client = _new_clickhouse_client()
         _CH_LOCAL.client = client
+        _CH_LOCAL.last_ok = time.monotonic()
         return client
 
 
@@ -136,13 +161,19 @@ def clickhouse_query_df(sql: str, params: Optional[list] = None, *, raw: bool = 
     # kline_daily / kline_minute_5 重写为无界 FINAL 视图子查询，阻断日期/代码
     # 谓词下推；调用方已按 argMax(col, created_at) 等价实现 FINAL 版本语义，
     # 经 raw 路径绕过重写（也跳过仅服务于分钟视图的 normalize_min5_frame）。
-    client = clickhouse_client()
     adapted_sql, adapted_params = _adapt_clickhouse_query(sql, params)
     query = adapted_sql
     if not raw:
         from utils.daily_quality_read import quality_read_sql
         query = quality_read_sql(adapted_sql)
-    frame = client.query_df(query, parameters=adapted_params)
+    try:
+        frame = clickhouse_client().query_df(query, parameters=adapted_params)
+    except Exception as exc:
+        if not _is_transient_connection_error(exc):
+            raise
+        _reset_thread_clickhouse_client()
+        frame = clickhouse_client().query_df(query, parameters=adapted_params)
+    _CH_LOCAL.last_ok = time.monotonic()
     if raw:
         return frame
     from utils.minute_volume import PRECISE_MIN5_VIEW, normalize_min5_frame
@@ -151,12 +182,18 @@ def clickhouse_query_df(sql: str, params: Optional[list] = None, *, raw: bool = 
 
 def clickhouse_scalar(sql: str, params: Optional[list] = None, *, raw: bool = False):
     # R14（2026-11-09）：raw=True 同上，直查基表、绕过 quality_read_sql 重写。
-    client = clickhouse_client()
     adapted_sql, adapted_params = _adapt_clickhouse_query(sql, params)
     if not raw:
         from utils.daily_quality_read import quality_read_sql
         adapted_sql = quality_read_sql(adapted_sql)
-    result = client.query(adapted_sql, parameters=adapted_params)
+    try:
+        result = clickhouse_client().query(adapted_sql, parameters=adapted_params)
+    except Exception as exc:
+        if not _is_transient_connection_error(exc):
+            raise
+        _reset_thread_clickhouse_client()
+        result = clickhouse_client().query(adapted_sql, parameters=adapted_params)
+    _CH_LOCAL.last_ok = time.monotonic()
     if not result.result_rows:
         return None
     return result.result_rows[0][0]

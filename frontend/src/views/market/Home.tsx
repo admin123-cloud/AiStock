@@ -93,6 +93,7 @@ export default function Home() {
     async (retryCount = 0) => {
       try {
         const refreshParams = { _ts: Date.now() }
+        const emotionPromise = loadEmotionCycle()
         const [indicesRes, sentimentRes, marginRes, pubRes] = (await Promise.all([
           request.get('/market/indices', { params: { all: true, ...refreshParams }, skipErrorHandler: true }),
           request.get('/market/sentiment', { params: refreshParams, skipErrorHandler: true }),
@@ -106,7 +107,7 @@ export default function Home() {
         setSentiment(sentimentRes?.error ? null : sentimentRes)
         setPublicationStatus(pubRes && typeof pubRes === 'object' ? pubRes : null)
 
-        await loadEmotionCycle()
+        await emotionPromise
       } catch (error) {
         console.error('加载大盘数据失败:', error)
         // 前后端容器同时重启时，前端可能比后端更早就绪；短暂重试避免首页图表永久空白。

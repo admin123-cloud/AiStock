@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,12 +23,15 @@ import pandas as pd
 
 from utils.common.logger import get_logger
 from utils.common.paths import PROJECT_ROOT
+from utils.kline.market_warehouse import clickhouse_client
 
 logger = get_logger("g3_mainwave_scanner")
 BJ_TZ = timezone(timedelta(hours=8))
 
 _CACHE: dict[str, Any] = {"expires_at": 0.0, "payload": None}
-_CACHE_TTL_SECONDS = 120.0
+_CACHE_TTL_SECONDS = 300.0
+_CACHE_LOCK = threading.Lock()
+_REFRESHING = False
 
 
 def _load_contract() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -55,20 +59,65 @@ def _get_ch_client():
 
 
 def _query_df(sql: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
-    client = _get_ch_client()
+    own_client = False
+    try:
+        client = clickhouse_client()
+    except Exception:
+        client = _get_ch_client()
+        own_client = True
     try:
         res = client.query(sql, parameters=params or {})
         return pd.DataFrame(res.result_rows, columns=list(res.column_names))
     finally:
-        client.close()
+        if own_client:
+            client.close()
+
+
+def _refresh_mainwave_bg() -> None:
+    global _REFRESHING
+    try:
+        payload = _compute_mainwave_daily()
+        if isinstance(payload, dict) and payload.get("state") != "data_blocked":
+            with _CACHE_LOCK:
+                _CACHE["payload"] = payload
+                _CACHE["expires_at"] = time.monotonic() + _CACHE_TTL_SECONDS
+    except Exception as exc:
+        logger.warning("background mainwave scan refresh failed: %s", exc)
+    finally:
+        with _CACHE_LOCK:
+            _REFRESHING = False
 
 
 def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
+    """实时扫描 ClickHouse 最新交易日的主升浪 Score88 候选池（SWR 300s 缓存）。"""
+    global _REFRESHING
+    now_mono = time.monotonic()
+    if not force_refresh:
+        with _CACHE_LOCK:
+            cached_payload = _CACHE.get("payload")
+            if cached_payload is not None:
+                if now_mono < float(_CACHE.get("expires_at") or 0.0):
+                    return cached_payload
+                if not _REFRESHING:
+                    _REFRESHING = True
+                    threading.Thread(
+                        target=_refresh_mainwave_bg,
+                        daemon=True,
+                        name="mainwave-scanner-refresh",
+                    ).start()
+                return cached_payload
+
+    payload = _compute_mainwave_daily()
+    if isinstance(payload, dict) and payload.get("state") != "data_blocked":
+        with _CACHE_LOCK:
+            _CACHE["payload"] = payload
+            _CACHE["expires_at"] = time.monotonic() + _CACHE_TTL_SECONDS
+    return payload
+
+
+def _compute_mainwave_daily() -> dict[str, Any]:
     """实时扫描 ClickHouse 最新交易日的主升浪 Score88 候选池。"""
     now = datetime.now(BJ_TZ)
-    now_mono = time.monotonic()
-    if not force_refresh and _CACHE["payload"] is not None and now_mono < float(_CACHE["expires_at"]):
-        return _CACHE["payload"]
 
     contract, meta = _load_contract()
     min_score = float(contract.get("entry", {}).get("minimum_score", 88))
@@ -466,7 +515,7 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
     blocked_cnt = sum(1 for x in candidates_out if x["stage"] == "data_blocked")
     state = "confirmed" if confirmed_cnt > 0 else ("waiting_30m" if candidates_out else "no_candidates")
 
-    payload = {
+    return {
         "generated_at": now.isoformat(timespec="seconds"),
         "source_generated_at": now.isoformat(timespec="seconds"),
         "state": state,
@@ -492,9 +541,6 @@ def scan_mainwave_daily(*, force_refresh: bool = False) -> dict[str, Any]:
         "changes": [],
         "history": [],
     }
-    _CACHE["payload"] = payload
-    _CACHE["expires_at"] = now_mono + _CACHE_TTL_SECONDS
-    return payload
 
 
 def _empty_result(now: datetime, contract: dict, meta: dict, reason: str) -> dict[str, Any]:

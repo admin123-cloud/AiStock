@@ -2919,6 +2919,35 @@ def _get_stocks_with_limit_impl(
 # ==================== 股票详情接口 ====================
 
 
+@router.get("/holdings")
+def get_holdings():
+    """获取持仓股"""
+    # 这里应该从数据库中获取持仓股数据
+    # 暂时返回模拟数据
+    return [
+        {
+            "code": "600000.SH",
+            "name": "浦发银行",
+            "close": 10.23,
+            "change_pct": 2.34,
+            "hold_count": 1000,
+            "cost_price": 9.85,
+            "profit": 380.0,
+            "profit_rate": 3.86
+        },
+        {
+            "code": "000001.SZ",
+            "name": "平安银行",
+            "close": 15.67,
+            "change_pct": -1.23,
+            "hold_count": 500,
+            "cost_price": 16.25,
+            "profit": -290.0,
+            "profit_rate": -3.57
+        }
+    ]
+
+
 @router.get("/{code}")
 def get_stock_detail(code: str):
     """
@@ -2983,14 +3012,17 @@ def get_stock_kline_stats(code: str):
         stock = _get_stock_by_code(session, code)
         if not stock:
             raise HTTPException(status_code=404, detail=f"股票 {code} 不存在")
+        stock_name = stock.name
 
         stats = {
             "code": code,
-            "name": stock.name,
+            "name": stock_name,
             "periods": {}
         }
 
         if clickhouse_available():
+            DatabaseSessionManager.close_session(session)
+            session = None
             # 直查 ClickHouse 物理表（raw=True），避免经 SQLAlchemy 触发已废弃的
             # kline_daily_quality_read_20261016_v1 视图重写钩子（Code 60 UNKNOWN_TABLE）。
             full_code, short_code = _clickhouse_code_filter_params(code)
@@ -3005,7 +3037,8 @@ def get_stock_kline_stats(code: str):
                 ("30m", "kline_minute_30"),
                 ("60m", "kline_minute_60"),
             ]
-            for period_label, table_name in ch_period_tables:
+
+            def _count_table(period_label: str, table_name: str) -> tuple[str, str, int]:
                 try:
                     cnt = clickhouse_scalar(
                         f"SELECT COUNT(*) FROM {table_name} WHERE code IN (?, ?)",
@@ -3015,7 +3048,14 @@ def get_stock_kline_stats(code: str):
                 except Exception as exc:
                     logger.warning(f"ClickHouse kline stats query failed ({table_name}): {exc}")
                     cnt = 0
-                stats["periods"][period_label] = {"count": int(cnt), "table": table_name}
+                return period_label, table_name, int(cnt)
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                for period_label, table_name, cnt in executor.map(
+                    lambda item: _count_table(item[0], item[1]),
+                    ch_period_tables,
+                ):
+                    stats["periods"][period_label] = {"count": cnt, "table": table_name}
         else:
             # 使用UNION ALL合并所有查询，减少数据库往返次数
             from sqlalchemy import union_all, literal_column
@@ -3075,7 +3115,8 @@ def get_stock_kline_stats(code: str):
         return stats
 
     finally:
-        DatabaseSessionManager.close_session(session)
+        if session is not None:
+            DatabaseSessionManager.close_session(session)
 
 
 @router.get("/{code}/navigation")
@@ -3111,51 +3152,56 @@ def get_stock_navigation(code: str):
 @router.get("/{code}/industry")
 def get_stock_industry(code: str):
     """
-    获取股票行业信息
-
-    Args:
-        code: 股票代码
-
-    Returns:
-        行业信息
+    获取股票行业信息（直查 ClickHouse sectors/sector_stocks 主档，替代已退役 pytdx）
     """
-    # R29：data_fetcher.pytdx 已随数据源退役删除（仓库无此模块），导入必须放在
-    # try 内走本处理器自身的优雅降级（200 + industry=None + message），
-    # 置于 try 外会以 ModuleNotFoundError 直接 500（2026-11-10 盘中实测）。
     try:
-        from data_fetcher.pytdx import PytdxDataSource
-        from utils.config import ConfigManager
-        # 创建Pytdx数据源
-        config_manager = ConfigManager()
-        data_sources_config = config_manager.get_data_sources_config()
-        pytdx_config = data_sources_config.get("pytdx", {})
-        data_source = PytdxDataSource(pytdx_config)
+        bare_code = code.split(".")[0] if "." in code else code
+        if "." not in code:
+            if bare_code.startswith(("8", "4", "92")):
+                full_code = f"{bare_code}.BJ"
+            elif bare_code.startswith(("6", "5", "9")):
+                full_code = f"{bare_code}.SH"
+            else:
+                full_code = f"{bare_code}.SZ"
+        else:
+            full_code = code.upper()
 
-        # 获取行业信息
-        industry_info = data_source.get_industry_info(code)
-        
-        if not industry_info:
-            return {
-                "code": code,
-                "industry": None,
-                "industry_code": None,
-                "message": "未获取到行业信息"
-            }
-        
-        return {
-            "code": code,
-            "industry": industry_info.get("industry"),
-            "industry_code": industry_info.get("industry_code"),
-            "message": "获取行业信息成功"
-        }
-        
-    except Exception as e:
-        logger.error(f"获取股票 {code} 行业信息失败: {e}")
+        if clickhouse_available():
+            df = clickhouse_query_df(
+                """
+                SELECT s.code AS industry_code, s.name AS industry_name
+                FROM sector_stocks ss FINAL
+                INNER JOIN sectors s FINAL ON s.code = ss.sector_code
+                WHERE s.type = 'industry'
+                  AND ss.stock_code IN (?, ?)
+                ORDER BY s.level DESC, s.code ASC
+                LIMIT 1
+                """,
+                [full_code, bare_code],
+                raw=True,
+            )
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                return {
+                    "code": code,
+                    "industry": str(row.get("industry_name") or "") or None,
+                    "industry_code": str(row.get("industry_code") or "") or None,
+                    "message": "获取行业信息成功",
+                }
+
         return {
             "code": code,
             "industry": None,
             "industry_code": None,
-            "message": f"获取行业信息失败: {str(e)}"
+            "message": "未获取到行业信息",
+        }
+    except Exception as e:
+        logger.warning(f"获取股票 {code} 行业信息失败: {e}")
+        return {
+            "code": code,
+            "industry": None,
+            "industry_code": None,
+            "message": f"获取行业信息失败: {str(e)}",
         }
 
 
@@ -3253,6 +3299,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
         stock = _get_stock_by_code(session, code)
         if not stock:
             raise HTTPException(status_code=404, detail=f"股票 {code} 不存在")
+        stock_name = stock.name
         
         # 映射周期到模型（使用统一的时间单位标准）
         period_model_map = {
@@ -3287,32 +3334,69 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
         date_field = date_field_map.get(period)
 
         if period in CLICKHOUSE_KLINE_TABLES and clickhouse_available():
+            DatabaseSessionManager.close_session(session)
+            session = None
             try:
                 table_name, clickhouse_date_field = CLICKHOUSE_KLINE_TABLES[period]
                 fetch_limit = int(limit)
-                if period in {"5m", "15m", "30m", "60m"}:
+                is_minute_period = period in {"5m", "15m", "30m", "60m"}
+                if is_minute_period:
                     fetch_limit = max(int(limit), 1) * 4
                 daily_extra_columns = ', amplitude, change_pct, change_amount, turnover_rate' if period == '1d' else ''
                 use_raw = period != '5m'
+
+                # 自适应分区裁剪：先仅扫描近期月份分区，满足 limit 即直接返回；不足再回退全历史扫描
+                lookback_days_map = {
+                    "5m": max(int(fetch_limit / 48 * 2.2) + 30, 60),
+                    "15m": max(int(fetch_limit / 16 * 2.2) + 45, 120),
+                    "30m": max(int(fetch_limit / 8 * 2.2) + 60, 240),
+                    "60m": max(int(fetch_limit / 4 * 2.2) + 90, 400),
+                    "1d": max(int(fetch_limit * 2.2) + 60, 240),
+                }
+                lookback_days = lookback_days_map[period]
+                now_bj = datetime.now(BUSINESS_TZ)
+                cutoff = (
+                    (now_bj.date() - timedelta(days=lookback_days))
+                    if period == "1d"
+                    else (now_bj - timedelta(days=lookback_days))
+                )
+
                 df = clickhouse_query_df(
                     f"""
                     SELECT {clickhouse_date_field} AS date_value,
                            code, open, high, low, close, volume, amount {daily_extra_columns}
                     FROM {table_name} FINAL
                     WHERE code = ?
+                      AND {clickhouse_date_field} >= ?
                     ORDER BY {clickhouse_date_field} DESC
                     LIMIT ?
                     """,
-                    [code, fetch_limit],
+                    [code, cutoff, fetch_limit],
                     raw=use_raw,
                 )
+                if df is not None and not df.empty and is_minute_period:
+                    df = clean_minute_bars_df(df, period, datetime_col="date_value", code_col="code")
+
+                if (df is None or df.empty or len(df) < int(limit)) and lookback_days < 36500:
+                    df = clickhouse_query_df(
+                        f"""
+                        SELECT {clickhouse_date_field} AS date_value,
+                               code, open, high, low, close, volume, amount {daily_extra_columns}
+                        FROM {table_name} FINAL
+                        WHERE code = ?
+                        ORDER BY {clickhouse_date_field} DESC
+                        LIMIT ?
+                        """,
+                        [code, fetch_limit],
+                        raw=use_raw,
+                    )
+                    if df is not None and not df.empty and is_minute_period:
+                        df = clean_minute_bars_df(df, period, datetime_col="date_value", code_col="code")
 
                 data = []
                 if df is not None and not df.empty:
-                    if period in {"5m", "15m", "30m", "60m"}:
-                        df = clean_minute_bars_df(df, period, datetime_col="date_value", code_col="code")
-                        if len(df) > int(limit):
-                            df = df.tail(int(limit)).reset_index(drop=True)
+                    if is_minute_period and len(df) > int(limit):
+                        df = df.tail(int(limit)).reset_index(drop=True)
                     df = df.sort_values("date_value")
                     for row in df.itertuples(index=False):
                         date_value = getattr(row, "date_value")
@@ -3347,7 +3431,7 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
 
                 return {
                     "code": code,
-                    "name": stock.name,
+                    "name": stock_name,
                     "period": period,
                     "data": data,
                     "total": len(data),
@@ -3361,6 +3445,8 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
                 logger.warning(f"ClickHouse kline query fallback to SQLAlchemy engine: {exc}")
         
         # 查询K线数据
+        if session is None:
+            session = DatabaseSessionManager.get_session()
         query = session.query(model).filter(model.code == code)
         
         # 按日期降序排序
@@ -3399,14 +3485,15 @@ def get_stock_kline(code: str, period: str, limit: int = 100):
         
         return {
             'code': code,
-            'name': stock.name,
+            'name': stock_name,
             'period': period,
             'data': data,
             'total': len(data)
         }
         
     finally:
-        DatabaseSessionManager.close_session(session)
+        if session is not None:
+            DatabaseSessionManager.close_session(session)
 
 
 
@@ -3546,35 +3633,6 @@ def _evaluate_main_rise_build_up_window(
 
 
 
-
-
-@router.get("/holdings")
-def get_holdings():
-    """获取持仓股"""
-    # 这里应该从数据库中获取持仓股数据
-    # 暂时返回模拟数据
-    return [
-        {
-            "code": "600000.SH",
-            "name": "浦发银行",
-            "close": 10.23,
-            "change_pct": 2.34,
-            "hold_count": 1000,
-            "cost_price": 9.85,
-            "profit": 380.0,
-            "profit_rate": 3.86
-        },
-        {
-            "code": "000001.SZ",
-            "name": "平安银行",
-            "close": 15.67,
-            "change_pct": -1.23,
-            "hold_count": 500,
-            "cost_price": 16.25,
-            "profit": -290.0,
-            "profit_rate": -3.57
-        }
-    ]
 
 
 router.routes = [

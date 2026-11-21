@@ -8,13 +8,16 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import clickhouse_connect
 
 from utils.common.logger import get_logger
+from utils.kline.market_warehouse import clickhouse_client
 
 logger = get_logger("data_center")
 BJ_TZ = timezone(timedelta(hours=8))
@@ -36,7 +39,11 @@ CORE_INDICES: tuple[str, ...] = (
 
 _MATRIX_CACHE: dict[int, dict[str, Any]] = {}
 _OVERVIEW_CACHE: dict[str, Any] = {"expires_at": 0.0, "payload": None}
-_CACHE_TTL = 60.0
+_CACHE_TTL = 180.0
+_OVERVIEW_LOCK = threading.Lock()
+_OVERVIEW_REFRESHING = False
+_MATRIX_LOCK = threading.Lock()
+_MATRIX_REFRESHING: set[int] = set()
 
 
 def _client():
@@ -52,11 +59,17 @@ def _client():
 
 
 def _query(sql: str, params: dict[str, Any] | None = None) -> list[tuple]:
-    c = _client()
+    own_client = False
+    try:
+        c = clickhouse_client()
+    except Exception:
+        c = _client()
+        own_client = True
     try:
         return list(c.query(sql, parameters=params or {}).result_rows)
     finally:
-        c.close()
+        if own_client:
+            c.close()
 
 
 def _normalize_code(raw: str) -> str:
@@ -72,12 +85,47 @@ def _normalize_code(raw: str) -> str:
     return s
 
 
-def get_data_overview(*, force_refresh: bool = False) -> dict[str, Any]:
-    """查询 ClickHouse 核心行情与基础表的真实存储占用、行数与时间覆盖范围。"""
-    now_mono = time.monotonic()
-    if not force_refresh and _OVERVIEW_CACHE["payload"] is not None and now_mono < float(_OVERVIEW_CACHE["expires_at"]):
-        return _OVERVIEW_CACHE["payload"]
+def _refresh_data_overview_bg() -> None:
+    global _OVERVIEW_REFRESHING
+    try:
+        payload = _compute_data_overview()
+        with _OVERVIEW_LOCK:
+            _OVERVIEW_CACHE["payload"] = payload
+            _OVERVIEW_CACHE["expires_at"] = time.monotonic() + _CACHE_TTL
+    except Exception as exc:
+        logger.warning("background data overview refresh failed: %s", exc)
+    finally:
+        with _OVERVIEW_LOCK:
+            _OVERVIEW_REFRESHING = False
 
+
+def get_data_overview(*, force_refresh: bool = False) -> dict[str, Any]:
+    """查询 ClickHouse 核心行情与基础表的真实存储占用、行数与时间覆盖范围（SWR 180s 缓存）。"""
+    global _OVERVIEW_REFRESHING
+    now_mono = time.monotonic()
+    if not force_refresh:
+        with _OVERVIEW_LOCK:
+            cached_payload = _OVERVIEW_CACHE.get("payload")
+            if cached_payload is not None:
+                if now_mono < float(_OVERVIEW_CACHE.get("expires_at") or 0.0):
+                    return cached_payload
+                if not _OVERVIEW_REFRESHING:
+                    _OVERVIEW_REFRESHING = True
+                    threading.Thread(
+                        target=_refresh_data_overview_bg,
+                        daemon=True,
+                        name="data-overview-refresh",
+                    ).start()
+                return cached_payload
+
+    payload = _compute_data_overview()
+    with _OVERVIEW_LOCK:
+        _OVERVIEW_CACHE["payload"] = payload
+        _OVERVIEW_CACHE["expires_at"] = time.monotonic() + _CACHE_TTL
+    return payload
+
+
+def _compute_data_overview() -> dict[str, Any]:
     now_bj = datetime.now(BJ_TZ)
     target_tables = [
         ("kline_daily", "股票/指数日线", "trade_date"),
@@ -90,46 +138,44 @@ def get_data_overview(*, force_refresh: bool = False) -> dict[str, Any]:
         ("trade_calendar", "交易日历", "trade_date"),
     ]
 
-    # 1. 从 system.parts 读取每张表的物理行数与磁盘占用（毫秒级）
-    parts_rows = _query(
-        """
-        SELECT
-            table,
-            sum(rows) AS total_rows,
-            sum(bytes_on_disk) AS disk_bytes
-        FROM system.parts
-        WHERE database = 'stock' AND active = 1
-        GROUP BY table
-        """
-    )
-    parts_map = {str(r[0]): (int(r[1] or 0), int(r[2] or 0)) for r in parts_rows}
+    # 1 & 2. 并发读取 system.parts 与证券池计数
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        fut_parts = executor.submit(
+            _query,
+            """
+            SELECT
+                table,
+                sum(rows) AS total_rows,
+                sum(bytes_on_disk) AS disk_bytes
+            FROM system.parts
+            WHERE database = 'stock' AND active = 1
+            GROUP BY table
+            """,
+        )
+        fut_pool = executor.submit(
+            _query,
+            """
+            SELECT
+                countIf(type = 'stock' AND quit = 0 AND listing_status = 'active') AS active_stocks,
+                countIf(type = 'index') AS total_indices,
+                (SELECT count() FROM stock.sectors WHERE type = 'industry') AS industry_sectors
+            FROM stock.stocks FINAL
+            """,
+        )
+        parts_rows = fut_parts.result()
+        pool_rows = fut_pool.result()
 
-    # 2. 证券池计数
-    pool_rows = _query(
-        """
-        SELECT
-            countIf(type = 'stock' AND quit = 0 AND listing_status = 'active') AS active_stocks,
-            countIf(type = 'index') AS total_indices,
-            (SELECT count() FROM stock.sectors WHERE type = 'industry') AS industry_sectors
-        FROM stock.stocks FINAL
-        """
-    )
+    parts_map = {str(r[0]): (int(r[1] or 0), int(r[2] or 0)) for r in parts_rows}
     active_stocks, total_indices, industry_sectors = (
         (int(pool_rows[0][0]), int(pool_rows[0][1]), int(pool_rows[0][2]))
         if pool_rows
         else (0, 0, 0)
     )
 
-    # 3. 逐表查 min/max 时间范围
-    table_stats: list[dict[str, Any]] = []
-    total_rows_all = 0
-    total_bytes_all = 0
-    latest_daily_date = None
-
-    for tbl, label, time_col in target_tables:
+    # 3. 并发查各表 min/max 时间范围
+    def _fetch_table_stat(spec: tuple[str, str, str]) -> tuple[dict[str, Any], int, int, str | None]:
+        tbl, label, time_col = spec
         rows_cnt, disk_bytes = parts_map.get(tbl, (0, 0))
-        total_rows_all += rows_cnt
-        total_bytes_all += disk_bytes
         min_t, max_t = None, None
         if rows_cnt > 0:
             try:
@@ -138,18 +184,35 @@ def get_data_overview(*, force_refresh: bool = False) -> dict[str, Any]:
                     min_t, max_t = str(r[0][0]), str(r[0][1])
             except Exception as exc:
                 logger.warning("table %s min/max failed: %s", tbl, exc)
-        if tbl == "kline_daily" and max_t:
-            latest_daily_date = max_t[:10]
-        table_stats.append({
-            "table": tbl,
-            "label": label,
-            "rows": rows_cnt,
-            "size_mb": round(disk_bytes / (1024 * 1024), 2),
-            "min_time": min_t,
-            "max_time": max_t,
-        })
+        daily_date = max_t[:10] if (tbl == "kline_daily" and max_t) else None
+        return (
+            {
+                "table": tbl,
+                "label": label,
+                "rows": rows_cnt,
+                "size_mb": round(disk_bytes / (1024 * 1024), 2),
+                "min_time": min_t,
+                "max_time": max_t,
+            },
+            rows_cnt,
+            disk_bytes,
+            daily_date,
+        )
 
-    payload = {
+    table_stats: list[dict[str, Any]] = []
+    total_rows_all = 0
+    total_bytes_all = 0
+    latest_daily_date = None
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        for stat, rows_cnt, disk_bytes, daily_date in executor.map(_fetch_table_stat, target_tables):
+            table_stats.append(stat)
+            total_rows_all += rows_cnt
+            total_bytes_all += disk_bytes
+            if daily_date:
+                latest_daily_date = daily_date
+
+    return {
         "generated_at": now_bj.isoformat(timespec="seconds"),
         "latest_daily_date": latest_daily_date,
         "summary": {
@@ -162,9 +225,6 @@ def get_data_overview(*, force_refresh: bool = False) -> dict[str, Any]:
         },
         "tables": table_stats,
     }
-    _OVERVIEW_CACHE["payload"] = payload
-    _OVERVIEW_CACHE["expires_at"] = now_mono + _CACHE_TTL
-    return payload
 
 
 def _cell_status(actual: int, expected: int, is_future_or_pending: bool, ok_threshold: float = 0.99) -> str:
@@ -180,14 +240,45 @@ def _cell_status(actual: int, expected: int, is_future_or_pending: bool, ok_thre
     return "missing"
 
 
+def _refresh_health_matrix_bg(days: int) -> None:
+    try:
+        payload = _compute_health_matrix(days=days)
+        with _MATRIX_LOCK:
+            _MATRIX_CACHE[days] = {"expires_at": time.monotonic() + _CACHE_TTL, "payload": payload}
+    except Exception as exc:
+        logger.warning("background health matrix refresh (%d) failed: %s", days, exc)
+    finally:
+        with _MATRIX_LOCK:
+            _MATRIX_REFRESHING.discard(days)
+
+
 def get_health_matrix(days: int = 10, *, force_refresh: bool = False) -> dict[str, Any]:
-    """实时计算近 N 个交易日的真实数据交付矩阵（科学分母、零假警报）。"""
+    """实时计算近 N 个交易日的真实数据交付矩阵（SWR 180s 缓存、并发统计）。"""
     days = max(5, min(30, int(days)))
     now_mono = time.monotonic()
-    cached = _MATRIX_CACHE.get(days)
-    if not force_refresh and cached and now_mono < float(cached["expires_at"]):
-        return cached["payload"]
+    if not force_refresh:
+        with _MATRIX_LOCK:
+            cached = _MATRIX_CACHE.get(days)
+            if cached and cached.get("payload") is not None:
+                if now_mono < float(cached.get("expires_at") or 0.0):
+                    return cached["payload"]
+                if days not in _MATRIX_REFRESHING:
+                    _MATRIX_REFRESHING.add(days)
+                    threading.Thread(
+                        target=_refresh_health_matrix_bg,
+                        args=(days,),
+                        daemon=True,
+                        name=f"health-matrix-refresh-{days}",
+                    ).start()
+                return cached["payload"]
 
+    payload = _compute_health_matrix(days=days)
+    with _MATRIX_LOCK:
+        _MATRIX_CACHE[days] = {"expires_at": time.monotonic() + _CACHE_TTL, "payload": payload}
+    return payload
+
+
+def _compute_health_matrix(days: int = 10) -> dict[str, Any]:
     now_bj = datetime.now(BJ_TZ)
     today_str = now_bj.strftime("%Y-%m-%d")
     after_postclose = (now_bj.hour, now_bj.minute) >= (17, 30)
@@ -210,75 +301,82 @@ def get_health_matrix(days: int = 10, *, force_refresh: bool = False) -> dict[st
     start_date = dates[0]
     core_idx_sql = ", ".join(f"'{c}'" for c in CORE_INDICES)
 
-    # 2. 在市股票总数作为日线分母
-    active_stock_rows = _query(
-        "SELECT count() FROM stock.stocks FINAL WHERE type = 'stock' AND quit = 0 AND listing_status = 'active'"
-    )
-    active_stock_count = int(active_stock_rows[0][0]) if active_stock_rows else 5570
-
-    # 3. 股票日线每日覆盖数（作为当日分钟线的科学分母！）
-    stock_daily_rows = _query(
-        """
-        SELECT toString(trade_date) AS d, uniqExact(code) AS cnt
-        FROM stock.kline_daily
-        WHERE trade_date >= toDate({s:String})
-          AND code IN (SELECT code FROM stock.stocks FINAL WHERE type = 'stock' AND quit = 0 AND listing_status = 'active')
-        GROUP BY d
-        """,
-        {"s": start_date},
-    )
-    stock_daily_map = {str(r[0]): int(r[1]) for r in stock_daily_rows}
-
-    # 4. 股票分钟线（5/15/30/60m）每日覆盖数（仅统计在市股票，精准对标当日日线）
-    minute_maps: dict[str, dict[str, int]] = {}
-    idx_minute_maps: dict[str, dict[str, int]] = {}
-    for p in ("5", "15", "30", "60"):
-        tbl = f"kline_minute_{p}"
-        s_rows = _query(
-            f"""
-            SELECT toString(toDate(datetime)) AS d, uniqExact(code) AS cnt
-            FROM stock.{tbl}
-            WHERE datetime >= toDateTime('{start_date} 00:00:00')
+    # 2–6. 并发执行所有统计查询（每线程独立 thread-local CH client）
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        fut_active = executor.submit(
+            _query,
+            "SELECT count() FROM stock.stocks FINAL WHERE type = 'stock' AND quit = 0 AND listing_status = 'active'",
+        )
+        fut_stock_daily = executor.submit(
+            _query,
+            """
+            SELECT toString(trade_date) AS d, uniqExact(code) AS cnt
+            FROM stock.kline_daily
+            WHERE trade_date >= toDate({s:String})
               AND code IN (SELECT code FROM stock.stocks FINAL WHERE type = 'stock' AND quit = 0 AND listing_status = 'active')
             GROUP BY d
-            """
+            """,
+            {"s": start_date},
         )
-        minute_maps[p] = {str(r[0]): int(r[1]) for r in s_rows}
-
-        i_rows = _query(
+        fut_min_s = {
+            p: executor.submit(
+                _query,
+                f"""
+                SELECT toString(toDate(datetime)) AS d, uniqExact(code) AS cnt
+                FROM stock.kline_minute_{p}
+                WHERE datetime >= toDateTime('{start_date} 00:00:00')
+                  AND code IN (SELECT code FROM stock.stocks FINAL WHERE type = 'stock' AND quit = 0 AND listing_status = 'active')
+                GROUP BY d
+                """,
+            )
+            for p in ("5", "15", "30", "60")
+        }
+        fut_min_i = {
+            p: executor.submit(
+                _query,
+                f"""
+                SELECT toString(toDate(datetime)) AS d, uniqExact(code) AS cnt
+                FROM stock.kline_minute_{p}
+                WHERE datetime >= toDateTime('{start_date} 00:00:00')
+                  AND code IN ({core_idx_sql})
+                GROUP BY d
+                """,
+            )
+            for p in ("5", "15", "30", "60")
+        }
+        fut_idx_daily = executor.submit(
+            _query,
             f"""
-            SELECT toString(toDate(datetime)) AS d, uniqExact(code) AS cnt
-            FROM stock.{tbl}
-            WHERE datetime >= toDateTime('{start_date} 00:00:00')
+            SELECT toString(trade_date) AS d, uniqExact(code) AS cnt
+            FROM stock.kline_daily
+            WHERE trade_date >= toDate('{start_date}')
               AND code IN ({core_idx_sql})
             GROUP BY d
-            """
+            """,
         )
-        idx_minute_maps[p] = {str(r[0]): int(r[1]) for r in i_rows}
+        fut_total_sec = executor.submit(_query, "SELECT count() FROM stock.sectors FINAL")
+        fut_sec_daily = executor.submit(
+            _query,
+            f"""
+            SELECT toString(trade_date) AS d, uniqExact(code) AS cnt
+            FROM stock.sector_kline_daily FINAL
+            WHERE trade_date >= toDate('{start_date}')
+            GROUP BY d
+            """,
+        )
 
-    # 5. 11 大核心指数日线
-    idx_daily_rows = _query(
-        f"""
-        SELECT toString(trade_date) AS d, uniqExact(code) AS cnt
-        FROM stock.kline_daily
-        WHERE trade_date >= toDate('{start_date}')
-          AND code IN ({core_idx_sql})
-        GROUP BY d
-        """
-    )
+        active_stock_rows = fut_active.result()
+        stock_daily_rows = fut_stock_daily.result()
+        minute_maps = {p: {str(r[0]): int(r[1]) for r in fut.result()} for p, fut in fut_min_s.items()}
+        idx_minute_maps = {p: {str(r[0]): int(r[1]) for r in fut.result()} for p, fut in fut_min_i.items()}
+        idx_daily_rows = fut_idx_daily.result()
+        total_sectors_rows = fut_total_sec.result()
+        sec_rows = fut_sec_daily.result()
+
+    active_stock_count = int(active_stock_rows[0][0]) if active_stock_rows else 5570
+    stock_daily_map = {str(r[0]): int(r[1]) for r in stock_daily_rows}
     idx_daily_map = {str(r[0]): int(r[1]) for r in idx_daily_rows}
-
-    # 6. 通达信标准板块日线（行业/概念/风格/地区）
-    total_sectors_rows = _query("SELECT count() FROM stock.sectors FINAL")
     expected_sectors = int(total_sectors_rows[0][0]) if total_sectors_rows and int(total_sectors_rows[0][0]) > 0 else 604
-    sec_rows = _query(
-        f"""
-        SELECT toString(trade_date) AS d, uniqExact(code) AS cnt
-        FROM stock.sector_kline_daily FINAL
-        WHERE trade_date >= toDate('{start_date}')
-        GROUP BY d
-        """
-    )
     sec_map = {str(r[0]): int(r[1]) for r in sec_rows}
 
     def _build_cells(actual_map: dict[str, int], expected_fn, ok_threshold: float = 0.99) -> list[dict[str, Any]]:
@@ -374,15 +472,13 @@ def get_health_matrix(days: int = 10, *, force_refresh: bool = False) -> dict[st
         },
     ]
 
-    payload = {
+    return {
         "generated_at": now_bj.isoformat(timespec="seconds"),
         "days": days,
         "dates": dates,
         "core_indices": list(CORE_INDICES),
         "datasets": datasets,
     }
-    _MATRIX_CACHE[days] = {"expires_at": now_mono + _CACHE_TTL, "payload": payload}
-    return payload
 
 
 def inspect_kline(raw_code: str, days: int = 10) -> dict[str, Any]:
@@ -391,29 +487,33 @@ def inspect_kline(raw_code: str, days: int = 10) -> dict[str, Any]:
     days = max(5, min(30, int(days)))
     now_bj = datetime.now(BJ_TZ)
 
-    # 1. 查询标的名称与类型
-    info_rows = _query(
-        "SELECT anyLast(name), anyLast(type), anyLast(listing_status) FROM stock.stocks FINAL WHERE code = {c:String}",
-        {"c": code},
-    )
+    # 1 & 2. 并发查询标的信息与近 N 个交易日
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        fut_info = executor.submit(
+            _query,
+            "SELECT anyLast(name), anyLast(type), anyLast(listing_status) FROM stock.stocks FINAL WHERE code = {c:String}",
+            {"c": code},
+        )
+        fut_cal = executor.submit(
+            _query,
+            """
+            SELECT toString(trade_date) AS d
+            FROM stock.trade_calendar
+            WHERE market = 'SH' AND is_trading = 1 AND trade_date < today()
+            ORDER BY trade_date DESC
+            LIMIT {n:UInt32}
+            """,
+            {"n": days},
+        )
+        info_rows = fut_info.result()
+        cal_rows = fut_cal.result()
+
     name = str(info_rows[0][0]) if info_rows and info_rows[0][0] else code
     sec_type = str(info_rows[0][1]) if info_rows and info_rows[0][1] else "unknown"
-
-    # 2. 近 N 个交易日
-    cal_rows = _query(
-        """
-        SELECT toString(trade_date) AS d
-        FROM stock.trade_calendar
-        WHERE market = 'SH' AND is_trading = 1 AND trade_date < today()
-        ORDER BY trade_date DESC
-        LIMIT {n:UInt32}
-        """,
-        {"n": days},
-    )
     dates = [str(r[0]) for r in reversed(cal_rows)]
     start_date = dates[0] if dates else "2026-11-01"
 
-    # 3. 全周期总览（总根数、起止时间、近 N 日每日槽数）
+    # 3. 并发检查 5 个周期（日线/5m/15m/30m/60m）
     periods_spec = [
         ("daily", "日线", "kline_daily", "trade_date", 1),
         ("5m", "5分钟", "kline_minute_5", "datetime", 48),
@@ -422,10 +522,8 @@ def inspect_kline(raw_code: str, days: int = 10) -> dict[str, Any]:
         ("60m", "60分钟", "kline_minute_60", "datetime", 4),
     ]
 
-    period_summaries: list[dict[str, Any]] = []
-    daily_grid: dict[str, dict[str, int]] = {d: {} for d in dates}
-
-    for key, label, tbl, col, expected_bars in periods_spec:
+    def _inspect_period(spec: tuple[str, str, str, str, int]) -> tuple[dict[str, Any], dict[str, int]]:
+        key, label, tbl, _col, expected_bars = spec
         if key == "daily":
             agg = _query(
                 f"SELECT uniqExact(trade_date), toString(min(trade_date)), toString(max(trade_date)) FROM stock.{tbl} WHERE code = {{c:String}}",
@@ -451,13 +549,14 @@ def inspect_kline(raw_code: str, days: int = 10) -> dict[str, Any]:
         rec_map = {str(r[0]): int(r[1]) for r in recent}
 
         ok_days = 0
+        counts_for_dates: dict[str, int] = {}
         for d in dates:
             cnt = rec_map.get(d, 0)
-            daily_grid[d][key] = cnt
+            counts_for_dates[d] = cnt
             if cnt >= expected_bars:
                 ok_days += 1
 
-        period_summaries.append({
+        summary = {
             "period": key,
             "label": label,
             "expected_per_day": expected_bars,
@@ -467,7 +566,18 @@ def inspect_kline(raw_code: str, days: int = 10) -> dict[str, Any]:
             "recent_ok_days": ok_days,
             "recent_total_days": len(dates),
             "complete": ok_days == len(dates) and len(dates) > 0,
-        })
+        }
+        return summary, counts_for_dates
+
+    period_summaries: list[dict[str, Any]] = []
+    daily_grid: dict[str, dict[str, int]] = {d: {} for d in dates}
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for summary, counts_for_dates in executor.map(_inspect_period, periods_spec):
+            key = summary["period"]
+            period_summaries.append(summary)
+            for d, cnt in counts_for_dates.items():
+                daily_grid[d][key] = cnt
 
     rows = [
         {

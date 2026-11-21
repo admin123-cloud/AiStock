@@ -7,6 +7,9 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, desc, or_, and_
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+import math
+import threading
+import time
 
 from utils.database import db
 from utils.market_warehouse import clickhouse_available, clickhouse_table_exists, clickhouse_query_df, clickhouse_scalar
@@ -16,6 +19,10 @@ from utils.logger import get_logger
 router = APIRouter(prefix="/sectors", tags=["板块"])
 logger = get_logger("sectors")
 
+_LATEST_TRADE_DATE_CACHE = {"expires_at": 0.0, "value": None}
+_LATEST_TRADE_DATE_LOCK = threading.Lock()
+_LATEST_TRADE_DATE_TTL_SECONDS = 60.0
+
 
 def _date_text(value):
     if hasattr(value, "strftime"):
@@ -23,11 +30,30 @@ def _date_text(value):
     return str(value)[:10]
 
 
+def _finite_float(value):
+    if value is None:
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _finite_int(value):
+    num = _finite_float(value)
+    return int(num) if num is not None else None
+
+
 def _latest_stock_trade_date_from_clickhouse():
     if not clickhouse_available():
         return None
+    now = time.monotonic()
+    with _LATEST_TRADE_DATE_LOCK:
+        if _LATEST_TRADE_DATE_CACHE["value"] is not None and now < float(_LATEST_TRADE_DATE_CACHE["expires_at"]):
+            return _LATEST_TRADE_DATE_CACHE["value"]
     try:
-        return clickhouse_scalar(
+        val = clickhouse_scalar(
             """
             SELECT MAX(k.trade_date)
             FROM kline_daily k
@@ -37,8 +63,30 @@ def _latest_stock_trade_date_from_clickhouse():
              AND c.market = 'SH'
              AND c.is_trading = 1
             WHERE s.type = 'stock'
-            """
+              AND k.trade_date >= today() - 30
+            """,
+            raw=True,
         )
+        if not val or _date_text(val) in ("1970-01-01", "0000-00-00"):
+            val = clickhouse_scalar(
+                """
+                SELECT MAX(k.trade_date)
+                FROM kline_daily k
+                JOIN stocks s ON s.code = k.code
+                JOIN trade_calendar c
+                  ON c.trade_date = k.trade_date
+                 AND c.market = 'SH'
+                 AND c.is_trading = 1
+                WHERE s.type = 'stock'
+                """,
+                raw=True,
+            )
+        if val and _date_text(val) not in ("1970-01-01", "0000-00-00"):
+            with _LATEST_TRADE_DATE_LOCK:
+                _LATEST_TRADE_DATE_CACHE["value"] = val
+                _LATEST_TRADE_DATE_CACHE["expires_at"] = time.monotonic() + _LATEST_TRADE_DATE_TTL_SECONDS
+            return val
+        return None
     except Exception as exc:
         logger.warning(f"ClickHouse sector latest trade date fallback to SQLAlchemy engine: {exc}")
         return None
@@ -51,21 +99,27 @@ def _daily_rows_for_codes_on_date_from_clickhouse(stock_codes, trade_date):
         placeholders = ",".join(["?"] * len(stock_codes))
         df = clickhouse_query_df(
             f"""
-            SELECT code, change_pct, volume, amount
+            SELECT
+                code,
+                argMax(change_pct, created_at) AS change_pct,
+                argMax(volume, created_at) AS volume,
+                argMax(amount, created_at) AS amount
             FROM kline_daily
             WHERE trade_date = ?
               AND code IN ({placeholders})
+            GROUP BY code
             """,
             [_date_text(trade_date)] + list(stock_codes),
+            raw=True,
         )
         if df is None:
             return None
         return [
             {
                 "code": row.code,
-                "change_pct": row.change_pct,
-                "volume": row.volume,
-                "amount": row.amount,
+                "change_pct": _finite_float(row.change_pct),
+                "volume": _finite_float(row.volume),
+                "amount": _finite_float(row.amount),
             }
             for row in df.itertuples(index=False)
         ]
@@ -125,11 +179,24 @@ def _calculate_sector_rising_stats(session, sector_code, days=15, threshold=10):
                         """
                         SELECT DISTINCT trade_date
                         FROM kline_daily
+                        WHERE trade_date >= today() - 90
                         ORDER BY trade_date DESC
                         LIMIT ?
                         """,
                         [int(days)],
+                        raw=True,
                     )
+                    if date_df is None or len(date_df) < int(days):
+                        date_df = clickhouse_query_df(
+                            """
+                            SELECT DISTINCT trade_date
+                            FROM kline_daily
+                            ORDER BY trade_date DESC
+                            LIMIT ?
+                            """,
+                            [int(days)],
+                            raw=True,
+                        )
                     if date_df is not None and not date_df.empty:
                         recent_dates = [(d,) for d in date_df["trade_date"].tolist()]
                 except Exception as exc:
@@ -157,13 +224,18 @@ def _calculate_sector_rising_stats(session, sector_code, days=15, threshold=10):
                     df = clickhouse_query_df(
                         f"""
                         SELECT code,
-                               SUM(CASE WHEN change_pct > 0 THEN 1 ELSE 0 END) AS rising_days
-                        FROM kline_daily
-                        WHERE code IN ({code_placeholders})
-                          AND trade_date IN ({date_placeholders})
+                               SUM(CASE WHEN pct > 0 THEN 1 ELSE 0 END) AS rising_days
+                        FROM (
+                            SELECT code, trade_date, argMax(change_pct, created_at) AS pct
+                            FROM kline_daily
+                            WHERE code IN ({code_placeholders})
+                              AND trade_date IN ({date_placeholders})
+                            GROUP BY code, trade_date
+                        )
                         GROUP BY code
                         """,
                         stock_codes + [_date_text(d) for d in date_list],
+                        raw=True,
                     )
                     if df is not None:
                         rising_stock_count = sum(
@@ -281,7 +353,7 @@ def _calculate_sector_change_pct(session, sector_code):
             sector_trade_date = latest_sector_kline[0]
             latest_trade_date = latest_stock_date[0] if latest_stock_date else None
             sector_has_counts = (latest_sector_kline[3] or 0) + (latest_sector_kline[4] or 0) + (latest_sector_kline[5] or 0) > 0
-            sector_is_current = latest_trade_date is None or sector_trade_date == latest_trade_date
+            sector_is_current = latest_trade_date is None or _date_text(sector_trade_date) == _date_text(latest_trade_date)
             if sector_is_current and (sector_has_counts or not latest_sector_kline[2]):
                 return {
                     "change_pct": float(latest_sector_kline[1]),
@@ -300,7 +372,7 @@ def _calculate_sector_change_pct(session, sector_code):
         clickhouse_rows = _daily_rows_for_codes_on_date_from_clickhouse(stock_codes, trade_date)
         if clickhouse_rows is not None:
             kline_data = [
-                (row["code"], row["change_pct"])
+                SimpleNamespace(code=row["code"], change_pct=row["change_pct"])
                 for row in clickhouse_rows
             ]
         else:
@@ -471,12 +543,72 @@ def get_sectors(
         offset = (page - 1) * page_size
         results = query.offset(offset).limit(page_size).all()
 
+        # 批量从 ClickHouse sector_kline_daily 取当前页板块最新涨跌统计，避免逐条 N+1 查询
+        batch_sector_stats: dict[str, dict] = {}
+        if results and clickhouse_available():
+            try:
+                page_codes = [r[0] for r in results]
+                latest_td = _latest_stock_trade_date_from_clickhouse()
+                ph = ",".join(["?"] * len(page_codes))
+                if latest_td:
+                    sk_df = clickhouse_query_df(
+                        f"""
+                        SELECT code,
+                               argMax(change_pct, created_at) AS change_pct,
+                               argMax(stock_count, created_at) AS stock_count,
+                               argMax(rise_count, created_at) AS rise_count,
+                               argMax(fall_count, created_at) AS fall_count,
+                               argMax(flat_count, created_at) AS flat_count
+                        FROM sector_kline_daily
+                        WHERE trade_date = ?
+                          AND code IN ({ph})
+                        GROUP BY code
+                        """,
+                        [_date_text(latest_td)] + page_codes,
+                        raw=True,
+                    )
+                else:
+                    sk_df = clickhouse_query_df(
+                        f"""
+                        SELECT code,
+                               change_pct,
+                               stock_count,
+                               rise_count,
+                               fall_count,
+                               flat_count
+                        FROM sector_kline_daily FINAL
+                        WHERE code IN ({ph})
+                        ORDER BY code ASC, trade_date DESC
+                        LIMIT 1 BY code
+                        """,
+                        page_codes,
+                        raw=True,
+                    )
+                if sk_df is not None and not sk_df.empty:
+                    for srow in sk_df.itertuples(index=False):
+                        chg = _finite_float(getattr(srow, "change_pct", None))
+                        if chg is None:
+                            continue
+                        r_cnt = int(getattr(srow, "rise_count", 0) or 0)
+                        f_cnt = int(getattr(srow, "fall_count", 0) or 0)
+                        fl_cnt = int(getattr(srow, "flat_count", 0) or 0)
+                        sc_cnt = int(getattr(srow, "stock_count", 0) or 0)
+                        if (r_cnt + f_cnt + fl_cnt > 0) or not sc_cnt:
+                            batch_sector_stats[str(srow.code)] = {
+                                "change_pct": chg,
+                                "rise_count": r_cnt,
+                                "fall_count": f_cnt,
+                            }
+            except Exception as exc:
+                logger.warning(f"批量获取板块日线统计失败，将按单板块回退: {exc}")
+
         # 构建返回数据
         items = []
         for code, name, type_, level, stock_count in results:
             try:
-                # 计算板块涨跌幅
-                sector_stats = _calculate_sector_change_pct(session, code)
+                sector_stats = batch_sector_stats.get(code)
+                if sector_stats is None:
+                    sector_stats = _calculate_sector_change_pct(session, code)
                 # 计算上涨比例
                 total_valid = sector_stats.get('rise_count', 0) + sector_stats.get('fall_count', 0)
                 rise_ratio = (sector_stats.get('rise_count', 0) / total_valid * 100) if total_valid > 0 else 0
@@ -563,6 +695,74 @@ def get_sectors_stats():
         session.close()
 
 
+@router.get("/stock-count")
+def get_sectors_stock_count(
+    sector_type: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50
+):
+    """
+    获取板块成分股统计（联合查询 sectors 和 sector_stocks 表）
+
+    Args:
+        sector_type: 类型筛选(industry/concept)，不传则返回所有类型
+        page: 页码
+        page_size: 每页数量
+
+    Returns:
+        板块成分股统计列表
+    """
+    session = next(db.get_session())
+    try:
+        # 联合查询统计每个板块的成分股数量
+        query = session.query(
+            Sector.code,
+            Sector.name,
+            Sector.type,
+            func.count(SectorStock.stock_code).label('actual_stock_count')
+        ).outerjoin(
+            SectorStock,
+            Sector.code == SectorStock.sector_code
+        ).group_by(
+            Sector.code,
+            Sector.name,
+            Sector.type
+        )
+
+        # 类型筛选
+        if sector_type:
+            query = query.filter(Sector.type == sector_type)
+
+        # 总数
+        total = query.count()
+
+        # 分页
+        offset = (page - 1) * page_size
+        results = query.order_by(
+            desc('actual_stock_count'),
+            Sector.code
+        ).offset(offset).limit(page_size).all()
+
+        items = []
+        for code, name, type_, count in results:
+            items.append({
+                "code": code,
+                "name": name,
+                "type": type_,
+                "stock_count": count or 0
+            })
+
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": items
+        }
+
+    finally:
+        session.close()
+
+
 @router.get("/{code}")
 def get_sector_detail(code: str):
     """
@@ -601,6 +801,7 @@ def get_sector_detail(code: str):
         stock_pairs = stocks_query.all()
         stock_codes = [ss.stock_code for ss, _ in stock_pairs]
         kline_map = {}
+        clickhouse_rows = None
         if trade_date:
             clickhouse_rows = _daily_rows_for_codes_on_date_from_clickhouse(stock_codes, trade_date)
             if clickhouse_rows is not None:
@@ -620,7 +821,7 @@ def get_sector_detail(code: str):
             # 如果有最近的交易日，查询该股票的K线数据
             if trade_date:
                 stock_kline = kline_map.get(ss.stock_code)
-                if stock_kline is None and not kline_map:
+                if stock_kline is None and clickhouse_rows is None:
                     stock_kline = session.query(KlineDaily).filter(
                         KlineDaily.code == ss.stock_code,
                         KlineDaily.trade_date == trade_date
@@ -628,13 +829,13 @@ def get_sector_detail(code: str):
 
                 if stock_kline:
                     if isinstance(stock_kline, dict):
-                        item["change_pct"] = float(stock_kline["change_pct"]) if stock_kline.get("change_pct") else None
-                        item["volume"] = int(stock_kline["volume"]) if stock_kline.get("volume") else None
-                        item["amount"] = float(stock_kline["amount"]) if stock_kline.get("amount") else None
+                        item["change_pct"] = _finite_float(stock_kline.get("change_pct"))
+                        item["volume"] = _finite_int(stock_kline.get("volume"))
+                        item["amount"] = _finite_float(stock_kline.get("amount"))
                     else:
-                        item["change_pct"] = float(stock_kline.change_pct) if stock_kline.change_pct else None
-                        item["volume"] = int(stock_kline.volume) if stock_kline.volume else None
-                        item["amount"] = float(stock_kline.amount) if stock_kline.amount else None
+                        item["change_pct"] = _finite_float(stock_kline.change_pct)
+                        item["volume"] = _finite_int(stock_kline.volume)
+                        item["amount"] = _finite_float(stock_kline.amount)
 
             stocks.append(item)
 
@@ -767,74 +968,6 @@ def get_sector_stocks(code: str, page: int = 1, page_size: int = 50):
             "page": page,
             "page_size": page_size,
             "stocks": stocks
-        }
-
-    finally:
-        session.close()
-
-
-@router.get("/stock-count")
-def get_sectors_stock_count(
-    sector_type: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 50
-):
-    """
-    获取板块成分股统计（联合查询 sectors 和 sector_stocks 表）
-
-    Args:
-        sector_type: 类型筛选(industry/concept)，不传则返回所有类型
-        page: 页码
-        page_size: 每页数量
-
-    Returns:
-        板块成分股统计列表
-    """
-    session = next(db.get_session())
-    try:
-        # 联合查询统计每个板块的成分股数量
-        query = session.query(
-            Sector.code,
-            Sector.name,
-            Sector.type,
-            func.count(SectorStock.stock_code).label('actual_stock_count')
-        ).outerjoin(
-            SectorStock,
-            Sector.code == SectorStock.sector_code
-        ).group_by(
-            Sector.code,
-            Sector.name,
-            Sector.type
-        )
-
-        # 类型筛选
-        if sector_type:
-            query = query.filter(Sector.type == sector_type)
-
-        # 总数
-        total = query.count()
-
-        # 分页
-        offset = (page - 1) * page_size
-        results = query.order_by(
-            desc('actual_stock_count'),
-            Sector.code
-        ).offset(offset).limit(page_size).all()
-
-        items = []
-        for code, name, type_, count in results:
-            items.append({
-                "code": code,
-                "name": name,
-                "type": type_,
-                "stock_count": count or 0
-            })
-
-        return {
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "items": items
         }
 
     finally:

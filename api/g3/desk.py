@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,7 @@ from services.trading.t_daily_plan import (
     build_stock_daily_plan,
     delete_t_execution,
     fetch_batch_live_quotes,
-    fetch_live_rsi_snapshot,
+    fetch_batch_live_rsi_snapshots,
     generate_and_save_daily_plan,
     load_intraday_executions,
     load_saved_daily_plan,
@@ -263,6 +264,64 @@ def get_g3_desk(
         total_market_value=merged_funds.get("market_value"),
     )
 
+    # 预先识别需要计算 RSI 的标的并准备并发任务（批量 RSI + 主升浪扫描 + 冰点反抽 + 路由扫描）
+    rsi_codes: list[str] = []
+    rsi_price_map: dict[str, Any] = {}
+    for code in all_codes:
+        h_list = holding_by_code.get(code, [])
+        r_info = regime_codes.get(code) or {}
+        total_shares = sum(int(x.get("shares") or 0) for x in h_list)
+        t_lot_cap = (total_shares // 3 // 100) * 100 if total_shares >= 300 else 0
+        if t_lot_cap >= 100 or r_info:
+            px = (live_quotes.get(code) or {}).get("price")
+            if not px and h_list:
+                px = h_list[0].get("current_price")
+            rsi_codes.append(code)
+            rsi_price_map[code] = float(px) if px else None
+
+    def _safe_rsi_batch() -> dict[str, dict[str, Any]]:
+        return fetch_batch_live_rsi_snapshots(
+            rsi_codes,
+            rsi_price_map,
+            force_refresh=refresh_quotes,
+        )
+
+    def _safe_mainwave() -> dict[str, Any]:
+        try:
+            return merge_screening_into_mainwave(
+                scan_mainwave_daily(force_refresh=False),
+                market_gate=market_regime_gate,
+            )
+        except Exception:
+            return {}
+
+    def _safe_panic() -> dict[str, Any] | None:
+        try:
+            return evaluate_panic_rebound_signal(market_gate=market_regime_gate)
+        except Exception:
+            return None
+
+    def _safe_router() -> dict[str, Any] | None:
+        try:
+            return scan_active_strategy_signals(
+                current_regime=str(market_regime_gate.get("regime") or "balanced"),
+                regime_label=str(market_regime_gate.get("regime_label") or ""),
+                allow_new_mainwave=bool(market_regime_gate.get("allow_new_mainwave")),
+                target_position_cap_pct=float(market_regime_gate.get("target_position_cap_pct") or 0.0),
+            )
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        fut_rsi = executor.submit(_safe_rsi_batch)
+        fut_mw = executor.submit(_safe_mainwave)
+        fut_panic = executor.submit(_safe_panic)
+        fut_router = executor.submit(_safe_router)
+        rsi_map = fut_rsi.result()
+        _mw_merged = fut_mw.result()
+        panic_rebound_signal = fut_panic.result()
+        strategy_router = fut_router.result()
+
     cards: list[dict[str, Any]] = []
     saved_screening_doc = load_saved_screening()
     eligible_count = 0
@@ -285,7 +344,7 @@ def get_g3_desk(
             or code
         )
 
-        # 实时行情 + 实时 RSI（仅对可做T或有周期数据的标的拉取分钟K，减少外部请求）
+        # 实时行情 + 实时 RSI（来自前置批量并发结果）
         q = dict(live_quotes.get(code) or {})
         if not q.get("price") and h_list:
             fallback_px = h_list[0].get("current_price")
@@ -293,7 +352,7 @@ def get_g3_desk(
                 q["price"] = float(fallback_px)
                 q["source"] = "holding_snapshot"
         if t_lot_cap >= 100 or r_info:
-            rsi_snap = fetch_live_rsi_snapshot(code, q.get("price"), force_refresh=refresh_quotes)
+            rsi_snap = rsi_map.get(code) or {}
             q["rsi5m"] = rsi_snap.get("rsi5m")
             q["rsi15m"] = rsi_snap.get("rsi15m")
             if not q.get("vwap") and rsi_snap.get("vwap_5m"):
@@ -400,17 +459,6 @@ def get_g3_desk(
     except Exception:
         strategy_allocation = None
 
-    # 策略挖掘工坊闭环联动：根据当前大盘五态周期自动路由生效策略与实时选股买卖计划
-    try:
-        strategy_router = scan_active_strategy_signals(
-            current_regime=str(market_regime_gate.get("regime") or "balanced"),
-            regime_label=str(market_regime_gate.get("regime_label") or ""),
-            allow_new_mainwave=bool(market_regime_gate.get("allow_new_mainwave")),
-            target_position_cap_pct=float(market_regime_gate.get("target_position_cap_pct") or 0.0),
-        )
-    except Exception:
-        strategy_router = None
-
     accounts_summary_obj = {
         "total_assets": merged_funds.get("total_assets"),
         "total_market_value": merged_funds.get("market_value"),
@@ -421,20 +469,6 @@ def get_g3_desk(
         "bridge_online": bridge_info.get("online"),
         "updated_at": bridge_info.get("heartbeat_at"),
     }
-
-    # 编译唯一权威的「今日交易执行指令单」（大盘环境 → 生效策略 → 交易模式 → 持仓逐股处置 → 候选储备与红灯排雷）
-    try:
-        _mw_merged = merge_screening_into_mainwave(
-            scan_mainwave_daily(force_refresh=False),
-            market_gate=market_regime_gate,
-        )
-    except Exception:
-        _mw_merged = {}
-
-    try:
-        panic_rebound_signal = evaluate_panic_rebound_signal(market_gate=market_regime_gate)
-    except Exception:
-        panic_rebound_signal = None
 
     trading_command = compile_daily_trading_command(
         market_gate=market_regime_gate,

@@ -11,11 +11,13 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Optional
 
 from services.trading.t_daily_plan import fetch_batch_live_quotes
+from utils.kline.market_warehouse import clickhouse_client
 
 BJ_TZ = timezone(timedelta(hours=8))
 
@@ -32,30 +34,54 @@ PANIC_ETF_TARGETS = (
 )
 
 _IDX_CHG_CACHE: dict[str, Any] = {"expires_at": 0.0, "payload": None}
+_IDX_CHG_TTL_SEC = 300.0
+_IDX_CHG_LOCK = threading.Lock()
+_IDX_CHG_REFRESHING = False
 
 
-def _fetch_latest_pair_index_chg_from_ch() -> dict[str, dict[str, Any]]:
-    """只读 ClickHouse 拉取 399006.SZ 与 000852.SH 最近两日收盘价计算真实涨跌幅。fail-safe。"""
-    now_mono = time.monotonic()
-    if _IDX_CHG_CACHE["payload"] is not None and now_mono < float(_IDX_CHG_CACHE["expires_at"]):
-        return _IDX_CHG_CACHE["payload"]
-
+def _query_pair_index_chg_rows() -> dict[str, dict[str, Any]]:
+    """直连 ClickHouse 获取 399006.SZ 与 000852.SH 最新两日收盘并计算涨跌幅。"""
     out: dict[str, dict[str, Any]] = {}
+    target_codes = ("399006.SZ", "000852.SH")
+    client = None
+    own_client = False
     try:
-        import clickhouse_connect
-
-        client = clickhouse_connect.get_client(
-            host=os.getenv("AISTOCK_CLICKHOUSE_HOST", "127.0.0.1"),
-            port=int(os.getenv("AISTOCK_CLICKHOUSE_PORT", "8123")),
-            username=os.getenv("AISTOCK_CLICKHOUSE_USER", "default"),
-            password=os.getenv("AISTOCK_CLICKHOUSE_PASSWORD", ""),
-            database=os.getenv("AISTOCK_CLICKHOUSE_DATABASE", "stock"),
-            connect_timeout=5,
-            send_receive_timeout=10,
-        )
         try:
-            for code in ("399006.SZ", "000852.SH"):
-                res = client.query(
+            client = clickhouse_client()
+        except Exception:
+            import clickhouse_connect
+
+            client = clickhouse_connect.get_client(
+                host=os.getenv("AISTOCK_CLICKHOUSE_HOST", "127.0.0.1"),
+                port=int(os.getenv("AISTOCK_CLICKHOUSE_PORT", "8123")),
+                username=os.getenv("AISTOCK_CLICKHOUSE_USER", "default"),
+                password=os.getenv("AISTOCK_CLICKHOUSE_PASSWORD", ""),
+                database=os.getenv("AISTOCK_CLICKHOUSE_DATABASE", "stock"),
+                connect_timeout=5,
+                send_receive_timeout=10,
+            )
+            own_client = True
+
+        res = client.query(
+            """
+            SELECT code, toString(trade_date) AS d, close
+            FROM stock.kline_daily FINAL
+            WHERE code IN ('399006.SZ', '000852.SH')
+              AND close > 0
+              AND trade_date >= today() - 30
+            ORDER BY code ASC, trade_date DESC
+            LIMIT 2 BY code
+            """
+        )
+        grouped: dict[str, list[tuple[str, float]]] = {}
+        for row in res.result_rows or []:
+            grouped.setdefault(str(row[0]), []).append((str(row[1])[:10], float(row[2])))
+
+        for code in target_codes:
+            rows = grouped.get(code, [])
+            if len(rows) < 2:
+                # 若近 30 天内不足两条（如长假或历史环境），再回退单码无日期下界查询
+                fb = client.query(
                     """
                     SELECT toString(trade_date) AS d, close
                     FROM stock.kline_daily FINAL
@@ -65,19 +91,60 @@ def _fetch_latest_pair_index_chg_from_ch() -> dict[str, dict[str, Any]]:
                     """,
                     parameters={"c": code},
                 )
-                rows = res.result_rows or []
-                if len(rows) >= 2:
-                    c0 = float(rows[0][1])
-                    c1 = float(rows[1][1])
-                    chg = round((c0 / c1 - 1.0) * 100.0, 2) if c1 > 0 else None
-                    out[code] = {"date": str(rows[0][0])[:10], "close": round(c0, 2), "change_pct": chg}
-        finally:
-            client.close()
+                rows = [(str(r[0])[:10], float(r[1])) for r in (fb.result_rows or [])]
+            if len(rows) >= 2 and rows[1][1] > 0:
+                c0, c1 = rows[0][1], rows[1][1]
+                out[code] = {
+                    "date": rows[0][0],
+                    "close": round(c0, 2),
+                    "change_pct": round((c0 / c1 - 1.0) * 100.0, 2),
+                }
     except Exception:
         pass
+    finally:
+        if own_client and client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+    return out
 
-    _IDX_CHG_CACHE["payload"] = out
-    _IDX_CHG_CACHE["expires_at"] = now_mono + 120.0
+
+def _refresh_pair_index_chg_bg() -> None:
+    global _IDX_CHG_REFRESHING
+    try:
+        out = _query_pair_index_chg_rows()
+        if out:
+            with _IDX_CHG_LOCK:
+                _IDX_CHG_CACHE["payload"] = out
+                _IDX_CHG_CACHE["expires_at"] = time.monotonic() + _IDX_CHG_TTL_SEC
+    finally:
+        with _IDX_CHG_LOCK:
+            _IDX_CHG_REFRESHING = False
+
+
+def _fetch_latest_pair_index_chg_from_ch() -> dict[str, dict[str, Any]]:
+    """只读 ClickHouse 拉取 399006.SZ 与 000852.SH 最近两日收盘价计算真实涨跌幅（SWR 300s 缓存）。"""
+    global _IDX_CHG_REFRESHING
+    now_mono = time.monotonic()
+    with _IDX_CHG_LOCK:
+        cached = _IDX_CHG_CACHE.get("payload")
+        if cached is not None:
+            if now_mono < float(_IDX_CHG_CACHE.get("expires_at") or 0.0):
+                return cached
+            if not _IDX_CHG_REFRESHING:
+                _IDX_CHG_REFRESHING = True
+                threading.Thread(
+                    target=_refresh_pair_index_chg_bg,
+                    daemon=True,
+                    name="panic-rebound-idx-refresh",
+                ).start()
+            return cached
+
+    out = _query_pair_index_chg_rows()
+    with _IDX_CHG_LOCK:
+        _IDX_CHG_CACHE["payload"] = out
+        _IDX_CHG_CACHE["expires_at"] = time.monotonic() + _IDX_CHG_TTL_SEC
     return out
 
 

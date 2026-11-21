@@ -471,7 +471,7 @@ def _qt_snapshot_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:  # n
     }]
 
 
-def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
+def fetch_east_klines(code: str, klt: int, lmt: int = 120, *, timeout: float = 15.0) -> list[dict]:
     """东财 push2his 前复权分时K（含当日）：[{ts, open, close, volume(手), amount(元)}]。
 
     R40 起含 open（f52，影子做T虚拟成交次开价用）；既有消费方按 key 取值不受影响。
@@ -484,7 +484,7 @@ def fetch_east_klines(code: str, klt: int, lmt: int = 120) -> list[dict]:
     url = EAST_K_URL.format(secid=east_secid(code), klt=klt, lmt=lmt)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 502:
@@ -583,6 +583,7 @@ def cached_east_klines(
     now_ts: Optional[float] = None,
     ttl: float = KLT_CACHE_TTL_SEC,
     fetch: Optional[Callable[[str, int], list[dict]]] = None,
+    timeout: float = 15.0,
 ) -> list[dict]:
     """东财分时K TTL 缓存（R46 限频：同码同周期 ≤1 次/分钟）。
 
@@ -594,7 +595,10 @@ def cached_east_klines(
     hit = _klt_cache.get(key)
     if hit is not None and now_ts - hit[0] < ttl:
         return hit[1]
-    bars = (fetch or fetch_east_klines)(str(code), int(klt))
+    if fetch is not None:
+        bars = fetch(str(code), int(klt))
+    else:
+        bars = fetch_east_klines(str(code), int(klt), timeout=timeout)
     _klt_cache[key] = (now_ts, bars)
     return bars
 

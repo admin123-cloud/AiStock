@@ -13,9 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -31,6 +33,7 @@ RSI_CACHE_TTL_SEC = 45.0
 
 _qt_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _rsi_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_PLAN_CACHE_LOCK = threading.Lock()
 
 
 def _plan_store_dir() -> Path:
@@ -78,7 +81,7 @@ def fetch_batch_live_quotes(
     *,
     price_cache: Optional[Mapping[str, Any]] = None,
     force_refresh: bool = False,
-    timeout: float = 4.0,
+    timeout: float = 2.5,
 ) -> dict[str, dict[str, Any]]:
     """批量拉取实时行情（现价、昨收、今开、高低、涨跌幅、当日 VWAP）。fail-safe。"""
     codes6 = sorted({str(c).split(".")[0].zfill(6) for c in codes if c and str(c).strip()})
@@ -90,12 +93,13 @@ def fetch_batch_live_quotes(
     missing: list[str] = []
 
     if not force_refresh:
-        for c in codes6:
-            hit = _qt_cache.get(c)
-            if hit is not None and (now_ts - hit[0]) < QUOTE_CACHE_TTL_SEC:
-                out[c] = dict(hit[1])
-            else:
-                missing.append(c)
+        with _PLAN_CACHE_LOCK:
+            for c in codes6:
+                hit = _qt_cache.get(c)
+                if hit is not None and (now_ts - hit[0]) < QUOTE_CACHE_TTL_SEC:
+                    out[c] = dict(hit[1])
+                else:
+                    missing.append(c)
     else:
         missing = list(codes6)
 
@@ -149,7 +153,8 @@ def fetch_batch_live_quotes(
                         "quote_ts": ts_fmt,
                         "source": "tencent_qt",
                     }
-                    _qt_cache[code6] = (now_ts, q)
+                    with _PLAN_CACHE_LOCK:
+                        _qt_cache[code6] = (now_ts, q)
                     out[code6] = dict(q)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[t_daily_plan] 腾讯实时行情拉取失败，将降级使用缓存: %s", exc)
@@ -182,14 +187,16 @@ def fetch_live_rsi_snapshot(
     live_price: Optional[float] = None,
     *,
     force_refresh: bool = False,
+    timeout: float = 3.0,
 ) -> dict[str, Any]:
     """拉取单票实时 5m/15m RSI14 与当日 5m VWAP（带 45s 内存缓存，fail-safe）。"""
     code6 = str(code).split(".")[0].zfill(6)
     now_ts = time.time()
     if not force_refresh:
-        hit = _rsi_cache.get(code6)
-        if hit is not None and (now_ts - hit[0]) < RSI_CACHE_TTL_SEC:
-            return dict(hit[1])
+        with _PLAN_CACHE_LOCK:
+            hit = _rsi_cache.get(code6)
+            if hit is not None and (now_ts - hit[0]) < RSI_CACHE_TTL_SEC:
+                return dict(hit[1])
 
     result: dict[str, Any] = {
         "rsi5m": None,
@@ -199,7 +206,7 @@ def fetch_live_rsi_snapshot(
         "source": None,
     }
     try:
-        bars5 = tts.cached_east_klines(code6, 5, ttl=45.0)
+        bars5 = tts.cached_east_klines(code6, 5, ttl=45.0, timeout=timeout)
         if bars5:
             closes5 = [float(b["close"]) for b in bars5 if _safe_float(b.get("close")) is not None]
             if live_price and closes5:
@@ -214,7 +221,7 @@ def fetch_live_rsi_snapshot(
                 result["vwap_5m"] = round(vwap5, 3)
             result["source"] = "kline_5m"
 
-        bars15 = tts.cached_east_klines(code6, 15, ttl=90.0)
+        bars15 = tts.cached_east_klines(code6, 15, ttl=90.0, timeout=timeout)
         if bars15:
             closes15 = [float(b["close"]) for b in bars15 if _safe_float(b.get("close")) is not None]
             if live_price and closes15:
@@ -224,8 +231,41 @@ def fetch_live_rsi_snapshot(
     except Exception as exc:  # noqa: BLE001
         logger.debug("[t_daily_plan] %s 实时 RSI 拉取失败: %s", code6, exc)
 
-    _rsi_cache[code6] = (now_ts, result)
+    with _PLAN_CACHE_LOCK:
+        _rsi_cache[code6] = (now_ts, result)
     return dict(result)
+
+
+def fetch_batch_live_rsi_snapshots(
+    codes: Sequence[str],
+    live_price_map: Optional[Mapping[str, Optional[float]]] = None,
+    *,
+    force_refresh: bool = False,
+    timeout: float = 3.0,
+) -> dict[str, dict[str, Any]]:
+    """并发批量拉取多只标的实时 5m/15m RSI14 与当日 5m VWAP，避免串行放大网络延迟。"""
+    codes6 = sorted({str(c).split(".")[0].zfill(6) for c in codes if c and str(c).strip()})
+    if not codes6:
+        return {}
+    prices = live_price_map or {}
+    out: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(codes6)))) as executor:
+        futures = {
+            c: executor.submit(
+                fetch_live_rsi_snapshot,
+                c,
+                prices.get(c),
+                force_refresh=force_refresh,
+                timeout=timeout,
+            )
+            for c in codes6
+        }
+        for c, fut in futures.items():
+            try:
+                out[c] = fut.result()
+            except Exception:
+                out[c] = {"rsi5m": None, "rsi15m": None, "vwap_5m": None, "bar_ts": None, "source": None}
+    return out
 
 
 # ---------------------------------------------------------------------------

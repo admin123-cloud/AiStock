@@ -3,9 +3,11 @@
 """
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as dt_time, timedelta, timezone
 import json
 import os
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -61,6 +63,8 @@ _QMT_BRIDGE_UNREACHABLE_CACHE_SECONDS = 60.0
 # 参数分键）；缓存命中直接返回，避免每次轮询都重跑 date_counts 聚合与 QMT 桥探测。
 _MARKET_INDICES_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
 _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS = 45.0
+_MARKET_INDICES_CACHE_LOCK = threading.Lock()
+_MARKET_INDICES_REFRESHING: set[str] = set()
 # R20（2026-11-09，Owner 指令）：/market/sentiment 数据源改为 kline_daily 按需
 # 重算（停读 market_sentiment_snapshot 预计算快照——刷新调度器已停用，首页 date
 # 停在 2026-10-30），缓存分档：盘中（Asia/Shanghai 交易日 09:15~15:00）TTL=300s
@@ -1267,24 +1271,53 @@ def _compute_market_indices(code: Optional[str] = None):
         }
 
 
+def _refresh_market_indices_bg(code: Optional[str], cache_key: str) -> None:
+    try:
+        payload = _compute_market_indices(code)
+        if payload.get("indices"):
+            with _MARKET_INDICES_CACHE_LOCK:
+                _MARKET_INDICES_RESULT_CACHE[cache_key] = {
+                    "expires_at": time.monotonic() + _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS,
+                    "payload": payload,
+                }
+    except Exception as exc:
+        logger.warning("background market indices refresh failed: %s", exc)
+    finally:
+        with _MARKET_INDICES_CACHE_LOCK:
+            _MARKET_INDICES_REFRESHING.discard(cache_key)
+
+
 @router.get("/indices")
 def get_market_indices(code: Optional[str] = None):
     """获取主要指数数据，并返回关键指数健康状态。
 
     R13（2026-11-09）：进程内 TTL 结果缓存（45 秒，monotonic 时钟，按 code 参数
-    分键）；缓存命中直接返回，不重跑 date_counts 聚合与 QMT 桥探测。
+    分键）；已命中且过期时走 SWR 返回旧缓存并异步后台刷新，首次冷查同步计算。
     """
     cache_key = code or ""
     now = time.monotonic()
-    cached = _MARKET_INDICES_RESULT_CACHE.get(cache_key)
-    if cached is not None and now < float(cached.get("expires_at") or 0.0):
-        return cached["payload"]
+    with _MARKET_INDICES_CACHE_LOCK:
+        cached = _MARKET_INDICES_RESULT_CACHE.get(cache_key)
+        if cached is not None:
+            if now < float(cached.get("expires_at") or 0.0):
+                return cached["payload"]
+            if cache_key not in _MARKET_INDICES_REFRESHING:
+                _MARKET_INDICES_REFRESHING.add(cache_key)
+                threading.Thread(
+                    target=_refresh_market_indices_bg,
+                    args=(code, cache_key),
+                    daemon=True,
+                    name=f"indices-refresh-{cache_key or 'all'}",
+                ).start()
+            return cached["payload"]
+
     payload = _compute_market_indices(code)
     if payload.get("indices"):
-        _MARKET_INDICES_RESULT_CACHE[cache_key] = {
-            "expires_at": now + _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS,
-            "payload": payload,
-        }
+        with _MARKET_INDICES_CACHE_LOCK:
+            _MARKET_INDICES_RESULT_CACHE[cache_key] = {
+                "expires_at": time.monotonic() + _MARKET_INDICES_RESULT_CACHE_TTL_SECONDS,
+                "payload": payload,
+            }
     return payload
 
 
@@ -1823,6 +1856,24 @@ def _snapshot_cache_key() -> Optional[str]:
 # /market/indices 缓存同风格；error 载荷不缓存。
 _LIMIT_UP_LADDER_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
 _LIMIT_UP_LADDER_RESULT_CACHE_TTL_SECONDS = 60.0
+_LIMIT_UP_LADDER_CACHE_LOCK = threading.Lock()
+_LIMIT_UP_LADDER_REFRESHING: set[str] = set()
+
+
+def _refresh_limit_up_ladder_bg(min_streak: int, max_streak: int, history_days: int, cache_key: str) -> None:
+    try:
+        payload = _compute_limit_up_ladder(min_streak, max_streak, history_days)
+        if not (isinstance(payload, dict) and "error" in payload):
+            with _LIMIT_UP_LADDER_CACHE_LOCK:
+                _LIMIT_UP_LADDER_RESULT_CACHE[cache_key] = {
+                    "expires_at": time.monotonic() + _LIMIT_UP_LADDER_RESULT_CACHE_TTL_SECONDS,
+                    "payload": payload,
+                }
+    except Exception as exc:
+        logger.warning("background limit-up ladder refresh failed: %s", exc)
+    finally:
+        with _LIMIT_UP_LADDER_CACHE_LOCK:
+            _LIMIT_UP_LADDER_REFRESHING.discard(cache_key)
 
 
 @router.get("/limit-up-ladder")
@@ -1831,23 +1882,36 @@ def get_limit_up_ladder(
     max_streak: int = 7,
     history_days: int = 10,
 ):
-    """获取最新交易日连板天梯。"""
+    """获取最新交易日连板天梯（SWR 60s 缓存）。"""
     min_streak = max(1, min(int(min_streak), 20))
     max_streak = max(min_streak, min(int(max_streak), 20))
     history_days = max(1, min(int(history_days), 30))
 
     cache_key = f"{min_streak}|{max_streak}|{history_days}"
     now = time.monotonic()
-    cached = _LIMIT_UP_LADDER_RESULT_CACHE.get(cache_key)
-    if cached is not None and now < float(cached.get("expires_at") or 0.0):
-        return cached["payload"]
+    with _LIMIT_UP_LADDER_CACHE_LOCK:
+        cached = _LIMIT_UP_LADDER_RESULT_CACHE.get(cache_key)
+        if cached is not None:
+            if now < float(cached.get("expires_at") or 0.0):
+                return cached["payload"]
+            if cache_key not in _LIMIT_UP_LADDER_REFRESHING:
+                _LIMIT_UP_LADDER_REFRESHING.add(cache_key)
+                threading.Thread(
+                    target=_refresh_limit_up_ladder_bg,
+                    args=(min_streak, max_streak, history_days, cache_key),
+                    daemon=True,
+                    name=f"ladder-refresh-{cache_key}",
+                ).start()
+            return cached["payload"]
+
     payload = _compute_limit_up_ladder(min_streak, max_streak, history_days)
     if isinstance(payload, dict) and "error" in payload:
         return payload
-    _LIMIT_UP_LADDER_RESULT_CACHE[cache_key] = {
-        "expires_at": now + _LIMIT_UP_LADDER_RESULT_CACHE_TTL_SECONDS,
-        "payload": payload,
-    }
+    with _LIMIT_UP_LADDER_CACHE_LOCK:
+        _LIMIT_UP_LADDER_RESULT_CACHE[cache_key] = {
+            "expires_at": time.monotonic() + _LIMIT_UP_LADDER_RESULT_CACHE_TTL_SECONDS,
+            "payload": payload,
+        }
     return payload
 
 
@@ -2501,21 +2565,26 @@ def _compute_emotion_trend(days: int = 30, granularity: str = "daily"):
         if not window_dates or not range_start:
             return _empty_emotion_trend("数据库中没有情绪周期数据")
 
-        core_df = _emotion_core_aggregates(range_start, latest_date)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            fut_core = executor.submit(_emotion_core_aggregates, range_start, latest_date)
+            fut_yday = executor.submit(_emotion_yesterday_aggregates, range_start, latest_date)
+            fut_intra = executor.submit(_emotion_intraday_aggregates, range_start, latest_date, window_dates[0])
+            core_df = fut_core.result()
+            yday_df = fut_yday.result()
+            intra_df = fut_intra.result()
+
         if core_df is None or core_df.empty:
             return _empty_emotion_trend("数据库中没有情绪周期数据")
         core_map = {
             _date_text(v): row
             for v, row in zip(core_df["trade_date"].tolist(), core_df.to_dict("records"))
         }
-        yday_df = _emotion_yesterday_aggregates(range_start, latest_date)
         yday_map: Dict[str, Dict[str, Any]] = {}
         if yday_df is not None and not yday_df.empty:
             yday_map = {
                 _date_text(v): row
                 for v, row in zip(yday_df["trade_date"].tolist(), yday_df.to_dict("records"))
             }
-        intra_df = _emotion_intraday_aggregates(range_start, latest_date, window_dates[0])
         intra_map: Dict[str, float] = {}
         if intra_df is not None and not intra_df.empty:
             intra_map = {

@@ -43,8 +43,8 @@ class DatabaseManager:
         if db_type != "clickhouse":
             raise RuntimeError(f"Hard-cut mode: only ClickHouse is allowed, current database.type={db_type}")
         db_url = self._build_clickhouse_url(db_config)
-        default_pool_size = 1 if db_type == "clickhouse" else 20
-        default_max_overflow = 0 if db_type == "clickhouse" else 10
+        default_pool_size = 12 if db_type == "clickhouse" else 20
+        default_max_overflow = 12 if db_type == "clickhouse" else 10
 
         self._engine = create_engine(
             db_url,

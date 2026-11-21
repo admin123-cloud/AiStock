@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from time import monotonic
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -16,6 +16,7 @@ from utils.paths import runtime_path
 router = APIRouter(prefix='/operations', tags=['operations'])
 _cache = {}
 _cache_lock = Lock()
+_calendar_refreshing: set[int] = set()
 
 
 class DataReviewAction(BaseModel):
@@ -253,20 +254,55 @@ def daily():
     return mainwave_daily(runtime_path())
 
 
+def _refresh_calendar_bg(days: int) -> None:
+    try:
+        from utils.market_warehouse import clickhouse_client
+        result = build_delivery_calendar(
+            clickhouse_client(),
+            days=days,
+            sector_universe=read_json(runtime_path('operations', 'sector_universe.json')),
+        )
+        with _cache_lock:
+            _cache[days] = (monotonic(), result)
+    except Exception:
+        pass
+    finally:
+        with _cache_lock:
+            _calendar_refreshing.discard(days)
+
+
 @router.get('/data-calendar')
 def data_calendar(days: int = Query(30, ge=1, le=60)):
     from services.operations.health import read_snapshot
-    published = read_snapshot(runtime_path('operations','delivery_calendar.json'))
+    published = read_snapshot(runtime_path('operations', 'delivery_calendar.json'))
     if published.get('publisher_status') == 'healthy' and len(published.get('dates', [])) >= days:
-        return {**published, 'dates':published['dates'][-days:],
-                'datasets':[{**row,'cells':row['cells'][-days:]} for row in published.get('datasets', [])]}
+        return {**published, 'dates': published['dates'][-days:],
+                'datasets': [{**row, 'cells': row['cells'][-days:]} for row in published.get('datasets', [])]}
     with _cache_lock:
-        if days in _cache and monotonic()-_cache[days][0] < 300:
-            return _cache[days][1]
-        try:
-            from utils.market_warehouse import clickhouse_client
-            result = build_delivery_calendar(clickhouse_client(), days=days, sector_universe=read_json(runtime_path('operations','sector_universe.json')))
-        except Exception as exc:
-            raise HTTPException(503, '数据验收暂不可用，请检查交易日历、证券池和业务豁免表；未将查询失败解释为零缺口。') from exc
+        entry = _cache.get(days)
+        if entry is not None:
+            cached_at, cached_result = entry
+            if monotonic() - cached_at < 300:
+                return cached_result
+            if days not in _calendar_refreshing:
+                _calendar_refreshing.add(days)
+                Thread(
+                    target=_refresh_calendar_bg,
+                    args=(days,),
+                    daemon=True,
+                    name=f'data-calendar-refresh-{days}',
+                ).start()
+            return cached_result
+
+    try:
+        from utils.market_warehouse import clickhouse_client
+        result = build_delivery_calendar(
+            clickhouse_client(),
+            days=days,
+            sector_universe=read_json(runtime_path('operations', 'sector_universe.json')),
+        )
+    except Exception as exc:
+        raise HTTPException(503, '数据验收暂不可用，请检查交易日历、证券池和业务豁免表；未将查询失败解释为零缺口。') from exc
+    with _cache_lock:
         _cache[days] = (monotonic(), result)
-        return result
+    return result
