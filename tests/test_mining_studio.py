@@ -220,3 +220,30 @@ def test_panic_rebound_monitor_armed_and_triggered() -> None:
     assert sig_go["etf_plans"][0]["take_profit_price"] == round(2.100 * 1.12, 3)
 
 
+def test_ar3_dual_core_config_hot_switch(tmp_path: Path, monkeypatch) -> None:
+    import pytest
+    import services.mining.ar3_dual_core_live as ar3
+
+    cfg_file = tmp_path / "ar3_dual_core_config.json"
+    monkeypatch.setattr(ar3, "_config_path", lambda: cfg_file)
+    ar3.invalidate_ar3_radar_cache()
+
+    # 1. 默认应为 50% AB混合 + #01 RegimeFocus
+    d0 = ar3.load_ar3_config()
+    assert d0["active_stock_mode"] == "ab_blend"
+    assert d0["etf_core_mode"] == "regime_focus"
+    assert d0["stock_budget_cap_pct"] == 50
+
+    # 2. 热切换至 F3A 回踩 + #02 分散 + 40% 仓位上限
+    d1 = ar3.save_ar3_config(active_stock_mode="f3a_pullback", etf_core_mode="risk_adj_mom", stock_budget_cap_pct=40)
+    assert d1["active_stock_mode"] == "f3a_pullback"
+    assert d1["etf_core_mode"] == "risk_adj_mom"
+    assert d1["stock_budget_cap_pct"] == 40
+    assert ar3.load_ar3_config()["active_stock_mode"] == "f3a_pullback"
+
+    # 3. 非法模式应抛 ValueError
+    with pytest.raises(ValueError):
+        ar3.save_ar3_config(active_stock_mode="invalid_mode")
+
+
+

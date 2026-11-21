@@ -4,6 +4,7 @@ import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/catalyst/table'
 import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
+import AR3DualCorePanel from '@/views/g3/AR3DualCorePanel'
 import {
   deleteG3TExecution,
   dispatchG3PrefillOrder,
@@ -1398,6 +1399,37 @@ export default function G3Desk() {
           </Card>
         )
       })()}
+
+      {/* 0.1 AR3 v3.0 终极双核作战雷达（50% AB混合 F3A+F2A + #01 跨资产 ETF 轮动 + 20日赚钱效应热切换） */}
+      <AR3DualCorePanel
+        onPrefillOrder={(p) => {
+          setPrefillRes(null)
+          setPrefillExecStatus(null)
+          setExecForm({
+            open: true,
+            code: p.code,
+            name: p.name,
+            side: p.side,
+            order_type: p.order_type,
+            price: p.price,
+            shares: p.shares,
+            account_label: '',
+            note: p.note,
+          })
+        }}
+        onAddWatchlist={(code, name) => {
+          void (async () => {
+            try {
+              await upsertG3Watchlist({ add: [{ code, qty: 0 }] })
+              setMsg(`已将 ${name}(${code}) 加入 G3 观察池`)
+              await load(false)
+            } catch (e) {
+              const err = e as { message?: string }
+              setError(err.message || `加入观察池失败：${code}`)
+            }
+          })()
+        }}
+      />
 
       {/* 0. Phase 1A：大盘择时总闸门 × R51 仓位水位 */}
       {data?.market_regime_gate && (() => {

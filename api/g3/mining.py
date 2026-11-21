@@ -10,6 +10,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from services.mining import MINING_TEMPLATES
+from services.mining.ar3_dual_core_live import (
+    build_ar3_dual_core_radar,
+    invalidate_ar3_radar_cache,
+    save_ar3_config,
+)
 from services.mining.backtest_benchmark import build_ar1_historical_backtest_report
 from services.mining.backtest_engine import RuleSpec
 from services.mining.contract_exporter import export_candidate_contract
@@ -285,3 +290,84 @@ def post_rebuild_mining_backtest_report() -> dict[str, Any]:
         return build_ar1_historical_backtest_report(force_rebuild=True)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"重跑历史回测失败: {exc}") from exc
+
+
+def _resolve_live_gate_and_panic() -> tuple[dict[str, Any], dict[str, Any]]:
+    from api.g3.desk import get_g3_market_gate
+    from services.mining.panic_rebound_monitor import evaluate_panic_rebound_signal
+
+    try:
+        gate = get_g3_market_gate()
+    except Exception:
+        gate = {"regime": "balanced", "regime_label": "横盘平衡", "allow_new_mainwave": False, "target_position_cap_pct": 35.0}
+    try:
+        panic = evaluate_panic_rebound_signal(market_gate=gate)
+    except Exception:
+        panic = {"armed": False, "triggered": False}
+    return gate, panic
+
+
+@router.get("/ar3/radar")
+def get_ar3_dual_core_radar(force_refresh: bool = False) -> dict[str, Any]:
+    """返回 AR3 v3.0 终极双核实时作战雷达（#01/#02 跨资产 ETF + F2A/F3A 双选股雷达 + 20日赚钱效应）。"""
+    gate, panic = _resolve_live_gate_and_panic()
+    try:
+        return build_ar3_dual_core_radar(
+            market_gate=gate,
+            panic_signal=panic,
+            force_refresh=force_refresh,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"加载 AR3 v3.0 双核雷达失败: {exc}") from exc
+
+
+class AR3ConfigUpdateRequest(BaseModel):
+    active_stock_mode: str | None = None
+    etf_core_mode: str | None = None
+    stock_budget_cap_pct: int | None = Field(default=None, ge=20, le=60)
+    max_slots: int | None = Field(default=None, ge=2, le=6)
+    note: str | None = None
+
+
+@router.post("/ar3/config")
+def post_ar3_dual_core_config(req: AR3ConfigUpdateRequest) -> dict[str, Any]:
+    """Scoped-write：随行情赚钱效应一键热切换 AR3 v3.0 个股主引擎（AB混合/F2A趋势/F3A回踩）与 ETF 核心。"""
+    try:
+        cfg = save_ar3_config(
+            active_stock_mode=req.active_stock_mode,
+            etf_core_mode=req.etf_core_mode,
+            stock_budget_cap_pct=req.stock_budget_cap_pct,
+            max_slots=req.max_slots,
+            note=req.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    gate, panic = _resolve_live_gate_and_panic()
+    radar = build_ar3_dual_core_radar(market_gate=gate, panic_signal=panic, force_refresh=True)
+    return {"status": "ok", "config": cfg, "radar": radar}
+
+
+@router.post("/ar3/sync")
+def post_ar3_sync_data(sync_etf: bool = True, sync_financials: bool = False) -> dict[str, Any]:
+    """Scoped-write：手动刷新 ClickHouse 独立表（跨资产 ETF 日线；可选全量刷新财报/预告/分红）并重算雷达。"""
+    summary: dict[str, Any] = {}
+    try:
+        if sync_etf:
+            from scripts.sync_cross_asset_etf_daily import sync_all_etfs
+            summary["etf"] = sync_all_etfs()
+        if sync_financials:
+            from scripts.sync_financial_disclosures import ensure_tables, sync_dividends, sync_express_reports, sync_forecasts, sync_official_reports
+            from datetime import datetime, timedelta, timezone
+            ensure_tables()
+            now_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+            summary["official"] = sync_official_reports(now_str)
+            summary["express"] = sync_express_reports(now_str)
+            summary["forecast"] = sync_forecasts(now_str)
+            summary["dividends"] = sync_dividends(now_str)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"同步 AR3 独立数据失败: {exc}") from exc
+
+    invalidate_ar3_radar_cache()
+    gate, panic = _resolve_live_gate_and_panic()
+    radar = build_ar3_dual_core_radar(market_gate=gate, panic_signal=panic, force_refresh=True)
+    return {"status": "ok", "sync": summary, "radar": radar}

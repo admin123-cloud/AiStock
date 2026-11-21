@@ -1248,6 +1248,8 @@ export interface G3BacktestCurvePoint {
   lowvol: number
   panic_etf: number
   retired_mw04: number
+  ar3_dual_ab?: number
+  ar3_etf01?: number
 }
 
 export interface G3HistoricalBacktestReport {
@@ -1276,3 +1278,138 @@ export const getG3BacktestReport = () =>
 
 export const rebuildG3BacktestReport = () =>
   request.post<unknown, G3HistoricalBacktestReport>('/g3/mining/backtest-report/rebuild', {}, { timeout: 180000 })
+
+// ---------------------------------------------------------------------------
+// AR3 v3.0 终极双核实时雷达（50% AB混合 F3A+F2A + #01/#02 跨资产 ETF）
+// ---------------------------------------------------------------------------
+
+export interface G3AR3Config {
+  active_stock_mode: 'ab_blend' | 'f2a_trend' | 'f3a_pullback'
+  etf_core_mode: 'regime_focus' | 'risk_adj_mom'
+  stock_budget_cap_pct: number
+  max_slots: number
+  updated_at?: string | null
+  note?: string
+}
+
+export interface G3AR3EtfItem {
+  code: string
+  ts_code: string
+  name: string
+  asset_class: string
+  asset_class_label: string
+  trade_date: string
+  close: number
+  ret_1d_pct: number
+  ret_10d_pct: number
+  ret_20d_pct: number
+  ma20: number
+  above_ma20: boolean
+  vol_20d_pct: number
+  risk_adj_mom: number
+  is_qdii: boolean
+  eligible: boolean
+  basket_weight_pct?: number
+  account_weight_pct?: number
+  reason?: string
+  qdii_notice?: string | null
+}
+
+export interface G3AR3StockCandidate {
+  code: string
+  ts_code: string
+  name: string
+  industry: string
+  source_engine: 'F2A' | 'F3A' | 'BOTH' | string
+  source_label: string
+  close: number
+  stop_loss_price: number
+  ret_1d_pct: number
+  ret_20d_pct: number
+  rs_20d_pct: number
+  amt_20d_yi: number
+  ma10_bias_pct: number
+  vol_ratio_20d: number
+  notice_date: string
+  report_date: string
+  net_profit_yoy_pct?: number | null
+  revenue_yoy_pct?: number | null
+  roe_pct?: number | null
+  score: number
+  industry_duplicate: boolean
+  slot_rank?: number | null
+  suggested_weight_pct: number
+}
+
+export interface G3AR3MoneyEffectStats {
+  samples: number
+  active_days: number
+  win_rate_pct?: number | null
+  avg_5d_ret_pct?: number | null
+  median_5d_ret_pct?: number | null
+}
+
+export interface G3AR3DualCoreRadarResponse {
+  version: string
+  generated_at: string
+  regime: string
+  is_offensive: boolean
+  config: G3AR3Config
+  stock_mode_options: Array<{ id: G3AR3Config['active_stock_mode']; label: string; short_label: string; desc: string }>
+  etf_mode_options: Array<{ id: G3AR3Config['etf_core_mode']; label: string; short_label: string; desc: string }>
+  evidence: Record<string, { cum_ret_pct: number; ann_ret_pct: number; max_dd_pct: number; sharpe: number; calmar: number; oos_pct: number }>
+  etf_radar: {
+    available: boolean
+    error?: string
+    latest_date?: string | null
+    etf_core_mode?: string
+    etf_core_label?: string
+    etf_total_budget_pct?: number
+    stock_budget_active_pct?: number
+    panic_triggered?: boolean
+    headline?: string
+    targets: G3AR3EtfItem[]
+    universe: G3AR3EtfItem[]
+  }
+  stock_radar: {
+    available: boolean
+    error?: string
+    latest_date?: string
+    is_offensive?: boolean
+    stock_budget_active_pct?: number
+    slot_weight_pct?: number
+    max_slots?: number
+    f2a_total_hits?: number
+    f3a_total_hits?: number
+    exec_queue?: G3AR3StockCandidate[]
+    f2a_candidates?: G3AR3StockCandidate[]
+    f3a_candidates?: G3AR3StockCandidate[]
+    money_effect_20d?: {
+      window: string
+      f2a: G3AR3MoneyEffectStats
+      f3a: G3AR3MoneyEffectStats
+      suggested_mode: G3AR3Config['active_stock_mode']
+      headline: string
+    }
+  }
+}
+
+export const getG3AR3Radar = (forceRefresh = false) =>
+  request.get<unknown, G3AR3DualCoreRadarResponse>('/g3/mining/ar3/radar', {
+    params: forceRefresh ? { force_refresh: true } : undefined,
+    timeout: 60000,
+  })
+
+export const updateG3AR3Config = (payload: Partial<G3AR3Config>) =>
+  request.post<unknown, { status: string; config: G3AR3Config; radar: G3AR3DualCoreRadarResponse }>(
+    '/g3/mining/ar3/config',
+    payload,
+    { timeout: 60000 }
+  )
+
+export const syncG3AR3Data = (payload?: { sync_etf?: boolean; sync_financials?: boolean }) =>
+  request.post<unknown, { status: string; sync: Record<string, unknown>; radar: G3AR3DualCoreRadarResponse }>(
+    '/g3/mining/ar3/sync',
+    null,
+    { params: payload, timeout: 180000 }
+  )

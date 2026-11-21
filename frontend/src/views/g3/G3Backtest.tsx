@@ -17,16 +17,18 @@ const fmtSigned = (v?: number | null, digits = 2, suffix = '%'): string => {
 }
 
 const SERIES_CFG: Array<{
-  key: keyof Pick<G3BacktestCurvePoint, 'core_sat_aw' | 'pure_etf_aw' | 'lowvol' | 'panic_etf' | 'hs300' | 'retired_mw04'>
+  key: keyof Pick<G3BacktestCurvePoint, 'ar3_dual_ab' | 'ar3_etf01' | 'core_sat_aw' | 'pure_etf_aw' | 'lowvol' | 'panic_etf' | 'hs300' | 'retired_mw04'>
   label: string
   color: string
   width: number
   dashed?: boolean
 }> = [
-  { key: 'core_sat_aw', label: 'AR1 v2.1 核心卫星全天候(单账户零杠杆)', color: '#10b981', width: 2.6 },
-  { key: 'pure_etf_aw', label: 'AR1 v2.1 纯ETF全天候(零生存者偏差)', color: '#38bdf8', width: 2.2 },
-  { key: 'lowvol', label: 'AR1 机构低波慢牛个股(进攻期)', color: '#a78bfa', width: 1.6 },
-  { key: 'panic_etf', label: 'AR2 冰点企稳反抽ETF(冰点期)', color: '#fbbf24', width: 1.6 },
+  { key: 'ar3_dual_ab', label: '★ AR3 v3.0 终极双核·全能卡玛王(50% AB+#01)', color: '#f59e0b', width: 3.0 },
+  { key: 'ar3_etf01', label: 'AR3 #01 跨资产全天候ETF(RegimeFocus)', color: '#22d3ee', width: 2.2 },
+  { key: 'core_sat_aw', label: 'AR1 v2.1 核心卫星全天候(单账户零杠杆)', color: '#10b981', width: 2.0 },
+  { key: 'pure_etf_aw', label: 'AR1 v2.1 纯ETF全天候(零生存者偏差)', color: '#38bdf8', width: 1.6 },
+  { key: 'lowvol', label: 'AR1 机构低波慢牛个股(进攻期)', color: '#a78bfa', width: 1.4 },
+  { key: 'panic_etf', label: 'AR2 冰点企稳反抽ETF(冰点期)', color: '#eab308', width: 1.3, dashed: true },
   { key: 'hs300', label: '沪深300 满仓基准', color: '#9ca3af', width: 1.6, dashed: true },
   { key: 'retired_mw04', label: '已淘汰对照组(旧追高5日死止盈)', color: '#ef4444', width: 1.4, dashed: true },
 ]
@@ -123,8 +125,12 @@ function BacktestNavChart({
 
         {/* 多策略净值折线 */}
         {SERIES_CFG.map((s) => {
-          const dStr = points
-            .map((p, idx) => `${idx === 0 ? 'M' : 'L'}${xOf(idx).toFixed(1)},${yOf(Number(p[s.key])).toFixed(1)}`)
+          const validPts = points
+            .map((p, idx) => ({ idx, val: Number(p[s.key]) }))
+            .filter((x) => Number.isFinite(x.val))
+          if (validPts.length < 2) return null
+          const dStr = validPts
+            .map((pt, j) => `${j === 0 ? 'M' : 'L'}${xOf(pt.idx).toFixed(1)},${yOf(pt.val).toFixed(1)}`)
             .join(' ')
           return (
             <path
