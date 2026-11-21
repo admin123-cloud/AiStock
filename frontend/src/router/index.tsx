@@ -96,32 +96,32 @@ export const routes: AppRoute[] = [
   page(
     '/g3/desk',
     'G3Desk',
-    { title: 'G3 做T实战台', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 1, navLabel: '做T实战台' },
+    { title: 'G3 实战作战台', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 1, navLabel: '实战作战台' },
     () => import('@/views/g3/G3Desk')
   ),
   page(
     '/g3/review',
     'G3Review',
-    { title: 'G3 复盘与影子台账', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 2, navLabel: '做T复盘' },
+    { title: 'G3 复盘与收益归因', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 2, navLabel: '复盘与归因' },
     () => import('@/views/g3/G3Review')
   ),
   page(
     '/g3/mainwave',
     'G3MainwaveDaily',
-    { title: '主升浪每日选股池', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 3, navLabel: '主升每日选股' },
+    { title: 'G3 主升选股与AI排雷', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 3, navLabel: '主升选股排雷' },
     () => import('@/views/g3/MainwaveDaily')
   ),
   page(
     '/g3/settings',
     'G3Settings',
-    { title: 'G3 策略合约与风控', group: 'gen3', groupLabel: 'G3第三代策略', groupOrder: 2.7, navOrder: 4, navLabel: '策略与风控' },
+    { title: 'G3 策略矩阵与风控', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 4, navLabel: '策略矩阵风控' },
     () => import('@/views/g3/G3Settings')
   ),
-  // 兼容旧书签路径，自动落入新做T实战台
+  // 兼容旧书签路径，自动落入实战作战台
   page(
     '/gen3/state-alpha',
     'Gen3LegacyRedirect',
-    { title: 'G3 做T实战台', group: 'gen3', hiddenInNav: true },
+    { title: 'G3 实战作战台', group: 'gen3', hiddenInNav: true },
     () => import('@/views/g3/G3Desk')
   ),
   // 兼容旧 /data-stats 书签，自动落入统一数据健康与监控页
