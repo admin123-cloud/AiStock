@@ -592,6 +592,7 @@ export interface G3DeskResponse {
       action_route: string
     }>
   } | null
+  strategy_router?: G3LiveStrategyRouter | null
   premarket_brief?: G3PremarketBrief | null
   prefill_bridge?: G3PrefillBridgeStatus
   fill_sync_meta?: {
@@ -1015,3 +1016,77 @@ export const runG3MiningExperiment = (payload: {
 
 export const exportG3MiningContract = (payload: { run_id: string; rule_id: string }) =>
   request.post<unknown, { status: string; strategy_id: string; path: string }>('/g3/mining/export-contract', payload)
+
+export interface G3StrategyRouterPick {
+  code: string
+  code_full: string
+  name: string
+  industry: string
+  ref_price: number
+  stop_loss_price: number
+  take_profit_price: number
+  hold_days: number
+  suggested_slot_pct: number
+  ret_1d_pct: number
+  ret_5d_pct: number
+  rs_20d_vs_hs300: number
+  industry_above_ma20_pct: number
+  rank_metric_name: string
+  rank_metric_val?: number | null
+  ai_risk_light: 'green' | 'yellow' | 'red' | 'unknown' | string
+  ai_blocked: boolean
+  ai_thesis: string
+}
+
+export interface G3LiveStrategyRouter {
+  schema: string
+  as_of: string
+  current_regime: string
+  regime_label: string
+  allow_new_mainwave: boolean
+  target_position_cap_pct: number
+  active_strategy_id: string
+  active_strategy_name: string
+  mode: 'cash_defense' | 'active_strategy' | string
+  strategy_thesis: string
+  all_gates_passed?: boolean
+  mining_score?: number | null
+  readable_conditions: string[]
+  exit_plan?: {
+    hold_days: number
+    stop_loss_pct: number
+    take_profit_pct: number
+  } | null
+  data_date?: string | null
+  matched_total: number
+  picks: G3StrategyRouterPick[]
+  action_hint: string
+  routes: Record<string, string>
+  available_contracts: Array<{
+    strategy_id: string
+    display_name: string
+    all_gates_passed: boolean
+    mining_score?: number | null
+    target_regimes: string[]
+  }>
+}
+
+export interface G3RegimeRouterResponse {
+  router_config: {
+    schema: string
+    updated_at?: string | null
+    routes: Record<string, string>
+    regimes: Array<{ regime: string; label: string }>
+    available_contracts: G3LiveStrategyRouter['available_contracts']
+  }
+  live_signal: G3LiveStrategyRouter
+}
+
+export const getG3MiningRouter = () =>
+  request.get<unknown, G3RegimeRouterResponse>('/g3/mining/router', { timeout: 30000 })
+
+export const bindG3MiningRouter = (payload: { regime: string; strategy_id: string }) =>
+  request.post<unknown, { status: string; router_config: G3RegimeRouterResponse['router_config'] }>(
+    '/g3/mining/router/bind',
+    payload
+  )

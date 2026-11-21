@@ -9,6 +9,7 @@ import pandas as pd
 
 from services.mining.backtest_engine import RuleSpec, evaluate_rule, simulate_trade_returns, split_trade_dates
 from services.mining.contract_exporter import export_candidate_contract
+from services.mining.live_router import load_regime_router_config, scan_active_strategy_signals, update_regime_route
 from services.mining.quality_gates import evaluate_mining_quality_gates
 
 
@@ -125,3 +126,57 @@ def test_limit_down_delays_exit() -> None:
     assert int(days[0]) == 3
     # 买入 10.0 -> 第 3 天开盘 8.5 成交 = -15% 再扣 0.26% 摩擦
     assert abs(float(rets[0]) - (-15.26)) < 0.05
+
+
+def test_regime_router_bind_and_live_scan(tmp_path: Path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    panel, bench = _make_synthetic_panel(n_days=90)
+    sp = split_trade_dates(bench["trade_date"].tolist())
+    rule = RuleSpec(
+        rule_id="router_test_champ",
+        name="路由测试冠军",
+        template_id="mainwave_offense",
+        target_regimes=["offensive"],
+        entry_conditions=[{"feature": "ma_bull_align", "op": "==", "value": 1.0}],
+        exit_policy={"hold_days": 5, "stop_loss_pct": -0.07, "take_profit_pct": 0.15},
+    )
+    ev = evaluate_rule(panel, bench, rule, splits=sp)
+    gate = evaluate_mining_quality_gates(ev, min_oos_trades=10)
+    c_dir = tmp_path / "contracts"
+    exp = export_candidate_contract({**ev, "quality_gates": gate}, run_id="r1", base_dir=c_dir)
+    sid = exp["strategy_id"]
+
+    # 默认防守周期为 cash_defense
+    cfg0 = load_regime_router_config(base_dir=c_dir)
+    assert cfg0["routes"]["defensive"] == "cash_defense"
+
+    # 绑定 offensive 到冠军合约
+    cfg1 = update_regime_route("offensive", sid, base_dir=c_dir)
+    assert cfg1["routes"]["offensive"] == sid
+
+    # 准备最新缓存截面并执行实时选股扫描
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    panel["close"] = 10.0
+    panel["ret_1d_pct"] = 2.0
+    panel["ret_5d_pct"] = 5.0
+    panel["industry_above_ma20_pct"] = 80.0
+    pq.write_table(pa.Table.from_pandas(panel, preserve_index=False), cache_dir / "panel_test.parquet")
+
+    sig = scan_active_strategy_signals(
+        current_regime="offensive",
+        regime_label="主升进攻",
+        allow_new_mainwave=True,
+        target_position_cap_pct=75.0,
+        contracts_dir=c_dir,
+        cache_dir=cache_dir,
+    )
+    assert sig["mode"] == "active_strategy"
+    assert sig["active_strategy_id"] == sid
+    assert sig["matched_total"] == 3
+    assert len(sig["picks"]) == 3
+    assert sig["picks"][0]["stop_loss_price"] == 9.3
+    assert sig["picks"][0]["take_profit_price"] == 11.5
+

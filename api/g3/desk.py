@@ -26,6 +26,7 @@ from services.g3.premarket_brief import (
     push_premarket_brief_wechat,
 )
 from services.g3.strategy_matrix import build_strategy_matrix
+from services.mining.live_router import scan_active_strategy_signals
 from services.trading.holding_t_watchlist import (
     read_watchlist,
     sync_watchlist_from_ths,
@@ -397,6 +398,17 @@ def get_g3_desk(
     except Exception:
         strategy_allocation = None
 
+    # 策略挖掘工坊闭环联动：根据当前大盘五态周期自动路由生效策略与实时选股买卖计划
+    try:
+        strategy_router = scan_active_strategy_signals(
+            current_regime=str(market_regime_gate.get("regime") or "balanced"),
+            regime_label=str(market_regime_gate.get("regime_label") or ""),
+            allow_new_mainwave=bool(market_regime_gate.get("allow_new_mainwave")),
+            target_position_cap_pct=float(market_regime_gate.get("target_position_cap_pct") or 0.0),
+        )
+    except Exception:
+        strategy_router = None
+
     return {
         "as_of": now_bj.isoformat(timespec="seconds"),
         "today": today_str,
@@ -410,6 +422,7 @@ def get_g3_desk(
         "market_directive": market_directive,
         "market_regime_gate": market_regime_gate,
         "strategy_allocation": strategy_allocation,
+        "strategy_router": strategy_router,
         "premarket_brief": load_latest_premarket_brief(today_str),
         "prefill_bridge": get_prefill_bridge_status(),
         "fill_sync_meta": {

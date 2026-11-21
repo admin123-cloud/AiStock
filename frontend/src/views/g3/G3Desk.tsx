@@ -1256,6 +1256,139 @@ export default function G3Desk() {
         )
       })()}
 
+      {/* 0.35 周期自适应策略路由（挖掘进化策略 → 今日选股与买卖预填闭环） */}
+      {data?.strategy_router && (
+        <Card
+          className={
+            data.strategy_router.mode === 'cash_defense'
+              ? 'border-amber-500/35 bg-amber-950/10'
+              : 'border-emerald-500/40 bg-emerald-950/10'
+          }
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-white">
+                周期自适应策略路由 · 今日生效策略与买卖计划
+              </span>
+              <Badge color="blue">周期：{data.strategy_router.regime_label}</Badge>
+              <Badge color={data.strategy_router.mode === 'cash_defense' ? 'amber' : 'emerald'}>
+                {data.strategy_router.active_strategy_name}
+              </Badge>
+              {data.strategy_router.exit_plan && (
+                <span className="font-mono text-xs text-zinc-400">
+                  纪律：持{data.strategy_router.exit_plan.hold_days}d · 止损
+                  {data.strategy_router.exit_plan.stop_loss_pct}% · 止盈+
+                  {data.strategy_router.exit_plan.take_profit_pct}%
+                </span>
+              )}
+            </div>
+            <Link to="/g3/mining" className="text-xs text-blue-400 hover:text-blue-300">
+              调整周期绑定 / 挖掘新策略 →
+            </Link>
+          </div>
+
+          <p className="mt-2 text-xs text-zinc-300">{data.strategy_router.action_hint}</p>
+
+          {data.strategy_router.readable_conditions.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {data.strategy_router.readable_conditions.map((rc, i) => (
+                <span
+                  key={i}
+                  className="rounded bg-zinc-900/90 px-2 py-0.5 font-mono text-[11px] text-zinc-300"
+                >
+                  {rc}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {data.strategy_router.picks.length > 0 && (
+            <div className="mt-3 overflow-x-auto">
+              <Table dense>
+                <TableHead>
+                  <TableRow>
+                    <TableHeader>标的 / 行业</TableHeader>
+                    <TableHeader>参考买价</TableHeader>
+                    <TableHeader>硬止损 / 止盈</TableHeader>
+                    <TableHeader>20日超额 / 行业强弱</TableHeader>
+                    <TableHeader>AI 排雷</TableHeader>
+                    <TableHeader>一键买卖闭环</TableHeader>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {data.strategy_router.picks.map((pk) => (
+                    <TableRow key={pk.code}>
+                      <TableCell className="text-xs">
+                        <Link to={`/stock/${pk.code}`} className="font-medium text-white hover:text-blue-400">
+                          {pk.name} <span className="font-mono text-zinc-400">{pk.code}</span>
+                        </Link>
+                        <div className="text-[11px] text-zinc-400">{pk.industry || '—'}</div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-white">
+                        {pk.ref_price.toFixed(2)}
+                        <div className="text-[10px] text-zinc-400">建议仓位 ≤{pk.suggested_slot_pct}%</div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        <span className="text-amber-300">止损 {pk.stop_loss_price.toFixed(2)}</span>
+                        <div className="text-rose-300">止盈 {pk.take_profit_price.toFixed(2)} ({pk.hold_days}d)</div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-zinc-300">
+                        RS20 {fmtSignedPct(pk.rs_20d_vs_hs300)}
+                        <div className="text-[11px] text-zinc-400">行业MA20占比 {pk.industry_above_ma20_pct}%</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          color={
+                            pk.ai_risk_light === 'red'
+                              ? 'red'
+                              : pk.ai_risk_light === 'yellow'
+                                ? 'amber'
+                                : pk.ai_risk_light === 'green'
+                                  ? 'emerald'
+                                  : 'zinc'
+                          }
+                        >
+                          {pk.ai_blocked
+                            ? '⛔ 红灯禁买'
+                            : pk.ai_risk_light === 'yellow'
+                              ? '⚠️ 黄灯留意'
+                              : pk.ai_risk_light === 'green'
+                                ? '🛡️ 绿灯无雷'
+                                : '待排雷'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          outline
+                          disabled={pk.ai_blocked}
+                          onClick={() => {
+                            setPrefillRes(null)
+                            setPrefillExecStatus(null)
+                            setExecForm({
+                              open: true,
+                              code: pk.code,
+                              name: pk.name,
+                              side: 'BUY',
+                              order_type: 'base_rebalance',
+                              price: pk.ref_price.toFixed(2),
+                              shares: '100',
+                              account_label: '',
+                              note: `周期策略路由 ${data.strategy_router?.active_strategy_id || ''} (止损${pk.stop_loss_price}/止盈${pk.take_profit_price})`,
+                            })
+                          }}
+                        >
+                          {pk.ai_blocked ? '红灯已拦截' : '带入 L2 预检/预填'}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* 0.5 Phase 2B：盘前 09:15 市场主线简报 */}
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">

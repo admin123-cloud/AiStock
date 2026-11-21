@@ -4,13 +4,16 @@ import { Button } from '@/components/catalyst/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/catalyst/table'
 import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import {
+  bindG3MiningRouter,
   exportG3MiningContract,
   getG3MiningOverview,
+  getG3MiningRouter,
   getG3MiningRunDetail,
   runG3MiningExperiment,
   type G3MiningCandidateResult,
   type G3MiningOverviewResponse,
   type G3MiningRunDetail,
+  type G3RegimeRouterResponse,
 } from '@/api/g3'
 
 const REGIME_LABELS: Record<string, string> = {
@@ -38,6 +41,8 @@ interface CustomCondRow {
 
 export default function G3Mining() {
   const [overview, setOverview] = useState<G3MiningOverviewResponse | null>(null)
+  const [routerState, setRouterState] = useState<G3RegimeRouterResponse | null>(null)
+  const [bindingRegime, setBindingRegime] = useState<string | null>(null)
   const [activeRun, setActiveRun] = useState<G3MiningRunDetail | null>(null)
   const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -69,8 +74,12 @@ export default function G3Mining() {
     setLoading(true)
     setError('')
     try {
-      const res = await getG3MiningOverview()
+      const [res, rtr] = await Promise.all([
+        getG3MiningOverview(),
+        getG3MiningRouter().catch(() => null),
+      ])
       setOverview(res)
+      if (rtr) setRouterState(rtr)
       if (keepRunId) {
         const detail = await getG3MiningRunDetail(keepRunId)
         setActiveRun(detail)
@@ -86,6 +95,23 @@ export default function G3Mining() {
       setLoading(false)
     }
   }, [])
+
+  const handleBindRegime = async (regime: string, strategyId: string) => {
+    setBindingRegime(regime)
+    setError('')
+    setMsg('')
+    try {
+      await bindG3MiningRouter({ regime, strategy_id: strategyId })
+      const rtr = await getG3MiningRouter()
+      setRouterState(rtr)
+      setMsg(`已更新「${REGIME_LABELS[regime] || regime}」周期生效策略 → ${strategyId === 'cash_defense' ? '现金防守（空仓）' : strategyId}，作战台 /g3/desk 已同步联动！`)
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '更新周期策略绑定失败')
+    } finally {
+      setBindingRegime(null)
+    }
+  }
 
   useEffect(() => {
     void loadOverview()
@@ -421,10 +447,63 @@ export default function G3Mining() {
         )}
       </Card>
 
-      {/* 2. 已导出候选影子合约池 */}
+      {/* 2. 五态周期策略路由器（真正挂钩 /g3/desk 实时选股与买卖） */}
+      {routerState && (
+        <Card className="border-blue-500/40 bg-blue-950/15">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SectionTitle title="2. 五态周期自适应策略路由（自动挂钩 /g3/desk 实盘选股与预填）" />
+            <div className="flex items-center gap-2 text-xs">
+              <Badge color="blue">
+                当前大盘周期：{routerState.live_signal.regime_label}
+              </Badge>
+              <Badge color={routerState.live_signal.mode === 'cash_defense' ? 'amber' : 'emerald'}>
+                今日生效：{routerState.live_signal.active_strategy_name}
+              </Badge>
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-zinc-300">{routerState.live_signal.action_hint}</p>
+          <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-5">
+            {routerState.router_config.regimes.map((rg) => {
+              const isCurrent = routerState.live_signal.current_regime === rg.regime
+              const boundId = routerState.router_config.routes[rg.regime] || 'cash_defense'
+              return (
+                <div
+                  key={rg.regime}
+                  className={`rounded-lg border p-2.5 text-xs ${
+                    isCurrent
+                      ? 'border-blue-400 bg-blue-950/40 ring-1 ring-blue-400/50'
+                      : 'border-zinc-800 bg-zinc-900/70'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-semibold text-white">{rg.label}</span>
+                    {isCurrent && <Badge color="blue">当前周期</Badge>}
+                  </div>
+                  <select
+                    value={boundId}
+                    disabled={bindingRegime === rg.regime}
+                    onChange={(e) => void handleBindRegime(rg.regime, e.target.value)}
+                    className="mt-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-100"
+                  >
+                    <option value="cash_defense">🛡️ 现金防守（严禁开新仓）</option>
+                    {routerState.router_config.available_contracts.map((c) => (
+                      <option key={c.strategy_id} value={c.strategy_id}>
+                        {c.all_gates_passed ? '✅ ' : '🧪 '}
+                        {c.display_name} ({fmtNum(c.mining_score, 0)}分)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* 3. 已导出候选影子合约池 */}
       <Card>
         <SectionTitle
-          title={`2. 已导出影子观察合约池（${overview?.exported_contracts.length || 0} 份 · candidate_shadow）`}
+          title={`3. 已导出影子观察合约池（${overview?.exported_contracts.length || 0} 份 · candidate_shadow）`}
         />
         {!overview?.exported_contracts.length ? (
           <div className="py-4 text-sm text-zinc-400">

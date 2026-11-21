@@ -74,6 +74,27 @@ def split_trade_dates(
     }
 
 
+def split_trade_dates_for_regimes(
+    bench_df: pd.DataFrame,
+    target_regimes: Optional[Sequence[str]] = None,
+    *,
+    is_ratio: float = 0.60,
+    val_ratio: float = 0.20,
+) -> dict[str, tuple[str, str]]:
+    """周期内严格时间顺序切分（Regime-Scoped Split）：
+    当指定了目标周期且历史该周期交易日 >= 60 日时，按该周期交易日 60/20/20 切分 IS/Val/OOS，
+    避免“拿熊市否决进攻策略”或“拿牛市否决冰点策略”的统计失真，同时严格保持时间单调无泄漏。
+    """
+    if target_regimes and "market_regime" in bench_df.columns:
+        reg_set = {str(r) for r in target_regimes}
+        sub_dates = sorted(
+            bench_df.loc[bench_df["market_regime"].isin(reg_set), "trade_date"].astype(str).unique().tolist()
+        )
+        if len(sub_dates) >= 60:
+            return split_trade_dates(sub_dates, is_ratio=is_ratio, val_ratio=val_ratio)
+    return split_trade_dates(bench_df["trade_date"].astype(str).tolist(), is_ratio=is_ratio, val_ratio=val_ratio)
+
+
 def apply_entry_conditions(
     df: pd.DataFrame,
     conditions: Sequence[Mapping[str, Any]],

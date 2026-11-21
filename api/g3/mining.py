@@ -13,6 +13,11 @@ from services.mining import MINING_TEMPLATES
 from services.mining.backtest_engine import RuleSpec
 from services.mining.contract_exporter import export_candidate_contract
 from services.mining.feature_store import MINING_FEATURE_META
+from services.mining.live_router import (
+    load_regime_router_config,
+    scan_active_strategy_signals,
+    update_regime_route,
+)
 from services.mining.rule_miner import run_mining_experiment
 from utils.common.paths import runtime_path
 
@@ -223,3 +228,41 @@ def post_export_mining_contract(req: ExportContractRequest) -> dict[str, Any]:
         "path": exp["path"],
         "contract": exp["contract"],
     }
+
+
+@router.get("/router")
+def get_mining_regime_router() -> dict[str, Any]:
+    """返回五态大盘周期策略路由表与今日生效策略实时选股扫描结果。"""
+    from api.g3.desk import get_g3_market_gate
+
+    try:
+        gate = get_g3_market_gate()
+    except Exception:
+        gate = {"regime": "balanced", "regime_label": "横盘平衡", "allow_new_mainwave": False, "target_position_cap_pct": 50.0}
+
+    live = scan_active_strategy_signals(
+        current_regime=str(gate.get("regime") or "balanced"),
+        regime_label=str(gate.get("regime_label") or ""),
+        allow_new_mainwave=bool(gate.get("allow_new_mainwave")),
+        target_position_cap_pct=float(gate.get("target_position_cap_pct") or 0.0),
+    )
+    cfg = load_regime_router_config()
+    return {
+        "router_config": cfg,
+        "live_signal": live,
+    }
+
+
+class BindRegimeRouteRequest(BaseModel):
+    regime: str
+    strategy_id: str = "cash_defense"
+
+
+@router.post("/router/bind")
+def post_bind_mining_regime_route(req: BindRegimeRouteRequest) -> dict[str, Any]:
+    """Scoped-write：将指定大盘周期绑定为某个已导出的影子合约或 cash_defense（空仓防守）。"""
+    try:
+        cfg = update_regime_route(req.regime.strip(), req.strategy_id.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "router_config": cfg}

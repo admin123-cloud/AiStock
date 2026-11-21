@@ -23,7 +23,7 @@ from services.mining.backtest_engine import (
     apply_entry_conditions,
     evaluate_rule,
     simulate_trade_returns,
-    split_trade_dates,
+    split_trade_dates_for_regimes,
 )
 from services.mining.feature_store import MINING_FEATURE_META, build_or_load_feature_panel
 from services.mining.quality_gates import evaluate_mining_quality_gates
@@ -504,7 +504,12 @@ def run_mining_experiment(
         min_amt_20d=min_amt_20d,
         force_rebuild=force_rebuild_cache,
     )
-    splits = split_trade_dates(bench_df["trade_date"].astype(str).tolist())
+    target_regs = (
+        list(custom_rules[0].target_regimes)
+        if custom_rules and custom_rules[0].target_regimes
+        else list(tpl["target_regimes"])
+    )
+    splits = split_trade_dates_for_regimes(bench_df, target_regimes=target_regs)
 
     candidates: list[RuleSpec] = []
     if custom_rules:
