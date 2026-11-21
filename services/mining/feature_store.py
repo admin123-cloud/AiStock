@@ -57,8 +57,16 @@ MINING_FEATURE_META: dict[str, dict[str, str]] = {
 
 
 def _clickhouse_url() -> str:
-    host = os.environ.get("CLICKHOUSE_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    port = os.environ.get("CLICKHOUSE_HTTP_PORT", "8123").strip() or "8123"
+    host = (
+        os.environ.get("AISTOCK_CLICKHOUSE_HOST")
+        or os.environ.get("CLICKHOUSE_HOST")
+        or "127.0.0.1"
+    ).strip() or "127.0.0.1"
+    port = (
+        os.environ.get("AISTOCK_CLICKHOUSE_PORT")
+        or os.environ.get("CLICKHOUSE_HTTP_PORT")
+        or "8123"
+    ).strip() or "8123"
     return f"http://{host}:{port}/"
 
 

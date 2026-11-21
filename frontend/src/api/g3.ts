@@ -839,3 +839,179 @@ export const getG3MainwaveDaily = (refresh = false) =>
     params: refresh ? { refresh: true } : undefined,
     timeout: 60000,
   })
+
+// ---------------------------------------------------------------------------
+// AI 策略挖掘工坊（Alpha Mining Studio）
+// ---------------------------------------------------------------------------
+
+export interface G3MiningTemplate {
+  template_id: string
+  name: string
+  description: string
+  target_regimes: string[]
+  default_hold_days: number
+  default_stop_loss: number
+  default_take_profit: number
+  default_rank_by: string
+  max_drawdown_limit: number
+}
+
+export interface G3MiningFeatureMeta {
+  key: string
+  label: string
+  group: string
+}
+
+export interface G3MiningSegmentMetrics {
+  from_date: string
+  to_date: string
+  trades_count: number
+  active_days: number
+  win_rate_pct: number
+  avg_ret_pct: number
+  profit_loss_ratio: number
+  cum_ret_pct: number
+  ann_ret_pct: number
+  bench_cum_ret_pct: number
+  excess_ret_pct: number
+  max_drawdown_pct: number
+  sharpe: number
+  calmar: number
+  ex_best_month_cum_ret_pct: number
+  monthly_returns: Array<{ ym: string; ret_pct: number }>
+}
+
+export interface G3MiningGateResult {
+  all_passed: boolean
+  passed_count: number
+  total_gates: number
+  mining_score: number
+  decay_ratio: number
+  gates: Array<{
+    gate: string
+    label: string
+    passed: boolean
+    detail: string
+  }>
+  failure_reasons: string[]
+}
+
+export interface G3MiningCandidateResult {
+  rule: {
+    rule_id: string
+    name: string
+    template_id: string
+    target_regimes: string[]
+    entry_conditions: Array<{ feature: string; op: string; value: number }>
+    exit_policy: { hold_days: number; stop_loss_pct: number; take_profit_pct: number }
+    top_k_per_day: number
+    rank_by: string
+    rank_ascending: boolean
+    source: string
+    thesis: string
+  }
+  segments: {
+    is: G3MiningSegmentMetrics
+    val: G3MiningSegmentMetrics
+    oos: G3MiningSegmentMetrics
+  }
+  oos_sample_trades: Array<{
+    trade_date: string
+    code: string
+    name: string
+    industry: string
+    entry_open: number
+    net_ret_pct: number
+    exit_day: number
+  }>
+  quality_gates: G3MiningGateResult
+}
+
+export interface G3MiningRunDetail {
+  schema: string
+  run_id: string
+  created_at: string
+  template_id: string
+  template_name: string
+  universe: {
+    start_date: string
+    end_date?: string | null
+    min_amt_20d_wan: number
+    panel_rows: number
+    unique_stocks: number
+    trade_days: number
+  }
+  splits: Record<'is' | 'val' | 'oos', { from: string; to: string }>
+  summary: {
+    candidates_evaluated: number
+    passed_all_gates: number
+    best_rule_id?: string | null
+    best_mining_score: number
+  }
+  results: G3MiningCandidateResult[]
+}
+
+export interface G3MiningExportedContract {
+  file: string
+  strategy_id: string
+  display_name: string
+  status: string
+  template_id?: string | null
+  run_id?: string | null
+  exported_at?: string | null
+  all_gates_passed: boolean
+  mining_score?: number | null
+  thesis: string
+  readable_conditions: string[]
+  target_regimes: string[]
+  exit: { hold_days?: number; hard_stop_loss_pct?: number; take_profit_pct?: number }
+  oos_summary: {
+    trades_count?: number | null
+    win_rate_pct?: number | null
+    avg_ret_pct?: number | null
+    cum_ret_pct?: number | null
+    excess_ret_pct?: number | null
+    max_drawdown_pct?: number | null
+    sharpe?: number | null
+  }
+}
+
+export interface G3MiningOverviewResponse {
+  templates: G3MiningTemplate[]
+  features: G3MiningFeatureMeta[]
+  recent_runs: Array<{
+    run_id: string
+    created_at: string
+    template_id: string
+    template_name: string
+    universe: G3MiningRunDetail['universe']
+    splits: G3MiningRunDetail['splits']
+    summary: G3MiningRunDetail['summary']
+  }>
+  latest_run?: G3MiningRunDetail | null
+  exported_contracts: G3MiningExportedContract[]
+}
+
+export const getG3MiningOverview = () =>
+  request.get<unknown, G3MiningOverviewResponse>('/g3/mining/overview', { timeout: 30000 })
+
+export const getG3MiningRunDetail = (runId: string) =>
+  request.get<unknown, G3MiningRunDetail>(`/g3/mining/runs/${encodeURIComponent(runId)}`, { timeout: 30000 })
+
+export const runG3MiningExperiment = (payload: {
+  template_id: string
+  start_date?: string
+  min_amt_wan?: number
+  enable_tree_miner?: boolean
+  tune_exit_on_val?: boolean
+  custom_name?: string
+  custom_thesis?: string
+  custom_regimes?: string[]
+  custom_conditions?: Array<{ feature: string; op: string; value: number }>
+  custom_hold_days?: number
+  custom_stop_loss_pct?: number
+  custom_take_profit_pct?: number
+}) => request.post<unknown, G3MiningRunDetail>('/g3/mining/run', payload, { timeout: 180000 })
+
+export const exportG3MiningContract = (payload: { run_id: string; rule_id: string }) =>
+  request.post<unknown, { status: string; strategy_id: string; path: string }>('/g3/mining/export-contract', payload)

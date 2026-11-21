@@ -5,11 +5,13 @@ from fastapi import APIRouter
 
 from api.g3.desk import router as desk_router
 from api.g3.mainwave import router as mainwave_router
+from api.g3.mining import router as mining_router
 from api.g3.review import router as review_router
 from api.g3.settings import router as settings_router
 
 router = APIRouter(prefix="/g3", tags=["g3"])
 router.include_router(desk_router)
 router.include_router(mainwave_router)
+router.include_router(mining_router)
 router.include_router(review_router)
 router.include_router(settings_router)

@@ -112,6 +112,12 @@ export const routes: AppRoute[] = [
     () => import('@/views/g3/MainwaveDaily')
   ),
   page(
+    '/g3/mining',
+    'G3Mining',
+    { title: 'G3 AI 策略挖掘工坊', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 3.5, navLabel: 'AI 策略挖掘' },
+    () => import('@/views/g3/G3Mining')
+  ),
+  page(
     '/g3/settings',
     'G3Settings',
     { title: 'G3 策略矩阵与风控', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 4, navLabel: '策略矩阵风控' },
