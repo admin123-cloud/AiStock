@@ -6,13 +6,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import {
   deleteG3TExecution,
+  dispatchG3PrefillOrder,
   generateG3DailyPlan,
   generateG3PremarketBrief,
   getG3Desk,
+  getG3PrefillStatus,
   prefillCheckG3Order,
   pushG3PremarketBriefWechat,
   recordG3TExecution,
   saveG3NotifyConfig,
+  syncG3DeskFills,
   syncG3WatchlistFromThs,
   testG3WechatNotify,
   upsertG3Watchlist,
@@ -20,6 +23,7 @@ import {
   type G3DeskResponse,
   type G3NotifyConfig,
   type G3PrefillCheckResponse,
+  type G3PrefillStatusResponse,
   type G3PriceGauge,
 } from '@/api/g3'
 
@@ -262,6 +266,9 @@ export default function G3Desk() {
   const [pushingBrief, setPushingBrief] = useState(false)
   const [prefillBusy, setPrefillBusy] = useState(false)
   const [prefillRes, setPrefillRes] = useState<G3PrefillCheckResponse | null>(null)
+  const [dispatchingPrefill, setDispatchingPrefill] = useState(false)
+  const [prefillExecStatus, setPrefillExecStatus] = useState<G3PrefillStatusResponse | null>(null)
+  const [syncingFills, setSyncingFills] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [countdown, setCountdown] = useState(15)
   const [showIneligible, setShowIneligible] = useState(false)
@@ -625,6 +632,7 @@ export default function G3Desk() {
     const px = presetPrice ?? card.live_quote?.price ?? card.prev_close ?? 0
     const lot = presetLot && presetLot >= 100 ? presetLot : Math.max(100, card.daily_plan?.recommended_lot || card.t_lot_cap || 100)
     setPrefillRes(null)
+    setPrefillExecStatus(null)
     setExecForm({
       open: true,
       code: card.code,
@@ -646,6 +654,7 @@ export default function G3Desk() {
       return
     }
     setPrefillBusy(true)
+    setPrefillExecStatus(null)
     setError('')
     try {
       const res = await prefillCheckG3Order({
@@ -662,6 +671,69 @@ export default function G3Desk() {
       setError(err.response?.data?.detail || err.message || 'L2 风控预检失败')
     } finally {
       setPrefillBusy(false)
+    }
+  }
+
+  const handleDispatchPrefill = async (draftId: string) => {
+    setDispatchingPrefill(true)
+    setError('')
+    setMsg('')
+    try {
+      const dis = await dispatchG3PrefillOrder(draftId)
+      if (dis.status === 'already_processed') {
+        setPrefillExecStatus({
+          draft_id: draftId,
+          state: 'done',
+          bridge: dis.bridge,
+          result: (dis.result as G3PrefillStatusResponse['result']) || null,
+        })
+        setMsg(`该放行码（${draftId}）已由宿主机处理完毕（幂等保护，不重复填单）`)
+        return
+      }
+      setPrefillExecStatus({
+        draft_id: draftId,
+        state: 'queued',
+        bridge: dis.bridge,
+        result: null,
+      })
+      // 轮询宿主机预填结果（最长约 12 秒）
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1200))
+        const st = await getG3PrefillStatus(draftId)
+        setPrefillExecStatus(st)
+        if (st.state === 'done') {
+          if (st.result?.ok) {
+            setMsg(`已预填至同花顺远航下单框（仅填单未提交），请切换到同花顺人工核对后点击确认！`)
+          } else {
+            setError(`宿主机预填未完成：${st.result?.message || st.result?.reason || '请检查同花顺远航窗口是否已打开'}`)
+          }
+          return
+        }
+      }
+      setError('预填指令已入队，但 12 秒内未收到宿主机回执，请确认宿主机 g3_prefill_bridge 已在线运行')
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '派发同花顺预填失败')
+    } finally {
+      setDispatchingPrefill(false)
+    }
+  }
+
+  const handleSyncFills = async () => {
+    setSyncingFills(true)
+    setError('')
+    setMsg('')
+    try {
+      const res = await syncG3DeskFills()
+      setMsg(
+        `同花顺当日成交同步完成：共扫描 ${res.broker_fills_found} 笔，新入账 ${res.imported} 笔（幂等去重跳过 ${res.idempotent_skipped} 笔）`
+      )
+      await load(false, false)
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '同步同花顺成交回执失败')
+    } finally {
+      setSyncingFills(false)
     }
   }
 
@@ -1454,6 +1526,52 @@ export default function G3Desk() {
                   </div>
                 ))}
               </div>
+
+              {/* Phase 3C 进阶：一键派发宿主机同花顺远航预填（强制 prefill_only，永不自动提交） */}
+              {prefillRes.approved && (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-500/30 pt-2.5">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    <Badge color={data?.prefill_bridge?.online ? 'emerald' : 'amber'}>
+                      {data?.prefill_bridge?.online ? '预填桥在线' : '预填桥离线'}
+                    </Badge>
+                    <span className="text-zinc-300">
+                      安全边界：仅填入代码 / 价格 / 股数，绝不点击「下单确认」
+                    </span>
+                  </div>
+                  <Button
+                    onClick={() => void handleDispatchPrefill(prefillRes.draft_id)}
+                    disabled={dispatchingPrefill || !data?.prefill_bridge?.online}
+                  >
+                    {dispatchingPrefill ? '正在预填至同花顺…' : '一键预填至同花顺（仅填单不提交）'}
+                  </Button>
+                </div>
+              )}
+
+              {prefillExecStatus && prefillExecStatus.draft_id === prefillRes.draft_id && (
+                <div
+                  className={`mt-2 rounded-md border px-2.5 py-2 text-[11px] ${
+                    prefillExecStatus.state === 'done' && prefillExecStatus.result?.ok
+                      ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-100'
+                      : prefillExecStatus.state === 'queued'
+                        ? 'border-blue-400/40 bg-blue-500/15 text-blue-100'
+                        : 'border-amber-400/50 bg-amber-500/15 text-amber-100'
+                  }`}
+                >
+                  {prefillExecStatus.state === 'queued' && (
+                    <span>⏳ 指令已入宿主机预填队列，等待同花顺远航桌面桥执行填单…</span>
+                  )}
+                  {prefillExecStatus.state === 'done' && prefillExecStatus.result?.ok && (
+                    <span>
+                      ✅ 预填完成（状态：{String(prefillExecStatus.result.status || 'prefilled_awaiting_human_confirm')}）— 请切换至同花顺远航窗口人工核对后手动提交。
+                    </span>
+                  )}
+                  {prefillExecStatus.state === 'done' && !prefillExecStatus.result?.ok && (
+                    <span>
+                      ⚠️ 预填未通过/异常：{String(prefillExecStatus.result?.message || prefillExecStatus.result?.reason || '请检查同花顺窗口状态')}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </Card>
@@ -1825,10 +1943,15 @@ export default function G3Desk() {
         </Card>
 
         <Card>
-          <SectionTitle title="今日做T执行台账（日内敞口闭环）" />
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <SectionTitle title="今日做T执行台账（日内敞口闭环 · 回执自动入账）" />
+            <Button outline onClick={() => void handleSyncFills()} disabled={syncingFills}>
+              {syncingFills ? '同步回执中…' : '同步同花顺成交回执'}
+            </Button>
+          </div>
           {executions.length === 0 ? (
             <div className="py-6 text-center text-sm text-zinc-400">
-              今日尚未登记做T成交；在上方卡片点击「记一笔卖T / 买T」即可实时追踪日内敞口与做T盈亏。
+              今日尚未登记做T成交；同花顺成交后会自动/一键入账，也可在上方卡片点击「记一笔卖T / 买T」手工补录。
             </div>
           ) : (
             <Table dense>
@@ -1836,7 +1959,7 @@ export default function G3Desk() {
                 <TableRow>
                   <TableHeader>时间</TableHeader>
                   <TableHeader>标的</TableHeader>
-                  <TableHeader>方向</TableHeader>
+                  <TableHeader>方向 / 分型</TableHeader>
                   <TableHeader>成交价</TableHeader>
                   <TableHeader>股数</TableHeader>
                   <TableHeader>备注</TableHeader>
@@ -1851,9 +1974,14 @@ export default function G3Desk() {
                       {ex.name} <span className="font-mono text-zinc-400">{ex.code}</span>
                     </TableCell>
                     <TableCell>
-                      <Badge color={ex.side === 'BUY' ? 'emerald' : 'red'}>
-                        {ex.side === 'BUY' ? '买入T' : '卖出T'}
-                      </Badge>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge color={ex.side === 'BUY' ? 'emerald' : 'red'}>
+                          {ex.side === 'BUY' ? '买入' : '卖出'}
+                        </Badge>
+                        <Badge color={ex.order_type === 'base_rebalance' ? 'amber' : 'blue'}>
+                          {ex.order_type === 'base_rebalance' ? 'R51调仓' : '做T'}
+                        </Badge>
+                      </div>
                     </TableCell>
                     <TableCell className="font-mono text-xs">{fmtNum(ex.price)}</TableCell>
                     <TableCell className="font-mono text-xs">{ex.shares}</TableCell>

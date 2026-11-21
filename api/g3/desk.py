@@ -11,6 +11,12 @@ from pydantic import BaseModel, Field
 
 from services.broker.broker_accounts import get_accounts_overview
 from services.g3.ai_screening import load_saved_screening, lookup_stock_ai_sentinel, merge_screening_into_mainwave
+from services.g3.fill_autosync import (
+    dispatch_prefill_order,
+    get_prefill_bridge_status,
+    get_prefill_dispatch_status,
+    sync_broker_fills_to_desk_executions,
+)
 from services.g3.mainwave_scanner import scan_mainwave_daily
 from services.g3.market_regime_gate import evaluate_market_regime_gate
 from services.g3.order_prefill import evaluate_and_build_prefill_draft
@@ -233,7 +239,13 @@ def get_g3_desk(
     # 市场总纲
     market_directive = build_market_directive(effective_regime_doc.get("breadth"))
 
-    # 当日手工做T执行台账与敞口汇总
+    # Phase 3C 进阶：自动幂等同步同花顺当日真实成交回执到日内分型台账
+    try:
+        fill_sync_meta = sync_broker_fills_to_desk_executions(trade_date=today_str)
+    except Exception:
+        fill_sync_meta = {"status": "error", "imported": 0, "idempotent_skipped": 0}
+
+    # 当日做T / R51水位调仓执行台账与敞口汇总
     executions = load_intraday_executions(today_str)
     exposure_by_code, exec_summary = summarize_intraday_executions(executions)
 
@@ -399,6 +411,11 @@ def get_g3_desk(
         "market_regime_gate": market_regime_gate,
         "strategy_allocation": strategy_allocation,
         "premarket_brief": load_latest_premarket_brief(today_str),
+        "prefill_bridge": get_prefill_bridge_status(),
+        "fill_sync_meta": {
+            "imported": fill_sync_meta.get("imported", 0),
+            "broker_fills_found": fill_sync_meta.get("broker_fills_found", 0),
+        },
         "intraday_summary": {
             **exec_summary,
             "eligible_count": eligible_count,
@@ -547,6 +564,31 @@ def post_g3_desk_prefill_check(req: PrefillCheckRequest) -> dict[str, Any]:
         available_cash=float(merged_funds["available_cash"]) if merged_funds.get("available_cash") is not None else None,
         market_gate=gate,
     )
+
+
+class PrefillDispatchRequest(BaseModel):
+    draft_id: str
+
+
+@router.post("/desk/prefill-dispatch")
+def post_g3_desk_prefill_dispatch(req: PrefillDispatchRequest) -> dict[str, Any]:
+    """Phase 3C 进阶：将已通过 L2 预检的草案派发至宿主机预填队列（强制 prefill_only，绝不提交）。"""
+    try:
+        return dispatch_prefill_order(draft_id=req.draft_id.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/desk/prefill-status/{draft_id}")
+def get_g3_desk_prefill_status(draft_id: str) -> dict[str, Any]:
+    """查询指定预填草案在宿主机同花顺界面的执行状态。"""
+    return get_prefill_dispatch_status(draft_id=draft_id.strip())
+
+
+@router.post("/desk/sync-fills")
+def post_g3_desk_sync_fills() -> dict[str, Any]:
+    """Phase 3C 进阶：立即将同花顺当日真实成交回执幂等入账至 G3 分型台账（自动继承 R51 分型）。"""
+    return sync_broker_fills_to_desk_executions()
 
 
 class TExecutionDeleteRequest(BaseModel):

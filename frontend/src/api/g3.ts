@@ -527,6 +527,47 @@ export interface G3StrategyMatrix {
   contracts_total: number
 }
 
+export interface G3PrefillBridgeStatus {
+  online: boolean
+  state: string
+  heartbeat_at?: string | null
+  pid?: number | null
+}
+
+export interface G3PrefillDispatchResponse {
+  status: 'queued' | 'already_queued' | 'already_processed' | string
+  draft_id: string
+  mode: string
+  allow_submit: boolean
+  bridge?: G3PrefillBridgeStatus
+  message?: string
+  result?: Record<string, unknown> | null
+}
+
+export interface G3PrefillStatusResponse {
+  draft_id: string
+  state: 'queued' | 'done' | 'not_found' | string
+  bridge?: G3PrefillBridgeStatus
+  result?: {
+    ok?: boolean
+    status?: string
+    reason?: string
+    message?: string
+    draft_id?: string
+    finished_at?: string
+    [key: string]: unknown
+  } | null
+}
+
+export interface G3SyncFillsResponse {
+  status: string
+  trade_date: string
+  broker_fills_found: number
+  imported: number
+  idempotent_skipped: number
+  entries: G3TExecution[]
+}
+
 export interface G3DeskResponse {
   as_of: string
   today?: string
@@ -552,6 +593,11 @@ export interface G3DeskResponse {
     }>
   } | null
   premarket_brief?: G3PremarketBrief | null
+  prefill_bridge?: G3PrefillBridgeStatus
+  fill_sync_meta?: {
+    imported: number
+    broker_fills_found: number
+  }
   intraday_summary?: {
     execution_count: number
     open_exposure_codes: number
@@ -669,6 +715,12 @@ export const prefillCheckG3Order = (payload: {
   order_type?: 't_trade' | 'base_rebalance'
   account_id?: string
 }) => request.post<unknown, G3PrefillCheckResponse>('/g3/desk/prefill-check', payload)
+export const dispatchG3PrefillOrder = (draftId: string) =>
+  request.post<unknown, G3PrefillDispatchResponse>('/g3/desk/prefill-dispatch', { draft_id: draftId })
+export const getG3PrefillStatus = (draftId: string) =>
+  request.get<unknown, G3PrefillStatusResponse>(`/g3/desk/prefill-status/${encodeURIComponent(draftId)}`)
+export const syncG3DeskFills = () =>
+  request.post<unknown, G3SyncFillsResponse>('/g3/desk/sync-fills', {})
 export const deleteG3TExecution = (execId: string) =>
   request.post<unknown, { status: string; deleted_id: string }>('/g3/desk/execution/delete', { exec_id: execId })
 export const getG3NotifyConfig = () =>
