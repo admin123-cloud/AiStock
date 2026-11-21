@@ -96,6 +96,7 @@ def run_postclose() -> int:
     _log("=== 启动盘后盈利闭环作业 (17:45) ===")
     mw = _http_json("/api/g3/mainwave?refresh=true", method="GET", timeout=90)
     gate = _http_json("/api/g3/market-gate", method="GET", timeout=30)
+    desk = _http_json("/api/g3/desk", method="GET", timeout=30)
     EXPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     export_payload = {
         "exported_at": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
@@ -109,6 +110,16 @@ def run_postclose() -> int:
             "actual_pct": (gate.get("r51_waterline") or {}).get("actual_pct"),
             "reasons": gate.get("reasons"),
         },
+        "desk_holdings": [
+            {
+                "code": c.get("code"),
+                "name": c.get("name"),
+                "total_shares": c.get("total_shares"),
+                "regime": c.get("regime"),
+                "in_holdings": c.get("in_holdings"),
+            }
+            for c in (desk.get("cards") or [])
+        ],
         "candidates": [
             {
                 "code": c.get("code"),

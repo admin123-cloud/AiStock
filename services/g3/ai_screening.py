@@ -145,14 +145,29 @@ def save_agent_screening(
     items: Sequence[Mapping[str, Any]],
     summary_note: Optional[str] = None,
     agent_name: str = "antigravity_agent",
+    merge_existing: bool = True,
     base_dir: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """校验并落盘 Agent 产出的结构化排雷与催化评分结果。"""
+    """校验并落盘 Agent 产出的结构化排雷与催化评分结果（默认同日增量合并，不覆盖已有标的）。"""
     d_str = _norm_date(decision_date)
     ymd = d_str.replace("-", "")
     now_iso = datetime.now(BJ_TZ).isoformat(timespec="seconds")
 
+    store_dir = _screening_dir(base_dir)
+    dated_path = store_dir / f"{ymd}.json"
+    latest_path = store_dir / "latest.json"
+
     normalized_items: dict[str, dict[str, Any]] = {}
+    existing_note: Optional[str] = None
+    if merge_existing:
+        existing = _read_json_safe(dated_path) or _read_json_safe(latest_path)
+        if existing and str(existing.get("decision_date") or "") == d_str:
+            existing_map = existing.get("items_by_code")
+            if isinstance(existing_map, Mapping):
+                for k, v in existing_map.items():
+                    if isinstance(v, Mapping):
+                        normalized_items[str(k)] = dict(v)
+            existing_note = existing.get("summary_note")
     for raw in items:
         if not isinstance(raw, Mapping):
             continue
@@ -185,17 +200,46 @@ def save_agent_screening(
         "decision_date": d_str,
         "generated_at": now_iso,
         "agent_name": agent_name,
-        "summary_note": summary_note or f"Agent 已完成 {len(normalized_items)} 只候选股公告排雷与催化逻辑评估",
+        "summary_note": summary_note or existing_note or f"Agent 已完成 {len(normalized_items)} 只标的公告排雷与催化逻辑评估",
         "items_by_code": normalized_items,
     }
 
-    store_dir = _screening_dir(base_dir)
-    dated_path = store_dir / f"{ymd}.json"
-    latest_path = store_dir / "latest.json"
     text = json.dumps(doc, ensure_ascii=False, indent=2)
     dated_path.write_text(text, encoding="utf-8")
     latest_path.write_text(text, encoding="utf-8")
     return doc
+
+
+def lookup_stock_ai_sentinel(
+    code: str,
+    *,
+    saved_doc: Optional[Mapping[str, Any]] = None,
+    base_dir: Optional[Path] = None,
+) -> Optional[dict[str, Any]]:
+    """供 /g3/desk 持仓股卡片查询最新 AI 公告/事件哨兵状态（共用同一排雷库，绝不孤立）。"""
+    code6 = _norm_code6(code)
+    doc = saved_doc if saved_doc is not None else load_saved_screening(base_dir=base_dir)
+    if not isinstance(doc, Mapping):
+        return None
+    items_map = doc.get("items_by_code")
+    if not isinstance(items_map, Mapping):
+        return None
+    item = items_map.get(code6)
+    if not isinstance(item, Mapping):
+        return None
+    light = str(item.get("risk_light") or "yellow").lower()
+    return {
+        "code6": code6,
+        "risk_light": light,
+        "forbid_forward_t": light == "red",
+        "catalyst_score": int(_safe_float(item.get("catalyst_score")) or 3),
+        "catalyst_type": str(item.get("catalyst_type") or ""),
+        "risk_flags": list(item.get("risk_flags") or []),
+        "one_line_thesis": str(item.get("one_line_thesis") or ""),
+        "source": str(item.get("source") or "agent_enriched"),
+        "decision_date": str(doc.get("decision_date") or ""),
+        "updated_at": item.get("updated_at") or doc.get("generated_at"),
+    }
 
 
 def load_saved_screening(

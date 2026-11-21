@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.broker.broker_accounts import get_accounts_overview
-from services.g3.ai_screening import merge_screening_into_mainwave
+from services.g3.ai_screening import load_saved_screening, lookup_stock_ai_sentinel, merge_screening_into_mainwave
 from services.g3.mainwave_scanner import scan_mainwave_daily
 from services.g3.market_regime_gate import evaluate_market_regime_gate
 from services.g3.order_prefill import evaluate_and_build_prefill_draft
@@ -249,6 +249,7 @@ def get_g3_desk(
     )
 
     cards: list[dict[str, Any]] = []
+    saved_screening_doc = load_saved_screening()
     eligible_count = 0
     ineligible_count = 0
     stale_param_count = 0
@@ -357,6 +358,7 @@ def get_g3_desk(
             "open_t_exposure": exposure_by_code.get(code),
             "armed_sides": s_info.get("sides") or {},
             "hard_stop": contract_stop.get(code),
+            "ai_sentinel": lookup_stock_ai_sentinel(code, saved_doc=saved_screening_doc),
         })
 
     # 按实战优先级排序：可做T & 风险/机会高优先排前，不可做T零股排后

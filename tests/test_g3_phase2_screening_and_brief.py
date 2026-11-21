@@ -6,6 +6,7 @@ from pathlib import Path
 
 from services.g3.ai_screening import (
     evaluate_rule_baseline_item,
+    lookup_stock_ai_sentinel,
     merge_screening_into_mainwave,
     save_agent_screening,
 )
@@ -133,3 +134,27 @@ def test_premarket_brief_generation_and_persistence(tmp_path: Path):
     loaded = load_latest_premarket_brief("2026-11-21", base_dir=brief_dir)
     assert loaded is not None
     assert loaded["source"] == "agent_enriched"
+
+
+def test_ai_sentinel_incremental_merge_and_forbid_forward_t(tmp_path: Path):
+    base_dir = tmp_path / "ai_screening"
+    save_agent_screening(
+        decision_date="2026-11-20",
+        items=[{"code": "600000.SH", "name": "浦发银行", "risk_light": "green", "catalyst_score": 5}],
+        base_dir=base_dir,
+    )
+    # 增量写入持仓股，不覆盖 600000
+    save_agent_screening(
+        decision_date="2026-11-20",
+        items=[
+            {"code": "002015", "name": "协鑫能科", "risk_light": "green", "catalyst_score": 3, "one_line_thesis": "扣非+11.7%"},
+            {"code": "603881", "name": "数据港", "risk_light": "red", "catalyst_score": 1, "risk_flags": ["模拟红灯测试"]},
+        ],
+        base_dir=base_dir,
+    )
+    s_pf = lookup_stock_ai_sentinel("600000", base_dir=base_dir)
+    s_xx = lookup_stock_ai_sentinel("002015.SZ", base_dir=base_dir)
+    s_sj = lookup_stock_ai_sentinel("603881", base_dir=base_dir)
+    assert s_pf is not None and s_pf["risk_light"] == "green"
+    assert s_xx is not None and s_xx["forbid_forward_t"] is False
+    assert s_sj is not None and s_sj["forbid_forward_t"] is True

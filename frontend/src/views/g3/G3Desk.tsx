@@ -1500,6 +1500,25 @@ export default function G3Desk() {
                       </Link>
                       <Badge color={rb.color}>{rb.label}</Badge>
                       {plan && <Badge color={toneToBadgeColor(plan.action_tone)}>{plan.action_label}</Badge>}
+                      {c.ai_sentinel ? (
+                        <Badge
+                          color={
+                            c.ai_sentinel.risk_light === 'red'
+                              ? 'red'
+                              : c.ai_sentinel.risk_light === 'yellow'
+                                ? 'amber'
+                                : 'emerald'
+                          }
+                        >
+                          {c.ai_sentinel.forbid_forward_t
+                            ? '⛔ AI哨兵·利空禁正T'
+                            : c.ai_sentinel.risk_light === 'yellow'
+                              ? '⚠️ AI哨兵·留意风险'
+                              : '🛡️ AI哨兵·无雷'}
+                        </Badge>
+                      ) : (
+                        <Badge color="zinc">AI哨兵·待排雷</Badge>
+                      )}
                       {c.open_t_exposure && c.open_t_exposure.net_shares !== 0 && (
                         <Badge color="amber">{c.open_t_exposure.status_label}</Badge>
                       )}
@@ -1534,6 +1553,36 @@ export default function G3Desk() {
                     )}
                   </div>
                 </div>
+
+                {/* AI 公告/事件哨兵详情条（与 /g3/mainwave 共用排雷库） */}
+                {c.ai_sentinel && (
+                  <div
+                    className={`mt-2.5 rounded-lg border px-3 py-2 text-xs ${
+                      c.ai_sentinel.forbid_forward_t
+                        ? 'border-red-500/50 bg-red-950/30 text-red-200'
+                        : c.ai_sentinel.risk_light === 'yellow'
+                          ? 'border-amber-500/40 bg-amber-950/20 text-amber-200'
+                          : 'border-emerald-500/30 bg-emerald-950/15 text-emerald-200'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-1">
+                      <span className="font-medium">
+                        {c.ai_sentinel.forbid_forward_t
+                          ? '⛔ AI 事件哨兵拦截：触发基本面/公告红灯，今日严禁正T低吸防接飞刀'
+                          : `🛡️ AI 事件哨兵（催化 ${c.ai_sentinel.catalyst_score}/5 · ${c.ai_sentinel.catalyst_type || '已核查'}）`}
+                      </span>
+                      <span className="font-mono text-[11px] opacity-80">
+                        {c.ai_sentinel.decision_date || ''}
+                      </span>
+                    </div>
+                    <p className="mt-1 leading-relaxed text-zinc-200">{c.ai_sentinel.one_line_thesis}</p>
+                    {c.ai_sentinel.risk_flags.length > 0 && (
+                      <div className="mt-1 text-[11px] text-amber-300">
+                        风险标签：{c.ai_sentinel.risk_flags.join('；')}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* 风险/机会预警条 */}
                 {plan?.alerts && plan.alerts.length > 0 && (

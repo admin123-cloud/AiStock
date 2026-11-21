@@ -191,6 +191,19 @@ export interface G3MarketDirective {
   rules: string[]
 }
 
+export interface G3AiSentinel {
+  code6: string
+  risk_light: 'green' | 'yellow' | 'red' | string
+  forbid_forward_t: boolean
+  catalyst_score: number
+  catalyst_type: string
+  risk_flags: string[]
+  one_line_thesis: string
+  source: string
+  decision_date?: string
+  updated_at?: string
+}
+
 export interface G3DeskCard {
   code: string
   name: string
@@ -234,6 +247,7 @@ export interface G3DeskCard {
   open_t_exposure?: G3OpenTExposure | null
   armed_sides: Record<string, { armed?: boolean; last_fire?: string | null }>
   hard_stop?: Record<string, unknown> | null
+  ai_sentinel?: G3AiSentinel | null
 }
 
 export interface G3NotifyConfig {
