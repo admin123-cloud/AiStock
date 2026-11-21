@@ -752,10 +752,20 @@ def post_g3_premarket_brief_generate(
         matrix = build_strategy_matrix(market_gate=gate)
     except Exception:
         matrix = None
+    try:
+        s_router = scan_active_strategy_signals(
+            current_regime=str(gate.get("regime") or "balanced"),
+            regime_label=str(gate.get("regime_label") or ""),
+            allow_new_mainwave=bool(gate.get("allow_new_mainwave")),
+            target_position_cap_pct=float(gate.get("target_position_cap_pct") or 0.0),
+        )
+    except Exception:
+        s_router = None
     return generate_premarket_brief(
         market_gate=gate,
         mainwave_payload=mw,
         strategy_matrix=matrix,
+        strategy_router=s_router,
         overnight_notes=body.overnight_notes,
         agent_thesis=body.agent_thesis,
         source=body.source,

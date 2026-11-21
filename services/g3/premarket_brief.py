@@ -80,13 +80,14 @@ def generate_premarket_brief(
     market_gate: Mapping[str, Any],
     mainwave_payload: Optional[Mapping[str, Any]] = None,
     strategy_matrix: Optional[Mapping[str, Any]] = None,
+    strategy_router: Optional[Mapping[str, Any]] = None,
     overnight_notes: Optional[Sequence[str]] = None,
     agent_thesis: Optional[str] = None,
     source: str = "auto_baseline",
     trade_date: Optional[str] = None,
     base_dir: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """生成并落盘当日 09:15 盘前市场主线简报。"""
+    """生成并落盘当日 09:15 盘前 AI 晨会简报（与五态周期和策略路由 100% 同源）。"""
     now_bj = datetime.now(BJ_TZ)
     d_str = _norm_date(trade_date or market_gate.get("ref_date") or now_bj.strftime("%Y-%m-%d"))
     ymd = d_str.replace("-", "")
@@ -108,28 +109,51 @@ def generate_premarket_brief(
     allow_new = bool(market_gate.get("allow_new_mainwave", False))
     cap_pct = float(market_gate.get("target_position_cap_pct") or 25.0)
     actual_pct = wl.get("actual_pct")
+    is_defensive = regime in ("defensive", "extreme_panic") or not allow_new
 
-    # 生成今日行动清单
-    checklist: list[str] = []
-    if not allow_new:
-        checklist.append(f"【总开关】今日为{regime_label}（上限 ≤{cap_pct:.0f}%），严禁开新主升仓。")
+    active_strat_name = (
+        str((strategy_router or {}).get("active_strategy_name") or "")
+        or ("现金防守 / 严禁开新仓" if is_defensive else "周期生效策略")
+    )
+    if is_defensive:
+        themes_title = "抗跌/避险资金流向（仅观察·严禁开新仓）"
+    elif regime == "balanced":
+        themes_title = "强主线轮动板块（按轮动补涨策略观察）"
     else:
-        checklist.append(f"【总开关】今日为{regime_label}（上限 ≤{cap_pct:.0f}%），允许从绿灯精选池中择优关注 10:00 首根 30m 确认。")
+        themes_title = "主升进攻核心板块（按主升冠军策略出击）"
+
+    # 生成今日行动清单（与五态大盘总闸门 + 周期策略路由 100% 统一口径）
+    checklist: list[str] = []
+    if is_defensive:
+        checklist.append(
+            f"【总开关与生效策略】今日为{regime_label}（上限 ≤{cap_pct:.0f}%），策略路由已锁死「{active_strat_name}」，严禁开新主升仓。"
+        )
+    else:
+        checklist.append(
+            f"【总开关与生效策略】今日为{regime_label}（上限 ≤{cap_pct:.0f}%），已激活「{active_strat_name}」，允许按规则择优执行。"
+        )
 
     if wl.get("advice"):
         checklist.append(f"【R51水位】{wl['advice']}")
 
     if core_themes:
         theme_str = "、".join(f"{t['industry']}({t['candidate_count']}只)" for t in core_themes)
-        checklist.append(f"【板块主线】主升共振靠前行业：{theme_str}。")
+        if is_defensive:
+            checklist.append(f"【防守风向】相对抗跌板块：{theme_str}（仅作盘面风向观察，不作为开新仓依据）。")
+        else:
+            checklist.append(f"【板块主线】强势共振行业：{theme_str}。")
     else:
-        checklist.append("【板块主线】当前无明显主升共振主线，耐心等待右侧信号。")
+        checklist.append("【板块观察】当前无明显主线共振，耐心等待右侧信号。")
 
-    if top_picks and allow_new:
+    router_picks = list((strategy_router or {}).get("picks") or [])
+    if router_picks and not is_defensive:
+        picks_str = "、".join(f"{p.get('name')}({p.get('code')})" for p in router_picks[:3])
+        checklist.append(f"【生效策略命中】{active_strat_name} 今日命中前排：{picks_str}。")
+    elif top_picks and not is_defensive:
         picks_str = "、".join(f"{p.get('name')}({str(p.get('code') or '').split('.')[0]})" for p in top_picks[:3])
         checklist.append(f"【精选关注】绿灯高催化池前排：{picks_str}。")
-    elif top_picks and not allow_new:
-        checklist.append(f"【观察名单】绿灯池现有 {len(top_picks)} 只储备标的，因大盘防守仅观察不开仓。")
+    elif is_defensive:
+        checklist.append("【开仓禁令】防守/冰点期严禁追买任何主升候选股，已有持仓优先逢反弹降水位或反T降本。")
 
     # 融合 Phase 4 三腿配额到作战清单与 Markdown 简报
     alloc = (strategy_matrix or {}).get("allocation") if isinstance(strategy_matrix, Mapping) else None
@@ -180,6 +204,8 @@ def generate_premarket_brief(
             "waterline_advice": wl.get("advice"),
         },
         "core_themes": core_themes,
+        "themes_title": themes_title,
+        "active_strategy_name": active_strat_name,
         "top_picks": top_picks,
         "overnight_notes": [str(x).strip() for x in (overnight_notes or []) if str(x).strip()],
         "agent_thesis": (agent_thesis or "").strip() or None,

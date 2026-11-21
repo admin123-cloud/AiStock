@@ -108,7 +108,7 @@ export const routes: AppRoute[] = [
   page(
     '/g3/mainwave',
     'G3MainwaveDaily',
-    { title: 'G3 主升选股与AI排雷', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 3, navLabel: '主升选股排雷' },
+    { title: 'G3 周期选股与排雷', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 3, navLabel: '周期选股排雷' },
     () => import('@/views/g3/MainwaveDaily')
   ),
   page(

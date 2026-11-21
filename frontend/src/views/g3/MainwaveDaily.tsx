@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Alert, AlertTitle } from '@/components/catalyst/alert'
@@ -10,7 +11,13 @@ import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import {
   dateTime, reasonText, statusLabel, statusTone, type StatusTone,
 } from '@/api/operations'
-import { getG3MainwaveDaily, type G3AiScreeningItem, type G3AiScreeningSummary } from '@/api/g3'
+import {
+  getG3MainwaveDaily,
+  getG3MiningRouter,
+  type G3AiScreeningItem,
+  type G3AiScreeningSummary,
+  type G3LiveStrategyRouter,
+} from '@/api/g3'
 
 interface MainwaveCandidate {
   code?: string
@@ -89,6 +96,7 @@ const score = (v: number | string | null | undefined): string =>
 
 export default function MainwaveDaily() {
   const [data, setData] = useState<MainwaveDailyData>({})
+  const [routerSignal, setRouterSignal] = useState<G3LiveStrategyRouter | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<FilterKey>('all')
@@ -99,8 +107,12 @@ export default function MainwaveDaily() {
     setLoading(true)
     setError('')
     try {
-      const res = await getG3MainwaveDaily(forceRefresh)
+      const [res, rtr] = await Promise.all([
+        getG3MainwaveDaily(forceRefresh),
+        getG3MiningRouter().catch(() => null),
+      ])
       setData(res as MainwaveDailyData)
+      if (rtr?.live_signal) setRouterSignal(rtr.live_signal)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
       setError(err.response?.data?.detail || err.message || '加载失败')
@@ -135,10 +147,74 @@ export default function MainwaveDaily() {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 sm:p-6">
       <PageHeader
-        title="主升每日跟踪"
-        subtitle="先判断数据是否可信，再看候选推进与每日验收。"
-        actions={<Button onClick={() => void load(true)} disabled={loading}>{loading ? '刷新中…' : '刷新跟踪'}</Button>}
+        title="G3 周期选股与 AI 排雷"
+        subtitle="以五态大盘周期策略路由为唯一权威：进攻/轮动期输出生效冠军策略命中股，防守/冰点期严禁开新仓（下方主升池自动降级为观察池）。"
+        actions={<Button onClick={() => void load(true)} disabled={loading}>{loading ? '刷新中…' : '刷新选股'}</Button>}
       />
+
+      {/* 周期自适应生效策略中枢 */}
+      {routerSignal && (
+        <Card
+          className={
+            routerSignal.mode === 'cash_defense'
+              ? 'border-amber-500/45 bg-amber-950/15'
+              : 'border-emerald-500/45 bg-emerald-950/15'
+          }
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-white">今日周期生效选股策略</span>
+              <Badge color="blue">大盘周期：{routerSignal.regime_label}</Badge>
+              <Badge color={routerSignal.mode === 'cash_defense' ? 'amber' : 'emerald'}>
+                {routerSignal.active_strategy_name}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <Link to="/g3/desk" className="text-blue-400 hover:text-blue-300">去实战作战台预填 →</Link>
+              <Link to="/g3/mining" className="text-zinc-400 hover:text-zinc-200">调整周期路由 →</Link>
+            </div>
+          </div>
+          <p className="mt-1.5 text-xs text-zinc-200">{routerSignal.action_hint}</p>
+          {routerSignal.picks.length > 0 && (
+            <div className="mt-3 overflow-x-auto">
+              <Table dense>
+                <TableHead>
+                  <TableRow>
+                    <TableHeader>标的 / 行业</TableHeader>
+                    <TableHeader>参考买价</TableHeader>
+                    <TableHeader>止损 / 止盈</TableHeader>
+                    <TableHeader>20日超额</TableHeader>
+                    <TableHeader>AI 排雷</TableHeader>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {routerSignal.picks.map((pk) => (
+                    <TableRow key={pk.code}>
+                      <TableCell className="text-xs">
+                        <Link to={`/stock/${pk.code}`} className="font-medium text-white hover:text-blue-400">
+                          {pk.name} <span className="font-mono text-zinc-400">{pk.code}</span>
+                        </Link>{' '}
+                        <span className="text-zinc-400">· {pk.industry}</span>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{pk.ref_price.toFixed(2)}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        <span className="text-amber-300">{pk.stop_loss_price.toFixed(2)}</span> /{' '}
+                        <span className="text-rose-300">{pk.take_profit_price.toFixed(2)}</span>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{pk.rs_20d_vs_hs300 > 0 ? `+${pk.rs_20d_vs_hs300}%` : `${pk.rs_20d_vs_hs300}%`}</TableCell>
+                      <TableCell>
+                        <Badge color={pk.ai_blocked ? 'red' : pk.ai_risk_light === 'green' ? 'emerald' : 'amber'}>
+                          {pk.ai_blocked ? '⛔ 红灯禁买' : pk.ai_risk_light === 'green' ? '🛡️ 绿灯通过' : '黄灯/待排雷'}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </Card>
+      )}
 
       {error && (
         <div role="alert" className="rounded-lg border border-red-500/30 bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300">
