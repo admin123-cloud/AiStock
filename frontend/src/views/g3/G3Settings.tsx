@@ -45,7 +45,7 @@ export default function G3Settings() {
   const matrix = data?.strategy_matrix
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6">
+    <div className="flex w-full flex-col gap-5">
       <PageHeader
         title="G3 策略矩阵与风控总控台"
         subtitle="Phase 4 三腿互补矩阵 × 动态资金配额 × 6 大宽基 ETF 波动率目标趋势 × R34/R51/L2 风控门禁"

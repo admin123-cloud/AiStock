@@ -204,7 +204,7 @@ export default function G3Mining() {
     activeRun?.results.find((x) => x.rule.rule_id === selectedRuleId) || activeRun?.results[0] || null
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6">
+    <div className="flex w-full flex-col gap-5">
       <PageHeader
         title="G3 AI 策略挖掘工坊（Alpha Mining Studio）"
         subtitle="ClickHouse 只读全市场特征宽表 × 浅层决策树/AI假设双引擎 × 训练/验证/盲测样本外五道防过拟合硬门禁"

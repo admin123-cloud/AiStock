@@ -81,7 +81,7 @@ export default function G3Review() {
   const summary = attribution?.summary
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6">
+    <div className="flex w-full flex-col gap-5">
       <PageHeader
         title="G3 复盘与收益归因台账"
         subtitle="整合四维收益归因（Beta/Alpha/做T/执行偏离）、日终复盘、R40 影子做T与信号质量日报"

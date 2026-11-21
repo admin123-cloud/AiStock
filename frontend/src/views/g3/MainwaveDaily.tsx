@@ -145,7 +145,7 @@ export default function MainwaveDaily() {
   const minimumScore = data.contract?.entry?.minimum_score
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 sm:p-6">
+    <div className="flex w-full flex-col gap-4">
       <PageHeader
         title="G3 周期选股与 AI 排雷"
         subtitle="以五态大盘周期策略路由为唯一权威：进攻/轮动期输出生效冠军策略命中股，防守/冰点期严禁开新仓（下方主升池自动降级为观察池）。"

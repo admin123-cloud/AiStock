@@ -75,13 +75,15 @@ export function SidebarLayout({
       </header>
 
       {/* Content */}
-      <main className="flex flex-1 flex-col pb-4 lg:min-w-0 lg:pl-[19rem] lg:pr-12">
-        {/* Navbar on desktop —— 吸顶，与内容卡同宽居中 */}
+      <main className="flex flex-1 flex-col pb-4 lg:min-w-0 lg:pl-64">
+        {/* Navbar on desktop —— 吸顶，全宽自适应 */}
         <header className="sticky top-0 z-30 hidden border-b border-zinc-950/10 bg-white lg:block dark:border-white/10 dark:bg-zinc-950">
-          <div className="mx-auto flex max-w-[1400px] items-center px-2 py-3">{navbar}</div>
+          <div className="flex w-full items-center px-5 py-3">{navbar}</div>
         </header>
-        <div className="mx-auto w-full max-w-[1400px] grow p-5 lg:rounded-xl lg:bg-white lg:p-6 lg:shadow-sm lg:ring-1 lg:ring-zinc-950/10 dark:lg:bg-zinc-900 dark:lg:ring-white/15">
-          {children}
+        <div className="w-full grow p-4 lg:px-6 lg:py-5">
+          <div className="w-full lg:rounded-xl lg:bg-white lg:p-5 lg:shadow-sm lg:ring-1 lg:ring-zinc-950/10 dark:lg:bg-zinc-900 dark:lg:ring-white/15">
+            {children}
+          </div>
         </div>
       </main>
     </div>

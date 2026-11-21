@@ -803,7 +803,7 @@ export default function G3Desk() {
   const executions = data?.executions || []
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 sm:p-6">
+    <div className="flex w-full flex-col gap-5">
       <PageHeader
         title="G3 做T实战台 · 每日作战规划"
         subtitle={`规划日期 ${data?.trade_date || '—'} · 生成于 ${data?.plan_meta?.generated_at || data?.regime_meta?.generated_at || '—'} · 实时行情 × 价位标尺 × 日内敞口闭环`}
@@ -1223,10 +1223,10 @@ export default function G3Desk() {
                               </div>
                             )}
                           </TableCell>
-                          <TableCell className="max-w-xs text-[11px] text-zinc-300">
+                          <TableCell className="min-w-[260px] max-w-md whitespace-normal break-words text-[11px] leading-relaxed text-zinc-300">
                             {h.reasons.join('；') || h.ai_thesis || '—'}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="whitespace-nowrap">
                             {h.suggested_shares > 0 ? (
                               <Button
                                 outline
