@@ -59,6 +59,7 @@ def simulate_physical_dual_core(
     selector_fn: Callable[[pd.DataFrame], pd.DataFrame],
     *,
     name: str,
+    etf_mode: str = "risk_adj_mom",  # "risk_adj_mom" (#02) | "regime_focus" (#01)
     stock_cap: float = 0.50,
     max_slots: int = 4,
     trail_stop_pct: float = 0.10,
@@ -81,11 +82,12 @@ def simulate_physical_dual_core(
 
     all_etfs = list(piv_c.columns)
     non_cn_broad = [c for c in all_etfs if code_to_class.get(c) != "cn_broad"]
+    cn_broad_codes = [c for c in all_etfs if code_to_class.get(c) == "cn_broad"]
 
-    def _pick_etf(prev_dt: str, pool: list[str], k: int, per_class: bool) -> list[str]:
-        if prev_dt not in risk_adj_mom.index:
+    def _pick_etf(prev_dt: str, pool: list[str], score_df: pd.DataFrame, k: int, per_class: bool) -> list[str]:
+        if prev_dt not in score_df.index:
             return []
-        s_row = risk_adj_mom.loc[prev_dt]
+        s_row = score_df.loc[prev_dt]
         a_row = above_ma20.loc[prev_dt]
         r20_row = ret20.loc[prev_dt]
         cands = []
@@ -173,16 +175,32 @@ def simulate_physical_dual_core(
 
         days_since_rebal += 1
         need_etf_eval = panic_changed or (not panic_active and (days_since_rebal >= rebal_every or not etf_target_norm))
+        if etf_mode == "regime_focus" and i >= 2 and reg_prev != reg_map.get(dates[i - 2], reg_prev):
+            need_etf_eval = True
         if need_etf_eval:
             etf_target_norm = {}
             if panic_active:
                 etf_target_norm["159915.SZ"] = 0.30
                 etf_target_norm["512100.SH"] = 0.30
-                safe_top = _pick_etf(prev_dt, non_cn_broad, 1, False)
+                safe_top = _pick_etf(prev_dt, non_cn_broad, risk_adj_mom, 1, False)
                 sc = safe_top[0] if safe_top else SAFE_BOND_CODE
                 etf_target_norm[sc] = etf_target_norm.get(sc, 0.0) + 0.40
+            elif etf_mode == "regime_focus":
+                # 精确复刻 #01 AR3_9_RegimeFocus_Top1+Panic
+                if reg_prev in ("offensive", "extreme_offensive"):
+                    cn_top = _pick_etf(prev_dt, cn_broad_codes, ret20, 2, False)
+                    if cn_top:
+                        for c in cn_top:
+                            etf_target_norm[c] = 1.0 / len(cn_top)
+                    else:
+                        chosen = _pick_etf(prev_dt, non_cn_broad, ret20, 1, False)
+                        etf_target_norm[chosen[0] if chosen else SAFE_BOND_CODE] = 1.0
+                else:
+                    chosen = _pick_etf(prev_dt, non_cn_broad, ret20, 1, False)
+                    etf_target_norm[chosen[0] if chosen else SAFE_BOND_CODE] = 1.0
             else:
-                chosen = _pick_etf(prev_dt, all_etfs, 2, True)
+                # 精确复刻 #02 AR3_6_RiskAdjMom_Top2+Panic
+                chosen = _pick_etf(prev_dt, all_etfs, risk_adj_mom, 2, True)
                 if chosen:
                     for c in chosen:
                         etf_target_norm[c] = 1.0 / len(chosen)
@@ -466,24 +484,27 @@ def main() -> None:
     div_lookup = _load_dividend_lookup()
     piv_o, piv_c, code_to_class, _ = _load_etf_panels()
 
-    # 基准线：#02 纯跨资产 ETF
-    ar3_etf_nav, _ = simulate_cross_asset_strategy(
-        day_df, piv_o, piv_c, code_to_class,
-        mode="risk_adj_mom", top_k=2, rebal_every=5, one_per_class=True, use_panic_overlay=True,
-    )
-    etf_yearly = {
-        yr: _eval_nav(ar3_etf_nav.loc[[d for d in ar3_etf_nav.index if d.startswith(yr)]])
-        for yr in ("2023", "2024", "2025", "2026")
-    }
-    m_etf = _pack_metrics(ar3_etf_nav, splits)
-    print(
-        f"  {'BASE_#02_AR3_6_ETF_Only':44s} | 全={m_etf['full']['cum_ret_pct']:+6.1f}% (年{m_etf['full']['ann_ret_pct']:+5.1f}%) "
-        f"DD={m_etf['full']['max_dd_pct']:4.1f}% Sh={m_etf['full']['sharpe']:4.2f} Cal={m_etf['full']['calmar']:4.2f} | "
-        f"IS={m_etf['is']['cum_ret_pct']:+5.1f}% Val={m_etf['val']['cum_ret_pct']:+5.1f}% OOS={m_etf['oos']['cum_ret_pct']:+5.1f}% | "
-        f"分年: 23={etf_yearly['2023']['cum_ret_pct']:+5.1f}% 24={etf_yearly['2024']['cum_ret_pct']:+5.1f}% "
-        f"25={etf_yearly['2025']['cum_ret_pct']:+5.1f}% 26={etf_yearly['2026']['cum_ret_pct']:+5.1f}%",
-        flush=True,
-    )
+    # 基准线：#01 (AR3_9_RegimeFocus_Top1+Panic) 与 #02 (AR3_6_RiskAdjMom_Top2+Panic)
+    out_rows: list[dict[str, Any]] = []
+    for base_id, b_kw in [
+        ("BASE_#01_AR3_9_RegimeFocus_Top1+Panic", dict(mode="regime_focus", top_k=1, rebal_every=5, one_per_class=False, use_panic_overlay=True)),
+        ("BASE_#02_AR3_6_RiskAdjMom_Top2+Panic", dict(mode="risk_adj_mom", top_k=2, rebal_every=5, one_per_class=True, use_panic_overlay=True)),
+    ]:
+        b_nav, _ = simulate_cross_asset_strategy(day_df, piv_o, piv_c, code_to_class, **b_kw)
+        b_y = {
+            yr: _eval_nav(b_nav.loc[[d for d in b_nav.index if d.startswith(yr)]])
+            for yr in ("2023", "2024", "2025", "2026")
+        }
+        m_b = _pack_metrics(b_nav, splits)
+        out_rows.append({"id": base_id, "metrics": m_b, "meta": {"yearly": b_y}})
+        print(
+            f"  {base_id:44s} | 全={m_b['full']['cum_ret_pct']:+6.1f}% (年{m_b['full']['ann_ret_pct']:+5.1f}%) "
+            f"DD={m_b['full']['max_dd_pct']:4.1f}% Sh={m_b['full']['sharpe']:4.2f} Cal={m_b['full']['calmar']:4.2f} | "
+            f"IS={m_b['is']['cum_ret_pct']:+5.1f}% Val={m_b['val']['cum_ret_pct']:+5.1f}% OOS={m_b['oos']['cum_ret_pct']:+5.1f}% | "
+            f"分年: 23={b_y['2023']['cum_ret_pct']:+5.1f}% 24={b_y['2024']['cum_ret_pct']:+5.1f}% "
+            f"25={b_y['2025']['cum_ret_pct']:+5.1f}% 26={b_y['2026']['cum_ret_pct']:+5.1f}%",
+            flush=True,
+        )
 
     def sel_f2a_canslim_core(df: pd.DataFrame) -> pd.DataFrame:
         m = (
@@ -524,22 +545,49 @@ def main() -> None:
         sub["score"] = 0.5 * sub["np_yoy_rank"].fillna(0.5) + 0.5 * sub["rs20_rank"].fillna(0.5)
         return sub.sort_values("score", ascending=False)
 
+    def sel_f2a_f3a_blend(df: pd.DataFrame) -> pd.DataFrame:
+        """方案 A+B 交错混合：交替排列 F3A 回踩 Top 候选与 F2A 趋势 Top 候选。"""
+        a = sel_f3a_growth_pullback(df).head(8)
+        b = sel_f2a_canslim_core(df).head(8)
+        if a.empty:
+            return b
+        if b.empty:
+            return a
+        rows = []
+        seen: set[str] = set()
+        for k in range(max(len(a), len(b))):
+            if k < len(a):
+                c = str(a.iloc[k]["code"])
+                if c not in seen:
+                    rows.append(a.iloc[[k]])
+                    seen.add(c)
+            if k < len(b):
+                c = str(b.iloc[k]["code"])
+                if c not in seen:
+                    rows.append(b.iloc[[k]])
+                    seen.add(c)
+        return pd.concat(rows, ignore_index=True) if rows else a
+
     configs = [
-        ("PHYS_30pct_F2A_CANSLIM+#02_ETF", sel_f2a_canslim_core, 0.30, 60),
-        ("PHYS_40pct_F2A_CANSLIM+#02_ETF", sel_f2a_canslim_core, 0.40, 60),
-        ("PHYS_50pct_F2A_CANSLIM+#02_ETF", sel_f2a_canslim_core, 0.50, 60),
-        ("PHYS_30pct_F3A_Pullback+#02_ETF", sel_f3a_growth_pullback, 0.30, 45),
-        ("PHYS_40pct_F3A_Pullback+#02_ETF", sel_f3a_growth_pullback, 0.40, 45),
-        ("PHYS_50pct_F3A_Pullback+#02_ETF", sel_f3a_growth_pullback, 0.50, 45),
+        # --- 结合 #01 (AR3_9_RegimeFocus_Top1+Panic) ---
+        ("PHYS_30pct_F3A(A)+#01_RegimeFocus", sel_f3a_growth_pullback, "regime_focus", 0.30, 45),
+        ("PHYS_40pct_F3A(A)+#01_RegimeFocus", sel_f3a_growth_pullback, "regime_focus", 0.40, 45),
+        ("PHYS_50pct_F3A(A)+#01_RegimeFocus", sel_f3a_growth_pullback, "regime_focus", 0.50, 45),
+        ("PHYS_30pct_F2A(B)+#01_RegimeFocus", sel_f2a_canslim_core, "regime_focus", 0.30, 60),
+        ("PHYS_40pct_F2A(B)+#01_RegimeFocus", sel_f2a_canslim_core, "regime_focus", 0.40, 60),
+        ("PHYS_50pct_F2A(B)+#01_RegimeFocus", sel_f2a_canslim_core, "regime_focus", 0.50, 60),
+        ("PHYS_40pct_F3A+F2A(AB)+#01_RegimeFocus", sel_f2a_f3a_blend, "regime_focus", 0.40, 50),
+        ("PHYS_50pct_F3A+F2A(AB)+#01_RegimeFocus", sel_f2a_f3a_blend, "regime_focus", 0.50, 50),
+        # --- 对照组：结合 #02 (AR3_6_RiskAdjMom_Top2+Panic) ---
+        ("PHYS_50pct_F3A(A)+#02_RiskAdjTop2", sel_f3a_growth_pullback, "risk_adj_mom", 0.50, 45),
+        ("PHYS_40pct_F2A(B)+#02_RiskAdjTop2", sel_f2a_canslim_core, "risk_adj_mom", 0.40, 60),
+        ("PHYS_50pct_F3A+F2A(AB)+#02_RiskAdjTop2", sel_f2a_f3a_blend, "risk_adj_mom", 0.50, 50),
     ]
 
-    out_rows: list[dict[str, Any]] = [
-        {"id": "BASE_#02_AR3_6_ETF_Only", "metrics": m_etf, "meta": {"yearly": etf_yearly}}
-    ]
-    for cid, fn, cap, hold in configs:
+    for cid, fn, emode, cap, hold in configs:
         nav_s, meta = simulate_physical_dual_core(
             day_df, by_date_rows, px_lookup, div_lookup, piv_o, piv_c, code_to_class, fn,
-            name=cid, stock_cap=cap, max_slots=4, trail_stop_pct=0.10, hard_stop_pct=-0.10, max_hold_days=hold,
+            name=cid, etf_mode=emode, stock_cap=cap, max_slots=4, trail_stop_pct=0.10, hard_stop_pct=-0.10, max_hold_days=hold,
         )
         m = _pack_metrics(nav_s, splits)
         y = meta["yearly"]
@@ -554,9 +602,9 @@ def main() -> None:
             flush=True,
         )
 
-    out_path = runtime_path("mining_runs", "ar3f_dual_core_physical_audit_v1.json")
+    out_path = runtime_path("mining_runs", "ar3f_dual_core_physical_audit_v2_01vs02.json")
     out_path.write_text(json.dumps({"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"), "results": out_rows}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n物理级单账户验真完成 ({time.time() - t0:.1f}s)，已落盘: {out_path}", flush=True)
+    print(f"\n物理级单账户 #01 vs #02 验真完成 ({time.time() - t0:.1f}s)，已落盘: {out_path}", flush=True)
 
 
 if __name__ == "__main__":
