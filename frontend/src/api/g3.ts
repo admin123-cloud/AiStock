@@ -1413,3 +1413,166 @@ export const syncG3AR3Data = (payload?: { sync_etf?: boolean; sync_financials?: 
     null,
     { params: payload, timeout: 180000 }
   )
+
+export interface G3AR3SellOrder {
+  code: string
+  name: string
+  is_etf: boolean
+  side: 'SELL'
+  order_type: string
+  current_shares: number
+  available_shares: number
+  full_clear_shares: number
+  suggested_shares: number
+  limit_price: number
+  ref_price: number
+  est_amount: number
+  profit_pct?: number | null
+  reason: string
+  blocked_t1?: boolean
+}
+
+export interface G3AR3BuyOrder {
+  code: string
+  name: string
+  asset_kind: 'stock' | 'etf' | string
+  is_etf: boolean
+  side: 'BUY'
+  order_type: string
+  target_weight_pct: number
+  source_label: string
+  ref_price: number
+  limit_price: number
+  stop_loss_price: number
+  immediate_shares: number
+  est_immediate_amount: number
+  post_sell_shares: number
+  est_post_sell_amount: number
+  suggested_shares: number
+  reason: string
+  qdii_notice?: string | null
+}
+
+export interface G3AR3RebalancePlanResponse {
+  schema: string
+  date: string
+  generated_at: string
+  regime: string
+  regime_label: string
+  is_offensive: boolean
+  smooth_step: boolean
+  config: G3AR3Config
+  account: {
+    account_id: string
+    label: string
+    available: boolean
+    total_assets: number
+    available_cash: number
+    market_value: number
+    position_pct: number
+    snapshot_at?: string | null
+    available_accounts: Array<{
+      account_id: string
+      label: string
+      total_assets?: number | null
+      available_cash?: number | null
+      market_value?: number | null
+      holdings_count: number
+    }>
+  }
+  cash_flow: {
+    current_available_cash: number
+    est_sell_proceeds: number
+    est_post_sell_cash: number
+    immediate_buy_budget: number
+    post_sell_buy_budget: number
+  }
+  sell_orders: G3AR3SellOrder[]
+  buy_orders: G3AR3BuyOrder[]
+  hold_keep: Array<{ code: string; name: string; shares: number; market_value: number; target_weight_pct: number; action: string; reason: string }>
+  order_intents: Array<Record<string, unknown>>
+  money_effect_20d?: G3AR3DualCoreRadarResponse['stock_radar']['money_effect_20d']
+  execution_adapter: {
+    active: string
+    mode: string
+    allow_submit: boolean
+    qmt_ready_protocol: string
+  }
+}
+
+export interface G3AR3BatchPrefillResponse {
+  status: string
+  account_id: string
+  account_label: string
+  mode: string
+  allow_submit: boolean
+  total_orders: number
+  dispatched_count: number
+  blocked_count: number
+  results: Array<{
+    code: string
+    name: string
+    side: string
+    price: number
+    shares: number
+    draft_id?: string | null
+    approved: boolean
+    dispatched: boolean
+    blockers: string[]
+    warnings: string[]
+  }>
+}
+
+export interface G3AR3ShadowReconcileResponse {
+  schema: string
+  account_id: string
+  account_label: string
+  days_tracked: number
+  total_planned_orders: number
+  total_executed_orders: number
+  overall_completion_pct?: number | null
+  avg_slippage_bps?: number | null
+  daily_records: Array<{
+    date: string
+    regime: string
+    planned_orders: number
+    executed_orders: number
+    completion_pct: number
+    items: Array<{
+      code: string
+      name: string
+      side: string
+      plan_shares: number
+      plan_price: number
+      actual_shares: number
+      actual_price?: number | null
+      slippage_bps?: number | null
+      status: string
+    }>
+  }>
+}
+
+export const getG3AR3RebalancePlan = (accountId = 'acct1', smoothStep = true) =>
+  request.get<unknown, G3AR3RebalancePlanResponse>('/g3/mining/ar3/rebalance-plan', {
+    params: { account_id: accountId, smooth_step: smoothStep, persist: true },
+    timeout: 60000,
+  })
+
+export const batchPrefillG3AR3Orders = (payload: {
+  account_id: string
+  auto_split_l2?: boolean
+  orders: Array<{ code: string; name: string; side: 'BUY' | 'SELL'; price: number; shares: number; order_type?: string }>
+}) => request.post<unknown, G3AR3BatchPrefillResponse>('/g3/mining/ar3/batch-prefill', payload, { timeout: 60000 })
+
+export const getG3AR3ShadowReconcile = (accountId = 'acct1', days = 20) =>
+  request.get<unknown, G3AR3ShadowReconcileResponse>('/g3/mining/ar3/shadow-reconcile', {
+    params: { account_id: accountId, days },
+    timeout: 30000,
+  })
+
+export const pushG3AR3PlanWechat = (accountId = 'acct1', smoothStep = true) =>
+  request.post<unknown, { status: string; wechat: Record<string, unknown>; plan_date?: string }>(
+    '/g3/mining/ar3/push-plan-wechat',
+    null,
+    { params: { account_id: accountId, smooth_step: smoothStep }, timeout: 60000 }
+  )

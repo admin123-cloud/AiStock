@@ -246,4 +246,95 @@ def test_ar3_dual_core_config_hot_switch(tmp_path: Path, monkeypatch) -> None:
         ar3.save_ar3_config(active_stock_mode="invalid_mode")
 
 
+def test_order_prefill_defensive_etf_whitelist_vs_stock_block(tmp_path: Path) -> None:
+    from datetime import datetime, timedelta, timezone
+    from services.g3.order_prefill import evaluate_and_build_prefill_draft
+
+    bj = timezone(timedelta(hours=8))
+    now_t = datetime(2026, 11, 23, 10, 0, 0, tzinfo=bj)
+    gate_def = {"regime": "defensive", "regime_label": "防守退潮", "allow_new_mainwave": False}
+
+    # 1. 防守期买入 A 股个股 base_rebalance -> 必须硬拦截
+    res_stk = evaluate_and_build_prefill_draft(
+        code="002015", name="协鑫能科", side="BUY", price=12.0, shares=1000,
+        order_type="base_rebalance", account_id="acct1", live_price=12.0,
+        available_cash=50000.0, market_gate=gate_def, now_bj=now_t,
+        draft_dir=tmp_path, persist=False,
+    )
+    assert res_stk["approved"] is False
+    assert any("大盘总闸门拦截" in b for b in res_stk["blockers"])
+
+    # 2. 防守期买入 AR3 跨资产避险 ETF（512890 红利低波ETF）-> 必须放行
+    res_etf = evaluate_and_build_prefill_draft(
+        code="512890", name="红利低波ETF", side="BUY", price=1.27, shares=10000,
+        order_type="base_rebalance", account_id="acct1", live_price=1.27,
+        available_cash=50000.0, market_gate=gate_def, now_bj=now_t,
+        draft_dir=tmp_path, persist=False,
+    )
+    assert res_etf["approved"] is True
+    assert not res_etf["blockers"]
+
+
+def test_ar3_rebalance_compiler_single_account_and_shadow(tmp_path: Path) -> None:
+    from services.mining.ar3_rebalance_compiler import compile_ar3_rebalance_plan, reconcile_ar3_shadow_ledger
+
+    fake_overview = {
+        "accounts": [
+            {
+                "account_id": "acct1",
+                "label": "广发证券-曾*",
+                "funds": {"total_assets": 100000.0, "available": 20000.0, "market_value": 80000.0},
+                "holdings": [
+                    {"code": "002015", "name": "协鑫能科", "quantity": 5000, "available_quantity": 5000, "current_price": 16.0, "cost_price": 20.0},
+                ],
+                "fills": [],
+            },
+            {
+                "account_id": "acct2",
+                "label": "广发证券-王*美",
+                "funds": {"total_assets": 500000.0, "available": 500000.0, "market_value": 0.0},
+                "holdings": [],
+                "fills": [],
+            },
+        ]
+    }
+    fake_radar = {
+        "regime": "defensive",
+        "is_offensive": False,
+        "config": {"active_stock_mode": "ab_blend", "etf_core_mode": "regime_focus", "stock_budget_cap_pct": 50, "max_slots": 4},
+        "etf_radar": {
+            "available": True,
+            "panic_triggered": False,
+            "targets": [
+                {"code": "512890", "name": "红利低波ETF", "close": 1.25, "ma20": 1.20, "basket_weight_pct": 100.0, "asset_class_label": "A股红利", "reason": "非A股动量Top1"},
+            ],
+        },
+        "stock_radar": {"available": True, "exec_queue": [], "f2a_candidates": [], "f3a_candidates": []},
+    }
+    plan = compile_ar3_rebalance_plan(
+        market_gate={"regime": "defensive", "regime_label": "防守退潮"},
+        account_id="acct1",
+        smooth_step=True,
+        persist=True,
+        accounts_overview=fake_overview,
+        ar3_radar=fake_radar,
+        base_dir=tmp_path,
+    )
+    # 严格只算 acct1 的 10 万，绝不混入 acct2 的 50 万
+    assert plan["account"]["account_id"] == "acct1"
+    assert plan["account"]["total_assets"] == 100000.0
+    assert len(plan["sell_orders"]) == 1
+    assert plan["sell_orders"][0]["code"] == "002015"
+    assert plan["sell_orders"][0]["suggested_shares"] % 100 == 0
+    assert len(plan["buy_orders"]) == 1
+    assert plan["buy_orders"][0]["code"] == "512890"
+    assert plan["buy_orders"][0]["immediate_shares"] % 100 == 0
+    assert plan["buy_orders"][0]["est_post_sell_amount"] <= plan["cash_flow"]["post_sell_buy_budget"] + 200.0
+
+    rec = reconcile_ar3_shadow_ledger(account_id="acct1", days=5, base_dir=tmp_path, accounts_overview=fake_overview)
+    assert rec["days_tracked"] == 1
+    assert rec["total_planned_orders"] == len(plan["order_intents"])
+
+
+
 

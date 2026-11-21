@@ -4,6 +4,7 @@ import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/catalyst/table'
 import { Card } from '@/components/ui'
+import AR3ExecutionOrderCard from '@/views/g3/AR3ExecutionOrderCard'
 import {
   getG3AR3Radar,
   syncG3AR3Data,
@@ -41,6 +42,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
   const [notice, setNotice] = useState('')
   const [stockTab, setStockTab] = useState<'exec' | 'f2a' | 'f3a'>('exec')
   const [showEtfUniverse, setShowEtfUniverse] = useState(false)
+  const [planReloadToken, setPlanReloadToken] = useState(0)
 
   const loadRadar = useCallback(async (forceRefresh = false) => {
     setLoading(true)
@@ -67,7 +69,8 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
     try {
       const res = await updateG3AR3Config(patch)
       setRadar(res.radar)
-      setNotice(`已切换主引擎配置：${label}`)
+      setPlanReloadToken((n) => n + 1)
+      setNotice(`已切换主引擎配置：${label}，上方最终买卖单已同步重算。`)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
       setError(err.response?.data?.detail || err.message || '切换 AR3 主引擎失败')
@@ -147,6 +150,9 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
 
       {radar && cfg && (
         <div className="mt-3 space-y-4">
+          {/* 0. 唯一权威：主力单账号 ct1曾 今日最终买卖执行单（先卖后买精确100股 + 一键顺序预填 + Shadow对账） */}
+          <AR3ExecutionOrderCard reloadToken={planReloadToken} />
+
           {/* 1. 主引擎热切换控制台 + 近20日赚钱效应指示仪 */}
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-3">

@@ -15,6 +15,13 @@ from services.mining.ar3_dual_core_live import (
     invalidate_ar3_radar_cache,
     save_ar3_config,
 )
+from services.mining.ar3_rebalance_compiler import (
+    DEFAULT_PRIMARY_ACCOUNT_ID,
+    compile_ar3_rebalance_plan,
+    execute_ar3_batch_prefill,
+    format_ar3_plan_wechat_markdown,
+    reconcile_ar3_shadow_ledger,
+)
 from services.mining.backtest_benchmark import build_ar1_historical_backtest_report
 from services.mining.backtest_engine import RuleSpec
 from services.mining.contract_exporter import export_candidate_contract
@@ -371,3 +378,95 @@ def post_ar3_sync_data(sync_etf: bool = True, sync_financials: bool = False) -> 
     gate, panic = _resolve_live_gate_and_panic()
     radar = build_ar3_dual_core_radar(market_gate=gate, panic_signal=panic, force_refresh=True)
     return {"status": "ok", "sync": summary, "radar": radar}
+
+
+@router.get("/ar3/rebalance-plan")
+def get_ar3_rebalance_plan(
+    account_id: str = DEFAULT_PRIMARY_ACCOUNT_ID,
+    smooth_step: bool = True,
+    persist: bool = True,
+) -> dict[str, Any]:
+    """返回主力单账号（默认 acct1 / ct1曾）的唯一权威 AR3 v3.0 今日精确买卖调仓单。"""
+    gate, panic = _resolve_live_gate_and_panic()
+    try:
+        return compile_ar3_rebalance_plan(
+            market_gate=gate,
+            panic_signal=panic,
+            account_id=account_id.strip() or DEFAULT_PRIMARY_ACCOUNT_ID,
+            smooth_step=smooth_step,
+            persist=persist,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"编译 AR3 调仓单失败: {exc}") from exc
+
+
+class AR3BatchPrefillOrderItem(BaseModel):
+    code: str
+    name: str = ""
+    side: str
+    price: float
+    shares: int
+    order_type: str = "base_rebalance"
+
+
+class AR3BatchPrefillRequest(BaseModel):
+    account_id: str = DEFAULT_PRIMARY_ACCOUNT_ID
+    auto_split_l2: bool = True
+    orders: list[AR3BatchPrefillOrderItem] = Field(default_factory=list)
+
+
+@router.post("/ar3/batch-prefill")
+def post_ar3_batch_prefill(req: AR3BatchPrefillRequest) -> dict[str, Any]:
+    """Scoped-write：按先卖后买顺序将已选 AR3 委托逐笔通过 L2 硬风控预检并派发至同花顺预填桥（严格 prefill_only）。"""
+    if not req.orders:
+        raise HTTPException(status_code=400, detail="请至少勾选 1 笔待预填委托")
+    gate, _ = _resolve_live_gate_and_panic()
+    try:
+        return execute_ar3_batch_prefill(
+            account_id=req.account_id.strip() or DEFAULT_PRIMARY_ACCOUNT_ID,
+            orders=[o.model_dump() for o in req.orders],
+            market_gate=gate,
+            auto_split_l2=req.auto_split_l2,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"批量预填派发失败: {exc}") from exc
+
+
+@router.get("/ar3/shadow-reconcile")
+def get_ar3_shadow_reconcile(
+    account_id: str = DEFAULT_PRIMARY_ACCOUNT_ID,
+    days: int = 20,
+) -> dict[str, Any]:
+    """返回近 N 日 AR3 计划单 vs 实盘成交回执 Shadow Ledger 对账报告。"""
+    try:
+        return reconcile_ar3_shadow_ledger(
+            account_id=account_id.strip() or DEFAULT_PRIMARY_ACCOUNT_ID,
+            days=max(1, min(60, int(days))),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Shadow Ledger 对账失败: {exc}") from exc
+
+
+@router.post("/ar3/push-plan-wechat")
+def post_ar3_push_plan_wechat(
+    account_id: str = DEFAULT_PRIMARY_ACCOUNT_ID,
+    smooth_step: bool = True,
+) -> dict[str, Any]:
+    """Scoped-write：立即编译并将今日 AR3 v3.0 最终买卖调仓单推送到微信。"""
+    from services.trading.t_notify import send_wechat_notification
+
+    gate, panic = _resolve_live_gate_and_panic()
+    plan = compile_ar3_rebalance_plan(
+        market_gate=gate,
+        panic_signal=panic,
+        account_id=account_id.strip() or DEFAULT_PRIMARY_ACCOUNT_ID,
+        smooth_step=smooth_step,
+        persist=True,
+    )
+    md = format_ar3_plan_wechat_markdown(plan)
+    res = send_wechat_notification(
+        title=f"AR3 v3.0 今日买卖单 ({plan.get('date')}) · {plan.get('regime_label')}",
+        content=md,
+        bypass_trading_hours=True,
+    )
+    return {"status": "ok" if res.get("ok") else "failed", "wechat": res, "plan_date": plan.get("date")}

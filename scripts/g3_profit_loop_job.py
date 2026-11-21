@@ -88,12 +88,47 @@ def run_premarket(push: bool) -> int:
     )
     if push:
         res = _http_json("/api/g3/premarket-brief/push-wechat", method="POST", body={}, timeout=30)
-        _log(f"微信推送完成: ok={res.get('ok')} channel={res.get('channel')} detail={res.get('detail')}")
+        _log(f"盘前简报微信推送完成: ok={res.get('ok')} channel={res.get('channel')} detail={res.get('detail')}")
+        try:
+            ar3_res = _http_json("/api/g3/mining/ar3/push-plan-wechat?account_id=acct1", method="POST", body={}, timeout=60)
+            _log(f"AR3 v3.0 今日精确买卖单微信推送完成: status={ar3_res.get('status')} date={ar3_res.get('plan_date')}")
+        except Exception as exc:
+            _log(f"WARN AR3 买卖单推送失败: {exc}")
     return 0
 
 
 def run_postclose() -> int:
-    _log("=== 启动盘后盈利闭环作业 (17:45) ===")
+    _log("=== 启动盘后盈利闭环作业 (17:45 · 含 AR3 v3.0 数据喂料与 Shadow 对账) ===")
+    # 1. 自动同步 AR3 独立表：每日刷新 14 只跨资产 ETF，每周五同步增量财报/业绩预告/除权分红
+    try:
+        is_fri = datetime.now(BJ_TZ).weekday() == 4
+        sync_q = f"/api/g3/mining/ar3/sync?sync_etf=true&sync_financials={'true' if is_fri else 'false'}"
+        sr = _http_json(sync_q, method="POST", body={}, timeout=180)
+        _log(f"AR3 数据自动喂料完成 (sync_financials={is_fri}): status={sr.get('status')}")
+    except Exception as exc:
+        _log(f"WARN AR3 数据自动喂料失败（继续后续步骤）: {exc}")
+
+    # 2. 自动把当日同花顺回执入账，并运行 AR3 Shadow Ledger 对账与预编译明日调仓预案
+    try:
+        fills_res = _http_json("/api/g3/desk/sync-fills", method="POST", body={}, timeout=30)
+        _log(f"成交回执自动入账: {fills_res.get('status') or fills_res}")
+    except Exception as exc:
+        _log(f"WARN 回执入账跳过: {exc}")
+
+    try:
+        rec = _http_json("/api/g3/mining/ar3/shadow-reconcile?account_id=acct1&days=20", method="GET", timeout=30)
+        _log(
+            f"AR3 Shadow 对账 (acct1): tracked={rec.get('days_tracked')}d "
+            f"completion={rec.get('overall_completion_pct')}% avg_slip={rec.get('avg_slippage_bps')}bps"
+        )
+        plan = _http_json("/api/g3/mining/ar3/rebalance-plan?account_id=acct1&smooth_step=true&persist=true", method="GET", timeout=60)
+        _log(
+            f"AR3 明日调仓预案已固化: sells={len(plan.get('sell_orders') or [])} "
+            f"buys={len(plan.get('buy_orders') or [])} regime={plan.get('regime')}"
+        )
+    except Exception as exc:
+        _log(f"WARN AR3 对账/预案生成异常: {exc}")
+
     mw = _http_json("/api/g3/mainwave?refresh=true", method="GET", timeout=90)
     gate = _http_json("/api/g3/market-gate", method="GET", timeout=30)
     desk = _http_json("/api/g3/desk", method="GET", timeout=30)

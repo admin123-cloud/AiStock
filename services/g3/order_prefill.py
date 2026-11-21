@@ -28,6 +28,14 @@ DEFAULT_MAX_DEVIATION_PCT = 0.5
 DEFAULT_MAX_ORDER_AMOUNT = 25000.0
 NO_NEW_POS_AFTER = dtime(14, 30, 0)
 
+# AR3 v3.0 跨资产全天候 ETF 白名单（防守期允许切换至红利/黄金/国债/跨境/冰点反抽 ETF，但严禁买个股）
+AR3_CROSS_ASSET_ETF_WHITELIST = frozenset({
+    "510300", "510500", "512100", "159915", "588000",
+    "512890", "510880", "518880",
+    "513100", "513500", "513180", "513050",
+    "511260", "511090",
+})
+
 
 def _draft_store_dir(base_dir: Optional[Path] = None) -> Path:
     p = base_dir or runtime_path("g3_prefill_drafts")
@@ -115,17 +123,24 @@ def evaluate_and_build_prefill_draft(
         else "参数无效：需为 BUY/SELL、价格 > 0 且股数为 100 整数倍",
     )
 
-    # 2. 大盘总闸门联动（防守期严禁 base_rebalance 买入/开新仓）
+    # 2. 大盘总闸门联动（防守期严禁个股 base_rebalance 买入；AR3 跨资产避险/轮动 ETF 白名单豁免）
     if isinstance(market_gate, Mapping):
         allow_new = bool(market_gate.get("allow_new_mainwave", True))
         regime_label = str(market_gate.get("regime_label") or market_gate.get("regime") or "")
         if side_u == "BUY" and otype == "base_rebalance" and not allow_new:
-            _add(
-                "market_regime_gate",
-                False,
-                f"大盘总闸门拦截：当前【{regime_label}】严禁开新仓或加底仓（base_rebalance BUY）",
-                hard=True,
-            )
+            if code6 in AR3_CROSS_ASSET_ETF_WHITELIST:
+                _add(
+                    "market_regime_gate",
+                    True,
+                    f"AR3 v3.0 跨资产避险/轮动 ETF 白名单放行（当前：{regime_label}，仅个股禁开新仓）",
+                )
+            else:
+                _add(
+                    "market_regime_gate",
+                    False,
+                    f"大盘总闸门拦截：当前【{regime_label}】严禁开新仓或加底仓（base_rebalance BUY）",
+                    hard=True,
+                )
         elif side_u == "BUY" and otype == "t_trade" and not allow_new:
             _add(
                 "market_regime_gate",
