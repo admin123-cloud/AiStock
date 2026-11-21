@@ -66,9 +66,9 @@ def test_strategy_matrix_offensive_with_long_etf_and_brief_integration(tmp_path:
     }
     matrix = build_strategy_matrix(market_gate=gate, index_closes_fetcher=fetcher)
     assert matrix["defense_auto_cash"] is False
-    assert matrix["allocation"]["offense_pct"] == 45.0
-    assert matrix["allocation"]["defense_etf_pct"] == 15.0
-    assert matrix["allocation"]["cash_pct"] == 25.0
+    assert matrix["allocation"]["offense_pct"] == 40.0
+    assert matrix["allocation"]["defense_etf_pct"] == 40.0
+    assert matrix["allocation"]["cash_pct"] == 10.0
 
     brief = generate_premarket_brief(
         market_gate=gate,
@@ -76,4 +76,4 @@ def test_strategy_matrix_offensive_with_long_etf_and_brief_integration(tmp_path:
         base_dir=tmp_path / "brief",
     )
     assert "三腿配额" in brief["markdown_text"]
-    assert "进攻腿(主升) 45%" in brief["markdown_text"]
+    assert "进攻腿(主升) 40%" in brief["markdown_text"]

@@ -33,11 +33,12 @@ DEFENSE_ETF_UNIVERSE: tuple[dict[str, str], ...] = (
     {"index_code": "000688.SH", "index_name": "科创50", "etf_code": "588000.SH", "etf_name": "科创50ETF", "style": "硬科技"},
 )
 
-# 与 Phase 1A / R51 对齐的三档市场动态配额（总和 = 100%）
+# 与 AR1 v2.0 实证宪法对齐的三档市场动态配额（总和 = 100%）
+# 进攻期 80% 仓位 = 40% 机构低波慢牛个股(4槽每行业限1只) + 40% 强趋势宽基动量Top2 ETF + 10% 做T增强 + 10% 现金
 REGIME_ALLOCATIONS: dict[str, dict[str, float]] = {
-    "offensive": {"offense_pct": 45.0, "defense_etf_pct": 15.0, "t_enhance_pct": 15.0, "cash_pct": 25.0},
-    "balanced": {"offense_pct": 20.0, "defense_etf_pct": 15.0, "t_enhance_pct": 15.0, "cash_pct": 50.0},
-    "defensive": {"offense_pct": 0.0, "defense_etf_pct": 15.0, "t_enhance_pct": 10.0, "cash_pct": 75.0},
+    "offensive": {"offense_pct": 40.0, "defense_etf_pct": 40.0, "t_enhance_pct": 10.0, "cash_pct": 10.0},
+    "balanced": {"offense_pct": 15.0, "defense_etf_pct": 20.0, "t_enhance_pct": 15.0, "cash_pct": 50.0},
+    "defensive": {"offense_pct": 0.0, "defense_etf_pct": 0.0, "t_enhance_pct": 10.0, "cash_pct": 90.0},
 }
 
 TARGET_ANNUAL_VOL = 0.15  # 稳健腿波动率目标 15%

@@ -35,15 +35,15 @@ ALL_REGIMES: list[dict[str, str]] = [
     {"regime": "extreme_panic", "label": "极端恐慌"},
 ]
 
-# 默认周期推荐绑定（仅绑定已通过 5/5 硬门禁的真金影子合约；防守/恐慌默认现金防御）
+# 默认周期推荐绑定（AR1 v2.0：进攻期全面升级为机构大票低波慢牛+10%移动止盈，淘汰旧追高策略）
 _DEFAULT_PREFERENCE: dict[str, list[str]] = {
     "offensive": [
+        "ar1_v2_inst_lowvol_trail10_shadow_v1",
         "mined_mw_hyp_04_rs_momentum_clean_candle_shadow_v1",
-        "mined_mw_hyp_01_trend_breakout_sector_shadow_v1",
     ],
     "extreme_offensive": [
+        "ar1_v2_inst_lowvol_trail10_shadow_v1",
         "mined_mw_hyp_01_trend_breakout_sector_shadow_v1",
-        "mined_mw_hyp_04_rs_momentum_clean_candle_shadow_v1",
     ],
     "balanced": [
         "mined_sector_rotation_tree_05_shadow_v1",
@@ -249,6 +249,9 @@ def scan_active_strategy_signals(
     if matched_total > 0:
         if rank_by in matched.columns:
             matched.sort_values(rank_by, ascending=rank_asc, inplace=True)
+        one_per_industry = bool(entry.get("one_per_industry") or (contract.get("portfolio") or {}).get("one_per_industry"))
+        if one_per_industry and "industry" in matched.columns:
+            matched = matched.drop_duplicates(subset=["industry"], keep="first")
         saved_screening = load_saved_screening()
         slots = max(1, int((contract.get("portfolio") or {}).get("slots") or 3))
         per_slot_cap = round(float(target_position_cap_pct) / slots, 1) if target_position_cap_pct > 0 else 10.0
