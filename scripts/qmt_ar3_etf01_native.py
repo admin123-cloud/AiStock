@@ -1,7 +1,7 @@
 #coding:gbk
 """
 ===============================================================================
-AR3 v3.0 阶段一  -  国金标准 QMT 纯内置原生策略（#01 跨资产 ETF 全天候轮动 + AR2_2A 冰点反抽）
+AR4.5-L3b  -  国金标准 QMT 纯内置原生策略（跨资产风险调整 Top2 逆波轮动 + AR2_2A 冰点反抽）
 ===============================================================================
 核心特性（100% 适配 2026-10 监管与国金标准 QMT v2.1.19+ 环境）：
   1. 零文件 IO（不调用 open / os / pathlib 读写任何磁盘文件）
@@ -9,7 +9,7 @@ AR3 v3.0 阶段一  -  国金标准 QMT 纯内置原生策略（#01 跨资产 ETF 全天候轮动 + AR2
   3. 零 MiniQMT / xtquant 外部进程依赖（100% 运行在标准大 QMT 内置 Python 3.6 引擎内）
   4. 策略口径与 AiStock AR3 v3.0 #01 实证冠军（AR3_9_RegimeFocus_Top1 + AR2_2A）100% 一致：
        - 进攻期（上证确认上升）：配 A 股强势宽基 Top2（站上 MA20 且 20日动量 > 0）
-       - 非进攻期（横盘/防守/冰点未企稳）：100% 聚焦非 A 股跨资产 20日动量 Top1
+       - 非进攻期（横盘/防守/冰点未企稳）：100% 配置非 A 股跨资产风险调整动量 Top2 逆波动率加权（卡玛 2.17 / OOS回撤腰斩）
          （红利低波 / 黄金 / 纳指 / 标普500 / 恒生科技 / 中概互联；全破位切十年国债 511260.SH）
        - 极端冰点右侧反抽（AR2_2A）：防守态 + 沪深300宽度 <= 18% + 创业板/中证1000均涨 >= +0.50%
          触发 30% 创业板ETF(159915.SZ) + 30% 中证1000ETF(512100.SH) + 40% 非A股最强避险ETF
@@ -43,6 +43,8 @@ REBALANCE_TIME_HHMM = 935          # 每日主调仓触发时间（09:35，避开集合竞价剧烈
 BUY_SLIPPAGE_PCT = 0.002           # 买入保护限价上浮 +0.2%
 SELL_SLIPPAGE_PCT = 0.002          # 卖出保护限价下浮 -0.2%
 ONLY_MANAGE_ETF_UNIVERSE = True    # 仅管理下方 14 只 AR3 ETF，绝不卖出账户中其他个股
+ALLOW_HK_TECH = True               # AR4.5 南向滤网开关：若作战台提示南向20日净流出(<0亿)，改为 False 拦截港科
+HK_SOUTHBOUND_BOOST = False        # 若作战台提示南向20日净买>=600亿，可改为 True 享+25%动量加权
 
 # AR2_2A 极端冰点反抽参数（与 AiStock 实证参数一致）
 PANIC_BREADTH_THRESHOLD_PCT = 18.0 # 市场站上 MA20 宽度 <= 18% 进入冰点戒备
@@ -234,21 +236,49 @@ def compute_etf_metrics(close_map):
 
 def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
     """
-    AR3 #01（AR3_9_RegimeFocus_Top1 + AR2_2A 冰点反抽）目标权重决策器。
+    AR4.5-L3b（进攻期A股宽基Top2 + 非进攻期非A股风险调整动量Top2逆波动加权 + AR2_2A冰点反抽）目标权重决策器。
     返回: (target_weights_dict, headline_str)
       target_weights_dict: {code: weight_0_to_1}（总和 = 1.0）
     """
-    def _pick_top(pool, key, k):
+    hk_codes = set(["513180.SH", "513050.SH"])
+
+    def _score_ram(item):
+        sc = float(item.get("risk_adj_mom", 0.0))
+        if item["code"] in hk_codes and HK_SOUTHBOUND_BOOST:
+            sc = sc * 1.25
+        return sc
+
+    def _pick_top_raw(pool, key, k):
         cands = [x for x in pool if x["eligible"]]
         cands.sort(key=lambda x: x[key], reverse=True)
         return cands[:k]
+
+    def _pick_non_cn_ar45(pool, k):
+        cands = []
+        for x in pool:
+            if not x["eligible"]:
+                continue
+            if (x["code"] in hk_codes) and (not ALLOW_HK_TECH):
+                continue
+            cands.append(x)
+        cands.sort(key=_score_ram, reverse=True)
+        return cands[:k]
+
+    def _inv_vol_dict(items):
+        if not items:
+            return {SAFE_BOND_CODE: 1.0}
+        if len(items) == 1:
+            return {items[0]["code"]: 1.0}
+        ivs = [1.0 / max(4.0, float(x.get("vol_20d_pct", 20.0))) for x in items]
+        total_iv = sum(ivs)
+        return dict((x["code"], round(iv / total_iv, 4)) for x, iv in zip(items, ivs))
 
     cn_broad = [x for x in etf_rows if x["asset_class"] == "cn_broad"]
     non_cn = [x for x in etf_rows if x["asset_class"] != "cn_broad"]
 
     # 1. 极端冰点右侧反抽接管：30% 创业板 + 30% 中证1000 + 40% 非A股风险调整动量 Top1
     if panic_active:
-        safe_top = _pick_top(non_cn, "risk_adj_mom", 1)
+        safe_top = _pick_non_cn_ar45(non_cn, 1)
         safe_code = safe_top[0]["code"] if safe_top else SAFE_BOND_CODE
         targets = {
             PANIC_ETF_CYB: 0.30,
@@ -260,28 +290,32 @@ def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
 
     # 2. 进攻期：优先配 A 股强势宽基 20 日动量 Top2
     if regime_info.get("is_offensive"):
-        top_cn = _pick_top(cn_broad, "ret_20d_pct", 2)
+        top_cn = _pick_top_raw(cn_broad, "ret_20d_pct", 2)
         if top_cn:
             w = 1.0 / float(len(top_cn))
             targets = dict((x["code"], w) for x in top_cn)
             names = " + ".join(["%s(%.1f%%)" % (x["name"], x["ret_20d_pct"]) for x in top_cn])
-            headline = "进攻期 #01 宽基动量 Top%d：%s" % (len(top_cn), names)
+            headline = "AR4.5 进攻期宽基动量 Top%d：%s" % (len(top_cn), names)
             return targets, headline
 
-        # 若 A 股宽基暂未站上趋势，切非 A 股最强单核
-        top_non = _pick_top(non_cn, "ret_20d_pct", 1)
-        code = top_non[0]["code"] if top_non else SAFE_BOND_CODE
-        headline = "进攻期但A股宽基未达标 -> 暂切非A股最强 %s" % ETF_NAME_MAP.get(code, code)
-        return {code: 1.0}, headline
+        # 若 A 股宽基暂未站上趋势，切非 A 股风险调整 Top2 逆波
+        top_non = _pick_non_cn_ar45(non_cn, 2)
+        if top_non:
+            targets = _inv_vol_dict(top_non)
+            names = " + ".join(["%s %.0f%%" % (x["name"], targets[x["code"]] * 100.0) for x in top_non])
+            headline = "进攻期A股宽基未达标 -> 切非A股风险调整Top%d逆波：%s" % (len(top_non), names)
+            return targets, headline
+        return {SAFE_BOND_CODE: 1.0}, "进攻期宽基与跨资产全破位 -> 切十年国债避险"
 
-    # 3. 平衡 / 防守 / 冰点未企稳：100% 聚焦非 A 股跨资产 20 日纯动量 Top1
-    top_non = _pick_top(non_cn, "ret_20d_pct", 1)
+    # 3. 平衡 / 防守 / 冰点未企稳：AR4.5-L3b 100% 配置非A股风险调整动量 Top2 逆波动率加权
+    top_non = _pick_non_cn_ar45(non_cn, 2)
     if top_non:
-        winner = top_non[0]
-        headline = "非进攻期(%s) -> 100%% 切入非A股最强单核：%s(%s, 20d %+.2f%%)" % (
-            regime_info.get("regime_label", ""), winner["name"], winner["code"], winner["ret_20d_pct"]
+        targets = _inv_vol_dict(top_non)
+        names = " + ".join(["%s(%s %.0f%%, RAM=%.3f)" % (x["name"], x["code"], targets[x["code"]] * 100.0, _score_ram(x)) for x in top_non])
+        headline = "AR4.5-L3b 非进攻期(%s) -> 风险调整Top%d逆波：%s" % (
+            regime_info.get("regime_label", ""), len(top_non), names
         )
-        return {winner["code"]: 1.0}, headline
+        return targets, headline
 
     headline = "非进攻期且全球资产全破 MA20 -> 100%% 转入十年国债ETF(%s)避险" % SAFE_BOND_CODE
     return {SAFE_BOND_CODE: 1.0}, headline

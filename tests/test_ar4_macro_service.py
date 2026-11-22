@@ -195,3 +195,37 @@ def test_rebalance_compiler_respects_dynamic_effective_cap(tmp_path: Path):
     assert "78.0%" in brief["markdown_text"]
     assert "+1,271亿" in brief["markdown_text"]
     assert "65%" in brief["markdown_text"]
+
+
+def test_ar45_l3b_qmt_top2_invvol_and_southbound_parity():
+    """验证 AR4.5-L3b 非进攻期 Top2 逆波动加权与港科南向滤网在 QMT 原生策略中口径一致。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "qmt_ar3_etf01_native",
+        Path(__file__).resolve().parents[1] / "scripts" / "qmt_ar3_etf01_native.py",
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    rows = [
+        {"code": "513180.SH", "name": "恒生科技", "asset_class": "overseas", "ret_20d_pct": 12.0, "vol_20d_pct": 30.0, "risk_adj_mom": 0.34, "eligible": True},
+        {"code": "512890.SH", "name": "红利低波", "asset_class": "cn_dividend", "ret_20d_pct": 5.8, "vol_20d_pct": 12.0, "risk_adj_mom": 0.35, "eligible": True},
+        {"code": "511260.SH", "name": "十年国债", "asset_class": "bond", "ret_20d_pct": 0.5, "vol_20d_pct": 4.0, "risk_adj_mom": 0.06, "eligible": True},
+    ]
+
+    # 默认允许港科：红利低波(0.35) + 恒生科技(0.34) 逆波动配权 -> 红利权重显著更高
+    mod.ALLOW_HK_TECH = True
+    mod.HK_SOUTHBOUND_BOOST = False
+    t_allow, _ = mod.decide_ar3_etf01_targets({"is_offensive": False, "regime_label": "防守"}, rows)
+    assert set(t_allow.keys()) == {"512890.SH", "513180.SH"}
+    assert t_allow["512890.SH"] > 0.70  # 1/12 vs 1/30 -> 71.4% vs 28.6%
+    assert abs(sum(t_allow.values()) - 1.0) < 1e-3
+
+    # 南向20日净流出拦截港科：恒生科技被剔除 -> 自动切红利低波 + 十年国债
+    mod.ALLOW_HK_TECH = False
+    t_block, _ = mod.decide_ar3_etf01_targets({"is_offensive": False, "regime_label": "防守"}, rows)
+    assert "513180.SH" not in t_block
+    assert set(t_block.keys()) == {"512890.SH", "511260.SH"}
+    mod.ALLOW_HK_TECH = True

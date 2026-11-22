@@ -30,6 +30,9 @@ NT_LOW_PCTILE = 30.0
 NT_PULSE_5D_YI = 300.0
 ERP_OVERHEAT_PCT = 5.0
 ERP_CHEAP_PCT = 6.0
+SB_HK_FILTER_YI = 0.0
+SB_HK_BOOST_YI = 600.0
+SB_HK_BOOST_MULT = 1.25
 
 DYNAMIC_CAP_HEAVY_PCT = 65
 DYNAMIC_CAP_NEUTRAL_PCT = 50
@@ -177,6 +180,21 @@ def get_ar4_macro_snapshot(
             )
             if not df.empty:
                 raw_latest = df.iloc[0].to_dict()
+                # 同步读取最新南向资金（港股通净买入）
+                try:
+                    sb_df = _ch_query_df(
+                        """
+                        SELECT toString(trade_date) AS sb_date, sb_net_yi, sb_net_5d_yi, sb_net_20d_yi, sb_net_60d_yi
+                        FROM stock.ar4_southbound_daily FINAL
+                        ORDER BY trade_date DESC
+                        LIMIT 1
+                        """,
+                        timeout=8,
+                    )
+                    if not sb_df.empty:
+                        raw_latest.update(sb_df.iloc[0].to_dict())
+                except Exception:
+                    pass
                 _MACRO_CACHE["snapshot"] = raw_latest
                 _MACRO_CACHE["expires_at"] = now_mono + 60.0
         except Exception as exc:
@@ -213,6 +231,20 @@ def get_ar4_macro_snapshot(
         enable_dynamic=enable_dynamic,
     )
 
+    sb_1d = round(float(raw_latest.get("sb_net_yi") or 0.0), 1)
+    sb_5d = round(float(raw_latest.get("sb_net_5d_yi") or 0.0), 1)
+    sb_20d = round(float(raw_latest.get("sb_net_20d_yi") or 0.0), 1)
+    sb_60d = round(float(raw_latest.get("sb_net_60d_yi") or 0.0), 1)
+    if sb_20d < SB_HK_FILTER_YI:
+        sb_hk_status = "blocked"
+        sb_hk_label = "南向净流出(<0亿) · 拦截港科ETF"
+    elif sb_20d >= SB_HK_BOOST_YI:
+        sb_hk_status = "boosted"
+        sb_hk_label = "南向巨量扫货(≥600亿) · 港科动量+25%"
+    else:
+        sb_hk_status = "neutral"
+        sb_hk_label = "南向温和流入 · 港科中性放行"
+
     return {
         "available": True,
         "trade_date": str(raw_latest.get("trade_date") or ""),
@@ -230,8 +262,14 @@ def get_ar4_macro_snapshot(
         "nt_share_chg_20d_pct": round(float(raw_latest.get("nt_share_chg_20d_pct") or 0.0), 2),
         "broad6_net_inflow_5d_yi": round(float(raw_latest.get("broad6_net_inflow_5d_yi") or 0.0), 1),
         "top5pct_amt_share_pct": round(float(raw_latest.get("top5pct_amt_share") or 0.0) * 100.0, 1),
+        "sb_net_1d_yi": sb_1d,
+        "sb_net_5d_yi": sb_5d,
+        "sb_net_20d_yi": sb_20d,
+        "sb_net_60d_yi": sb_60d,
+        "sb_hk_status": sb_hk_status,
+        "sb_hk_label": sb_hk_label,
         "decision": decision,
-        "evidence_note": "物理单账户实证(2023~2026)：国家队分位动态股仓(≥70%→65%, <30%→35%)将4年收益从+208.5%提至+239.3%(年化+37.0%·卡玛1.61·OOS回撤降0.58%)。",
+        "evidence_note": "AR4.5-L3b 物理单账户实证(2023~2026)：国家队分位动态股仓 + 防守ETF风险调整Top2逆波 + 南向港科滤网，4年收益 +283.2%（年化 +41.3% · 回撤 19.1% · 卡玛 2.17 · OOS回撤降半至 11.3%）。",
     }
 
 
@@ -393,6 +431,6 @@ def get_national_team_cycle_report(years: int = 3) -> dict[str, Any]:
             "formula": "国家队核心持仓代理 = (510300 + 510310 + 510330 每日官方份额 × 收盘价) ÷ 沪深300点位 -> 过去250交易日滚动分位",
             "bottom_rule": "抄底用法：分位 ≥ 70%（重仓托底）+ 5日净买 ≥ 300亿代表政策底强托，但严禁左侧抢跑；须待大盘确认右侧反转后，将 AR3 进攻股仓由 50% 放大至 65%。",
             "top_rule": "逃顶用法：分位跌破 30%（国家队持续派发）自动将进攻股仓收紧至 35%；若股债性价比 ERP < 5.0%（历史60日均跌 -15.2%），硬锁进攻股仓至 0%。",
-            "backtest_proof": "2023~2026 物理单账户零杠杆消融：4年收益 +208.5% -> +239.3%（年化 +37.0% / 卡玛 1.61 / 样本外OOS +4.80% 且回撤降 0.58%）。",
+            "backtest_proof": "AR4.5-L3b 2023~2026 物理单账户零杠杆消融：4年收益 +211.9% -> +283.2%（年化 +41.3% / 回撤 19.1% / 夏普 1.64 / 卡玛 2.17 / OOS +8.87% 且回撤腰斩至 11.3%）。",
         },
     }

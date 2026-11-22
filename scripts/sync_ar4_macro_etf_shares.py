@@ -91,6 +91,65 @@ ORDER BY (trade_date)
 """
 
 
+DDL_SOUTHBOUND = """
+CREATE TABLE IF NOT EXISTS stock.ar4_southbound_daily (
+    trade_date Date,
+    sb_net_yi Float64,
+    sb_buy_yi Float64,
+    sb_sell_yi Float64,
+    sb_net_5d_yi Float64,
+    sb_net_20d_yi Float64,
+    sb_net_60d_yi Float64,
+    updated_at DateTime('Asia/Shanghai')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (trade_date)
+"""
+
+
+def sync_southbound_only(all_dates: list[str] | None = None) -> dict[str, Any]:
+    """同步东方财富官方港股通南向资金日频净买入至隔离表 stock.ar4_southbound_daily。"""
+    _ch_exec(DDL_SOUTHBOUND)
+    try:
+        raw = ak.stock_hsgt_hist_em(symbol="南向资金")
+        sb = pd.DataFrame({
+            "dt": pd.to_datetime(raw["日期"]).dt.strftime("%Y-%m-%d"),
+            "sb_net_yi": pd.to_numeric(raw["当日成交净买额"], errors="coerce").fillna(0.0),
+            "sb_buy_yi": pd.to_numeric(raw["买入成交额"], errors="coerce").fillna(0.0),
+            "sb_sell_yi": pd.to_numeric(raw["卖出成交额"], errors="coerce").fillna(0.0),
+        })
+        sb = sb[sb["dt"] >= "2020-06-01"].drop_duplicates("dt", keep="last").sort_values("dt").set_index("dt")
+    except Exception as exc:
+        print(f"[AR4-Sync] 南向资金拉取失败（保留旧表数据）: {exc}")
+        return {"ok": False, "error": str(exc), "rows": 0}
+
+    if all_dates:
+        idx = sorted(set(all_dates) | set(sb.index))
+        sb = sb.reindex(idx).fillna(0.0)
+    sb["sb_net_5d_yi"] = sb["sb_net_yi"].rolling(5, min_periods=1).sum()
+    sb["sb_net_20d_yi"] = sb["sb_net_yi"].rolling(20, min_periods=1).sum()
+    sb["sb_net_60d_yi"] = sb["sb_net_yi"].rolling(60, min_periods=1).sum()
+
+    now_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    lines = []
+    for dt, r in sb.iterrows():
+        lines.append(json.dumps({
+            "trade_date": str(dt),
+            "sb_net_yi": round(float(r["sb_net_yi"]), 3),
+            "sb_buy_yi": round(float(r["sb_buy_yi"]), 3),
+            "sb_sell_yi": round(float(r["sb_sell_yi"]), 3),
+            "sb_net_5d_yi": round(float(r["sb_net_5d_yi"]), 2),
+            "sb_net_20d_yi": round(float(r["sb_net_20d_yi"]), 2),
+            "sb_net_60d_yi": round(float(r["sb_net_60d_yi"]), 2),
+            "updated_at": now_str,
+        }, ensure_ascii=False))
+    if lines:
+        _ch_exec("INSERT INTO stock.ar4_southbound_daily FORMAT JSONEachRow", body="\n".join(lines).encode("utf-8"))
+    last_dt = str(sb.index[-1]) if not sb.empty else ""
+    last_20d = round(float(sb["sb_net_20d_yi"].iloc[-1]), 1) if not sb.empty else 0.0
+    print(f"[AR4-Sync] ar4_southbound_daily 写入 {len(lines)} 天完成（最新 {last_dt} · 20日净买 {last_20d:+.1f}亿）")
+    return {"ok": True, "rows": len(lines), "latest_date": last_dt, "sb_net_20d_yi": last_20d}
+
+
 def _ch_exec(sql: str, body: bytes | None = None, timeout: int = 60) -> str:
     host = (os.environ.get("AISTOCK_CLICKHOUSE_HOST") or "127.0.0.1").strip()
     port = (os.environ.get("AISTOCK_CLICKHOUSE_PORT") or "8123").strip()
@@ -456,13 +515,14 @@ def sync_all(start_date: str = "2021-01-01") -> dict[str, Any]:
         macro_lines.append(json.dumps(rec, ensure_ascii=False))
 
     _ch_exec("INSERT INTO stock.ar4_macro_daily FORMAT JSONEachRow", body="\n".join(macro_lines).encode("utf-8"))
+    sb_res = sync_southbound_only(all_dates=all_dates)
     elapsed = round(time.time() - t0, 1)
     print(f"[AR4-Sync] 全部完成！ar4_macro_daily 写入 {len(macro_lines)} 天，耗时 {elapsed}s")
     print("[AR4-Sync] 最新 5 日宏观 & 国家队切片：")
     cols_show = ["hs300_close", "erp_pct", "hs300_top3_scale_yi", "nt_ratio_pctile_250d",
                  "nt_share_chg_5d_pct", "broad6_net_inflow_5d_yi", "margin_balance_yi", "top5pct_amt_share"]
     print(panel[cols_show].tail(5).to_string())
-    return {"macro_days": len(macro_lines), "elapsed_sec": elapsed}
+    return {"macro_days": len(macro_lines), "southbound": sb_res, "elapsed_sec": elapsed}
 
 
 if __name__ == "__main__":

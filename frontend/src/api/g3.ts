@@ -1284,7 +1284,7 @@ export const rebuildG3BacktestReport = () =>
 // ---------------------------------------------------------------------------
 
 export interface G3AR3Config {
-  active_stock_mode: 'ab_blend' | 'f2a_trend' | 'f3a_pullback'
+  active_stock_mode: 'ab_blend' | 'auto_lag_me20' | 'f2a_trend' | 'f3a_pullback'
   etf_core_mode: 'regime_focus' | 'risk_adj_mom'
   stock_budget_cap_pct: number
   enable_macro_dynamic_cap?: boolean
@@ -1327,6 +1327,12 @@ export interface G3AR4MacroSnapshot {
   nt_share_chg_20d_pct?: number
   broad6_net_inflow_5d_yi?: number
   top5pct_amt_share_pct?: number
+  sb_net_1d_yi?: number
+  sb_net_5d_yi?: number
+  sb_net_20d_yi?: number
+  sb_net_60d_yi?: number
+  sb_hk_status?: 'blocked' | 'boosted' | 'neutral' | string
+  sb_hk_label?: string
   decision: G3AR4MacroDecision
   evidence_note?: string
 }

@@ -458,7 +458,7 @@ export default function NationalTeamCycleCard({ dark }: NationalTeamCycleCardPro
           </div>
 
           <div className="rounded-xl border border-zinc-200/80 bg-white/80 p-3 dark:border-white/10 dark:bg-white/[0.04]">
-            <div className="text-[11px] text-zinc-500 dark:text-slate-400">沪深300 股债性价比 ERP</div>
+            <div className="text-[11px] text-zinc-500 dark:text-slate-400">沪深300 ERP / 南向20日净买</div>
             <div className="mt-1 flex items-baseline gap-2">
               <span
                 className={`font-mono text-xl font-bold ${
@@ -469,10 +469,12 @@ export default function NationalTeamCycleCard({ dark }: NationalTeamCycleCardPro
               >
                 {latest.erp_pct?.toFixed(2)}%
               </span>
-              <span className="text-[11px] text-zinc-600 dark:text-slate-300">{decision.erp_label}</span>
+              <span className="font-mono text-[11px] font-semibold text-sky-700 dark:text-sky-300">
+                南向 {fmtSigned(latest.sb_net_20d_yi, 1, '亿')}
+              </span>
             </div>
             <div className="mt-1 font-mono text-[11px] text-zinc-500 dark:text-slate-400">
-              PE_TTM {latest.hs300_pe_ttm?.toFixed(2)} · 10Y中债 {latest.cn_bond_10y?.toFixed(2)}%
+              PE {latest.hs300_pe_ttm?.toFixed(1)} · 10Y债 {latest.cn_bond_10y?.toFixed(2)}% · {latest.sb_hk_label || decision.erp_label}
             </div>
           </div>
         </div>

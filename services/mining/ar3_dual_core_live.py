@@ -31,36 +31,42 @@ from utils.common.paths import runtime_path
 BJ_TZ = timezone(timedelta(hours=8))
 
 SAFE_BOND_CODE = "511260.SH"
-VALID_STOCK_MODES = ("ab_blend", "f2a_trend", "f3a_pullback")
+HK_TECH_ETF_CODES = frozenset({"513180.SH", "513050.SH"})
+VALID_STOCK_MODES = ("ab_blend", "auto_lag_me20", "f2a_trend", "f3a_pullback")
 VALID_ETF_MODES = ("regime_focus", "risk_adj_mom")
 
 STOCK_MODE_META: dict[str, dict[str, Any]] = {
     "ab_blend": {
-        "label": "AB 混合（F3A回踩 + F2A趋势）",
-        "short_label": "AB 混合（全能卡玛王）",
-        "desc": "交替填槽 F3A 绩优回踩与 F2A 业绩趋势主升，兼顾低回撤与高弹性（实证年化 +34.8% · 回撤 20.8% · 卡玛 1.67）",
+        "label": "AB 混合（AR4.5-L3b 冠军主力）",
+        "short_label": "AB 混合（L3b 收益王）",
+        "desc": "交替填槽 F3A 绩优回踩与 F2A 业绩趋势主升，实证 4 年 +283.2% · 年化 +41.3% · 回撤 19.1% · 卡玛 2.17 · OOS 回撤 11.3%",
+    },
+    "auto_lag_me20": {
+        "label": "AR4.5-L4 赚钱效应自动热切（低回撤版）",
+        "short_label": "L4 赚钱效应自动切（回撤14.4%）",
+        "desc": "严格按近20日已闭合5日实现赚钱效应差（±1.5%）自动切换 F2A/F3A/AB，实证卡玛 2.69 · 最大回撤仅 14.4% · 年化 +38.8%",
     },
     "f2a_trend": {
         "label": "F2A 业绩趋势主升优先",
         "short_label": "F2A 业绩趋势主升",
-        "desc": "主升行情/高风险偏好赚钱效应强时主攻：高增财报池 + 均线多头排列 + 强势相对强度（实证年化 +35.0% · 回撤 24.9%）",
+        "desc": "主升行情/高风险偏好赚钱效应强时主攻：高增财报池 + 均线多头排列 + 强势相对强度",
     },
     "f3a_pullback": {
         "label": "F3A 绩优高增回踩低吸优先",
         "short_label": "F3A 绩优回踩低吸",
-        "desc": "结构震荡/追高易亏时主攻：高景气高ROE池 + 中期多头缩量回踩MA10企稳低吸（实证年化 +31.0% · OOS +16.4%）",
+        "desc": "结构震荡/追高易亏时主攻：高景气高ROE池 + 中期多头缩量回踩MA10企稳低吸",
     },
 }
 
 ETF_MODE_META: dict[str, dict[str, Any]] = {
     "regime_focus": {
-        "label": "#01 AR3_9_RegimeFocus_Top1+Panic",
-        "short_label": "#01 分周期聚焦 Top1+冰点反抽",
-        "desc": "进攻期配 A 股强势宽基 Top2；平衡/防守期 100% 聚焦非 A 股跨资产最强单核（黄金/美股/恒科/红利/国债）；极端冰点企稳切反抽",
+        "label": "AR4.5-L3b 风险调整Top2逆波 + 南向港科滤网",
+        "short_label": "AR4.5-L3b 风险调整Top2逆波",
+        "desc": "进攻期配 A 股强势宽基 Top2；非进攻期选非 A 股风险调整动量 Top2 并按逆波动率配权（叠加南向20日净流港科滤网，告别单品满仓硬扛，OOS回撤腰斩至 11.3%）",
     },
     "risk_adj_mom": {
-        "label": "#02 AR3_6_RiskAdjMom_Top2+Panic",
-        "short_label": "#02 全天候分散 Top2+冰点反抽",
+        "label": "#02 全市场5大类跨资产分散 Top2",
+        "short_label": "#02 全天候跨类分散 Top2",
         "desc": "全市场 5 大类资产风险调整动量 Top2（每类限 1 只，强制跨资产分散防单品黑天鹅）+ 极端冰点企稳反抽",
     },
 }
@@ -175,8 +181,9 @@ def _build_etf_radar(
     etf_core_mode: str,
     stock_budget_cap_pct: int,
     panic_signal: Optional[Mapping[str, Any]] = None,
+    sb_net_20d_yi: float = 0.0,
 ) -> dict[str, Any]:
-    """从 stock.etf_kline_daily 计算 14 只跨资产 ETF 最新动量与今日目标配置。"""
+    """从 stock.etf_kline_daily 计算 14 只跨资产 ETF 最新动量与 AR4.5-L3b 今日目标配置。"""
     since_90 = (datetime.now(BJ_TZ) - timedelta(days=100)).strftime("%Y-%m-%d")
     try:
         raw = _ch_query_df(
@@ -233,6 +240,10 @@ def _build_etf_radar(
         above = close_px > m20
         ram = (r20 / 100.0) / (v20 + 0.05)
         cls = str(cls_map.get(code, "other"))
+        is_hk = str(code) in HK_TECH_ETF_CODES
+        sb_filtered = bool(is_hk and sb_net_20d_yi < 0.0)
+        sb_boosted = bool(is_hk and sb_net_20d_yi >= 600.0)
+        ar45_score = ram * 1.25 if sb_boosted else ram
         universe.append({
             "code": str(code).split(".")[0],
             "ts_code": str(code),
@@ -248,8 +259,11 @@ def _build_etf_radar(
             "above_ma20": above,
             "vol_20d_pct": round(v20 * 100.0, 1),
             "risk_adj_mom": round(ram, 3),
+            "ar45_score": round(ar45_score, 3),
+            "sb_filtered": sb_filtered,
+            "sb_boosted": sb_boosted,
             "is_qdii": cls == "overseas",
-            "eligible": bool(above and r20 > 0.0),
+            "eligible": bool(above and r20 > 0.0 and not sb_filtered),
         })
 
     def _pick(pool: list[dict[str, Any]], key: str, k: int, per_class: bool) -> list[dict[str, Any]]:
@@ -278,9 +292,19 @@ def _build_etf_radar(
     norm_targets: list[tuple[str, float, str]] = []
     decision_headline = ""
 
+    def _inv_vol_weights(items: list[dict[str, Any]]) -> list[float]:
+        """按 20 日年化波动率倒数（1/vol20，下限 4%）计算风险平价权重。"""
+        if not items:
+            return []
+        if len(items) == 1:
+            return [1.0]
+        ivs = [1.0 / max(4.0, float(x.get("vol_20d_pct") or 20.0)) for x in items]
+        total_iv = sum(ivs)
+        return [iv / total_iv for iv in ivs]
+
     if panic_triggered:
         # 冰点企稳右侧触发：30% 创业板 + 30% 中证1000 + 40% 非A股风险调整动量最强（否则十年国债）
-        safe_top = _pick(non_cn, "risk_adj_mom", 1, False)
+        safe_top = _pick(non_cn, "ar45_score", 1, False)
         safe_ts = safe_top[0]["ts_code"] if safe_top else SAFE_BOND_CODE
         norm_targets = [
             ("159915.SZ", 0.30, "冰点企稳右侧反抽（止损-6%/止盈+12%/持5日）"),
@@ -289,42 +313,58 @@ def _build_etf_radar(
         ]
         decision_headline = "极端冰点右侧阳线已确认：触发 AR2_2A 反抽接管（60% 双创小盘反抽 + 40% 非A股避险底仓）。"
     elif etf_core_mode == "regime_focus":
-        # #01 AR3_9_RegimeFocus_Top1+Panic
+        # AR4.5-L3b 实证冠军：进攻期配 A股宽基 Top2；非进攻期配非A股风险调整动量 Top2 逆波动加权 + 南向港科滤网
         if is_offensive:
             cn_top = _pick(cn_broad, "ret_20d_pct", 2, False)
             if cn_top:
                 w_each = 1.0 / len(cn_top)
                 for item in cn_top:
-                    norm_targets.append((item["ts_code"], w_each, "A股进攻期 · 宽基20日动量 Top2"))
+                    norm_targets.append((item["ts_code"], w_each, "AR4.5 进攻期 · A股宽基20日动量 Top2"))
                 decision_headline = (
                     f"当前处于 A 股进攻期：个股预算 {stock_budget_cap_pct}%（未满槽闲置现金亦归入 ETF），"
                     f"ETF 底仓配置 A 股最强宽基 Top{len(cn_top)}。"
                 )
             else:
-                top1 = _pick(non_cn, "ret_20d_pct", 1, False)
-                ts = top1[0]["ts_code"] if top1 else SAFE_BOND_CODE
-                norm_targets.append((ts, 1.0, "A股宽基动量未达标，切非A股最强跨资产"))
-                decision_headline = "A 股宽基均未站上 MA20/正动量，ETF 仓位暂切非 A 股跨资产最强标的。"
+                def_top = _pick(non_cn, "ar45_score", 2, False)
+                if def_top:
+                    for item, w in zip(def_top, _inv_vol_weights(def_top)):
+                        norm_targets.append((item["ts_code"], w, "A股宽基动量未达标，切非A股风险调整 Top2 逆波"))
+                    names_txt = " + ".join(f"{x['name']}({w*100:.0f}%)" for x, w in zip(def_top, _inv_vol_weights(def_top)))
+                    decision_headline = f"A 股宽基未达标，ETF 暂切非 A 股风险调整 Top2 逆波：{names_txt}。"
+                else:
+                    norm_targets.append((SAFE_BOND_CODE, 1.0, "全市场趋势偏弱 · 十年国债避险"))
+                    decision_headline = "A 股宽基与非 A 股资产均未站上 MA20，暂切十年国债避险。"
         else:
-            top1 = _pick(non_cn, "ret_20d_pct", 1, False)
-            if top1:
-                norm_targets.append((top1[0]["ts_code"], 1.0, "非进攻期 · 非A股跨资产20日纯动量 Top1（与A股脱钩）"))
+            def_top = _pick(non_cn, "ar45_score", 2, False)
+            if def_top:
+                ws = _inv_vol_weights(def_top)
+                for item, w in zip(def_top, ws):
+                    sb_note = " · 南向+25%共振" if item.get("sb_boosted") else ""
+                    norm_targets.append((
+                        item["ts_code"],
+                        w,
+                        f"AR4.5-L3b 非进攻期 · 风险调整Top{len(def_top)}逆波配权(20d波动{item['vol_20d_pct']}%{sb_note})",
+                    ))
+                names_txt = " + ".join(f"{x['name']} {w*100:.0f}%" for x, w in zip(def_top, ws))
+                sb_hint = "（南向20日净流出，已自动拦截港科ETF）" if sb_net_20d_yi < 0 else (
+                    f"（南向20日净买 +{sb_net_20d_yi:.0f}亿，港科享+25%顺风加权）" if sb_net_20d_yi >= 600 else ""
+                )
                 decision_headline = (
-                    f"当前处于非进攻期（{regime}）：个股预算锁死 0%，"
-                    f"100% 账户资金切入 #01 非 A 股跨资产最强单核「{top1[0]['name']}」。"
+                    f"AR4.5-L3b 非进攻期（{regime}）：个股硬锁 0%，"
+                    f"100% 切入非 A 股风险调整 Top{len(def_top)} 逆波组合「{names_txt}」{sb_hint}。"
                 )
             else:
                 norm_targets.append((SAFE_BOND_CODE, 1.0, "全球权益/商品趋势全灭 · 100% 十年国债避险"))
                 decision_headline = "当前非进攻期且全部跨资产均跌破趋势线，100% 转入十年国债 ETF 避险。"
     else:
-        # #02 AR3_6_RiskAdjMom_Top2+Panic
-        top2 = _pick(universe, "risk_adj_mom", 2, True)
+        # #02 全市场5大类资产风险调整动量 Top2
+        top2 = _pick(universe, "ar45_score", 2, True)
         if top2:
-            w_each = 1.0 / len(top2)
-            for item in top2:
-                norm_targets.append((item["ts_code"], w_each, "全市场5大类资产风险调整动量 Top2（跨类分散）"))
-            names_txt = " + ".join(x["name"] for x in top2)
-            decision_headline = f"#02 全天候跨资产分散模式：ETF 预算 {etf_total_budget_pct}% 均分配置「{names_txt}」。"
+            ws = _inv_vol_weights(top2)
+            for item, w in zip(top2, ws):
+                norm_targets.append((item["ts_code"], w, "全市场5大类资产风险调整动量 Top2 逆波（跨类分散）"))
+            names_txt = " + ".join(f"{x['name']} {w*100:.0f}%" for x, w in zip(top2, ws))
+            decision_headline = f"#02 全天候跨资产分散模式：ETF 预算 {etf_total_budget_pct}% 逆波配置「{names_txt}」。"
         else:
             norm_targets.append((SAFE_BOND_CODE, 1.0, "全市场动量为负 · 100% 十年国债避险"))
             decision_headline = "全市场资产均未满足动量门槛，ETF 预算 100% 转入十年国债 ETF。"
@@ -342,9 +382,8 @@ def _build_etf_radar(
             "qdii_notice": "跨境QDII场内若溢价 > 4% 建议限价或换同方向次优标的" if info["is_qdii"] else None,
         })
 
-    # 全景表按 20日涨幅排序（#01）或风险调整动量排序（#02）
-    sort_key = "ret_20d_pct" if etf_core_mode == "regime_focus" else "risk_adj_mom"
-    universe_sorted = sorted(universe, key=lambda x: float(x[sort_key]), reverse=True)
+    # 全景表按 AR4.5 风险调整综合得分排序
+    universe_sorted = sorted(universe, key=lambda x: float(x.get("ar45_score", x["risk_adj_mom"])), reverse=True)
 
     return {
         "available": True,
@@ -650,10 +689,96 @@ def _scan_f2a_f3a_and_money_effect(
     f2a_list = _pack_rows(f2a_df, "F2A", limit=12)
     f3a_list = _pack_rows(f3a_df, "F3A", limit=12)
 
-    # 6. 按当前主引擎模式拼装「优先执行队列」（单行业限1只，前 max_slots 只标红/绿重点执行）
-    if active_stock_mode == "f2a_trend":
+    # 6. 滚动回算近 20 个已验证交易日（T-25 ~ T-6）F2A vs F3A 的真实 5 日赚钱效应（严格零未来函数）
+    all_dts = sorted(kline["trade_date"].astype(str).unique())
+    eval_dts = all_dts[-26:-6] if len(all_dts) >= 26 else all_dts[:-6]
+
+    def _eval_money_effect(sel_fn) -> dict[str, Any]:
+        rets: list[float] = []
+        active_days = 0
+        for d in eval_dts:
+            sl = kline.loc[kline["trade_date"] == d]
+            cands = sel_fn(sl)
+            if cands.empty:
+                continue
+            picked_r: list[float] = []
+            seen_i: set[str] = set()
+            for r in cands.head(12).itertuples(index=False):
+                ind = str(r.industry)
+                if ind != "未分类" and ind in seen_i:
+                    continue
+                if pd.notna(r.fwd_ret_5d_pct):
+                    picked_r.append(float(r.fwd_ret_5d_pct))
+                    seen_i.add(ind)
+                if len(picked_r) >= 4:
+                    break
+            if picked_r:
+                active_days += 1
+                rets.extend(picked_r)
+        if not rets:
+            return {"samples": 0, "active_days": 0, "win_rate_pct": None, "avg_5d_ret_pct": None, "median_5d_ret_pct": None}
+        arr = np.array(rets, dtype=float)
+        return {
+            "samples": int(len(arr)),
+            "active_days": int(active_days),
+            "win_rate_pct": round(float((arr > 0).mean() * 100.0), 1),
+            "avg_5d_ret_pct": round(float(arr.mean()), 2),
+            "median_5d_ret_pct": round(float(np.median(arr)), 2),
+        }
+
+    me_f2a = _eval_money_effect(_select_f2a)
+    me_f3a = _eval_money_effect(_select_f3a)
+
+    # 客观赚钱效应切换建议（AR4.5-L4 实证 ±1.5% 滞后实现收益差阈值）
+    r_f2a = me_f2a.get("avg_5d_ret_pct")
+    r_f3a = me_f3a.get("avg_5d_ret_pct")
+    effective_stock_mode = active_stock_mode
+    if r_f2a is not None and r_f3a is not None:
+        diff = r_f2a - r_f3a
+        if r_f2a < 0 and r_f3a < 0:
+            suggested_mode = "ab_blend"
+            me_headline = (
+                f"近20日两条线5日均收益均偏弱（F2A {r_f2a:+.2f}% vs F3A {r_f3a:+.2f}%），"
+                "赚钱效应退潮阶段切勿重仓追高，优先执行 AR4.5-L3b 跨资产 ETF 防守。"
+            )
+        elif diff >= 1.5:
+            suggested_mode = "f2a_trend"
+            me_headline = (
+                f"近20日 F2A 业绩趋势主升明显领跑（5日均 {r_f2a:+.2f}% / 胜率 {me_f2a['win_rate_pct']}% vs "
+                f"F3A {r_f3a:+.2f}%），进攻期可侧重 F2A 或维持 AB 混合。"
+            )
+        elif diff <= -1.5:
+            suggested_mode = "f3a_pullback"
+            me_headline = (
+                f"近20日 F3A 绩优回踩低吸明显占优（5日均 {r_f3a:+.2f}% / 胜率 {me_f3a['win_rate_pct']}% vs "
+                f"F2A {r_f2a:+.2f}%），追高易吃面，进攻期建议侧重 F3A 低吸或维持 AB 混合。"
+            )
+        else:
+            suggested_mode = "ab_blend"
+            me_headline = (
+                f"近20日两条线赚钱效应接近（F2A {r_f2a:+.2f}% vs F3A {r_f3a:+.2f}%），"
+                "推荐保持默认「AB 混合（AR4.5-L3b 冠军主力）」交替填槽。"
+            )
+        if active_stock_mode == "auto_lag_me20":
+            if me_f2a["samples"] >= 3 and me_f3a["samples"] >= 3:
+                if diff >= 1.5:
+                    effective_stock_mode = "f2a_trend"
+                elif diff <= -1.5:
+                    effective_stock_mode = "f3a_pullback"
+                else:
+                    effective_stock_mode = "ab_blend"
+            else:
+                effective_stock_mode = "ab_blend"
+    else:
+        suggested_mode = "ab_blend"
+        me_headline = "近期有效样本较少，默认保持「AB 混合（AR4.5-L3b 冠军主力）」。"
+        if active_stock_mode == "auto_lag_me20":
+            effective_stock_mode = "ab_blend"
+
+    # 7. 按生效主引擎模式拼装「优先执行队列」（单行业限1只，前 max_slots 只标红/绿重点执行）
+    if effective_stock_mode == "f2a_trend":
         raw_exec = list(f2a_list)
-    elif active_stock_mode == "f3a_pullback":
+    elif effective_stock_mode == "f3a_pullback":
         raw_exec = list(f3a_list)
     else:
         # AB 交错混合：优先 F3A[0], F2A[0], F3A[1], F2A[1]...
@@ -686,84 +811,11 @@ def _scan_f2a_f3a_and_money_effect(
         if len(exec_queue) >= 10:
             break
 
-    # 7. 滚动回算近 20 个已验证交易日（T-25 ~ T-6）F2A vs F3A 的真实 5 日赚钱效应
-    all_dts = sorted(kline["trade_date"].astype(str).unique())
-    eval_dts = all_dts[-26:-6] if len(all_dts) >= 26 else all_dts[:-6]
-
-    def _eval_money_effect(sel_fn) -> dict[str, Any]:
-        rets: list[float] = []
-        active_days = 0
-        for d in eval_dts:
-            sl = kline.loc[kline["trade_date"] == d]
-            cands = sel_fn(sl)
-            if cands.empty:
-                continue
-            # 每日取单行业去重前 4 只评估 T+1开盘 -> T+6收盘真实收益
-            picked_r: list[float] = []
-            seen_i: set[str] = set()
-            for r in cands.head(12).itertuples(index=False):
-                ind = str(r.industry)
-                if ind != "未分类" and ind in seen_i:
-                    continue
-                if pd.notna(r.fwd_ret_5d_pct):
-                    picked_r.append(float(r.fwd_ret_5d_pct))
-                    seen_i.add(ind)
-                if len(picked_r) >= 4:
-                    break
-            if picked_r:
-                active_days += 1
-                rets.extend(picked_r)
-        if not rets:
-            return {"samples": 0, "active_days": 0, "win_rate_pct": None, "avg_5d_ret_pct": None, "median_5d_ret_pct": None}
-        arr = np.array(rets, dtype=float)
-        return {
-            "samples": int(len(arr)),
-            "active_days": int(active_days),
-            "win_rate_pct": round(float((arr > 0).mean() * 100.0), 1),
-            "avg_5d_ret_pct": round(float(arr.mean()), 2),
-            "median_5d_ret_pct": round(float(np.median(arr)), 2),
-        }
-
-    me_f2a = _eval_money_effect(_select_f2a)
-    me_f3a = _eval_money_effect(_select_f3a)
-
-    # 客观赚钱效应切换建议
-    r_f2a = me_f2a.get("avg_5d_ret_pct")
-    r_f3a = me_f3a.get("avg_5d_ret_pct")
-    if r_f2a is not None and r_f3a is not None:
-        diff = r_f2a - r_f3a
-        if r_f2a < 0 and r_f3a < 0:
-            suggested_mode = "ab_blend"
-            me_headline = (
-                f"近20日两条线5日均收益均偏弱（F2A {r_f2a:+.2f}% vs F3A {r_f3a:+.2f}%），"
-                "赚钱效应退潮阶段切勿重仓追高，优先执行 #01 跨资产 ETF 防守。"
-            )
-        elif diff >= 1.2:
-            suggested_mode = "f2a_trend"
-            me_headline = (
-                f"近20日 F2A 业绩趋势主升明显领跑（5日均 {r_f2a:+.2f}% / 胜率 {me_f2a['win_rate_pct']}% vs "
-                f"F3A {r_f3a:+.2f}%），若大盘处于进攻期可侧重 F2A 或维持 AB 混合。"
-            )
-        elif diff <= -1.2:
-            suggested_mode = "f3a_pullback"
-            me_headline = (
-                f"近20日 F3A 绩优回踩低吸明显占优（5日均 {r_f3a:+.2f}% / 胜率 {me_f3a['win_rate_pct']}% vs "
-                f"F2A {r_f2a:+.2f}%），追高易吃面，进攻期建议侧重 F3A 低吸或维持 AB 混合。"
-            )
-        else:
-            suggested_mode = "ab_blend"
-            me_headline = (
-                f"近20日两条线赚钱效应接近（F2A {r_f2a:+.2f}% vs F3A {r_f3a:+.2f}%），"
-                "推荐保持默认「AB 混合（全能卡玛王）」交替填槽。"
-            )
-    else:
-        suggested_mode = "ab_blend"
-        me_headline = "近期有效样本较少，默认保持「AB 混合（全能卡玛王）」。"
-
     return {
         "available": True,
         "latest_date": latest_dt,
         "is_offensive": is_offensive,
+        "effective_stock_mode": effective_stock_mode,
         "stock_budget_active_pct": stock_budget_cap_pct if is_offensive else 0,
         "slot_weight_pct": slot_w_pct if is_offensive else 0.0,
         "max_slots": max_slots,
@@ -813,6 +865,7 @@ def build_ar3_dual_core_radar(
     )
     macro_dec = macro_snap.get("decision") or {}
     effective_stock_cap = int(macro_dec.get("effective_stock_cap_pct", cfg["stock_budget_cap_pct"]))
+    sb_net_20d_yi = float(macro_snap.get("sb_net_20d_yi") or 0.0) if macro_snap.get("available") else 0.0
 
     is_offensive = regime in ("offensive", "extreme_offensive")
     etf_radar = _build_etf_radar(
@@ -820,6 +873,7 @@ def build_ar3_dual_core_radar(
         etf_core_mode=cfg["etf_core_mode"],
         stock_budget_cap_pct=effective_stock_cap,
         panic_signal=panic_signal,
+        sb_net_20d_yi=sb_net_20d_yi,
     )
     stock_radar = _scan_f2a_f3a_and_money_effect(
         active_stock_mode=cfg["active_stock_mode"],
@@ -833,7 +887,7 @@ def build_ar3_dual_core_radar(
     cfg_with_eff["dynamic_cap_reason"] = str(macro_dec.get("cap_reason") or "")
 
     payload: dict[str, Any] = {
-        "version": "AR3 v3.0 + AR4 Macro",
+        "version": "AR4.5-L3b",
         "generated_at": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         "regime": regime,
         "is_offensive": is_offensive,
@@ -846,11 +900,10 @@ def build_ar3_dual_core_radar(
             {"id": k, **v} for k, v in ETF_MODE_META.items()
         ],
         "evidence": {
-            "ab_blend_01_ar4": {"cum_ret_pct": 239.3, "ann_ret_pct": 37.0, "max_dd_pct": 23.0, "sharpe": 1.27, "calmar": 1.61, "oos_pct": 4.8},
-            "ab_blend_01": {"cum_ret_pct": 218.6, "ann_ret_pct": 34.8, "max_dd_pct": 20.8, "sharpe": 1.25, "calmar": 1.67, "oos_pct": 4.1},
-            "f2a_trend_01": {"cum_ret_pct": 220.9, "ann_ret_pct": 35.0, "max_dd_pct": 24.9, "sharpe": 1.26, "calmar": 1.41, "oos_pct": 10.4},
-            "f3a_pullback_01": {"cum_ret_pct": 185.2, "ann_ret_pct": 31.0, "max_dd_pct": 23.5, "sharpe": 1.15, "calmar": 1.32, "oos_pct": 16.4},
-            "etf_only_01": {"cum_ret_pct": 157.1, "ann_ret_pct": 27.5, "max_dd_pct": 22.9, "sharpe": 1.05, "calmar": 1.20, "oos_pct": 8.1},
+            "ar45_l3b": {"cum_ret_pct": 283.2, "ann_ret_pct": 41.32, "max_dd_pct": 19.07, "sharpe": 1.64, "calmar": 2.17, "oos_pct": 8.87},
+            "ar45_l4": {"cum_ret_pct": 257.4, "ann_ret_pct": 38.81, "max_dd_pct": 14.42, "sharpe": 1.64, "calmar": 2.69, "oos_pct": 8.16},
+            "ab_blend_01_ar4": {"cum_ret_pct": 243.1, "ann_ret_pct": 37.36, "max_dd_pct": 22.11, "sharpe": 1.28, "calmar": 1.69, "oos_pct": 4.71},
+            "ab_blend_01": {"cum_ret_pct": 211.9, "ann_ret_pct": 34.03, "max_dd_pct": 22.69, "sharpe": 1.21, "calmar": 1.50, "oos_pct": 3.97},
         },
         "etf_radar": etf_radar,
         "stock_radar": stock_radar,

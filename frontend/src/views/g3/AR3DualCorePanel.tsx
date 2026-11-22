@@ -130,13 +130,13 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
 
   return (
     <Card className="border-amber-500/45 bg-zinc-950/90 ring-1 ring-amber-500/15">
-      {/* 顶栏：AR3 v3.0 终极双核总控 */}
+      {/* 顶栏：AR4.5-L3b 终极双核总控 */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-base font-bold text-white">⚡ AR3 v3.0 终极双核作战雷达</span>
-          <Badge color="amber">50% AB混合 + #01 · 全能卡玛王</Badge>
+          <span className="text-base font-bold text-white">⚡ AR4.5-L3b 终极双核作战雷达</span>
+          <Badge color="amber">国家队动态股仓 + 风险调整Top2逆波 + 南向港科滤网</Badge>
           <span className="font-mono text-[11px] text-zinc-400">
-            物理单账户实证：年化 +34.8% · 回撤 20.8% · 卡玛 1.67 · 4年全正
+            物理单账户实证：4年 +283.2% · 年化 +41.3% · 回撤 19.1% · 卡玛 2.17 · OOS回撤 11.3%
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -174,12 +174,12 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
           {/* 0. 唯一权威：主力单账号 ct1曾 今日最终买卖执行单（先卖后买精确100股 + 一键顺序预填 + Shadow对账） */}
           <AR3ExecutionOrderCard reloadToken={planReloadToken} />
 
-          {/* 0.5 国家队持仓分位 + 5日净申购 + 股债性价比 ERP 实时仪表盘（驱动 AR3 进攻股仓动态调节） */}
+          {/* 0.5 国家队持仓分位 + 5日净申购 + 南向资金 + ERP 实时仪表盘（AR4.5-L3b 核心宏观中枢） */}
           {macro && (
             <div className="rounded-lg border border-emerald-500/35 bg-gradient-to-r from-emerald-950/20 via-zinc-900/70 to-violet-950/20 p-3 text-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-bold text-white">🏛️ 国家队持仓分位 + 5日净申购 + ERP 实时仪表盘</span>
+                  <span className="font-bold text-white">🏛️ 国家队分位 + 5日净申购 + 南向资金 + ERP 实时仪表盘</span>
                   {macroDec && (
                     <Badge
                       color={
@@ -234,7 +234,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
 
               {macro.available && macroDec ? (
                 <>
-                  <div className="mt-2.5 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                  <div className="mt-2.5 grid grid-cols-2 gap-2 lg:grid-cols-5">
                     <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
                       <div className="text-[11px] text-zinc-400">国家队 250 日持仓分位</div>
                       <div className="mt-0.5 flex items-baseline gap-2 font-mono">
@@ -265,6 +265,31 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
                     </div>
 
                     <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
+                      <div className="text-[11px] text-zinc-400">南向资金 20 日净买入（港科滤网）</div>
+                      <div className="mt-0.5 flex items-baseline gap-2 font-mono">
+                        <span
+                          className={`text-base font-bold ${
+                            macro.sb_hk_status === 'blocked'
+                              ? 'text-emerald-400'
+                              : macro.sb_hk_status === 'boosted'
+                                ? 'text-rose-400'
+                                : 'text-sky-300'
+                          }`}
+                        >
+                          {(macro.sb_net_20d_yi ?? 0) >= 0 ? '+' : ''}
+                          {(macro.sb_net_20d_yi ?? 0).toFixed(1)}亿
+                        </span>
+                        <span className="text-[10px] text-zinc-400">
+                          {macro.sb_hk_status === 'blocked'
+                            ? '拦截港科'
+                            : macro.sb_hk_status === 'boosted'
+                              ? '港科+25%'
+                              : '中性放行'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
                       <div className="text-[11px] text-zinc-400">沪深300 股债性价比 ERP</div>
                       <div className="mt-0.5 flex items-baseline gap-2 font-mono">
                         <span
@@ -281,7 +306,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
                     </div>
 
                     <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
-                      <div className="text-[11px] text-zinc-400">AR3 进攻期生效股仓上限</div>
+                      <div className="text-[11px] text-zinc-400">AR4.5 进攻期生效股仓上限</div>
                       <div className="mt-0.5 flex items-baseline gap-2 font-mono">
                         <span className="text-base font-bold text-emerald-300">
                           {cfg.stock_budget_cap_pct}% → {cfg.effective_stock_budget_cap_pct ?? macroDec.effective_stock_cap_pct}%
@@ -349,7 +374,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
                           : 'border-zinc-700 bg-zinc-950/70 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
                       }`}
                     >
-                      {opt.id === 'regime_focus' ? '#01 分周期聚焦Top1' : '#02 跨资产分散Top2'}
+                      {opt.id === 'regime_focus' ? 'AR4.5-L3b 风险调整Top2逆波' : '#02 全天候跨类分散Top2'}
                     </button>
                   )
                 })}

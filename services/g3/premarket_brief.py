@@ -118,26 +118,28 @@ def generate_premarket_brief(
         stock_cap = int(raw_eff_cap if raw_eff_cap is not None else (cfg.get("stock_budget_cap_pct") or 50))
         stock_mode = str(cfg.get("active_stock_mode") or "ab_blend")
         etf_mode = str(cfg.get("etf_core_mode") or "regime_focus")
-        active_strat_name = f"AR3 v3.0 终极双核（{stock_cap}% {stock_mode} + {etf_mode}）"
+        active_strat_name = f"AR4.5-L3b 终极双核（{stock_cap}% {stock_mode} + 风险调整Top2逆波ETF）"
         actual_pct = acct.get("position_pct")
-        cap_pct = 100.0  # AR3 v3.0 物理单账户零杠杆：进攻期按国家队分位动态调节股仓(0/35/50/65%)，非进攻期 0%股+100%跨资产ETF
+        cap_pct = 100.0  # AR4.5-L3b 物理单账户零杠杆：进攻期按国家队分位动态调节股仓(0/35/50/65%)，非进攻期 0%股+100%非A股Top2逆波ETF
 
         alloc_line = (
-            f"AR3-F基本面个股 {stock_cap}%({stock_mode}) + #01跨资产ETF {100 - stock_cap}%(含闲置现金)"
+            f"AR3-F基本面个股 {stock_cap}%({stock_mode}) + AR4.5跨资产ETF {100 - stock_cap}%(含闲置现金)"
             if is_offensive and stock_cap > 0
             else (
-                "ERP极贵逃顶阀(<5%)触发 -> AR3-F个股 0% + #01避险ETF 100%"
+                "ERP极贵逃顶阀(<5%)触发 -> AR3-F个股 0% + AR4.5避险ETF 100%"
                 if is_offensive and stock_cap <= 0
-                else "AR3-F个股 0%(锁仓禁开) + #01非A股跨资产ETF 100%(含冰点反抽)"
+                else "AR3-F个股 0%(锁仓禁开) + AR4.5非A股风险调整Top2逆波ETF 100%(含冰点反抽)"
             )
         )
         macro_line = None
         if isinstance(macro_dash, Mapping) and macro_dash.get("available"):
             inflow5 = float(macro_dash.get("broad6_net_inflow_5d_yi") or 0.0)
             inflow_sign = "+" if inflow5 >= 0 else ""
+            sb20 = macro_dash.get("sb_net_20d_yi")
+            sb_part = f"｜南向20日净买 {float(sb20):+,.0f}亿" if sb20 is not None else ""
             macro_line = (
                 f"国家队250日分位 {macro_dash.get('nt_ratio_pctile_250d')}%（{(macro_dec or {}).get('phase_label') or '—'}）"
-                f"｜6大宽基5日净申购 {inflow_sign}{inflow5:,.0f}亿"
+                f"｜6大宽基5日净申购 {inflow_sign}{inflow5:,.0f}亿{sb_part}"
                 f"｜沪深300 ERP {macro_dash.get('erp_pct')}%｜进攻股仓生效上限 {stock_cap}%"
             )
 
@@ -168,7 +170,7 @@ def generate_premarket_brief(
 
         turnover_str = f"{tf['forecast_trillion']}万亿" if tf.get("forecast_trillion") is not None else "—"
         lines = [
-            f"⚡ 【AR3 v3.0 盘前终极战报 & 买卖单 · {d_str}】",
+            f"⚡ 【AR4.5-L3b 盘前终极战报 & 买卖单 · {d_str}】",
             f"■ 主力账号：{acct.get('label') or acct.get('display_name') or acct.get('account_id', 'acct1')}｜总资产 ¥{float(acct.get('total_assets') or 0):,.0f}｜可用 ¥{float(acct.get('available_cash') or 0):,.0f}｜现仓位 {actual_pct}%",
             f"■ 大盘五态：{regime_label}｜上证AR3趋势={idx.get('confirmed_regime') or '—'}（连{idx.get('streak_days') or 0}日）｜涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}｜成交额={turnover_str}",
             f"■ AR3 配额：{alloc_line}",
