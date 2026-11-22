@@ -47,8 +47,8 @@ export default function G3Settings() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageHeader
-        title="AR3 v3.0 终极双核策略矩阵与风控总控台"
-        subtitle="AR3 v3.0 双核驱动（进攻期 50% AR3-F AB混合 + 50% #01跨资产ETF · 防守/平衡期 100% #01非A股避险ETF）× 已有底仓反T哨兵 × L2 硬风控门禁"
+        title="AR4.5-L3b 终极双核策略矩阵与风控总控台"
+        subtitle="AR4.5-L3b 双核驱动（进攻期按国家队分位动态 0/35/50/65% AB混合个股 + 宽基ETF · 防守/平衡期 100% 非A股风险调整Top2逆波ETF + 南向港科滤网）× 已有底仓反T哨兵 × L2 硬风控门禁"
         actions={
           <Button onClick={() => void load()} disabled={loading}>
             {loading ? '刷新中…' : '刷新'}
@@ -62,17 +62,17 @@ export default function G3Settings() {
         </div>
       )}
 
-      {/* Phase 4：AR3 v3.0 终极双核策略矩阵与动态配额 */}
+      {/* Phase 4：AR4.5-L3b 终极双核策略矩阵与动态配额 */}
       {matrix && (
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
-              label="进攻核 · AR3-F 基本面个股 (AB混合)"
+              label="进攻核 · AR4.5 基本面个股 (AB混合)"
               value={`${matrix.allocation.offense_pct}%`}
               hint={`大盘状态：${matrix.regime_label}`}
             />
             <StatCard
-              label="压舱核 · AR3 #01 跨资产 ETF"
+              label="压舱核 · AR4.5-L3b Top2 逆波 ETF"
               value={`${matrix.allocation.defense_etf_pct}%`}
               hint="纳指/黄金/红利/政金债跨资产全天候轮动"
             />

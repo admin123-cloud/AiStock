@@ -279,19 +279,19 @@ def build_strategy_matrix(
     coach_metrics = coach.get("metrics") if isinstance(coach.get("metrics"), Mapping) else {}
     r40 = _load_r40_shadow_progress(tracker_dir)
 
-    # 组装三条策略腿的健康度与实时状态（统一 AR3 v3.0 终版口径）
+    # 组装三条策略腿的健康度与实时状态（统一 AR4.5-L3b 终版口径）
     offense_status = "active" if regime == "offensive" else "halted"
     offense_status_label = (
-        "AR3-F 进攻期开放（50%上限）"
+        "AR4.5-L3b 进攻期开放（国家队分位动态 0/35/50/65%）"
         if regime == "offensive"
         else "非进攻期锁仓 0%（仅作备选观察）"
     )
 
     defense_status = "active"
     defense_status_label = (
-        "进攻期承接 50%+闲置资金（#01 宽基Top2）"
+        "进攻期承接剩余资金（A股宽基Top2）"
         if regime == "offensive"
-        else "非进攻期 100% 承接（#01 非A股跨资产Top1）"
+        else "非进攻期 100% 承接（风险调整Top2逆波 + 南向港科滤网）"
     )
 
     t_pnl = attr.get("t_trade_pnl")
@@ -309,8 +309,8 @@ def build_strategy_matrix(
     legs = [
         {
             "leg_id": "offense",
-            "name": "进攻核 · AR3-F 基本面业绩 × 趋势 (AB混合)",
-            "role": "仅 AR1 进攻期启动：F3A绩优回踩 + F2A业绩趋势主升交替填4槽（单行业限1只，-10%硬止损）",
+            "name": "进攻核 · AR4.5 基本面业绩 × 趋势 (AB混合)",
+            "role": "仅右侧进攻期启动：按国家队250日分位动态调节股仓(0/35/50/65%)，F3A+F2A交替填4槽（单行业限1只，-10%硬止损）",
             "target_pct": effective_alloc["offense_pct"],
             "base_pct": base_alloc["offense_pct"],
             "status": offense_status,
@@ -318,19 +318,19 @@ def build_strategy_matrix(
             "contracts_count": len(by_leg["offense"]),
             "contracts": by_leg["offense"],
             "action_route": "/g3/mainwave",
-            "action_label": "查看 AR3-F 双雷达与排雷",
+            "action_label": "查看 AR4.5 双雷达与排雷",
             "feedback_note": (
-                "物理单账户实证：50% AB混合 + #01 年化 +34.8%、回撤 20.8%、卡玛 1.67。"
+                "AR4.5-L3b 物理单账户实证：4年 +283.2%、年化 +41.3%、回撤 19.1%、卡玛 2.17、OOS回撤 11.3%。"
                 + (
                     " 当前处于非进攻期，个股预算锁死 0%，严禁开新个股仓。"
                     if regime != "offensive"
-                    else " 当前处于进攻期，按 AR3 双核执行单择优填槽（支持随20日赚钱效应热切 F2A/F3A）。"
+                    else " 当前处于进攻期，按 AR4.5-L3b 双核执行单择优填槽（支持一键切换 L4 赚钱效应自动热切）。"
                 )
             ),
         },
         {
             "leg_id": "defense_etf",
-            "name": "压舱核 · AR3 #01 跨资产全天候 ETF",
+            "name": "压舱核 · AR4.5-L3b 风险调整 Top2 逆波 ETF",
             "role": "14只5大类场内ETF（A股宽基/红利/黄金/纳指标普/恒科/国债）+ 极端冰点企稳反抽",
             "target_pct": effective_alloc["defense_etf_pct"],
             "base_pct": base_alloc["defense_etf_pct"],

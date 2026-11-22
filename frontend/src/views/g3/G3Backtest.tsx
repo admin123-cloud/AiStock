@@ -211,7 +211,7 @@ export default function G3Backtest() {
   const secondaryStrategy = ar3Etf01 ?? report?.comparisons.find((c) => c.id === 'ar1_v2_1_pure_etf_allweather')
 
   const catBadge = (cat: string, id: string) => {
-    if (id.startsWith('ar3_')) return { label: 'AR3 v3.0 现役主策略', color: 'amber' as const }
+    if (id.startsWith('ar3_')) return { label: 'AR3 v3.0 升级前基准', color: 'amber' as const }
     if (cat === 'legacy_combo' || id.startsWith('ar1_v2_1_')) return { label: 'AR1 历史对照', color: 'zinc' as const }
     if (cat === 'active_combo') return { label: '全天候合体', color: 'emerald' as const }
     if (cat === 'stage_strategy') return { label: '阶段独立策略', color: 'blue' as const }
@@ -222,15 +222,16 @@ export default function G3Backtest() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageHeader
-        title="G3 历史回测对比与防幻觉验真（AR3 v3.0 终极双核）"
+        title="G3 历史回测对比与防幻觉验真（现役已升级至 AR4.5-L3b）"
         subtitle={
           report
-            ? `回测区间 ${report.period.start} ~ ${report.period.end}（${report.period.trade_days} 交易日 · 5阶段切换 ${report.period.regime_switches} 次）· 严格 T-1→T+1 + PIT 公告日对齐单账户零杠杆仿真`
-            : 'AR3 v3.0 终极双核（50% AB混合 + #01跨资产ETF）× 基准与历史版本三段盲测对比 × 6 项防未来函数审计'
+            ? `回测区间 ${report.period.start} ~ ${report.period.end}（${report.period.trade_days} 交易日 · 5阶段切换 ${report.period.regime_switches} 次）· 现役生产已于 2026-11-22 升级至 AR4.5-L3b（4年 +283.2% · 年化 +41.3% · 回撤 19.1% · 卡玛 2.17 · OOS回撤 11.3%），下方展示升级前 AR3 v3.0 与历史版本对照`
+            : 'AR4.5-L3b（卡玛 2.17）× AR3 v3.0 基准 × 历史版本三段盲测对比 × 6 项防未来函数审计'
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Badge color="amber">现役主策略 · AR3 v3.0</Badge>
+            <Badge color="emerald">现役主策略 · AR4.5-L3b（卡玛 2.17）</Badge>
+            <Badge color="amber">下方历史基准 · AR3 v3.0</Badge>
             <Badge color="emerald">零未来函数 T-1→T+1</Badge>
             <Badge color="blue">单账户总仓位 ≤ 100%</Badge>
             <Button outline onClick={() => void load()} disabled={loading}>

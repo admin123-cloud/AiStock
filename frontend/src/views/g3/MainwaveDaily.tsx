@@ -131,7 +131,7 @@ export default function MainwaveDaily() {
     ? '当前数据不足以形成可信买入结论，候选为0不等于今天没有机会。'
     : data.stale_batch
       ? '当前显示历史批次，不作为今天的新买点。'
-      : '历史旧主升合同仅作存档观察，实盘买入与调仓统一以顶部 AR3 v3.0 终极双核雷达为准。'
+      : '历史旧主升合同仅作存档观察，实盘买入与调仓统一以顶部 AR4.5-L3b 终极双核雷达为准。'
 
   const blockedChecks = useMemo(() => (data.checks || []).filter((x) => !x.ok), [data.checks])
   const candidates = useMemo(
@@ -150,8 +150,8 @@ export default function MainwaveDaily() {
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="AR3-F 基本面选股与 AI 排雷中心"
-        subtitle="AR3 v3.0 唯一权威选股视图：进攻期 50% AB混合（F3A 绩优回踩 + F2A 业绩趋势主升）+ 50% #01 跨资产 ETF；防守/平衡期 100% #01 非A股避险 ETF（严禁买 A 股个股）。"
+        title="AR4.5 基本面选股与 AI 排雷中心"
+        subtitle="AR4.5-L3b 唯一权威选股视图：进攻期按国家队分位动态 0/35/50/65% AB混合（F3A 绩优回踩 + F2A 业绩趋势主升）+ 宽基 ETF；防守/平衡期 100% 非A股风险调整 Top2 逆波 ETF + 南向港科滤网（严禁买 A 股个股）。"
         actions={
           <div className="flex items-center gap-2">
             <Button outline onClick={() => navigate('/g3/desk')}>前往实战作战台预填 →</Button>

@@ -121,7 +121,7 @@ def test_strategy_matrix_offensive_with_ar3_dual_core_and_brief_integration(tmp_
         base_dir=tmp_path / "brief",
     )
     assert brief["schema"] == "g3_premarket_brief/2_ar3"
-    assert "AR3 v3.0" in brief["markdown_text"]
+    assert "AR4.5-L3b" in brief["markdown_text"]
     assert "广发证券-曾*" in brief["markdown_text"]
     assert "513100" in brief["markdown_text"]
     assert "主升浪" not in brief["markdown_text"]

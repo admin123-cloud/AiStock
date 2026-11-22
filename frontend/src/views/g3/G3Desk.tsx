@@ -806,8 +806,8 @@ export default function G3Desk() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageHeader
-        title="G3 AR3 v3.0 实战作战台"
-        subtitle={`AR3 v3.0 终极双核（50% AB混合 F3A+F2A + #01 跨资产ETF）· 主力账号 ct1曾 · 规划日 ${data?.trade_date || '—'} · 实时行情 × 精准调仓 × L2风控预填`}
+        title="G3 AR4.5-L3b 实战作战台"
+        subtitle={`AR4.5-L3b 终极双核（国家队动态股仓 + 风险调整Top2逆波ETF + 南向港科滤网）· 主力账号 ct1曾 · 规划日 ${data?.trade_date || '—'} · 实时行情 × 精准调仓 × L2风控预填`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={handleGeneratePlan} disabled={generating}>
@@ -1147,7 +1147,7 @@ export default function G3Desk() {
                 )}
               </div>
               <div className="flex items-center gap-3 text-xs">
-                <Link to="/g3/mainwave" className="text-blue-400 hover:text-blue-300">AR3-F 选股排雷 →</Link>
+                <Link to="/g3/mainwave" className="text-blue-400 hover:text-blue-300">AR4.5 选股排雷 →</Link>
                 <Link to="/g3/backtest" className="text-zinc-400 hover:text-zinc-200">历史回测验真 →</Link>
               </div>
             </div>
@@ -1416,10 +1416,10 @@ export default function G3Desk() {
           <Card className={gate.regime === 'defensive' ? 'border-red-500/40 bg-red-950/10' : gate.regime === 'offensive' ? 'border-emerald-500/40 bg-emerald-950/10' : 'border-amber-500/40 bg-amber-950/10'}>
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-white">大盘择时总闸门 × AR3 v3.0 仓位水位</span>
+                <span className="text-sm font-semibold text-white">大盘择时总闸门 × AR4.5-L3b 仓位水位</span>
                 <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
                 <Badge color={gate.allow_new_mainwave ? 'emerald' : 'red'}>
-                  {gate.allow_new_mainwave ? '允许 AR3-F 个股开新仓' : '防守切 100% #01 跨资产ETF · 严禁买A股'}
+                  {gate.allow_new_mainwave ? '允许 AR4.5 个股开新仓' : '防守切 100% AR4.5 逆波ETF · 严禁买A股'}
                 </Badge>
                 <Badge color="blue">A股风险水位上限 ≤ {capPct.toFixed(0)}%</Badge>
               </div>
@@ -1471,20 +1471,20 @@ export default function G3Desk() {
                   <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/60 p-2.5 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium text-zinc-200">
-                        AR3 v3.0 动态配额（全站联动）
+                        AR4.5-L3b 动态配额（全站联动）
                       </span>
                       <div className="flex items-center gap-2">
-                        <Link to="/g3/mainwave" className="text-blue-400 hover:underline">AR3-F 选股排雷 →</Link>
+                        <Link to="/g3/mainwave" className="text-blue-400 hover:underline">AR4.5 选股排雷 →</Link>
                         <Link to="/g3/settings" className="text-blue-400 hover:underline">策略总控台 →</Link>
                       </div>
                     </div>
                     <div className="mt-2 grid grid-cols-4 gap-2 font-mono text-[11px]">
                       <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
-                        <div className="text-zinc-400">进攻·AR3-F个股</div>
+                        <div className="text-zinc-400">进攻·AR4.5个股</div>
                         <div className="text-sm font-semibold text-white">{data.strategy_allocation.allocation.offense_pct}%</div>
                       </div>
                       <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
-                        <div className="text-zinc-400">压舱·#01 ETF</div>
+                        <div className="text-zinc-400">压舱·Top2逆波ETF</div>
                         <div className="text-sm font-semibold text-blue-300">{data.strategy_allocation.allocation.defense_etf_pct}%</div>
                       </div>
                       <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
@@ -1565,15 +1565,15 @@ export default function G3Desk() {
         )
       })()}
 
-      {/* 0.5 盘前 AI 晨会简报（AR3 v3.0 单一口径） */}
+      {/* 0.5 盘前 AI 晨会简报（AR4.5-L3b 单一口径） */}
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-white">盘前 AI 晨会简报（AR3 v3.0 单一口径）</span>
+            <span className="text-sm font-semibold text-white">盘前 AI 晨会简报（AR4.5-L3b 单一口径）</span>
             {data?.premarket_brief ? (
               <>
                 <Badge color={data.premarket_brief.source === 'agent_enriched' ? 'emerald' : 'blue'}>
-                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : 'AR3 自动基线版'}
+                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : 'AR4.5 自动基线版'}
                 </Badge>
                 <span className="font-mono text-xs text-zinc-400">
                   {data.premarket_brief.date} · {fmtTimeOnly(data.premarket_brief.generated_at)}
@@ -1617,8 +1617,8 @@ export default function G3Desk() {
                 const curRegime = data.market_regime_gate?.regime || 'defensive'
                 const isDef = curRegime !== 'offensive'
                 const themeTitle = isDef
-                  ? '防守/平衡期 · 100% #01 跨资产 ETF（严禁买A股个股）'
-                  : '进攻期 · AR3-F 基本面候选行业分布（F2A+F3A）'
+                  ? '防守/平衡期 · 100% AR4.5-L3b 风险调整Top2逆波ETF（严禁买A股个股）'
+                  : '进攻期 · AR4.5 基本面候选行业分布（F2A+F3A）'
                 return (
                   <>
                     <div className="flex items-center justify-between gap-2">
@@ -1651,8 +1651,8 @@ export default function G3Desk() {
                     ) : (
                       <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-zinc-400">
                         {isDef
-                          ? '当前非进攻期：AR3-F 选股待机，全部资金按顶部 #01 跨资产 ETF 指令单执行。'
-                          : '当前暂无 AR3-F 行业聚集信号'}
+                          ? '当前非进攻期：AR4.5 选股待机，全部资金按顶部 AR4.5-L3b 跨资产 ETF 指令单执行。'
+                          : '当前暂无 AR4.5 行业聚集信号'}
                       </div>
                     )}
                   </>
@@ -1662,7 +1662,7 @@ export default function G3Desk() {
           </div>
         ) : (
           <p className="mt-2.5 text-xs text-zinc-400">
-            点击右上角「生成/刷新简报」或等待 09:10 定时盘前 Agent 自动生成 AR3 v3.0 晨会简报并推送微信。
+            点击右上角「生成/刷新简报」或等待 09:10 定时盘前 Agent 自动生成 AR4.5-L3b 晨会简报并推送微信。
           </p>
         )}
       </Card>

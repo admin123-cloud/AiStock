@@ -144,7 +144,7 @@ def generate_premarket_brief(
             )
 
         checklist: list[str] = [
-            f"【AR3 v3.0 总控】大盘={regime_label}｜主力账号 {acct.get('label')}（总资产 ¥{acct.get('total_assets', 0):,.0f}｜可用 ¥{acct.get('available_cash', 0):,.0f}｜现仓位 {actual_pct}%）",
+            f"【AR4.5-L3b 总控】大盘={regime_label}｜主力账号 {acct.get('label')}（总资产 ¥{acct.get('total_assets', 0):,.0f}｜可用 ¥{acct.get('available_cash', 0):,.0f}｜现仓位 {actual_pct}%）",
             f"【目标配额】{alloc_line}",
         ]
         if sells:
@@ -172,8 +172,8 @@ def generate_premarket_brief(
         lines = [
             f"⚡ 【AR4.5-L3b 盘前终极战报 & 买卖单 · {d_str}】",
             f"■ 主力账号：{acct.get('label') or acct.get('display_name') or acct.get('account_id', 'acct1')}｜总资产 ¥{float(acct.get('total_assets') or 0):,.0f}｜可用 ¥{float(acct.get('available_cash') or 0):,.0f}｜现仓位 {actual_pct}%",
-            f"■ 大盘五态：{regime_label}｜上证AR3趋势={idx.get('confirmed_regime') or '—'}（连{idx.get('streak_days') or 0}日）｜涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}｜成交额={turnover_str}",
-            f"■ AR3 配额：{alloc_line}",
+            f"■ 大盘五态：{regime_label}｜上证趋势={idx.get('confirmed_regime') or '—'}（连{idx.get('streak_days') or 0}日）｜涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}｜成交额={turnover_str}",
+            f"■ AR4.5 配额：{alloc_line}",
         ]
         if macro_line:
             lines.append(f"■ 国家队与ERP：{macro_line}")
@@ -203,7 +203,7 @@ def generate_premarket_brief(
                 "waterline_advice": alloc_line,
             },
             "core_themes": [],
-            "themes_title": "AR3 v3.0 终极双核目标配置",
+            "themes_title": "AR4.5-L3b 终极双核目标配置",
             "active_strategy_name": active_strat_name,
             "top_picks": [],
             "ar3_summary": {

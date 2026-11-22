@@ -414,7 +414,7 @@ export default function NationalTeamCycleCard({ dark }: NationalTeamCycleCardPro
                 {latest.nt_ratio_pctile_250d?.toFixed(1)}%
               </span>
               <span className="text-[11px] font-semibold text-zinc-600 dark:text-slate-300">
-                AR3 进攻股仓上限 → <b className="text-emerald-600 dark:text-emerald-300">{decision.effective_stock_cap_pct}%</b>
+                AR4.5 进攻股仓上限 → <b className="text-emerald-600 dark:text-emerald-300">{decision.effective_stock_cap_pct}%</b>
               </span>
             </div>
             <div className="mt-1 text-[11px] text-zinc-500 dark:text-slate-400">

@@ -54,7 +54,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
       setRadar(res)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
-      setError(err.response?.data?.detail || err.message || '加载 AR3 v3.0 双核雷达失败')
+      setError(err.response?.data?.detail || err.message || '加载 AR4.5-L3b 双核雷达失败')
     } finally {
       setLoading(false)
     }
@@ -469,7 +469,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
                               order_type: 'base_rebalance',
                               price: item.close.toFixed(3),
                               shares: '1000',
-                              note: `AR3 v3.0 跨资产ETF(${item.asset_class_label}) 目标配额${item.account_weight_pct}%`,
+                              note: `AR4.5-L3b 跨资产ETF(${item.asset_class_label}) 目标配额${item.account_weight_pct}%`,
                             })
                           }
                         >
@@ -534,7 +534,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
           <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-white">🎯 AR3-F 基本面业绩 × 趋势双选股雷达</span>
+                <span className="font-bold text-white">🎯 AR4.5 基本面业绩 × 趋势双选股雷达</span>
                 <Badge color={radar.is_offensive ? 'emerald' : 'red'}>
                   {radar.is_offensive
                     ? `进攻期开放 · 个股预算 ${cfg.stock_budget_cap_pct}%（${cfg.max_slots}槽，每行业限1只）`
@@ -586,7 +586,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
 
             {!radar.is_offensive && (
               <div className="mt-2 rounded-md border border-amber-500/35 bg-amber-950/20 px-3 py-1.5 text-[11px] text-amber-200">
-                🔒 当前大盘处于非进攻期（{radar.regime}）：按 AR3 v3.0 物理单账户纪律，个股仓位预算为 0%，禁止新开个股仓；下方名单仅保留作为大盘转入进攻期后的第一梯队基本面储备池。
+                🔒 当前大盘处于非进攻期（{radar.regime}）：按 AR4.5-L3b 物理单账户纪律，个股仓位预算为 0%，禁止新开个股仓；下方名单仅保留作为大盘转入进攻期后的第一梯队基本面储备池。
               </div>
             )}
 
@@ -688,7 +688,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
                                     order_type: 'base_rebalance',
                                     price: row.close.toFixed(2),
                                     shares: '100',
-                                    note: `AR3-F ${row.source_label} 公告${row.notice_date} 净利+${row.net_profit_yoy_pct}% 止损${row.stop_loss_price}`,
+                                    note: `AR4.5 ${row.source_label} 公告${row.notice_date} 净利+${row.net_profit_yoy_pct}% 止损${row.stop_loss_price}`,
                                   })
                                 }
                               >

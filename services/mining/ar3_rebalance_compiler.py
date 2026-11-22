@@ -314,7 +314,7 @@ def compile_ar3_rebalance_plan(
             "target_weight_pct": w_pct,
             "ref_price": cl,
             "stop_loss_price": stop_px,
-            "reason": str(item.get("reason") or "AR3 v3.0 跨资产 ETF 轮动目标"),
+            "reason": str(item.get("reason") or "AR4.5-L3b 跨资产 ETF 轮动目标"),
             "source_label": str(item.get("asset_class_label") or "跨资产ETF"),
             "notice_date": None,
             "net_profit_yoy_pct": None,
@@ -430,7 +430,7 @@ def compile_ar3_rebalance_plan(
         limit_px = _round_px(px * 0.998, h["is_etf"])  # 卖单让价 0.2% 保障成交
         why_parts: list[str] = []
         if tgt is None:
-            why_parts.append("非 AR3 v3.0 当前目标标的")
+            why_parts.append("非 AR4.5-L3b 当前目标标的")
         else:
             why_parts.append(f"超配（现 {round(cur_mv / total_assets * 100, 1)}% > 目标 {tgt['target_weight_pct']}%）")
         if h["profit_pct"] is not None and h["profit_pct"] <= -10.0:
@@ -818,7 +818,7 @@ def format_ar3_plan_wechat_markdown(plan: Mapping[str, Any]) -> str:
     me = plan.get("money_effect_20d") or {}
 
     lines = [
-        f"⚡ **AR3 v3.0 今日最终买卖单 ({plan.get('date')})**",
+        f"⚡ **AR4.5-L3b 今日最终买卖单 ({plan.get('date')})**",
         f"• 主力账号：{acct.get('label')}（总资产 ¥{acct.get('total_assets', 0):,.0f}｜可用 ¥{acct.get('available_cash', 0):,.0f}｜现仓位 {acct.get('position_pct', 0)}%）",
         f"• 大盘五态：**{plan.get('regime_label')}**｜个股模式：`{cfg.get('active_stock_mode')}`｜ETF底座：`{cfg.get('etf_core_mode')}`",
         "",

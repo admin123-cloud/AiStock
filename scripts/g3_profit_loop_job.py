@@ -78,7 +78,7 @@ def _http_json(path: str, *, method: str = "GET", body: dict | None = None, time
 
 
 def run_premarket(push: bool) -> int:
-    _log("=== 启动盘前 AR3 v3.0 终极战报 & 精确买卖单作业 (09:10) ===")
+    _log("=== 启动盘前 AR4.5-L3b 终极战报 & 精确买卖单作业 (09:10) ===")
     brief = _http_json("/api/g3/premarket-brief/generate", method="POST", body={}, timeout=60)
     stance = brief.get("market_stance") or {}
     ar3s = brief.get("ar3_summary") or {}
@@ -89,12 +89,12 @@ def run_premarket(push: bool) -> int:
     if push:
         # 已合并为唯一权威 AR3 v3.0 盘前终极战报（含精确股数买卖单），不再连发两份旧版简报造成打架
         res = _http_json("/api/g3/premarket-brief/push-wechat", method="POST", body={}, timeout=30)
-        _log(f"AR3 v3.0 盘前终极战报微信推送完成: ok={res.get('ok')} channel={res.get('channel')} detail={res.get('detail')}")
+        _log(f"AR4.5-L3b 盘前终极战报微信推送完成: ok={res.get('ok')} channel={res.get('channel')} detail={res.get('detail')}")
     return 0
 
 
 def run_postclose() -> int:
-    _log("=== 启动盘后盈利闭环作业 (17:45 · 含 AR3 v3.0 数据喂料与 Shadow 对账) ===")
+    _log("=== 启动盘后盈利闭环作业 (17:45 · 含 AR4.5-L3b 数据喂料与 Shadow 对账) ===")
     # 1. 自动同步 AR3 独立表：每日刷新 14 只跨资产 ETF，每周五同步增量财报/业绩预告/除权分红
     try:
         is_fri = datetime.now(BJ_TZ).weekday() == 4
