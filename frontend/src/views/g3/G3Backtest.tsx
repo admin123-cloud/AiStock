@@ -23,14 +23,14 @@ const SERIES_CFG: Array<{
   width: number
   dashed?: boolean
 }> = [
-  { key: 'ar3_dual_ab', label: '★ AR3 v3.0 终极双核·全能卡玛王(50% AB+#01)', color: '#f59e0b', width: 3.0 },
-  { key: 'ar3_etf01', label: 'AR3 #01 跨资产全天候ETF(RegimeFocus)', color: '#22d3ee', width: 2.2 },
-  { key: 'core_sat_aw', label: 'AR1 v2.1 核心卫星全天候(单账户零杠杆)', color: '#10b981', width: 2.0 },
-  { key: 'pure_etf_aw', label: 'AR1 v2.1 纯ETF全天候(零生存者偏差)', color: '#38bdf8', width: 1.6 },
-  { key: 'lowvol', label: 'AR1 机构低波慢牛个股(进攻期)', color: '#a78bfa', width: 1.4 },
-  { key: 'panic_etf', label: 'AR2 冰点企稳反抽ETF(冰点期)', color: '#eab308', width: 1.3, dashed: true },
+  { key: 'ar3_dual_ab', label: '★ AR3 v3.0 终极双核·全能卡玛王(50% AB+#01)', color: '#f59e0b', width: 3.2 },
+  { key: 'ar3_etf01', label: 'AR3 #01 跨资产全天候ETF(RegimeFocus)', color: '#22d3ee', width: 2.4 },
+  { key: 'core_sat_aw', label: '历史对照 · AR1 v2.1 核心卫星', color: '#10b981', width: 1.5, dashed: true },
+  { key: 'pure_etf_aw', label: '历史对照 · AR1 v2.1 纯ETF', color: '#38bdf8', width: 1.4, dashed: true },
+  { key: 'lowvol', label: '阶段对照 · 机构低波慢牛个股', color: '#a78bfa', width: 1.3, dashed: true },
+  { key: 'panic_etf', label: '阶段对照 · 冰点企稳反抽ETF', color: '#eab308', width: 1.2, dashed: true },
   { key: 'hs300', label: '沪深300 满仓基准', color: '#9ca3af', width: 1.6, dashed: true },
-  { key: 'retired_mw04', label: '已淘汰对照组(旧追高5日死止盈)', color: '#ef4444', width: 1.4, dashed: true },
+  { key: 'retired_mw04', label: '已淘汰对照组(旧追高5日死止盈)', color: '#ef4444', width: 1.3, dashed: true },
 ]
 
 function BacktestNavChart({
@@ -204,12 +204,16 @@ export default function G3Backtest() {
     }
   }
 
-  const coreSat = report?.comparisons.find((c) => c.id === 'ar1_v2_1_allweather')
-  const pureEtf = report?.comparisons.find((c) => c.id === 'ar1_v2_1_pure_etf_allweather')
+  const ar3Dual = report?.comparisons.find((c) => c.id === 'ar3_v3_dual_core_ab_01')
+  const ar3Etf01 = report?.comparisons.find((c) => c.id === 'ar3_v3_etf01_regime_focus')
   const hs300 = report?.comparisons.find((c) => c.id === 'bench_hs300')
+  const primaryStrategy = ar3Dual ?? report?.comparisons.find((c) => c.id === 'ar1_v2_1_allweather')
+  const secondaryStrategy = ar3Etf01 ?? report?.comparisons.find((c) => c.id === 'ar1_v2_1_pure_etf_allweather')
 
-  const catBadge = (cat: string) => {
-    if (cat === 'active_combo') return { label: 'AR1 全天候合体', color: 'emerald' as const }
+  const catBadge = (cat: string, id: string) => {
+    if (id.startsWith('ar3_')) return { label: 'AR3 v3.0 现役主策略', color: 'amber' as const }
+    if (cat === 'legacy_combo' || id.startsWith('ar1_v2_1_')) return { label: 'AR1 历史对照', color: 'zinc' as const }
+    if (cat === 'active_combo') return { label: '全天候合体', color: 'emerald' as const }
     if (cat === 'stage_strategy') return { label: '阶段独立策略', color: 'blue' as const }
     if (cat === 'benchmark') return { label: '市场基准', color: 'zinc' as const }
     return { label: '已淘汰反面教材', color: 'red' as const }
@@ -218,14 +222,15 @@ export default function G3Backtest() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageHeader
-        title="G3 历史回测对比与防幻觉验真（AR1 v2.1）"
+        title="G3 历史回测对比与防幻觉验真（AR3 v3.0 终极双核）"
         subtitle={
           report
-            ? `回测区间 ${report.period.start} ~ ${report.period.end}（${report.period.trade_days} 交易日 · 5阶段切换 ${report.period.regime_switches} 次）· 严格 T-1→T+1 单账户零杠杆仿真`
-            : '大盘 5 阶段切换标准 × 基准与各阶段选股策略三段回测对比 × 6 项防未来函数/防幻觉硬核审计'
+            ? `回测区间 ${report.period.start} ~ ${report.period.end}（${report.period.trade_days} 交易日 · 5阶段切换 ${report.period.regime_switches} 次）· 严格 T-1→T+1 + PIT 公告日对齐单账户零杠杆仿真`
+            : 'AR3 v3.0 终极双核（50% AB混合 + #01跨资产ETF）× 基准与历史版本三段盲测对比 × 6 项防未来函数审计'
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Badge color="amber">现役主策略 · AR3 v3.0</Badge>
             <Badge color="emerald">零未来函数 T-1→T+1</Badge>
             <Badge color="blue">单账户总仓位 ≤ 100%</Badge>
             <Button outline onClick={() => void load()} disabled={loading}>
@@ -247,19 +252,19 @@ export default function G3Backtest() {
 
       {report && (
         <>
-          {/* 核心顶栏对比卡 */}
+          {/* 核心顶栏对比卡（AR3 v3.0 终极双核为主角） */}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
-              label="AR1 v2.1 核心卫星全天候"
-              value={fmtSigned(coreSat?.full.cum_ret_pct, 1)}
-              tone="info"
-              hint={`年化 ${fmtSigned(coreSat?.full.ann_ret_pct, 1)} · 回撤 ${coreSat?.full.max_dd_pct}% · 卡玛 ${coreSat?.full.calmar}`}
+              label="★ AR3 v3.0 终极双核·全能卡玛王"
+              value={fmtSigned(primaryStrategy?.full.cum_ret_pct, 1)}
+              tone="up"
+              hint={`年化 ${fmtSigned(primaryStrategy?.full.ann_ret_pct, 1)} · 回撤 ${primaryStrategy?.full.max_dd_pct}% · 卡玛 ${primaryStrategy?.full.calmar}`}
             />
             <StatCard
-              label="AR1 v2.1 纯ETF全天候(零个股偏差)"
-              value={fmtSigned(pureEtf?.full.cum_ret_pct, 1)}
+              label="AR3 #01 跨资产全天候 ETF"
+              value={fmtSigned(secondaryStrategy?.full.cum_ret_pct, 1)}
               tone="info"
-              hint={`年化 ${fmtSigned(pureEtf?.full.ann_ret_pct, 1)} · 2026熊市OOS ${fmtSigned(pureEtf?.segments.oos.cum_ret_pct, 1)}`}
+              hint={`年化 ${fmtSigned(secondaryStrategy?.full.ann_ret_pct, 1)} · 回撤 ${secondaryStrategy?.full.max_dd_pct}% · 2026熊市OOS ${fmtSigned(secondaryStrategy?.segments.oos.cum_ret_pct, 1)}`}
             />
             <StatCard
               label="沪深300 满仓基准"
@@ -267,16 +272,16 @@ export default function G3Backtest() {
               hint={`年化 ${fmtSigned(hs300?.full.ann_ret_pct, 1)} · 回撤 ${hs300?.full.max_dd_pct}% · 熊市OOS ${fmtSigned(hs300?.segments.oos.cum_ret_pct, 1)}`}
             />
             <StatCard
-              label="2026 熊市盲测超额（相对沪深300）"
-              value={fmtSigned((pureEtf?.segments.oos.cum_ret_pct ?? 0) - (hs300?.segments.oos.cum_ret_pct ?? 0), 1)}
+              label="2026 熊市盲测超额（AR3双核 vs 沪深300）"
+              value={fmtSigned((primaryStrategy?.segments.oos.cum_ret_pct ?? 0) - (hs300?.segments.oos.cum_ret_pct ?? 0), 1)}
               tone="up"
-              hint={`最大仓位硬锁死 ≤ ${String(pureEtf?.meta?.max_gross_exposure_pct ?? 80)}%（零隐形杠杆）`}
+              hint={`AR3双核 2026 OOS ${fmtSigned(primaryStrategy?.segments.oos.cum_ret_pct, 1)} · 物理单账户仓位 ≤ ${String(primaryStrategy?.meta?.max_gross_exposure_pct ?? 100)}%`}
             />
           </div>
 
           {/* 1. 大盘 5 阶段切换标准与实证统计 */}
           <Card>
-            <SectionTitle title="1. AR1 大盘五阶段精确切换标准与历史 940 交易日实证统计" />
+            <SectionTitle title={`1. AR3 v3.0 大盘五阶段精确切换标准与历史 ${report.period.trade_days} 交易日实证统计`} />
             <div className="mt-2 overflow-x-auto">
               <Table dense>
                 <TableHead>
@@ -351,9 +356,9 @@ export default function G3Backtest() {
                 </TableHead>
                 <TableBody>
                   {report.comparisons.map((row) => {
-                    const cb = catBadge(row.category)
+                    const cb = catBadge(row.category, row.id)
                     return (
-                      <TableRow key={row.id}>
+                      <TableRow key={row.id} className={row.id.startsWith('ar3_') ? 'bg-amber-500/5' : undefined}>
                         <TableCell className="whitespace-nowrap">
                           <Badge color={cb.color}>{cb.label}</Badge>
                         </TableCell>

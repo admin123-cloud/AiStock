@@ -512,17 +512,17 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
     comparisons.extend([
         pack_series(
             "ar1_v2_1_pure_etf_allweather",
-            "AR1 v2.1 纯ETF全天候（单账户零杠杆）",
-            "进攻80%宽基Top2 + 平衡35%宽基 + 冰点60%企稳反抽（零个股踩雷/零生存者偏差）",
-            "active_combo",
+            "历史对照 · AR1 v2.1 纯ETF全天候（单账户零杠杆）",
+            "进攻80%宽基Top2 + 平衡35%宽基 + 冰点60%企稳反抽（历史版本对照）",
+            "legacy_combo",
             pure_etf_aw_nav,
             pure_etf_aw_meta,
         ),
         pack_series(
             "ar1_v2_1_allweather",
-            "AR1 v2.1 核心卫星全天候（单账户零杠杆）",
-            "进攻40%宽基+40%机构低波 + 平衡35%宽基 + 冰点60%企稳反抽",
-            "active_combo",
+            "历史对照 · AR1 v2.1 核心卫星全天候（单账户零杠杆）",
+            "进攻40%宽基+40%机构低波 + 平衡35%宽基 + 冰点60%企稳反抽（历史版本对照）",
+            "legacy_combo",
             allweather_nav,
             aw_meta,
         ),
