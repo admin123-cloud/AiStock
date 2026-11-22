@@ -113,12 +113,12 @@ export default function G3Settings() {
             ))}
           </div>
 
-          {/* 辅助参考：6 大 A 股宽基 ETF 趋势温度计（AR3 #01 实盘选标的请以作战台跨资产雷达为准） */}
+          {/* 辅助参考：6 大 A 股宽基 ETF 趋势温度计（AR4.5-L3b 实盘选标的请以作战台跨资产雷达为准） */}
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <SectionTitle title="A 股宽基趋势温度计（6 大宽基参考 · AR3 压舱实盘由 #01 跨资产 ETF 驱动）" />
+              <SectionTitle title="A 股宽基趋势温度计（6 大宽基参考 · AR4.5-L3b 压舱实盘由风险调整 Top2 逆波 ETF 驱动）" />
               <Badge color={matrix.defense_auto_cash ? 'amber' : 'emerald'}>
-                {matrix.defense_auto_cash ? 'A 股宽基全破位 · #01 已切非A股避险ETF' : 'A 股宽基存在上升趋势'}
+                {matrix.defense_auto_cash ? 'A 股宽基全破位 · 已切非A股风险调整Top2逆波ETF' : 'A 股宽基存在上升趋势'}
               </Badge>
             </div>
             <div className="overflow-x-auto">

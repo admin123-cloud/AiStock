@@ -339,9 +339,9 @@ def build_strategy_matrix(
             "contracts_count": len(by_leg["defense_etf"]),
             "contracts": by_leg["defense_etf"],
             "action_route": "/g3/desk",
-            "action_label": "前往 AR3 作战台查看今日目标ETF",
+            "action_label": "前往 AR4.5-L3b 作战台查看今日目标ETF",
             "feedback_note": (
-                "进攻期配置 A 股最强宽基 Top2 承接 50%+闲置资金；非进攻期 100% 切入非 A 股跨资产最强单核（与 A 股脱钩避险）；极端冰点企稳自动触发 60% 双创反抽 + 40% 避险。"
+                "进攻期配置 A 股最强宽基 Top2 承接剩余资金；非进攻期 100% 切入非 A 股风险调整 Top2 逆波组合 + 南向港科滤网；极端冰点企稳自动触发 60% 双创反抽 + 40% 避险。"
             ),
         },
         {
@@ -358,7 +358,7 @@ def build_strategy_matrix(
             "action_label": "前往作战台处理底仓",
             "feedback_note": (
                 f"近窗做T净额={t_pnl if t_pnl is not None else '—'}；"
-                + ("请优先按 AR3 执行单清退破止损/非目标个股再谈做T。" if stop_viol > 0 else "盘中 15 分钟哨兵自动盯紧 -10% 硬止损与冰点信号。")
+                + ("请优先按 AR4.5-L3b 执行单清退破止损/非目标个股再谈做T。" if stop_viol > 0 else "盘中 15 分钟哨兵自动盯紧 -10% 硬止损与冰点信号。")
             ),
         },
     ]
