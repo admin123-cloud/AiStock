@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Mapping, Optional, Sequence
 
-_CODE_RE = re.compile(r"^(?:00|30|60|68|83|87|88|92)\d{4}(?:\.(?:SH|SZ|BJ))?$")
+# 覆盖 A 股个股（00/30/60/68/83/87/88/92）与沪深场内 ETF/LOF（15/16/50/51/52/56/58）
+_CODE_RE = re.compile(r"^(?:00|30|60|68|83|87|88|92|15|16|50|51|52|56|58)\d{4}(?:\.(?:SH|SZ|BJ))?$")
 _ALLOWED_MODES = frozenset({"prefill_only"})
 _ALLOWED_SIDES = frozenset({"BUY", "SELL"})
 

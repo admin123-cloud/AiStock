@@ -128,24 +128,80 @@ def _find_submit_button(
 # ===================================================================
 
 
-def _find_window() -> tuple[Optional[Application], Optional[str]]:
-    """通过标题+类名查找面板窗口，返回 (app, error|None)。"""
+def _find_window() -> tuple[Optional[Application], Optional[int], Optional[str]]:
+    """通过标题查找实时交易面板窗口（不再死绑重启后会变的 MFC class_name），返回 (app, hwnd, error|None)。"""
     if not _PYWINSUCCESS:
-        return None, "pywinauto 不可用"
+        return None, None, "pywinauto 不可用"
     try:
         wins = pywinauto.findwindows.find_windows(
-            title=PANEL_TITLE, class_name=PANEL_CLASS, timeout=3, visible_only=True
+            title=PANEL_TITLE, timeout=2, visible_only=True
         )
     except Exception as e:
-        return None, f"查找窗口异常: {e}"
+        return None, None, f"查找窗口异常: {e}"
     if not wins:
-        return None, f"窗口未找到 title={PANEL_TITLE!r}"
-    hwnd = wins[0]
+        # 兜底：若窗口当前处于最小化/隐藏态，再搜一次非 visible_only
+        try:
+            wins = pywinauto.findwindows.find_windows(
+                title=PANEL_TITLE, timeout=1, visible_only=False
+            )
+        except Exception:
+            wins = []
+    if not wins:
+        return None, None, f"窗口未找到 title={PANEL_TITLE!r}"
+    hwnd = int(wins[0])
     try:
         app = Application(backend="uia").connect(handle=hwnd)
     except Exception as e:
-        return None, f"connect 窗口失败 handle={hwnd:x}: {e}"
-    return app, None
+        return None, None, f"connect 窗口失败 handle={hwnd:x}: {e}"
+    return app, hwnd, None
+
+
+def _ensure_panel_ready_on_demand(
+    bootstrap_fn: Optional[Any] = None,
+) -> tuple[Optional[Application], Optional[int], list[str], Optional[str]]:
+    """按需获取已登录的同花顺远航交易面板；若未运行则自动冷启动（happ.exe → F12 → 记住密码自动登录）。"""
+    steps: list[str] = []
+    app, hwnd, err = _find_window()
+    if app is not None and hwnd is not None:
+        # 检查是否停在登录页；若停在登录页仍交由 bootstrap_cold_start 处理
+        try:
+            from host_bridges import ths_read_account_task as ths_boot
+
+            login_info = ths_boot._inspect_panel_login_controls(hwnd)
+            if not login_info.get("is_login_page"):
+                steps.append(f"复用已运行交易面板 hwnd={hwnd:x}")
+                return app, hwnd, steps, None
+            steps.append(f"检测到交易面板停在登录页 hwnd={hwnd:x}，触发自动登录引导")
+        except Exception:
+            steps.append(f"复用已运行交易面板 hwnd={hwnd:x}")
+            return app, hwnd, steps, None
+    else:
+        steps.append(f"交易面板未运行（{err}），启动同花顺远航按需冷启动引导")
+
+    # 按需冷启动：拉起 happ.exe → 等主界面 → F12 唤起面板 → 记住密码自动登录（严格凭证零接触）
+    try:
+        if bootstrap_fn is None:
+            from host_bridges.ths_read_account_task import bootstrap_cold_start
+
+            bootstrap_fn = bootstrap_cold_start
+        boot_res = bootstrap_fn()
+    except Exception as exc:
+        return None, None, steps, f"同花顺远航冷启动引导异常: {exc}"
+
+    if not isinstance(boot_res, dict) or not boot_res.get("ready"):
+        b_status = (boot_res or {}).get("status", "bootstrap_failed") if isinstance(boot_res, dict) else "bootstrap_failed"
+        b_reason = (boot_res or {}).get("reason", "未知原因") if isinstance(boot_res, dict) else str(boot_res)
+        steps.append(f"冷启动未就绪 status={b_status}")
+        return None, None, steps, f"同花顺冷启动未就绪({b_status}): {b_reason}"
+
+    steps.append(f"同花顺远航冷启动就绪 status={boot_res.get('status')}")
+    # 等待交易面板 UIA 控件树稳定后再连接
+    time.sleep(1.0)
+    app, hwnd, err = _find_window()
+    if app is None or hwnd is None:
+        return None, None, steps, f"冷启动后仍未连上交易面板: {err}"
+    steps.append(f"冷启动连接交易面板成功 hwnd={hwnd:x}")
+    return app, hwnd, steps, None
 
 
 def _check_foreground(hwnd: int) -> Optional[str]:
@@ -193,6 +249,7 @@ def _ensure_restored(hwnd: int) -> bool:
 def _switch_account_if_needed(
     panel_map: dict[str, Any],
     target_account: str,
+    live_hwnd: Optional[int] = None,
 ) -> Optional[str]:
     """检查当前身份，不在目标则切换；None=ok；str=失败原因。"""
     current_account = panel_map.get("account")
@@ -200,9 +257,12 @@ def _switch_account_if_needed(
         return None  # 已在目标
 
     try:
-        from services import ths_hotswitch as hs
+        from services.broker import ths_hotswitch as hs
     except ImportError:
-        return "ths_hotswitch 模块不可用，无法切换账号"
+        try:
+            from services import ths_hotswitch as hs  # type: ignore[no-redef]
+        except ImportError:
+            return "ths_hotswitch 模块不可用，无法切换账号"
 
     target_info = KNOWN_ACCOUNTS.get(target_account)
     if not target_info:
@@ -221,8 +281,11 @@ def _switch_account_if_needed(
         def __init__(self, hwnd: int) -> None:
             self.handle = hwnd
 
-    raw_hwnd = panel_map["panel"]["hwnd"]
-    hwnd = int(raw_hwnd, 16) if isinstance(raw_hwnd, str) else int(raw_hwnd)
+    if live_hwnd is not None and live_hwnd > 0:
+        hwnd = int(live_hwnd)
+    else:
+        raw_hwnd = panel_map["panel"]["hwnd"]
+        hwnd = int(raw_hwnd, 16) if isinstance(raw_hwnd, str) else int(raw_hwnd)
 
     try:
         res = hs.ensure_target_account(_WinHandle(hwnd), cfg)
@@ -347,21 +410,28 @@ def fill_order(
     price: float,
     qty: int,
     side: str = "buy",
+    *,
+    auto_cold_start: bool = True,
+    keep_visible: bool = True,
 ) -> dict[str, Any]:
-    """填单核心。绝不 Invoke 提交。
+    """填单核心（支持按需冷启动同花顺远航版）。绝不 Invoke 提交。
 
     参数：
-      account -- acct1 / acct2
-      code    -- 6 位代码如 "002015"
-      price   -- 价格如 13.50
-      qty     -- 股数（整百）
-      side    -- "buy" / "sell"
+      account         -- acct1 / acct2
+      code            -- 6 位代码如 "002015"
+      price           -- 价格如 13.50
+      qty             -- 股数（整百）
+      side            -- "buy" / "sell"
+      auto_cold_start -- 面板未打开时自动冷启动 happ.exe → F12 → 记住密码自动登录
+      keep_visible    -- 预填成功后保持交易面板可见，方便人工肉眼核对并点击最终确认
 
-    返回 dict（schema=l2_fill_result/1, success, filled, error, steps）。
+    返回 dict（schema=l2_fill_result/1, success, ok, status, filled, error, steps）。
     """
     result: dict[str, Any] = {
         "schema": FILL_SCHEMA,
         "success": False,
+        "ok": False,
+        "status": "fill_failed",
         "filled": {},
         "error": None,
         "steps": [],
@@ -369,7 +439,7 @@ def fill_order(
     }
 
     if not _PYWINSUCCESS:
-        result["error"] = "pywinauto 不可用"
+        result["error"] = "pywinauto 不可用（请确认桥接进程使用 F:\\python\\python3.10）"
         return result
 
     # -- 1) 加载 panel_map --
@@ -395,29 +465,35 @@ def fill_order(
         f"selection_item={(nav_def.get('patterns') or {}).get('selection_item', {})}"
     )
 
-    # -- 3) 窗口 + 前台 --
-    app, err = _find_window()
-    if app is None:
+    # -- 3) 查找实时交易面板（未打开时按需冷启动同花顺远航版） --
+    if auto_cold_start:
+        app, hwnd, boot_steps, err = _ensure_panel_ready_on_demand()
+        result["steps"].extend(boot_steps)
+    else:
+        app, hwnd, err = _find_window()
+
+    if app is None or hwnd is None:
         result["error"] = err or "窗口查找失败"
         return result
 
-    raw_hwnd = pm["panel"]["hwnd"]
-    hwnd = int(raw_hwnd, 16) if isinstance(raw_hwnd, str) else int(raw_hwnd)
+    # 使用实时找到的 hwnd，而不是 panel_map.json 里的历史句柄
+    if isinstance(pm.get("panel"), dict):
+        pm["panel"]["hwnd"] = hex(hwnd)
 
     fore_err = _check_foreground(hwnd)
     if fore_err:
         result["error"] = fore_err
+        result["status"] = "skipped_foreground"
         return result
 
-    _bring_below(hwnd)
     was_min = _ensure_restored(hwnd)
-    result["steps"].append(f"窗口就绪 hwnd={hwnd:x} was_minimized={was_min}")
+    result["steps"].append(f"实时窗口就绪 hwnd={hwnd:x} was_minimized={was_min}")
 
     # -- 4) 账号切换 --
-    sw_err = _switch_account_if_needed(pm, account)
+    sw_err = _switch_account_if_needed(pm, account, live_hwnd=hwnd)
     if sw_err:
         result["error"] = sw_err
-        if was_min:
+        if was_min and not keep_visible:
             _show_window(hwnd, 6)
         return result
     result["steps"].append(f"账号 {account} 就绪")
@@ -426,7 +502,7 @@ def fill_order(
     nav_err = _select_nav_item(app, side)
     if nav_err:
         result["error"] = nav_err
-        if was_min:
+        if was_min and not keep_visible:
             _show_window(hwnd, 6)
         return result
     result["steps"].append(f"已进入 {nav_name}")
@@ -435,7 +511,7 @@ def fill_order(
     edits = _find_edit_controls(app)
     if edits is None:
         result["error"] = "导航后未找到 Edit 输入框（表单未渲染？）"
-        if was_min:
+        if was_min and not keep_visible:
             _show_window(hwnd, 6)
         return result
     result["steps"].append(f"找到 {len(edits)} 个 Edit 控件")
@@ -444,7 +520,7 @@ def fill_order(
     missing = [r for r in ("code", "price", "qty") if r not in labeled]
     if missing:
         result["error"] = f"未能标识输入框角色: {missing}"
-        if was_min:
+        if was_min and not keep_visible:
             _show_window(hwnd, 6)
         return result
 
@@ -469,14 +545,24 @@ def fill_order(
 
     if fill_errors:
         result["error"] = f"填入部分失败: {fill_errors}"
-        if was_min:
+        if was_min and not keep_visible:
             _show_window(hwnd, 6)
         return result
 
     result["success"] = True
-    result["steps"].append("填值完成（未提交/未撤单）")
+    result["ok"] = True
+    result["status"] = "filled"
+    result["steps"].append("填值完成（未提交/未撤单，窗口已保持可见等待人工核对确认）")
 
-    if was_min:
+    if keep_visible:
+        # 填完后把交易面板恢复并适度抬升到前层，方便人工核对点击最终确认
+        try:
+            from host_bridges import ths_read_account_task as ths_boot
+
+            ths_boot._activate_and_raise_window(hwnd)
+        except Exception:
+            _show_window(hwnd, 9)
+    elif was_min:
         _show_window(hwnd, 6)
 
     return result

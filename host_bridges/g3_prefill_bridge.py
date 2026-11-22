@@ -44,11 +44,29 @@ logging.basicConfig(
 logger = logging.getLogger("g3_prefill_bridge")
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    retries: int = 6,
+    retry_delay: float = 0.06,
+) -> None:
+    """原子写 JSON；在 Windows 下对并发读锁导致的瞬时 PermissionError 做短重试。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    last_exc: Optional[OSError] = None
+    for attempt in range(max(1, retries)):
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt + 1 < max(1, retries):
+                time.sleep(retry_delay)
+    if last_exc is not None:
+        raise last_exc
 
 
 def write_heartbeat(root: Path, *, state: str = "idle", active_draft_id: Optional[str] = None) -> None:
@@ -160,7 +178,17 @@ def process_one_prefill_request(
             qty=ticket["qty"],
             side=ticket["side"].lower(),
         )
-        ok = bool(fill_res.get("status") in ("ok", "filled") or fill_res.get("ok") is True)
+        ok = bool(
+            fill_res.get("success") is True
+            or fill_res.get("ok") is True
+            or fill_res.get("status") in ("ok", "filled")
+        )
+        err_detail = (
+            fill_res.get("error")
+            or fill_res.get("reason")
+            or fill_res.get("note")
+            or fill_res.get("status")
+        )
         out = {
             "draft_id": draft_id,
             "status": "prefilled_awaiting_human_confirm" if ok else str(fill_res.get("status") or "fill_failed"),
@@ -171,7 +199,7 @@ def process_one_prefill_request(
             "message": (
                 f"已预填至同花顺（{ticket['code']} {ticket['side']} {ticket['qty']}股 @ {ticket['price']}），请切换窗口人工核对并点击最终确认"
                 if ok
-                else f"预填未完成：{fill_res.get('reason') or fill_res.get('note') or fill_res.get('status')}"
+                else f"预填未完成：{err_detail}"
             ),
             "finished_at": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
         }

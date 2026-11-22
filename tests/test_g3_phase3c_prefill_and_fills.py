@@ -267,3 +267,93 @@ def test_sync_broker_fills_inherits_order_type_and_is_idempotent(
     assert res2["imported"] == 0
     assert res2["idempotent_skipped"] == 2
     assert len(t_daily_plan.load_intraday_executions(tdate)) == 2
+
+
+def test_prefill_bridge_accepts_l2_order_filler_success_and_error_schema(tmp_path: Path) -> None:
+    now_dt = datetime(2026, 11, 23, 9, 35, 0, tzinfo=BJ_TZ)
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. l2_order_filler 返回 success=True（兼容无 status/ok 场景）
+    (queue_dir / "req_PF-L2-OK.json").write_text(
+        json.dumps(
+            {
+                "draft_id": "PF-L2-OK",
+                "trade_date": "2026-11-23",
+                "mode": "prefill_only",
+                "allow_submit": False,
+                "account": "acct1",
+                "code": "512890",
+                "side": "BUY",
+                "price": 1.274,
+                "qty": 1000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_ok = process_one_prefill_request(
+        tmp_path,
+        filler_fn=lambda **kw: {"success": True, "filled": {"code": kw["code"]}},
+        now=now_dt,
+    )
+    assert out_ok is not None
+    assert out_ok["ok"] is True
+    assert out_ok["submitted"] is False
+    assert out_ok["status"] == "prefilled_awaiting_human_confirm"
+
+    # 2. 冷启动需要人工输入验证码时，error 原因必须透传至前端 message
+    (queue_dir / "req_PF-L2-CAP.json").write_text(
+        json.dumps(
+            {
+                "draft_id": "PF-L2-CAP",
+                "trade_date": "2026-11-23",
+                "mode": "prefill_only",
+                "allow_submit": False,
+                "account": "acct1",
+                "code": "512890",
+                "side": "BUY",
+                "price": 1.274,
+                "qty": 1000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_err = process_one_prefill_request(
+        tmp_path,
+        filler_fn=lambda **kw: {
+            "success": False,
+            "error": "同花顺冷启动未就绪(need_manual_captcha): 存在未填写验证码",
+        },
+        now=now_dt,
+    )
+    assert out_err is not None
+    assert out_err["ok"] is False
+    assert "need_manual_captcha" in out_err["message"]
+
+
+def test_l2_order_filler_cold_start_on_demand(monkeypatch: pytest.MonkeyPatch) -> None:
+    from host_bridges import l2_order_filler
+
+    calls = {"find": 0, "boot": 0}
+    fake_app = object()
+
+    def fake_find_window():
+        calls["find"] += 1
+        if calls["find"] == 1:
+            return None, None, "窗口未找到"
+        return fake_app, 0x123456, None
+
+    def fake_bootstrap():
+        calls["boot"] += 1
+        return {"ready": True, "status": "bootstrap_ready"}
+
+    monkeypatch.setattr(l2_order_filler, "_find_window", fake_find_window)
+    monkeypatch.setattr(l2_order_filler.time, "sleep", lambda _: None)
+
+    app, hwnd, steps, err = l2_order_filler._ensure_panel_ready_on_demand(bootstrap_fn=fake_bootstrap)
+    assert err is None
+    assert app is fake_app
+    assert hwnd == 0x123456
+    assert calls["boot"] == 1
+    assert calls["find"] == 2
+    assert any("按需冷启动" in s for s in steps)
