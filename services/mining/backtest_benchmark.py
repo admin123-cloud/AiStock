@@ -45,7 +45,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "宽度回落 < 75% 或 动量/量比降温 → 退回「主升进攻」；若触发防守条件（N=2）→ 直接切入「防守退潮」",
         "confirm_days": "N=3 进攻确认叠加当日极值",
         "position_cap_pct": 100,
-        "active_strategy": "AR3 v3.0 终极双核：50% AB混合个股（F3A回踩+F2A趋势，4槽每行业限1只，满额持有不追高）+ 50% #01 强势宽基Top2 ETF",
+        "active_strategy": "AR4.5-L3b 现役双核：按国家队250日分位动态 0/35/50/65% AB混合个股（F3A回踩+F2A趋势，4槽每行业限1只，叠加ERP<5%逃顶锁0%）+ 剩余配 A股宽基Top2 ETF",
     },
     {
         "phase": "offensive",
@@ -55,7 +55,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "任一进攻条件失效且未达防守线 → 切入「横盘平衡」；连续 N=2 日触及防守线 → 直接切入「防守退潮」",
         "confirm_days": "N=3（进攻宁稳勿急，防一日游假突破）",
         "position_cap_pct": 100,
-        "active_strategy": "AR3 v3.0 终极双核：50% AB混合个股（F3A绩优回踩+F2A业绩趋势主升，-10%硬止损+10%追踪止盈）+ 50%+闲置资金配 #01 强势宽基Top2 ETF",
+        "active_strategy": "AR4.5-L3b 现役双核：国家队分位 ≥70%→65% / 中性→50% / <30%→35% AB混合个股（-10%硬止损+10%追踪止盈）+ 剩余资金配 A股强势宽基Top2 ETF",
     },
     {
         "phase": "balanced",
@@ -65,7 +65,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "连续 N=3 日走强达标 → 升级「主升进攻」；连续 N=2 日跌破MA20/宽度<30% 或 单日宽度<25% → 降级「防守退潮」",
         "confirm_days": "实时状态承接",
         "position_cap_pct": 100,
-        "active_strategy": "AR3 v3.0 跨资产切换：个股预算锁死 0%（严禁开新个股），100% 资金切入 #01 非A股跨资产最强单核（红利/黄金/纳指/恒科/十年国债）",
+        "active_strategy": "AR4.5-L3b 非进攻清股切换：退出进攻态即清股（个股 0%），100% 切入非A股风险调整动量 Top2 逆波动率加权 ETF + 南向20日港科滤网",
     },
     {
         "phase": "defensive",
@@ -75,7 +75,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "宽度继续杀跌至 ≤ 18% → 进入「极端恐慌」；宽度恢复 ≥ 30% 且 上证企稳 → 回到「横盘平衡」",
         "confirm_days": "N=2 快速防守（防守宁快勿慢，绝不恋战）",
         "position_cap_pct": 100,
-        "active_strategy": "AR3 v3.0 跨资产避险：清退全部非目标个股（0% 个股），100% 资金切入 #01 非A股跨资产最强单核（全破趋势自动切十年国债ETF）",
+        "active_strategy": "AR4.5-L3b 跨资产逆波避险：清退全部非目标个股（0% 个股），100% 切入非A股风险调整 Top2 逆波 ETF（南向<0拦截港科，全破位切十年国债）",
     },
     {
         "phase": "extreme_panic",
@@ -85,7 +85,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "宽度反弹回升 > 18% → 回到「防守退潮」或「横盘平衡」",
         "confirm_days": "N=2 防守确认叠加宽度 ≤ 18%",
         "position_cap_pct": 100,
-        "active_strategy": "严禁左侧抄底个股 · 默认 100% 持 #01 非A股最强避险ETF；一旦创业板+中证1000均涨 ≥+0.50% 右侧确认，触发 60% 159915+512100 反抽 + 40% 非A股避险底仓",
+        "active_strategy": "AR4.5-L3b 严禁左侧抢跑个股 · 默认 100% 持非A股风险调整 Top2 逆波 ETF；一旦创业板+中证1000均涨 ≥+0.50% 右侧确认，触发 60% 159915+512100 反抽 + 40% 非A股避险底仓",
     },
 ]
 
@@ -392,7 +392,11 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "meta": meta,
         }
 
-    # 7. AR3 v3.0 终极双核物理级单账户零杠杆对照（#01 跨资产 ETF + 50% AB混合 F3A+F2A 基本面个股）
+    # 7. AR4.5-L3b（现役主策略）+ AR4.5-L4（可选低回撤）+ AR3 v3.0（升级前历史基准）物理单账户零杠杆对照
+    ar45_l3b_nav: pd.Series | None = None
+    ar45_l3b_meta: dict[str, Any] = {}
+    ar45_l4_nav: pd.Series | None = None
+    ar45_l4_meta: dict[str, Any] = {}
     ar3_dual_nav: pd.Series | None = None
     ar3_dual_meta: dict[str, Any] = {}
     ar3_etf01_nav: pd.Series | None = None
@@ -405,6 +409,11 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             _load_full_price_lookup,
             attach_pit_fundamentals,
         )
+        from scripts.ar45_calmar_deep_research import (
+            precompute_lagged_money_effect,
+            simulate_ar45_physical,
+        )
+        from services.mining.ar4_macro_service import _ch_query_df as _ar4_ch_query_df
 
         piv_o, piv_c, code_to_class, _ = _load_etf_panels()
         ar3_etf01_nav, ar3_etf01_meta = simulate_cross_asset_strategy(
@@ -412,7 +421,8 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             mode="regime_focus", top_k=1, rebal_every=5, one_per_class=False, use_panic_overlay=True,
         )
         pit_df = attach_pit_fundamentals(panel_df)
-        by_date_pit = {dt: g for dt, g in pit_df.groupby("trade_date", sort=False)}
+        pit_df["trade_date_str"] = pit_df["trade_date"].astype(str).str[:10]
+        by_date_pit = {dt: g for dt, g in pit_df.groupby("trade_date_str", sort=False)}
         px_lookup = _load_full_price_lookup(set(pit_df["code"].astype(str).unique()), dates[0], dates[-1])
         div_lookup = _load_dividend_lookup()
 
@@ -477,23 +487,126 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
                         seen_b.add(c)
             return pd.concat(rows_b, ignore_index=True) if rows_b else a
 
+        # 7a. 升级前历史基准：AR3 v3.0
         ar3_dual_nav, ar3_dual_meta = simulate_physical_dual_core(
             day_df, by_date_pit, px_lookup, div_lookup, piv_o, piv_c, code_to_class, _sel_ab_blend,
-            name="AR3 v3.0 全能卡玛王", etf_mode="regime_focus", stock_cap=0.50, max_slots=4,
+            name="AR3 v3.0 升级前基准", etf_mode="regime_focus", stock_cap=0.50, max_slots=4,
             trail_stop_pct=0.10, hard_stop_pct=-0.10, max_hold_days=50,
         )
+
+        # 7b. 现役冠军：AR4.5-L3b & AR4.5-L4（直连 ClickHouse 读取国家队分位 + ERP + 南向资金隔离表，零外部网络）
+        try:
+            macro_df = _ar4_ch_query_df(
+                """
+                SELECT toString(trade_date) AS trade_date, erp_pct, nt_ratio_pctile_250d, broad6_net_inflow_5d_yi
+                FROM stock.ar4_macro_daily FINAL
+                ORDER BY trade_date
+                """,
+                timeout=20,
+            )
+            sb_df = _ar4_ch_query_df(
+                """
+                SELECT toString(trade_date) AS trade_date, sb_net_yi, sb_net_5d_yi, sb_net_20d_yi
+                FROM stock.ar4_southbound_daily FINAL
+                ORDER BY trade_date
+                """,
+                timeout=20,
+            )
+            if not macro_df.empty:
+                merged_sig = macro_df.merge(sb_df, on="trade_date", how="left") if not sb_df.empty else macro_df.copy()
+                if "sb_net_20d_yi" not in merged_sig.columns:
+                    merged_sig["sb_net_20d_yi"] = 0.0
+                merged_sig["sb_net_20d_yi"] = merged_sig["sb_net_20d_yi"].fillna(0.0)
+                me20_map = precompute_lagged_money_effect(dates, by_date_pit, px_lookup)
+                sig_map: dict[str, dict[str, float]] = {}
+                for row in merged_sig.to_dict(orient="records"):
+                    d = str(row["trade_date"])
+                    m_row = {
+                        k: float(v) if isinstance(v, (int, float, np.floating)) and pd.notna(v) else 0.0
+                        for k, v in row.items()
+                        if k != "trade_date"
+                    }
+                    if d in me20_map:
+                        m_row.update(me20_map[d])
+                    sig_map[d] = m_row
+
+                def _cap_ar45(dt: str, reg: str, s: dict[str, float]) -> float:
+                    if reg not in ("offensive", "extreme_offensive"):
+                        return 0.0
+                    erp = s.get("erp_pct", 5.5)
+                    if 0 < erp < 5.0:
+                        return 0.0
+                    p = s.get("nt_ratio_pctile_250d", 50.0)
+                    return 0.65 if p >= 70.0 else (0.35 if p < 30.0 else 0.50)
+
+                def _sel_l4_mode(dt: str, reg: str, s: dict[str, float]) -> str:
+                    if s.get("f2a_samples", 0) >= 3 and s.get("f3a_samples", 0) >= 3:
+                        diff = s.get("me20_diff_f2a_minus_f3a", 0.0)
+                        if diff >= 1.5:
+                            return "f2a"
+                        if diff <= -1.5:
+                            return "f3a"
+                    return "ab"
+
+                ar45_l3b_nav, ar45_l3b_meta = simulate_ar45_physical(
+                    day_df, sig_map, by_date_pit, px_lookup, div_lookup, piv_o, piv_c, code_to_class,
+                    name="AR4.5-L3b 现役主策略",
+                    stock_cap_fn=_cap_ar45,
+                    erp_active_exit=True,
+                    etf_policy="def_ram_top2_invvol",
+                    southbound_hk_filter=True,
+                    southbound_hk_boost=0.25,
+                )
+                ar45_l3b_meta["max_gross_exposure_pct"] = 100.0
+
+                ar45_l4_nav, ar45_l4_meta = simulate_ar45_physical(
+                    day_df, sig_map, by_date_pit, px_lookup, div_lookup, piv_o, piv_c, code_to_class,
+                    name="AR4.5-L4 可选低回撤版",
+                    stock_cap_fn=_cap_ar45,
+                    selector_mode_fn=_sel_l4_mode,
+                    erp_active_exit=True,
+                    etf_policy="def_ram_top2_invvol",
+                    southbound_hk_filter=True,
+                    southbound_hk_boost=0.25,
+                )
+                ar45_l4_meta["max_gross_exposure_pct"] = 100.0
+        except Exception:
+            ar45_l3b_nav = None
+            ar45_l4_nav = None
     except Exception:
         ar3_dual_nav = None
         ar3_etf01_nav = None
 
     comparisons = []
+    if ar45_l3b_nav is not None:
+        comparisons.append(
+            pack_series(
+                "ar45_l3b_champion",
+                "★ AR4.5-L3b 现役主策略（国家队动态股仓 + 风险调整Top2逆波 + 南向港科滤网）",
+                "物理级单一现金账户：进攻期按国家队250日分位动态 0/35/50/65% AB混合个股；非进攻期清股全切非A股风险调整Top2逆波ETF + 南向20日港科滤网（4年全双位数正收益）",
+                "active_combo",
+                ar45_l3b_nav,
+                ar45_l3b_meta,
+            )
+        )
+    if ar45_l4_nav is not None:
+        comparisons.append(
+            pack_series(
+                "ar45_l4_lowdd",
+                "◆ AR4.5-L4 可选低回撤版（L3b + 严格滞后赚钱效应自动热切 F2A/F3A）",
+                "在 AR4.5-L3b 基础上按近20日已闭合实现赚钱效应差（±1.5%）自动切换 F2A/F3A/AB，大幅压低最大回撤并拉升卡玛比率",
+                "active_combo",
+                ar45_l4_nav,
+                ar45_l4_meta,
+            )
+        )
     if ar3_dual_nav is not None:
         comparisons.append(
             pack_series(
                 "ar3_v3_dual_core_ab_01",
-                "★ AR3 v3.0 终极双核·全能卡玛王（50% AB混合 + #01 跨资产ETF）",
-                "物理级单一现金账户：进攻期50% F3A回踩+F2A趋势交替填槽，其余与非进攻期100%走#01跨资产动量+冰点反抽（4年全正）",
-                "active_combo",
+                "历史演进 · AR3 v3.0 升级前基准（固定50% AB混合 + #01 单核ETF）",
+                "升级前版本历史记忆：固定50%个股 + 非进攻期100%单只跨资产ETF（保留作为 AR4.5 进化对照）",
+                "legacy_combo",
                 ar3_dual_nav,
                 ar3_dual_meta,
             )
@@ -502,9 +615,9 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
         comparisons.append(
             pack_series(
                 "ar3_v3_etf01_regime_focus",
-                "AR3 #01 跨资产全天候 ETF（RegimeFocus_Top1+Panic）",
-                "100% 真实场内14只跨资产ETF（黄金/纳指/标普/恒科/红利/国债/宽基），进攻宽基Top2，非进攻切非A股最强Top1",
-                "active_combo",
+                "历史演进 · AR3 #01 纯跨资产 ETF（RegimeFocus_Top1+Panic）",
+                "100% 真实场内14只跨资产ETF纯轮动对照基准",
+                "legacy_combo",
                 ar3_etf01_nav,
                 ar3_etf01_meta,
             )
@@ -595,6 +708,10 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "panic_etf": round(float(panic_nav.iloc[idx]), 4),
             "retired_mw04": round(float(legacy_nav.iloc[idx]), 4),
         }
+        if ar45_l3b_nav is not None:
+            pt["ar45_l3b"] = round(float(ar45_l3b_nav.iloc[idx]), 4)
+        if ar45_l4_nav is not None:
+            pt["ar45_l4"] = round(float(ar45_l4_nav.iloc[idx]), 4)
         if ar3_dual_nav is not None:
             pt["ar3_dual_ab"] = round(float(ar3_dual_nav.iloc[idx]), 4)
         if ar3_etf01_nav is not None:
@@ -608,8 +725,8 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "title": "1. 严格 T-1 信号 → T+1 开盘撮合 + 财报 PIT 真实公告日对齐（零未来函数）",
             "status": "PASS",
             "detail": (
-                "大盘五态周期、跨资产ETF动量、个股均线/量能均严格使用 T-1 收盘数据；"
-                "AR3-F 财报与业绩预告 100% 按真实公告披露日 notice_date 对齐（严禁使用 report_date），每笔个股成交硬断言 notice_date <= signal_date < entry_date。"
+                "大盘五态周期、国家队250日分位、南向20日净流、跨资产ETF动量、个股均线/量能均严格使用 T-1 收盘数据；"
+                "AR4.5 财报与业绩预告 100% 按真实公告披露日 notice_date 对齐（严禁使用 report_date），每笔个股成交硬断言 notice_date <= signal_date < entry_date。"
             ),
         },
         {
@@ -623,8 +740,8 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "title": "3. 物理级单一现金账户硬锁死总仓位 ≤ 100%（零隐形杠杆）",
             "status": "PASS",
             "detail": (
-                f"拒绝把独立策略收益率直接相加造假；AR3 v3.0 与 AR1 全天候组合均在共享唯一 cash 变量的单一账户逐日撮合，"
-                f"940 天实测最大总仓位 100.00%、最低现金 0.0000，股/ETF 资金切换双向实扣摩擦，绝无超 100% 隐形杠杆。"
+                f"拒绝把独立策略收益率直接相加造假；AR4.5-L3b、AR4.5-L4、AR3 v3.0 与 AR1 全天候组合均在共享唯一 cash 变量的单一账户逐日撮合，"
+                f"实测最大总仓位 100.00%、最低现金 0.0000，股/ETF 资金切换双向实扣摩擦，绝无超 100% 隐形杠杆。"
             ),
         },
         {

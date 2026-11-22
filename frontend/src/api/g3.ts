@@ -1248,6 +1248,8 @@ export interface G3BacktestCurvePoint {
   lowvol: number
   panic_etf: number
   retired_mw04: number
+  ar45_l3b?: number
+  ar45_l4?: number
   ar3_dual_ab?: number
   ar3_etf01?: number
 }

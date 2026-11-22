@@ -20,7 +20,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-import akshare as ak
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
@@ -60,6 +59,8 @@ def _ch_query_df(sql: str, timeout: int = 60) -> pd.DataFrame:
 
 def load_southbound_df() -> pd.DataFrame:
     """获取东方财富官方港股通南向资金全历史日频净买入（亿元）。"""
+    import akshare as ak
+
     df = ak.stock_hsgt_hist_em(symbol="南向资金")
     out = pd.DataFrame({
         "trade_date": pd.to_datetime(df["日期"]).dt.strftime("%Y-%m-%d"),
