@@ -81,13 +81,14 @@ def generate_premarket_brief(
     mainwave_payload: Optional[Mapping[str, Any]] = None,
     strategy_matrix: Optional[Mapping[str, Any]] = None,
     strategy_router: Optional[Mapping[str, Any]] = None,
+    ar3_plan: Optional[Mapping[str, Any]] = None,
     overnight_notes: Optional[Sequence[str]] = None,
     agent_thesis: Optional[str] = None,
     source: str = "auto_baseline",
     trade_date: Optional[str] = None,
     base_dir: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """生成并落盘当日 09:15 盘前 AI 晨会简报（与五态周期和策略路由 100% 同源）。"""
+    """生成并落盘当日 09:10 盘前 AI 晨会简报（100% 统一为 AR3 v3.0 终极双核口径，彻底停推旧主升票）。"""
     now_bj = datetime.now(BJ_TZ)
     d_str = _norm_date(trade_date or market_gate.get("ref_date") or now_bj.strftime("%Y-%m-%d"))
     ymd = d_str.replace("-", "")
@@ -98,15 +99,119 @@ def generate_premarket_brief(
     idx = sources.get("index_r51") if isinstance(sources.get("index_r51"), Mapping) else {}
     tf = sources.get("turnover_forecast") if isinstance(sources.get("turnover_forecast"), Mapping) else {}
 
+    regime = str((ar3_plan or {}).get("regime") or market_gate.get("regime") or "defensive")
+    regime_label = str((ar3_plan or {}).get("regime_label") or market_gate.get("regime_label") or "防守模式")
+    is_offensive = regime in ("offensive", "extreme_offensive")
+    allow_new = is_offensive
+
+    # 若传入 AR3 v3.0 调仓计划，彻底以 AR3 v3.0（ct1曾单账号 + 50% AB混合 + #01 跨资产ETF）为唯一真值
+    if isinstance(ar3_plan, Mapping) and ar3_plan.get("account"):
+        acct = ar3_plan.get("account") or {}
+        cf = ar3_plan.get("cash_flow") or {}
+        cfg = ar3_plan.get("config") or {}
+        sells = [o for o in (ar3_plan.get("sell_orders") or []) if int(o.get("suggested_shares") or 0) > 0]
+        buys = list(ar3_plan.get("buy_orders") or [])
+        me = ar3_plan.get("money_effect_20d") or {}
+        stock_cap = int(cfg.get("stock_budget_cap_pct") or 50)
+        stock_mode = str(cfg.get("active_stock_mode") or "ab_blend")
+        etf_mode = str(cfg.get("etf_core_mode") or "regime_focus")
+        active_strat_name = f"AR3 v3.0 终极双核（{stock_cap}% {stock_mode} + {etf_mode}）"
+        actual_pct = acct.get("position_pct")
+        cap_pct = 100.0  # AR3 v3.0 物理单账户零杠杆：进攻期 50%股+50%ETF，非进攻期 0%股+100%跨资产ETF
+
+        alloc_line = (
+            f"AR3-F基本面个股 {stock_cap}%({stock_mode}) + #01跨资产ETF {100 - stock_cap}%(含闲置现金)"
+            if is_offensive
+            else "AR3-F个股 0%(锁仓禁开) + #01非A股跨资产ETF 100%(含冰点反抽)"
+        )
+
+        checklist: list[str] = [
+            f"【AR3 v3.0 总控】大盘={regime_label}｜主力账号 {acct.get('label')}（总资产 ¥{acct.get('total_assets', 0):,.0f}｜可用 ¥{acct.get('available_cash', 0):,.0f}｜现仓位 {actual_pct}%）",
+            f"【目标配额】{alloc_line}",
+        ]
+        if sells:
+            sell_txt = "；".join(
+                f"卖 {o.get('name', '')}({o.get('code', '')}) {int(o.get('suggested_shares') or o.get('shares') or 0)}股@≤¥{o.get('limit_price', o.get('ref_price', '—'))}(约¥{float(o.get('est_amount') or o.get('est_yuan') or 0):,.0f})"
+                for o in sells
+            )
+            checklist.append(f"【第一步·先卖清单】{sell_txt}（预计回款 ¥{float(cf.get('est_sell_proceeds') or 0):,.0f}）")
+        else:
+            checklist.append("【第一步·先卖清单】当前无须卖出调仓。")
+
+        if buys:
+            buy_txt = "；".join(
+                f"买 {o.get('name', '')}({o.get('code', '')}) 现可买{int(o.get('immediate_shares') or 0)}股/卖后总买{int(o.get('post_sell_shares') or o.get('shares') or 0)}股@≥¥{o.get('limit_price', o.get('ref_price', '—'))}(止损¥{o.get('stop_loss_price', '—')})"
+                for o in buys
+            )
+            checklist.append(f"【第二步·后买清单】{buy_txt}")
+        else:
+            checklist.append("【第二步·后买清单】当前无须买入新仓。")
+
+        if me.get("headline"):
+            checklist.append(f"【近20日双线赚钱效应】{me['headline']}")
+
+        turnover_str = f"{tf['forecast_trillion']}万亿" if tf.get("forecast_trillion") is not None else "—"
+        lines = [
+            f"⚡ 【AR3 v3.0 盘前终极战报 & 买卖单 · {d_str}】",
+            f"■ 主力账号：{acct.get('label') or acct.get('display_name') or acct.get('account_id', 'acct1')}｜总资产 ¥{float(acct.get('total_assets') or 0):,.0f}｜可用 ¥{float(acct.get('available_cash') or 0):,.0f}｜现仓位 {actual_pct}%",
+            f"■ 大盘五态：{regime_label}｜上证AR3趋势={idx.get('confirmed_regime') or '—'}（连{idx.get('streak_days') or 0}日）｜涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}｜成交额={turnover_str}",
+            f"■ AR3 配额：{alloc_line}",
+        ]
+        if agent_thesis:
+            lines.append(f"■ AI 隔夜研判：{agent_thesis.strip()}")
+        if overnight_notes:
+            lines.append("■ 隔夜要点：" + "；".join(str(x).strip() for x in overnight_notes if str(x).strip()))
+        lines.append("■ 今日最终执行清单：")
+        for idx_i, item in enumerate(checklist, 1):
+            lines.append(f"  {idx_i}. {item}")
+        lines.append("👉 打开作战台 /g3/desk 点「一键顺序预填至同花顺」，核对后按确认即可执行。")
+
+        markdown_text = "\n".join(lines)
+        brief = {
+            "schema": "g3_premarket_brief/2_ar3",
+            "date": d_str,
+            "generated_at": now_bj.isoformat(timespec="seconds"),
+            "source": source,
+            "market_stance": {
+                "regime": regime,
+                "regime_label": regime_label,
+                "tone": market_gate.get("tone") or ("emerald" if is_offensive else "red"),
+                "allow_new_mainwave": allow_new,
+                "target_cap_pct": cap_pct,
+                "actual_pct": actual_pct,
+                "waterline_status": "ar3_dual_core",
+                "waterline_advice": alloc_line,
+            },
+            "core_themes": [],
+            "themes_title": "AR3 v3.0 终极双核目标配置",
+            "active_strategy_name": active_strat_name,
+            "top_picks": [],
+            "ar3_summary": {
+                "account_label": acct.get("label"),
+                "sell_count": len(sells),
+                "buy_count": len(buys),
+                "sell_orders": sells,
+                "buy_orders": buys,
+                "money_effect_20d": me,
+            },
+            "overnight_notes": [str(x).strip() for x in (overnight_notes or []) if str(x).strip()],
+            "agent_thesis": (agent_thesis or "").strip() or None,
+            "action_checklist": checklist,
+            "markdown_text": markdown_text,
+        }
+        store_dir = _brief_dir(base_dir)
+        text = json.dumps(brief, ensure_ascii=False, indent=2)
+        (store_dir / f"{ymd}.json").write_text(text, encoding="utf-8")
+        (store_dir / "latest.json").write_text(text, encoding="utf-8")
+        return brief
+
+    # 兼容单测或未传入 ar3_plan 时的回退分支
     mw = dict(mainwave_payload or {})
     candidates = mw.get("candidates") or []
     ai_sum = mw.get("ai_screening_summary") if isinstance(mw.get("ai_screening_summary"), Mapping) else {}
     top_picks = list(ai_sum.get("top_picks") or [])[:5]
     core_themes = _extract_core_themes(candidates, top_n=3)
 
-    regime = str(market_gate.get("regime") or "defensive")
-    regime_label = str(market_gate.get("regime_label") or "防守模式")
-    allow_new = bool(market_gate.get("allow_new_mainwave", False))
     cap_pct = float(market_gate.get("target_position_cap_pct") or 25.0)
     actual_pct = wl.get("actual_pct")
     is_defensive = regime in ("defensive", "extreme_panic") or not allow_new

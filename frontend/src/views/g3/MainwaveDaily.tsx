@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Alert, AlertTitle } from '@/components/catalyst/alert'
@@ -8,6 +8,7 @@ import {
 } from '@/components/catalyst/table'
 import { Dialog, DialogBody, DialogTitle } from '@/components/catalyst/dialog'
 import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
+import AR3DualCorePanel from './AR3DualCorePanel'
 import {
   dateTime, reasonText, statusLabel, statusTone, type StatusTone,
 } from '@/api/operations'
@@ -95,6 +96,7 @@ const score = (v: number | string | null | undefined): string =>
   v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v).toFixed(1) : '待评估'
 
 export default function MainwaveDaily() {
+  const navigate = useNavigate()
   const [data, setData] = useState<MainwaveDailyData>({})
   const [routerSignal, setRouterSignal] = useState<G3LiveStrategyRouter | null>(null)
   const [loading, setLoading] = useState(false)
@@ -102,6 +104,7 @@ export default function MainwaveDaily() {
   const [filter, setFilter] = useState<FilterKey>('all')
   const [selected, setSelected] = useState<MainwaveCandidate | null>(null)
   const [historyDay, setHistoryDay] = useState<HistoryDay | null>(null)
+  const [showLegacyArchive, setShowLegacyArchive] = useState(false)
 
   const load = useCallback(async (forceRefresh = false) => {
     setLoading(true)
@@ -128,7 +131,7 @@ export default function MainwaveDaily() {
     ? '当前数据不足以形成可信买入结论，候选为0不等于今天没有机会。'
     : data.stale_batch
       ? '当前显示历史批次，不作为今天的新买点。'
-      : '按当前合同跟踪候选；确认结果仍需通过账户与执行安全检查。'
+      : '历史旧主升合同仅作存档观察，实盘买入与调仓统一以顶部 AR3 v3.0 终极双核雷达为准。'
 
   const blockedChecks = useMemo(() => (data.checks || []).filter((x) => !x.ok), [data.checks])
   const candidates = useMemo(
@@ -147,12 +150,41 @@ export default function MainwaveDaily() {
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="G3 周期选股与 AI 排雷"
-        subtitle="以五态大盘周期策略路由为唯一权威：进攻/轮动期输出生效冠军策略命中股，防守/冰点期严禁开新仓（下方主升池自动降级为观察池）。"
-        actions={<Button onClick={() => void load(true)} disabled={loading}>{loading ? '刷新中…' : '刷新选股'}</Button>}
+        title="AR3-F 基本面选股与 AI 排雷中心"
+        subtitle="AR3 v3.0 唯一权威选股视图：进攻期 50% AB混合（F3A 绩优回踩 + F2A 业绩趋势主升）+ 50% #01 跨资产 ETF；防守/平衡期 100% #01 非A股避险 ETF（严禁买 A 股个股）。"
+        actions={
+          <div className="flex items-center gap-2">
+            <Button outline onClick={() => navigate('/g3/desk')}>前往实战作战台预填 →</Button>
+            <Button onClick={() => void load(true)} disabled={loading}>{loading ? '刷新中…' : '刷新数据'}</Button>
+          </div>
+        }
       />
 
-      {/* 周期自适应生效策略中枢 */}
+      {/* 唯一权威主视图：AR3 v3.0 终极双核作战雷达 */}
+      <AR3DualCorePanel
+        onPrefillOrder={() => {
+          navigate('/g3/desk')
+        }}
+      />
+
+      {/* 历史归档：已停用的旧主升浪扫描器（默认折叠，防止误导实盘） */}
+      <Card className="border-zinc-800/90 bg-zinc-950/60">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-zinc-300">
+              🗄️ 历史归档 · 旧主升浪扫描器 & 旧周期路由（已停用）
+            </span>
+            <Badge color="zinc">仅作历史核查 · 不再作为买入依据</Badge>
+          </div>
+          <Button outline onClick={() => setShowLegacyArchive((v) => !v)}>
+            {showLegacyArchive ? '收起历史归档' : '展开历史归档'}
+          </Button>
+        </div>
+      </Card>
+
+      {showLegacyArchive && (
+        <div className="flex flex-col gap-4 opacity-90">
+      {/* 周期自适应生效策略中枢（历史归档） */}
       {routerSignal && (
         <Card
           className={
@@ -431,7 +463,7 @@ export default function MainwaveDaily() {
       </Card>
 
       <Card>
-        <SectionTitle title="当前合同" />
+        <SectionTitle title="当前合同（历史归档）" />
         <p className="text-sm text-zinc-600 dark:text-zinc-300">
           主升分 ≥ {minimumScore ?? '--'} · 同业共振 ≥ {data.contract?.entry?.minimum_same_day_industry_mainwave_count ?? '--'} · 指数60日涨幅 ≤ {((data.contract?.entry?.index_mom60_max || 0) * 100).toFixed(0)}% · 已完成30m放量突破前20根高点
         </p>
@@ -439,6 +471,8 @@ export default function MainwaveDaily() {
           {data.contract_metadata?.strategy_id} · {data.contract_metadata?.sha256?.slice(0, 12)} · 影子观察，正式买点和自动下单保持锁定。
         </p>
       </Card>
+        </div>
+      )}
 
       <Dialog open={!!selected} onClose={() => setSelected(null)} size="2xl">
         <DialogTitle>候选证据</DialogTitle>

@@ -806,8 +806,8 @@ export default function G3Desk() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageHeader
-        title="G3 做T实战台 · 每日作战规划"
-        subtitle={`规划日期 ${data?.trade_date || '—'} · 生成于 ${data?.plan_meta?.generated_at || data?.regime_meta?.generated_at || '—'} · 实时行情 × 价位标尺 × 日内敞口闭环`}
+        title="G3 AR3 v3.0 实战作战台"
+        subtitle={`AR3 v3.0 终极双核（50% AB混合 F3A+F2A + #01 跨资产ETF）· 主力账号 ct1曾 · 规划日 ${data?.trade_date || '—'} · 实时行情 × 精准调仓 × L2风控预填`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={handleGeneratePlan} disabled={generating}>
@@ -1089,7 +1089,38 @@ export default function G3Desk() {
         </div>
       )}
 
-      {/* 0.0 今日一页式交易执行指令单（环境 → 策略 → 模式 → 持仓逐股处置 → 候选储备与排雷） */}
+      {/* 0.0 AR3 v3.0 终极双核作战雷达 & 一键调仓指令单（全站第一权威主视图） */}
+      <AR3DualCorePanel
+        onPrefillOrder={(p) => {
+          setPrefillRes(null)
+          setPrefillExecStatus(null)
+          setExecForm({
+            open: true,
+            code: p.code,
+            name: p.name,
+            side: p.side,
+            order_type: p.order_type,
+            price: p.price,
+            shares: p.shares,
+            account_label: '',
+            note: p.note,
+          })
+        }}
+        onAddWatchlist={(code, name) => {
+          void (async () => {
+            try {
+              await upsertG3Watchlist({ add: [{ code, qty: 0 }] })
+              setMsg(`已将 ${name}(${code}) 加入 G3 观察池`)
+              await load(false)
+            } catch (e) {
+              const err = e as { message?: string }
+              setError(err.message || `加入观察池失败：${code}`)
+            }
+          })()
+        }}
+      />
+
+      {/* 0.1 已有持仓风控哨兵 & 盘中做T处置参考（含冰点反抽雷达与 AI 红灯雷区） */}
       {data?.trading_command && (() => {
         const cmd = data.trading_command
         const env = cmd.environment
@@ -1104,7 +1135,7 @@ export default function G3Desk() {
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-base font-bold text-white">今日交易执行指令单</span>
+                <span className="text-base font-bold text-white">已有持仓风控哨兵 & 盘中做T处置参考</span>
                 <Badge color={env.is_defensive ? 'red' : 'emerald'}>{env.regime_label}</Badge>
                 <Badge color={strat.mode === 'cash_defense' ? 'amber' : 'blue'}>
                   生效策略：{strat.active_strategy_name}
@@ -1116,8 +1147,8 @@ export default function G3Desk() {
                 )}
               </div>
               <div className="flex items-center gap-3 text-xs">
-                <Link to="/g3/mainwave" className="text-blue-400 hover:text-blue-300">周期选股排雷 →</Link>
-                <Link to="/g3/mining" className="text-zinc-400 hover:text-zinc-200">策略路由配置 →</Link>
+                <Link to="/g3/mainwave" className="text-blue-400 hover:text-blue-300">AR3-F 选股排雷 →</Link>
+                <Link to="/g3/backtest" className="text-zinc-400 hover:text-zinc-200">历史回测验真 →</Link>
               </div>
             </div>
 
@@ -1302,7 +1333,7 @@ export default function G3Desk() {
                             {h.suggested_shares > 0 && (
                               <div className="mt-1 font-mono text-[11px] font-semibold text-amber-300">
                                 建议卖出 {h.suggested_shares.toLocaleString()} 股（
-                                {h.suggested_order_type === 'base_rebalance' ? 'AR1减仓' : '反T卖'}）
+                                {h.suggested_order_type === 'base_rebalance' ? 'AR3调仓卖' : '反T卖'}）
                               </div>
                             )}
                           </TableCell>
@@ -1343,95 +1374,34 @@ export default function G3Desk() {
               )}
             </div>
 
-            {/* 5. 新开仓与候选储备票（评分 + 绿灯储备 + 红灯雷区） */}
-            <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-12 text-xs">
-              <div className="lg:col-span-8 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold text-white">
-                    {cmd.new_entries.can_open_new
-                      ? `今日允许新开仓标的（${cmd.new_entries.active_picks.length} 只）`
-                      : `候选储备观察池（今日严禁买入 · 绿灯 ${cmd.new_entries.reserve_counts.green ?? 0} / 黄灯 ${cmd.new_entries.reserve_counts.yellow ?? 0} / 红灯 ${cmd.new_entries.reserve_counts.red ?? 0}）`}
-                  </span>
-                  {!cmd.new_entries.can_open_new && <Badge color="amber">今日开新仓：0 只（仅观察待转暖）</Badge>}
+            {/* 5. AI 红灯一票否决雷区警示条（已移除旧主升观察池，新开仓选股统一以顶部 AR3 v3.0 终极双核雷达为准） */}
+            {cmd.new_entries.red_blocked.length > 0 && (
+              <div className="mt-4 rounded-lg border border-red-500/30 bg-red-950/15 p-3 text-xs">
+                <div className="font-semibold text-red-300">
+                  ⛔ AI 红灯一票否决雷区（{cmd.new_entries.red_blocked.length} 只已剔除）
                 </div>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {(cmd.new_entries.reserve_top_picks || []).slice(0, 4).map((p, i) => (
-                    <div key={`${p.code}-${i}`} className="rounded-md border border-zinc-800 bg-zinc-950/70 p-2">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="font-semibold text-zinc-100">
-                          {p.name} <span className="font-mono text-zinc-400">{String(p.code || '').split('.')[0]}</span>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {cmd.new_entries.red_blocked.map((rb) => (
+                    <div key={rb.code} className="rounded-md border border-red-500/25 bg-zinc-950/60 p-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-red-200">
+                          {rb.name} <span className="font-mono text-zinc-400">{rb.code}</span>
                         </span>
-                        <span className="font-mono text-[11px] text-emerald-300">
-                          分 {p.score ?? '—'} · 绿灯 {p.catalyst_score}/5
-                        </span>
+                        <span className="font-mono text-[11px] text-zinc-400">原评分 {rb.score ?? '—'}</span>
                       </div>
-                      <div className="mt-0.5 line-clamp-2 text-[11px] text-zinc-400">{p.one_line_thesis}</div>
+                      <div className="mt-0.5 text-[11px] text-red-200/90">
+                        {rb.risk_flags[0] || rb.one_line_thesis}
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
-
-              <div className="lg:col-span-4 rounded-lg border border-red-500/30 bg-red-950/15 p-3">
-                <div className="font-semibold text-red-300">
-                  ⛔ AI 红灯一票否决雷区（{cmd.new_entries.red_blocked.length} 只已剔除）
-                </div>
-                {cmd.new_entries.red_blocked.length === 0 ? (
-                  <div className="mt-2 text-zinc-400">当前候选池无红灯雷区</div>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {cmd.new_entries.red_blocked.map((rb) => (
-                      <div key={rb.code} className="rounded-md border border-red-500/25 bg-zinc-950/60 p-2">
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-red-200">
-                            {rb.name} <span className="font-mono text-zinc-400">{rb.code}</span>
-                          </span>
-                          <span className="font-mono text-[11px] text-zinc-400">原量化分 {rb.score ?? '—'}</span>
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-red-200/90">
-                          {rb.risk_flags[0] || rb.one_line_thesis}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+            )}
           </Card>
         )
       })()}
 
-      {/* 0.1 AR3 v3.0 终极双核作战雷达（50% AB混合 F3A+F2A + #01 跨资产 ETF 轮动 + 20日赚钱效应热切换） */}
-      <AR3DualCorePanel
-        onPrefillOrder={(p) => {
-          setPrefillRes(null)
-          setPrefillExecStatus(null)
-          setExecForm({
-            open: true,
-            code: p.code,
-            name: p.name,
-            side: p.side,
-            order_type: p.order_type,
-            price: p.price,
-            shares: p.shares,
-            account_label: '',
-            note: p.note,
-          })
-        }}
-        onAddWatchlist={(code, name) => {
-          void (async () => {
-            try {
-              await upsertG3Watchlist({ add: [{ code, qty: 0 }] })
-              setMsg(`已将 ${name}(${code}) 加入 G3 观察池`)
-              await load(false)
-            } catch (e) {
-              const err = e as { message?: string }
-              setError(err.message || `加入观察池失败：${code}`)
-            }
-          })()
-        }}
-      />
-
-      {/* 0. Phase 1A：大盘择时总闸门 × R51 仓位水位 */}
+      {/* 0.2 大盘择时总闸门 × AR3 v3.0 仓位与跨资产配置 */}
       {data?.market_regime_gate && (() => {
         const gate = data.market_regime_gate
         const wl = gate.r51_waterline
@@ -1446,12 +1416,12 @@ export default function G3Desk() {
           <Card className={gate.regime === 'defensive' ? 'border-red-500/40 bg-red-950/10' : gate.regime === 'offensive' ? 'border-emerald-500/40 bg-emerald-950/10' : 'border-amber-500/40 bg-amber-950/10'}>
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-white">大盘择时总闸门 × AR1 实证仓位水位</span>
+                <span className="text-sm font-semibold text-white">大盘择时总闸门 × AR3 v3.0 仓位水位</span>
                 <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
                 <Badge color={gate.allow_new_mainwave ? 'emerald' : 'red'}>
-                  {gate.allow_new_mainwave ? '允许主升开新仓' : '严禁开新主升仓'}
+                  {gate.allow_new_mainwave ? '允许 AR3-F 个股开新仓' : '防守切 100% #01 跨资产ETF · 严禁买A股'}
                 </Badge>
-                <Badge color="blue">今日水位上限 ≤ {capPct.toFixed(0)}%</Badge>
+                <Badge color="blue">A股风险水位上限 ≤ {capPct.toFixed(0)}%</Badge>
               </div>
               <span className="font-mono text-xs text-zinc-400">
                 参考日 {gate.ref_date}
@@ -1464,9 +1434,9 @@ export default function G3Desk() {
                 <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span className="text-zinc-300">
-                      双账号实际水位：<b className="font-mono text-white">{wl.actual_pct != null ? `${wl.actual_pct.toFixed(1)}%` : '—'}</b>
+                      当前实际水位：<b className="font-mono text-white">{wl.actual_pct != null ? `${wl.actual_pct.toFixed(1)}%` : '—'}</b>
                       <span className="mx-2 text-zinc-600">/</span>
-                      AR1 目标上限：<b className="font-mono text-blue-300">{capPct.toFixed(0)}%</b>
+                      A股个股风险上限：<b className="font-mono text-blue-300">{capPct.toFixed(0)}%</b>
                     </span>
                     <Badge color={wl.status === 'overweight' ? 'red' : wl.status === 'underweight' ? 'blue' : wl.status === 'aligned' ? 'emerald' : 'zinc'}>
                       {wl.status === 'overweight' ? '超配需降水位' : wl.status === 'underweight' ? '低配可分步加' : wl.status === 'aligned' ? '水位匹配' : '待同步资产'}
@@ -1480,7 +1450,7 @@ export default function G3Desk() {
                     <div
                       className="absolute top-0 bottom-0 w-0.5 bg-amber-300"
                       style={{ left: `${Math.min(100, Math.max(0, capPct))}%` }}
-                      title={`AR1 目标上限 ${capPct}%`}
+                      title={`A股个股风险上限 ${capPct}%`}
                     />
                   </div>
                   <p className="mt-2 text-xs leading-relaxed text-zinc-300">{wl.advice}</p>
@@ -1501,27 +1471,24 @@ export default function G3Desk() {
                   <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/60 p-2.5 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium text-zinc-200">
-                        三腿动态配额（全站联动）
-                        {data.strategy_allocation.defense_auto_cash && (
-                          <span className="ml-2 text-[11px] text-amber-300">· 宽基全破位，稳健腿已自动转现金</span>
-                        )}
+                        AR3 v3.0 动态配额（全站联动）
                       </span>
                       <div className="flex items-center gap-2">
-                        <Link to="/g3/mainwave" className="text-blue-400 hover:underline">主升选股 →</Link>
+                        <Link to="/g3/mainwave" className="text-blue-400 hover:underline">AR3-F 选股排雷 →</Link>
                         <Link to="/g3/settings" className="text-blue-400 hover:underline">策略总控台 →</Link>
                       </div>
                     </div>
                     <div className="mt-2 grid grid-cols-4 gap-2 font-mono text-[11px]">
                       <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
-                        <div className="text-zinc-400">进攻·主升</div>
+                        <div className="text-zinc-400">进攻·AR3-F个股</div>
                         <div className="text-sm font-semibold text-white">{data.strategy_allocation.allocation.offense_pct}%</div>
                       </div>
                       <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
-                        <div className="text-zinc-400">稳健·ETF</div>
+                        <div className="text-zinc-400">压舱·#01 ETF</div>
                         <div className="text-sm font-semibold text-blue-300">{data.strategy_allocation.allocation.defense_etf_pct}%</div>
                       </div>
                       <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
-                        <div className="text-zinc-400">增强·做T</div>
+                        <div className="text-zinc-400">辅助·底仓做T</div>
                         <div className="text-sm font-semibold text-emerald-300">{data.strategy_allocation.allocation.t_enhance_pct}%</div>
                       </div>
                       <div className="rounded bg-zinc-900/90 px-2 py-1 text-center">
@@ -1550,7 +1517,7 @@ export default function G3Desk() {
 
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-zinc-400">2. 上证 AR1 复合周期</span>
+                    <span className="text-zinc-400">2. 上证 AR3 复合周期</span>
                     <Badge color={srcBadge(src.index_r51.status)}>{srcText(src.index_r51.status)}</Badge>
                   </div>
                   <div className="mt-1.5 font-mono text-sm font-semibold text-white">
@@ -1594,135 +1561,19 @@ export default function G3Desk() {
                 </div>
               </div>
             </div>
-
-            {/* 融合：周期自适应生效策略执行栏（直接作为大盘总闸门的落地指令，不再单独堆卡） */}
-            {data?.strategy_router && (
-              <div
-                className={`mt-3 rounded-lg border px-3 py-2.5 text-xs ${
-                  data.strategy_router.mode === 'cash_defense'
-                    ? 'border-amber-500/35 bg-amber-950/20'
-                    : 'border-emerald-500/40 bg-emerald-950/20'
-                }`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-semibold text-white">今日周期生效策略：</span>
-                    <Badge color={data.strategy_router.mode === 'cash_defense' ? 'amber' : 'emerald'}>
-                      {data.strategy_router.active_strategy_name}
-                    </Badge>
-                    {data.strategy_router.exit_plan && (
-                      <span className="font-mono text-[11px] text-zinc-300">
-                        持{data.strategy_router.exit_plan.hold_days}d · 止损
-                        {data.strategy_router.exit_plan.stop_loss_pct}% · 止盈+
-                        {data.strategy_router.exit_plan.take_profit_pct}%
-                      </span>
-                    )}
-                    <span className="text-zinc-300">{data.strategy_router.action_hint}</span>
-                  </div>
-                  <Link to="/g3/mining" className="shrink-0 text-blue-400 hover:text-blue-300">
-                    周期策略路由配置 →
-                  </Link>
-                </div>
-
-                {data.strategy_router.picks.length > 0 && (
-                  <div className="mt-2.5 overflow-x-auto border-t border-zinc-800/80 pt-2">
-                    <Table dense>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeader>标的 / 行业</TableHeader>
-                          <TableHeader>参考买价</TableHeader>
-                          <TableHeader>硬止损 / 止盈</TableHeader>
-                          <TableHeader>20日超额 / 行业强弱</TableHeader>
-                          <TableHeader>AI 排雷</TableHeader>
-                          <TableHeader>一键买卖闭环</TableHeader>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {data.strategy_router.picks.map((pk) => (
-                          <TableRow key={pk.code}>
-                            <TableCell className="text-xs">
-                              <Link to={`/stock/${pk.code}`} className="font-medium text-white hover:text-blue-400">
-                                {pk.name} <span className="font-mono text-zinc-400">{pk.code}</span>
-                              </Link>
-                              <div className="text-[11px] text-zinc-400">{pk.industry || '—'}</div>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs text-white">
-                              {pk.ref_price.toFixed(2)}
-                              <div className="text-[10px] text-zinc-400">建议仓位 ≤{pk.suggested_slot_pct}%</div>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs">
-                              <span className="text-amber-300">止损 {pk.stop_loss_price.toFixed(2)}</span>
-                              <div className="text-rose-300">止盈 {pk.take_profit_price.toFixed(2)} ({pk.hold_days}d)</div>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs text-zinc-300">
-                              RS20 {fmtSignedPct(pk.rs_20d_vs_hs300)}
-                              <div className="text-[11px] text-zinc-400">行业MA20占比 {pk.industry_above_ma20_pct}%</div>
-                            </TableCell>
-                            <TableCell>
-                              <Badge
-                                color={
-                                  pk.ai_risk_light === 'red'
-                                    ? 'red'
-                                    : pk.ai_risk_light === 'yellow'
-                                      ? 'amber'
-                                      : pk.ai_risk_light === 'green'
-                                        ? 'emerald'
-                                        : 'zinc'
-                                }
-                              >
-                                {pk.ai_blocked
-                                  ? '⛔ 红灯禁买'
-                                  : pk.ai_risk_light === 'yellow'
-                                    ? '⚠️ 黄灯留意'
-                                    : pk.ai_risk_light === 'green'
-                                      ? '🛡️ 绿灯无雷'
-                                      : '待排雷'}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <Button
-                                outline
-                                disabled={pk.ai_blocked}
-                                onClick={() => {
-                                  setPrefillRes(null)
-                                  setPrefillExecStatus(null)
-                                  setExecForm({
-                                    open: true,
-                                    code: pk.code,
-                                    name: pk.name,
-                                    side: 'BUY',
-                                    order_type: 'base_rebalance',
-                                    price: pk.ref_price.toFixed(2),
-                                    shares: '100',
-                                    account_label: '',
-                                    note: `周期策略路由 ${data.strategy_router?.active_strategy_id || ''} (止损${pk.stop_loss_price}/止盈${pk.take_profit_price})`,
-                                  })
-                                }}
-                              >
-                                {pk.ai_blocked ? '红灯已拦截' : '带入 L2 预检/预填'}
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </div>
-            )}
           </Card>
         )
       })()}
 
-      {/* 0.5 盘前 AI 晨会简报（与当前五态周期 100% 同步口径） */}
+      {/* 0.5 盘前 AI 晨会简报（AR3 v3.0 单一口径） */}
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-white">盘前 AI 晨会简报</span>
+            <span className="text-sm font-semibold text-white">盘前 AI 晨会简报（AR3 v3.0 单一口径）</span>
             {data?.premarket_brief ? (
               <>
                 <Badge color={data.premarket_brief.source === 'agent_enriched' ? 'emerald' : 'blue'}>
-                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : '自动基线版'}
+                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : 'AR3 自动基线版'}
                 </Badge>
                 <span className="font-mono text-xs text-zinc-400">
                   {data.premarket_brief.date} · {fmtTimeOnly(data.premarket_brief.generated_at)}
@@ -1764,17 +1615,15 @@ export default function G3Desk() {
             <div className="lg:col-span-5 space-y-2 text-xs">
               {(() => {
                 const curRegime = data.market_regime_gate?.regime || 'defensive'
-                const isDef = curRegime === 'defensive' || curRegime === 'extreme_panic' || !data.market_regime_gate?.allow_new_mainwave
+                const isDef = curRegime !== 'offensive'
                 const themeTitle = isDef
-                  ? '抗跌/避险资金流向（仅观察·严禁开新仓）'
-                  : curRegime === 'balanced'
-                    ? '强主线轮动板块（按轮动策略低吸观察）'
-                    : '主升进攻核心板块（按主升冠军策略出击）'
+                  ? '防守/平衡期 · 100% #01 跨资产 ETF（严禁买A股个股）'
+                  : '进攻期 · AR3-F 基本面候选行业分布（F2A+F3A）'
                 return (
                   <>
                     <div className="flex items-center justify-between gap-2">
                       <span className={`font-medium ${isDef ? 'text-amber-300' : 'text-zinc-200'}`}>{themeTitle}</span>
-                      {isDef && <Badge color="zinc">仅观察</Badge>}
+                      {isDef && <Badge color="amber">A股禁买</Badge>}
                     </div>
                     {data.premarket_brief.core_themes.length > 0 ? (
                       <div className="space-y-1.5">
@@ -1790,18 +1639,20 @@ export default function G3Desk() {
                             <div className="flex items-center justify-between">
                               <span className="font-semibold text-white">{t.industry}</span>
                               <Badge color={isDef ? 'zinc' : 'blue'}>
-                                {t.candidate_count} 只（绿灯 {t.green_count}）
+                                {t.candidate_count} 只{t.green_count > 0 ? `（绿灯 ${t.green_count}）` : ''}
                               </Badge>
                             </div>
                             <div className="mt-1 text-[11px] text-zinc-400">
-                              代表：{t.representatives.join(' / ')}
+                              标的：{t.representatives.join(' / ')}
                             </div>
                           </div>
                         ))}
                       </div>
                     ) : (
                       <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-zinc-400">
-                        当前暂无明显板块聚集流向
+                        {isDef
+                          ? '当前非进攻期：AR3-F 选股待机，全部资金按顶部 #01 跨资产 ETF 指令单执行。'
+                          : '当前暂无 AR3-F 行业聚集信号'}
                       </div>
                     )}
                   </>
@@ -1811,7 +1662,7 @@ export default function G3Desk() {
           </div>
         ) : (
           <p className="mt-2.5 text-xs text-zinc-400">
-            点击右上角「生成/刷新简报」或通过 09:15 定时 Agent 工作流自动生成当日盘面研判与作战清单。
+            点击右上角「生成/刷新简报」或等待 09:10 定时盘前 Agent 自动生成 AR3 v3.0 晨会简报并推送微信。
           </p>
         )}
       </Card>
@@ -1886,14 +1737,14 @@ export default function G3Desk() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-7">
             <div>
-              <label className="block text-xs text-zinc-400">单据分型（AR1）</label>
+              <label className="block text-xs text-zinc-400">单据分型（AR3）</label>
               <select
                 value={execForm.order_type}
                 onChange={(e) => { setExecForm((f) => ({ ...f, order_type: e.target.value as 't_trade' | 'base_rebalance' })); setPrefillRes(null) }}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
               >
                 <option value="t_trade">做T滚动单 (t_trade)</option>
-                <option value="base_rebalance">AR1水位调仓 (rebalance)</option>
+                <option value="base_rebalance">AR3 精准调仓 (rebalance)</option>
               </select>
             </div>
             <div>

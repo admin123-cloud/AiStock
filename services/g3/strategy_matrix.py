@@ -33,12 +33,13 @@ DEFENSE_ETF_UNIVERSE: tuple[dict[str, str], ...] = (
     {"index_code": "000688.SH", "index_name": "科创50", "etf_code": "588000.SH", "etf_name": "科创50ETF", "style": "硬科技"},
 )
 
-# 与 AR1 v2.0 实证宪法对齐的三档市场动态配额（总和 = 100%）
-# 进攻期 80% 仓位 = 40% 机构低波慢牛个股(4槽每行业限1只) + 40% 强趋势宽基动量Top2 ETF + 10% 做T增强 + 10% 现金
+# 与 AR3 v3.0 终极双核实证定型对齐的三档市场动态配额（物理单账户总和 = 100%）
+# 进攻期：50% AR3-F 基本面个股(AB混合 F3A回踩+F2A趋势) + 50% #01 跨资产ETF(含未满槽闲置现金)
+# 平衡/防守期：0% 个股(严禁开新仓) + 100% #01 非A股跨资产ETF(红利/黄金/纳指/恒科/十年国债，极端冰点右侧切反抽)
 REGIME_ALLOCATIONS: dict[str, dict[str, float]] = {
-    "offensive": {"offense_pct": 40.0, "defense_etf_pct": 40.0, "t_enhance_pct": 10.0, "cash_pct": 10.0},
-    "balanced": {"offense_pct": 15.0, "defense_etf_pct": 20.0, "t_enhance_pct": 15.0, "cash_pct": 50.0},
-    "defensive": {"offense_pct": 0.0, "defense_etf_pct": 0.0, "t_enhance_pct": 10.0, "cash_pct": 90.0},
+    "offensive": {"offense_pct": 50.0, "defense_etf_pct": 50.0, "t_enhance_pct": 0.0, "cash_pct": 0.0},
+    "balanced": {"offense_pct": 0.0, "defense_etf_pct": 100.0, "t_enhance_pct": 0.0, "cash_pct": 0.0},
+    "defensive": {"offense_pct": 0.0, "defense_etf_pct": 100.0, "t_enhance_pct": 0.0, "cash_pct": 0.0},
 }
 
 TARGET_ANNUAL_VOL = 0.15  # 稳健腿波动率目标 15%
@@ -267,13 +268,10 @@ def build_strategy_matrix(
         if sig["signal"] == "long_trend":
             long_etfs.append(row)
 
-    # 动态三腿配额：若稳健腿 6 大宽基 ETF 全部破位，则将稳健腿配额自动转入现金防守！
+    # AR3 v3.0 跨资产 ETF 引擎在 A 股破位时自动切入非 A 股跨资产（红利/黄金/美股/国债），不再把 ETF 预算硬归零
     base_alloc = dict(REGIME_ALLOCATIONS[regime])
-    defense_auto_cash = len(long_etfs) == 0
+    defense_auto_cash = False
     effective_alloc = dict(base_alloc)
-    if defense_auto_cash:
-        effective_alloc["cash_pct"] = round(effective_alloc["cash_pct"] + effective_alloc["defense_etf_pct"], 1)
-        effective_alloc["defense_etf_pct"] = 0.0
 
     # 读取实盘归因、教练与 R40 影子状态，形成反馈闭环
     attr = dict(attribution_summary or {})
@@ -281,19 +279,19 @@ def build_strategy_matrix(
     coach_metrics = coach.get("metrics") if isinstance(coach.get("metrics"), Mapping) else {}
     r40 = _load_r40_shadow_progress(tracker_dir)
 
-    # 组装三条策略腿的健康度与实时状态
-    offense_status = "halted" if not allow_new else ("active" if regime == "offensive" else "throttled")
+    # 组装三条策略腿的健康度与实时状态（统一 AR3 v3.0 终版口径）
+    offense_status = "active" if regime == "offensive" else "halted"
     offense_status_label = (
-        "大盘防守·暂停开新仓"
-        if not allow_new
-        else ("正常进攻" if regime == "offensive" else "震荡精选限流")
+        "AR3-F 进攻期开放（50%上限）"
+        if regime == "offensive"
+        else "非进攻期锁仓 0%（仅作备选观察）"
     )
 
-    defense_status = "cash_defense" if defense_auto_cash else "active"
+    defense_status = "active"
     defense_status_label = (
-        "全宽基破位·转现金防守"
-        if defense_auto_cash
-        else f"{len(long_etfs)}/{len(etf_signals)} 只宽基上升可配"
+        "进攻期承接 50%+闲置资金（#01 宽基Top2）"
+        if regime == "offensive"
+        else "非进攻期 100% 承接（#01 非A股跨资产Top1）"
     )
 
     t_pnl = attr.get("t_trade_pnl")
@@ -303,16 +301,16 @@ def build_strategy_matrix(
         t_status_label = f"需先处理 {stop_viol} 只止损违约"
     elif r40.get("available") and not r40.get("overall_pass"):
         t_status = "observe_only"
-        t_status_label = "实盘谨慎做T · R40影子未达标"
+        t_status_label = "实盘谨慎做T · 仅辅助底仓降本"
     else:
         t_status = "active"
-        t_status_label = "正常运行"
+        t_status_label = "按需辅助底仓做T"
 
     legs = [
         {
             "leg_id": "offense",
-            "name": "进攻腿 · 个股主升与板块龙头",
-            "role": "牛市/结构性主升期获取高赔率 Alpha",
+            "name": "进攻核 · AR3-F 基本面业绩 × 趋势 (AB混合)",
+            "role": "仅 AR1 进攻期启动：F3A绩优回踩 + F2A业绩趋势主升交替填4槽（单行业限1只，-10%硬止损）",
             "target_pct": effective_alloc["offense_pct"],
             "base_pct": base_alloc["offense_pct"],
             "status": offense_status,
@@ -320,37 +318,36 @@ def build_strategy_matrix(
             "contracts_count": len(by_leg["offense"]),
             "contracts": by_leg["offense"],
             "action_route": "/g3/mainwave",
-            "action_label": "前往主升浪排雷精选",
+            "action_label": "查看 AR3-F 双雷达与排雷",
             "feedback_note": (
-                f"近窗选股 Alpha={attr.get('alpha_pnl')}；" + (
-                    "当前大盘防守严禁开新仓，仅跟踪绿灯观察池。"
-                    if not allow_new
-                    else "结合 Phase 2A 绿灯精选 + 10:00 首根 30m 确认择优开仓。"
+                "物理单账户实证：50% AB混合 + #01 年化 +34.8%、回撤 20.8%、卡玛 1.67。"
+                + (
+                    " 当前处于非进攻期，个股预算锁死 0%，严禁开新个股仓。"
+                    if regime != "offensive"
+                    else " 当前处于进攻期，按 AR3 双核执行单择优填槽（支持随20日赚钱效应热切 F2A/F3A）。"
                 )
             ),
         },
         {
             "leg_id": "defense_etf",
-            "name": "稳健腿 · 宽基 ETF 波动率目标趋势",
-            "role": "震荡/退潮期承接闲置资金，破位自动转现金控回撤",
+            "name": "压舱核 · AR3 #01 跨资产全天候 ETF",
+            "role": "14只5大类场内ETF（A股宽基/红利/黄金/纳指标普/恒科/国债）+ 极端冰点企稳反抽",
             "target_pct": effective_alloc["defense_etf_pct"],
             "base_pct": base_alloc["defense_etf_pct"],
             "status": defense_status,
             "status_label": defense_status_label,
             "contracts_count": len(by_leg["defense_etf"]),
             "contracts": by_leg["defense_etf"],
-            "action_route": "/g3/settings",
-            "action_label": "查看 6 大宽基 ETF 信号",
+            "action_route": "/g3/desk",
+            "action_label": "前往 AR3 作战台查看今日目标ETF",
             "feedback_note": (
-                "6 大宽基指数均未处于 MA20≥MA60 上升趋势，稳健腿配额已自动转入现金留存。"
-                if defense_auto_cash
-                else f"当前上升趋势可配标的：{', '.join(x['etf_name'] + '(' + x['etf_code'].split('.')[0] + ')' for x in long_etfs[:3])}。"
+                "进攻期配置 A 股最强宽基 Top2 承接 50%+闲置资金；非进攻期 100% 切入非 A 股跨资产最强单核（与 A 股脱钩避险）；极端冰点企稳自动触发 60% 双创反抽 + 40% 避险。"
             ),
         },
         {
             "leg_id": "t_enhance",
-            "name": "增强腿 · G3 三周期底仓做T",
-            "role": "底仓之上滚动降本增厚（AR1 实证纪律 + L2 硬风控）",
+            "name": "辅助核 · 已有持仓反T/风控监控",
+            "role": "仅对尚未清退完毕的历史底仓做反T降本与硬止损哨兵巡检（不额外占预算）",
             "target_pct": effective_alloc["t_enhance_pct"],
             "base_pct": base_alloc["t_enhance_pct"],
             "status": t_status,
@@ -358,15 +355,10 @@ def build_strategy_matrix(
             "contracts_count": len(by_leg["t_enhance"]),
             "contracts": by_leg["t_enhance"],
             "action_route": "/g3/desk",
-            "action_label": "前往做T实战台",
+            "action_label": "前往作战台处理底仓",
             "feedback_note": (
                 f"近窗做T净额={t_pnl if t_pnl is not None else '—'}；"
-                + (
-                    f"R40 影子4周胜率 {round((r40['win_rate'] or 0) * 100, 1)}%（目标≥60%），"
-                    if r40.get("available") and r40.get("win_rate") is not None
-                    else ""
-                )
-                + ("请优先处置止损违约再谈做T增厚。" if stop_viol > 0 else "严守买带/卖带与 L2 风控预检。")
+                + ("请优先按 AR3 执行单清退破止损/非目标个股再谈做T。" if stop_viol > 0 else "盘中 15 分钟哨兵自动盯紧 -10% 硬止损与冰点信号。")
             ),
         },
     ]

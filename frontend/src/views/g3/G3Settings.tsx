@@ -47,8 +47,8 @@ export default function G3Settings() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageHeader
-        title="G3 策略矩阵与风控总控台"
-        subtitle="AR1 实证三腿互补矩阵 × 动态资金配额 × 6 大宽基 ETF 波动率目标趋势 × AR1/L2 硬风控门禁"
+        title="AR3 v3.0 终极双核策略矩阵与风控总控台"
+        subtitle="AR3 v3.0 双核驱动（进攻期 50% AR3-F AB混合 + 50% #01跨资产ETF · 防守/平衡期 100% #01非A股避险ETF）× 已有底仓反T哨兵 × L2 硬风控门禁"
         actions={
           <Button onClick={() => void load()} disabled={loading}>
             {loading ? '刷新中…' : '刷新'}
@@ -62,29 +62,29 @@ export default function G3Settings() {
         </div>
       )}
 
-      {/* Phase 4：三腿互补策略矩阵与动态配额 */}
+      {/* Phase 4：AR3 v3.0 终极双核策略矩阵与动态配额 */}
       {matrix && (
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
-              label="进攻腿 · 主升与龙头"
+              label="进攻核 · AR3-F 基本面个股 (AB混合)"
               value={`${matrix.allocation.offense_pct}%`}
               hint={`大盘状态：${matrix.regime_label}`}
             />
             <StatCard
-              label="稳健腿 · 宽基 ETF"
+              label="压舱核 · AR3 #01 跨资产 ETF"
               value={`${matrix.allocation.defense_etf_pct}%`}
-              hint={matrix.defense_auto_cash ? '宽基全破位，已自动转现金' : '按波动率目标趋势配置'}
+              hint="纳指/黄金/红利/政金债跨资产全天候轮动"
             />
             <StatCard
-              label="增强腿 · 底仓做T"
+              label="辅助核 · 已有底仓反T与止损哨兵"
               value={`${matrix.allocation.t_enhance_pct}%`}
-              hint={`当前双账号实际水位 ${matrix.allocation.actual_position_pct != null ? `${matrix.allocation.actual_position_pct}%` : '—'}`}
+              hint={`当前实盘水位 ${matrix.allocation.actual_position_pct != null ? `${matrix.allocation.actual_position_pct}%` : '—'}`}
             />
             <StatCard
-              label="现金留存目标"
+              label="机动现金留存"
               value={`${matrix.allocation.cash_pct}%`}
-              hint={`有效投资上限 ≤ ${matrix.allocation.total_invest_cap_pct}%`}
+              hint={`有效总投资上限 ≤ ${matrix.allocation.total_invest_cap_pct}%`}
             />
           </div>
 
@@ -113,12 +113,12 @@ export default function G3Settings() {
             ))}
           </div>
 
-          {/* 稳健腿：6 大宽基 ETF 实时波动率目标趋势信号 */}
+          {/* 辅助参考：6 大 A 股宽基 ETF 趋势温度计（AR3 #01 实盘选标的请以作战台跨资产雷达为准） */}
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <SectionTitle title="稳健/防守腿 · 6 大宽基 ETF 波动率目标趋势信号（目标年化波动 15%）" />
-              <Badge color={matrix.defense_auto_cash ? 'red' : 'emerald'}>
-                {matrix.defense_auto_cash ? '全部破位 · 转现金防守' : '存在上升趋势可配标的'}
+              <SectionTitle title="A 股宽基趋势温度计（6 大宽基参考 · AR3 压舱实盘由 #01 跨资产 ETF 驱动）" />
+              <Badge color={matrix.defense_auto_cash ? 'amber' : 'emerald'}>
+                {matrix.defense_auto_cash ? 'A 股宽基全破位 · #01 已切非A股避险ETF' : 'A 股宽基存在上升趋势'}
               </Badge>
             </div>
             <div className="overflow-x-auto">

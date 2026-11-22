@@ -78,22 +78,18 @@ def _http_json(path: str, *, method: str = "GET", body: dict | None = None, time
 
 
 def run_premarket(push: bool) -> int:
-    _log("=== 启动盘前主线简报作业 (09:15) ===")
+    _log("=== 启动盘前 AR3 v3.0 终极战报 & 精确买卖单作业 (09:10) ===")
     brief = _http_json("/api/g3/premarket-brief/generate", method="POST", body={}, timeout=60)
     stance = brief.get("market_stance") or {}
-    themes = [t.get("industry") for t in (brief.get("core_themes") or [])]
+    ar3s = brief.get("ar3_summary") or {}
     _log(
-        f"简报已生成: date={brief.get('date')} stance={stance.get('regime_label')} "
-        f"cap={stance.get('target_cap_pct')}% actual={stance.get('actual_pct')}% themes={themes}"
+        f"AR3 盘前终极战报已生成: date={brief.get('date')} stance={stance.get('regime_label')} "
+        f"acct={ar3s.get('account_label')} sells={ar3s.get('sell_count')} buys={ar3s.get('buy_count')}"
     )
     if push:
+        # 已合并为唯一权威 AR3 v3.0 盘前终极战报（含精确股数买卖单），不再连发两份旧版简报造成打架
         res = _http_json("/api/g3/premarket-brief/push-wechat", method="POST", body={}, timeout=30)
-        _log(f"盘前简报微信推送完成: ok={res.get('ok')} channel={res.get('channel')} detail={res.get('detail')}")
-        try:
-            ar3_res = _http_json("/api/g3/mining/ar3/push-plan-wechat?account_id=acct1", method="POST", body={}, timeout=60)
-            _log(f"AR3 v3.0 今日精确买卖单微信推送完成: status={ar3_res.get('status')} date={ar3_res.get('plan_date')}")
-        except Exception as exc:
-            _log(f"WARN AR3 买卖单推送失败: {exc}")
+        _log(f"AR3 v3.0 盘前终极战报微信推送完成: ok={res.get('ok')} channel={res.get('channel')} detail={res.get('detail')}")
     return 0
 
 
@@ -129,14 +125,37 @@ def run_postclose() -> int:
     except Exception as exc:
         _log(f"WARN AR3 对账/预案生成异常: {exc}")
 
-    mw = _http_json("/api/g3/mainwave?refresh=true", method="GET", timeout=90)
+    # 3. 导出 AR3-F (F2A + F3A) 实时候选池与 ct1曾 真实持仓供 17:45 AI 联网深度排雷（彻底淘汰旧主升票）
+    ar3_radar = _http_json("/api/g3/mining/ar3/radar?force_refresh=true", method="GET", timeout=90)
     gate = _http_json("/api/g3/market-gate", method="GET", timeout=30)
     desk = _http_json("/api/g3/desk", method="GET", timeout=30)
+    sr_data = ar3_radar.get("stock_radar") or {}
+    ar3_cands: list[dict] = []
+    seen_codes: set[str] = set()
+    for bucket in (sr_data.get("exec_queue") or [], sr_data.get("f2a_candidates") or [], sr_data.get("f3a_candidates") or []):
+        for c in bucket:
+            ts = str(c.get("ts_code") or c.get("code") or "")
+            if not ts or ts in seen_codes:
+                continue
+            seen_codes.add(ts)
+            ar3_cands.append({
+                "code": ts,
+                "name": c.get("name"),
+                "industry": c.get("industry"),
+                "score": c.get("score"),
+                "source_engine": c.get("source_engine"),
+                "source_label": c.get("source_label"),
+                "notice_date": c.get("notice_date"),
+                "net_profit_yoy_pct": c.get("net_profit_yoy_pct"),
+                "revenue_yoy_pct": c.get("revenue_yoy_pct"),
+                "roe_pct": c.get("roe_pct"),
+            })
     EXPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     export_payload = {
+        "schema": "ar3f_ai_screening_export/2",
         "exported_at": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
-        "decision_date": mw.get("decision_date"),
-        "entry_date": mw.get("entry_date"),
+        "decision_date": sr_data.get("latest_date"),
+        "entry_date": sr_data.get("latest_date"),
         "market_gate": {
             "regime": gate.get("regime"),
             "regime_label": gate.get("regime_label"),
@@ -145,6 +164,7 @@ def run_postclose() -> int:
             "actual_pct": (gate.get("r51_waterline") or {}).get("actual_pct"),
             "reasons": gate.get("reasons"),
         },
+        "ar3_etf_targets": (ar3_radar.get("etf_radar") or {}).get("targets") or [],
         "desk_holdings": [
             {
                 "code": c.get("code"),
@@ -155,22 +175,10 @@ def run_postclose() -> int:
             }
             for c in (desk.get("cards") or [])
         ],
-        "candidates": [
-            {
-                "code": c.get("code"),
-                "name": c.get("name"),
-                "industry": c.get("industry"),
-                "score": c.get("score"),
-                "resonance": c.get("resonance"),
-                "stage": c.get("stage"),
-                "baseline_light": (c.get("ai_screening") or {}).get("risk_light"),
-                "baseline_flags": (c.get("ai_screening") or {}).get("risk_flags"),
-            }
-            for c in (mw.get("candidates") or [])
-        ],
+        "candidates": ar3_cands,
     }
     EXPORT_PATH.write_text(json.dumps(export_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    _log(f"主升候选已刷新并导出: decision_date={mw.get('decision_date')} count={len(export_payload['candidates'])} -> {EXPORT_PATH}")
+    _log(f"AR3-F (F2A+F3A) 候选池已刷新并导出: date={sr_data.get('latest_date')} count={len(ar3_cands)} -> {EXPORT_PATH}")
 
     attr = _http_json("/api/g3/review/attribution?days=30", method="GET", timeout=30)
     s = attr.get("summary") or {}

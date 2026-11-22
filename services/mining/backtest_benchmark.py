@@ -44,8 +44,8 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "enter_rule": "已满足「主升进攻」确认（N=3）且 全市场站上MA20宽度 ≥ 75% 且 上证20日动量 ≥ +6% 且 全市场成交额5日量比 ≥ 1.05（实盘叠加涨停≥80且封板率≥75%）",
         "exit_switch": "宽度回落 < 75% 或 动量/量比降温 → 退回「主升进攻」；若触发防守条件（N=2）→ 直接切入「防守退潮」",
         "confirm_days": "N=3 进攻确认叠加当日极值",
-        "position_cap_pct": 85,
-        "active_strategy": "AR1 v2.0 机构低波慢牛 + 强趋势宽基Top2 ETF（满额持有，不追高新开，防次日分歧）",
+        "position_cap_pct": 100,
+        "active_strategy": "AR3 v3.0 终极双核：50% AB混合个股（F3A回踩+F2A趋势，4槽每行业限1只，满额持有不追高）+ 50% #01 强势宽基Top2 ETF",
     },
     {
         "phase": "offensive",
@@ -54,8 +54,8 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "enter_rule": "连续 N=3 个交易日同时满足：全市场站上MA20宽度 ≥ 52% 且 上证收盘 > MA20 且 上证20日动量 > +1%",
         "exit_switch": "任一进攻条件失效且未达防守线 → 切入「横盘平衡」；连续 N=2 日触及防守线 → 直接切入「防守退潮」",
         "confirm_days": "N=3（进攻宁稳勿急，防一日游假突破）",
-        "position_cap_pct": 80,
-        "active_strategy": "40% 强趋势宽基动量Top2 ETF + 40% AR1 v2.0 机构低波慢牛个股（4槽每行业限1只，10%移动止盈）",
+        "position_cap_pct": 100,
+        "active_strategy": "AR3 v3.0 终极双核：50% AB混合个股（F3A绩优回踩+F2A业绩趋势主升，-10%硬止损+10%追踪止盈）+ 50%+闲置资金配 #01 强势宽基Top2 ETF",
     },
     {
         "phase": "balanced",
@@ -64,8 +64,8 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "enter_rule": "既不满足「主升进攻（N=3）」，也未触及「防守退潮（N=2 或 宽度<25%）」的中间震荡状态",
         "exit_switch": "连续 N=3 日走强达标 → 升级「主升进攻」；连续 N=2 日跌破MA20/宽度<30% 或 单日宽度<25% → 降级「防守退潮」",
         "confirm_days": "实时状态承接",
-        "position_cap_pct": 35,
-        "active_strategy": "控仓 ≤35%（实证横盘大盘微负期望）：强趋势宽基ETF（站上MA20才持）+ 强主线行业低位补涨（sector_rotation_tree_05）",
+        "position_cap_pct": 100,
+        "active_strategy": "AR3 v3.0 跨资产切换：个股预算锁死 0%（严禁开新个股），100% 资金切入 #01 非A股跨资产最强单核（红利/黄金/纳指/恒科/十年国债）",
     },
     {
         "phase": "defensive",
@@ -74,8 +74,8 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "enter_rule": "连续 N=2 个交易日满足（宽度 < 30% 或 [上证收盘 < MA20 且 上证20日动量 < -2%]），或单日宽度跌破 25%（实盘叠加跌停≥50且>涨停）",
         "exit_switch": "宽度继续杀跌至 ≤ 18% → 进入「极端恐慌」；宽度恢复 ≥ 30% 且 上证企稳 → 回到「横盘平衡」",
         "confirm_days": "N=2 快速防守（防守宁快勿慢，绝不恋战）",
-        "position_cap_pct": 10,
-        "active_strategy": "现金防守 / 严禁开新仓 · 已有超配仓位按 AR1 果断减仓步长 ≤30%/日 在 2~3 日内降到位",
+        "position_cap_pct": 100,
+        "active_strategy": "AR3 v3.0 跨资产避险：清退全部非目标个股（0% 个股），100% 资金切入 #01 非A股跨资产最强单核（全破趋势自动切十年国债ETF）",
     },
     {
         "phase": "extreme_panic",
@@ -84,8 +84,8 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "enter_rule": "已处于「防守退潮」确认 且 全市场站上MA20宽度 ≤ 18%（实盘叠加跌停≥80且>涨停）",
         "exit_switch": "宽度反弹回升 > 18% → 回到「防守退潮」或「横盘平衡」",
         "confirm_days": "N=2 防守确认叠加宽度 ≤ 18%",
-        "position_cap_pct": 10,
-        "active_strategy": "严禁左侧盲抄与开新主升仓 · 武装 AR2_2A 冰点反抽雷达：仅当创业板+中证1000均涨 ≥+0.50% 右侧确认后，次日开盘切入 159915+512100 做 5 日反抽（止损-6%/止盈+12%）",
+        "position_cap_pct": 100,
+        "active_strategy": "严禁左侧抄底个股 · 默认 100% 持 #01 非A股最强避险ETF；一旦创业板+中证1000均涨 ≥+0.50% 右侧确认，触发 60% 159915+512100 反抽 + 40% 非A股避险底仓",
     },
 ]
 

@@ -788,47 +788,39 @@ class PremarketBriefGenerateRequest(BaseModel):
 
 @router.get("/premarket-brief")
 def get_g3_premarket_brief(trade_date: str | None = Query(default=None)) -> dict[str, Any]:
-    """Phase 2B：读取当日或最新盘前 09:15 市场主线简报。"""
+    """Phase 2B：读取当日或最新盘前 09:10 AR3 v3.0 终极战报（若已有旧版 schema 则按 AR3 重算）。"""
     brief = load_latest_premarket_brief(trade_date)
-    if brief:
+    if brief and str(brief.get("schema") or "").startswith("g3_premarket_brief/2_ar3"):
         return brief
-    gate = get_g3_market_gate()
-    try:
-        mw = merge_screening_into_mainwave(scan_mainwave_daily(force_refresh=False), market_gate=gate)
-    except Exception:
-        mw = {}
-    return generate_premarket_brief(market_gate=gate, mainwave_payload=mw, source="auto_baseline")
+    return post_g3_premarket_brief_generate()
 
 
 @router.post("/premarket-brief/generate")
 def post_g3_premarket_brief_generate(
     req: PremarketBriefGenerateRequest | None = None,
 ) -> dict[str, Any]:
-    """Scoped-write：生成并落盘当日盘前主线简报（支持 Agent 传入隔夜要闻与主线研判）。"""
+    """Scoped-write：生成并落盘当日 AR3 v3.0 盘前终极战报（主力单账号 ct1曾 + 精确买卖单 + 隔夜研判）。"""
+    from services.mining.ar3_rebalance_compiler import compile_ar3_rebalance_plan
+
     body = req or PremarketBriefGenerateRequest()
     gate = get_g3_market_gate()
     try:
-        mw = merge_screening_into_mainwave(scan_mainwave_daily(force_refresh=False), market_gate=gate)
+        panic = evaluate_panic_rebound_signal(market_gate=gate)
     except Exception:
-        mw = {}
+        panic = None
     try:
-        matrix = build_strategy_matrix(market_gate=gate)
-    except Exception:
-        matrix = None
-    try:
-        s_router = scan_active_strategy_signals(
-            current_regime=str(gate.get("regime") or "balanced"),
-            regime_label=str(gate.get("regime_label") or ""),
-            allow_new_mainwave=bool(gate.get("allow_new_mainwave")),
-            target_position_cap_pct=float(gate.get("target_position_cap_pct") or 0.0),
+        ar3_plan = compile_ar3_rebalance_plan(
+            market_gate=gate,
+            panic_signal=panic,
+            account_id="acct1",
+            smooth_step=True,
+            persist=True,
         )
     except Exception:
-        s_router = None
+        ar3_plan = None
     return generate_premarket_brief(
         market_gate=gate,
-        mainwave_payload=mw,
-        strategy_matrix=matrix,
-        strategy_router=s_router,
+        ar3_plan=ar3_plan,
         overnight_notes=body.overnight_notes,
         agent_thesis=body.agent_thesis,
         source=body.source,

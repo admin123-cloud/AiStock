@@ -20,7 +20,7 @@ def test_voltarget_trend_signal_long_vs_cash_defense():
     assert down_sig["vol_target_weight_pct"] == 0.0
 
 
-def test_strategy_matrix_defensive_auto_cash_when_all_etfs_broken():
+def test_strategy_matrix_defensive_switches_to_ar3_cross_asset_etf():
     down_closes = [4000.0 - i * 10.0 for i in range(70)]
     fetcher = lambda: {
         code: ("2026-11-20", down_closes)
@@ -38,20 +38,21 @@ def test_strategy_matrix_defensive_auto_cash_when_all_etfs_broken():
         index_closes_fetcher=fetcher,
     )
 
-    assert res["defense_auto_cash"] is True
+    # AR3 v3.0：防守期不再把压舱 ETF 归零转现金，而是 100% 切换至 #01 非 A 股跨资产避险 ETF
+    assert res["defense_auto_cash"] is False
     assert res["allocation"]["offense_pct"] == 0.0
-    assert res["allocation"]["defense_etf_pct"] == 0.0
-    assert res["allocation"]["t_enhance_pct"] == 10.0
-    assert res["allocation"]["cash_pct"] == 90.0
+    assert res["allocation"]["defense_etf_pct"] == 100.0
+    assert res["allocation"]["t_enhance_pct"] == 0.0
+    assert res["allocation"]["cash_pct"] == 0.0
     assert res["contracts_total"] >= 1
 
     legs = {lg["leg_id"]: lg for lg in res["legs"]}
     assert legs["offense"]["status"] == "halted"
-    assert legs["defense_etf"]["status"] == "cash_defense"
+    assert legs["defense_etf"]["status"] == "active"
     assert legs["t_enhance"]["status"] == "review_needed"
 
 
-def test_strategy_matrix_offensive_with_long_etf_and_brief_integration(tmp_path: Path):
+def test_strategy_matrix_offensive_with_ar3_dual_core_and_brief_integration(tmp_path: Path):
     up_closes = [3000.0 + i * 8.0 for i in range(70)]
     fetcher = lambda: {"000300.SH": ("2026-11-20", up_closes)}
     gate = {
@@ -60,20 +61,67 @@ def test_strategy_matrix_offensive_with_long_etf_and_brief_integration(tmp_path:
         "regime_label": "进攻模式",
         "tone": "emerald",
         "allow_new_mainwave": True,
-        "target_position_cap_pct": 75.0,
-        "r51_waterline": {"actual_pct": 50.0, "status": "underweight", "advice": "回踩买带分步加仓"},
+        "target_position_cap_pct": 100.0,
+        "r51_waterline": {"actual_pct": 50.0, "status": "underweight", "advice": "按 AR3 双核目标分批调仓"},
         "sources": {},
     }
     matrix = build_strategy_matrix(market_gate=gate, index_closes_fetcher=fetcher)
     assert matrix["defense_auto_cash"] is False
-    assert matrix["allocation"]["offense_pct"] == 40.0
-    assert matrix["allocation"]["defense_etf_pct"] == 40.0
-    assert matrix["allocation"]["cash_pct"] == 10.0
+    assert matrix["allocation"]["offense_pct"] == 50.0
+    assert matrix["allocation"]["defense_etf_pct"] == 50.0
+    assert matrix["allocation"]["cash_pct"] == 0.0
+
+    ar3_plan = {
+        "trade_date": "2026-11-23",
+        "regime": "offensive",
+        "regime_label": "进攻模式",
+        "account": {
+            "account_id": "acct1",
+            "label": "广发证券-曾* (ct1曾)",
+            "total_assets": 108104.58,
+            "available_cash": 16736.58,
+            "position_pct": 84.4,
+        },
+        "cash_flow": {
+            "est_sell_proceeds": 52020.0,
+        },
+        "config": {
+            "stock_budget_cap_pct": 50,
+            "active_stock_mode": "ab_blend",
+            "etf_core_mode": "regime_focus",
+        },
+        "money_effect_20d": {
+            "headline": "近20日 F3A +5.1% vs F2A +4.2%，建议维持 AB混合",
+        },
+        "sell_orders": [
+            {
+                "code": "002015",
+                "name": "协鑫能科",
+                "suggested_shares": 5100,
+                "limit_price": 10.2,
+                "est_amount": 52020.0,
+            }
+        ],
+        "buy_orders": [
+            {
+                "code": "513100",
+                "name": "纳指ETF",
+                "immediate_shares": 9000,
+                "post_sell_shares": 25000,
+                "limit_price": 1.85,
+                "stop_loss_price": 1.67,
+            }
+        ],
+    }
 
     brief = generate_premarket_brief(
         market_gate=gate,
         strategy_matrix=matrix,
+        ar3_plan=ar3_plan,
         base_dir=tmp_path / "brief",
     )
-    assert "三腿配额" in brief["markdown_text"]
-    assert "进攻腿(主升) 40%" in brief["markdown_text"]
+    assert brief["schema"] == "g3_premarket_brief/2_ar3"
+    assert "AR3 v3.0" in brief["markdown_text"]
+    assert "广发证券-曾*" in brief["markdown_text"]
+    assert "513100" in brief["markdown_text"]
+    assert "主升浪" not in brief["markdown_text"]

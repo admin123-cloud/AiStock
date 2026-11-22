@@ -38,39 +38,43 @@ def compile_daily_trading_command(
     is_defensive = regime in ("defensive", "extreme_panic") or not allow_new
 
     sr = dict(strategy_router or {})
-    router_mode = str(sr.get("mode") or ("cash_defense" if is_defensive else "active_strategy"))
-    active_strategy_name = str(
-        sr.get("active_strategy_name") or ("现金防守 / 严禁开新仓" if is_defensive else "周期生效策略")
+    is_offensive = regime in ("offensive", "extreme_offensive")
+    router_mode = "active_strategy" if is_offensive else "ar3_cross_asset_defense"
+    active_strategy_name = (
+        "AR3 v3.0 终极双核（50% AB混合 F3A+F2A + 50% #01 跨资产ETF）"
+        if is_offensive
+        else "AR3 v3.0 非进攻跨资产避险（0% 个股 + 100% #01 非A股最强ETF）"
     )
 
-    # 1. 允许 / 禁止交易模式（AR1 实证宪法 v1.0）
+    # 1. 允许 / 禁止交易模式（AR3 v3.0 终极双核实盘纪律）
     if is_defensive:
         allowed_modes = [
-            "AR1 水位减仓单（base_rebalance，果断 ≤30%/日 降超配水位）",
-            "已有持仓反T降本（t_trade，严格先卖后买，接不回顺势减仓）",
+            "按上方 AR3 v3.0 买卖执行单清退非目标/破止损个股（平稳 ≤30%/日 或一步到位）",
+            "将可用现金与卖出回款无缝切入 #01 非A股跨资产最强 ETF（红利/黄金/纳指/恒科/十年国债）",
+            "已有未清退历史底仓仅允许反T降本（先卖后买）",
         ]
         forbidden_modes = [
-            "严禁开新主升仓",
-            "严禁正T低吸（先买后卖）",
-            "严禁逆势抄底补仓",
+            "严禁买入任何旧主升票或新开 A 股个股仓位（个股预算锁死 0%）",
+            "严禁正T低吸或逆势抄底补仓个股",
         ]
     elif regime == "balanced":
         allowed_modes = [
-            f"AR1 平衡轮动补涨买单（{active_strategy_name}，受 AR1 水位上限 ≤{cap_pct:.0f}% 约束）",
-            "已有持仓双向做T（t_trade，优先反T + 低位支撑正T）",
+            "非进攻期（横盘平衡）：个股预算锁死 0%，100% 资金走 #01 非A股跨资产最强 ETF 轮动",
+            "持续观察 AR3-F（F2A/F3A）双雷达与近20日赚钱效应，等待大盘确认进入进攻期",
         ]
         forbidden_modes = [
-            "严禁追高涨幅已大的强势股",
-            "严禁买 AI 排雷红灯标的",
+            "严禁在横盘震荡期抢跑重仓买个股（实证平衡期开个股会大幅放大回撤）",
+            "严禁买业绩预亏/AI排雷红灯标的",
         ]
     else:
         allowed_modes = [
-            f"AR1 主升进攻龙头买单（{active_strategy_name}，受 AR1 水位上限 ≤{cap_pct:.0f}% 约束）",
-            "已有持仓顺势做T（t_trade，均线支撑低吸高抛）",
+            "AR3 v3.0 进攻期开放：最多 50% 仓位按 AB混合（F3A回踩 + F2A趋势，4槽单行业限1只，-10%硬止损）开仓",
+            "剩余 50%+未满槽闲置现金同步配置 #01 A股强势宽基 Top2 ETF",
+            "随近20日双线赚钱效应随时在作战台热切换 AB混合 / F2A / F3A 主引擎",
         ]
         forbidden_modes = [
-            "严禁买 AI 排雷红灯标的",
-            "严禁无止损重仓单押",
+            "严禁买旧主升浪淘汰策略票或业绩预亏/AI红灯雷区股",
+            "严禁单行业重复开槽或无 -10% 硬止损重仓单押",
         ]
 
     # 2. 现有持仓逐股硬核处置计划（精确算出“该不该留、建议减多少股、原因”）
