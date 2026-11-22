@@ -16,7 +16,6 @@ import {
   ShieldCheckIcon,
   Squares2X2Icon,
   SunIcon,
-  TrophyIcon,
 } from '@heroicons/react/20/solid'
 import type { ComponentType } from 'react'
 import { SidebarLayout } from '@/components/catalyst/sidebar-layout'
@@ -43,7 +42,6 @@ const EXPANDED_KEY = 'aistock_nav_expanded_groups'
 const NAV_ICONS: Record<string, ComponentType> = {
   '/': HomeIcon,
   '/stocks': ChartBarIcon,
-  '/limit-up-ladder': TrophyIcon,
   '/sectors': Squares2X2Icon,
   '/g3/desk': ComputerDesktopIcon,
   '/g3/review': ClockIcon,

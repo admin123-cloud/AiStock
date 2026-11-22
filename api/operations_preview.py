@@ -138,7 +138,6 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/market/breadth',
     '/api/market/emotion-trend',
     '/api/market/indices',
-    '/api/market/limit-up-ladder',
     '/api/market/limit-up-stats',
     '/api/market/margin-sentiment',
     '/api/market/publication-status',

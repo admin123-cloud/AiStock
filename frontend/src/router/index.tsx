@@ -64,12 +64,6 @@ export const routes: AppRoute[] = [
     () => import('@/views/market/Stocks')
   ),
   page(
-    '/limit-up-ladder',
-    'LimitUpLadder',
-    { title: '连板天梯', group: 'market', groupLabel: '市场', groupOrder: 1, navOrder: 2.5, navLabel: '连板天梯', icon: '📊' },
-    () => import('@/views/market/LimitUpLadder')
-  ),
-  page(
     '/stock/:code',
     'StockDetail',
     { title: '股票详情', group: 'market', groupLabel: '市场', hiddenInNav: true, parentPath: '/stocks' },

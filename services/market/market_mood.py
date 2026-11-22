@@ -45,7 +45,7 @@ SCHEMA_MOOD = "market_mood/1"
 SCHEMA_DAY_FILE = "market_mood_day/1"
 #: 盘中快照新鲜度（与 R28 FRESH_WINDOW_SEC 一致）
 FRESH_WINDOW_SEC = 600.0
-#: 连板回溯窗口（交易日数；与既有 limit-up-ladder max 20 板对齐 + 余量）
+#: 连板回溯窗口（交易日数；覆盖最高 20 板 + 余量）
 STREAK_LOOKBACK_DATES = 21
 #: 梯队代表股每档最多展示
 LADDER_TOP_N = 5

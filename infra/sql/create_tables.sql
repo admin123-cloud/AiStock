@@ -451,33 +451,6 @@ CREATE TABLE IF NOT EXISTS emotion_cycle (
     INDEX ix_emotion_cycle_id (id ASC)
 ) ENGINE=InnoDB AUTO_INCREMENT=1 CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='情绪周期表';
 
--- 7.2 市场情绪数据表
-CREATE TABLE IF NOT EXISTS sentiment_data (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    date DATE NULL DEFAULT NULL COMMENT '交易日期',
-    up_count INT NULL DEFAULT NULL COMMENT '上涨家数',
-    down_count INT NULL DEFAULT NULL COMMENT '下跌家数',
-    unchanged_count INT NULL DEFAULT NULL COMMENT '平盘家数',
-    avg_change_percent FLOAT NULL DEFAULT NULL COMMENT '平均涨跌幅（%）',
-    total_turnover_amount FLOAT NULL DEFAULT NULL COMMENT '沪深两市总成交额（亿元）',
-    daily_turnover_change FLOAT NULL DEFAULT NULL COMMENT '日成交额环比变化（%）',
-    up_5_percent_count INT NULL DEFAULT NULL COMMENT '涨幅5%以上家数',
-    down_5_percent_count INT NULL DEFAULT NULL COMMENT '跌幅5%以上家数',
-    limit_up_count INT NULL DEFAULT NULL COMMENT '涨停家数',
-    limit_down_count INT NULL DEFAULT NULL COMMENT '跌停家数',
-    sentiment_score FLOAT NULL DEFAULT NULL COMMENT '综合情绪指数（0-100）',
-    sentiment_level VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL COMMENT '情绪等级：极度悲观/悲观/中性/乐观/极度乐观',
-    consecutive_2_limit INT NULL DEFAULT 0 COMMENT '2连板家数',
-    consecutive_3_limit INT NULL DEFAULT 0 COMMENT '3连板家数',
-    consecutive_4_limit INT NULL DEFAULT 0 COMMENT '4连板家数',
-    consecutive_5_plus_limit INT NULL DEFAULT 0 COMMENT '5连板及以上家数',
-    created_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE INDEX ix_sentiment_data_date (date ASC),
-    INDEX ix_sentiment_date (date ASC),
-    INDEX ix_sentiment_data_id (id ASC)
-) ENGINE=InnoDB AUTO_INCREMENT=1 CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='市场情绪数据表';
-
 -- ========================================
 -- 完成
 -- ========================================

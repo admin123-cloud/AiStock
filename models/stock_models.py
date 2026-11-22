@@ -603,35 +603,6 @@ class EmotionCycle(Base):
         return f"<EmotionCycle(date={self.date}, close_up={self.close_up_rate}%)>"
 
 
-class SentimentData(Base):
-    """市场情绪数据模型"""
-    __tablename__ = 'sentiment_data'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(Date, comment='交易日期')
-    up_count = Column(Integer, comment='上涨家数')
-    down_count = Column(Integer, comment='下跌家数')
-    unchanged_count = Column(Integer, comment='平盘家数')
-    avg_change_percent = Column(DECIMAL(10, 2), comment='平均涨跌幅（%）')
-    total_turnover_amount = Column(DECIMAL(20, 2), comment='沪深两市总成交额（亿元）')
-    daily_turnover_change = Column(DECIMAL(10, 2), comment='日成交额环比变化（%）')
-    up_5_percent_count = Column(Integer, comment='涨幅5%以上家数')
-    down_5_percent_count = Column(Integer, comment='跌幅5%以上家数')
-    limit_up_count = Column(Integer, comment='涨停家数')
-    limit_down_count = Column(Integer, comment='跌停家数')
-    sentiment_score = Column(DECIMAL(10, 2), comment='综合情绪指数（0-100）')
-    sentiment_level = Column(String(10), comment='情绪等级')
-    consecutive_2_limit = Column(Integer, default=0, comment='2连板家数')
-    consecutive_3_limit = Column(Integer, default=0, comment='3连板家数')
-    consecutive_4_limit = Column(Integer, default=0, comment='4连板家数')
-    consecutive_5_plus_limit = Column(Integer, default=0, comment='5连板及以上家数')
-    created_at = Column(DateTime, default=get_current_time, comment='创建时间')
-    updated_at = Column(DateTime, default=get_current_time, onupdate=get_current_time, comment='更新时间')
-    
-    def __repr__(self):
-        return f"<SentimentData(date={self.date}, score={self.sentiment_score}, level={self.sentiment_level})>"
-
-
 # ========================================
 # 8. 数据巡检结果模型
 # ========================================
