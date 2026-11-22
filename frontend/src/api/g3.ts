@@ -1287,9 +1287,108 @@ export interface G3AR3Config {
   active_stock_mode: 'ab_blend' | 'f2a_trend' | 'f3a_pullback'
   etf_core_mode: 'regime_focus' | 'risk_adj_mom'
   stock_budget_cap_pct: number
+  enable_macro_dynamic_cap?: boolean
+  effective_stock_budget_cap_pct?: number
+  dynamic_cap_reason?: string
   max_slots: number
   updated_at?: string | null
   note?: string
+}
+
+export interface G3AR4MacroDecision {
+  phase: 'erp_overheated' | 'heavy_support_pulse' | 'heavy_support' | 'distribution_low' | 'neutral' | string
+  phase_label: string
+  tone: 'red' | 'emerald' | 'amber' | 'blue' | string
+  advice: string
+  erp_zone: 'overheated' | 'cheap' | 'neutral' | string
+  erp_label: string
+  enable_dynamic: boolean
+  base_stock_cap_pct: number
+  effective_stock_cap_pct: number
+  cap_delta_pct: number
+  cap_reason: string
+}
+
+export interface G3AR4MacroSnapshot {
+  available: boolean
+  error?: string
+  trade_date?: string
+  hs300_close?: number
+  hs300_pe_ttm?: number
+  cn_bond_10y?: number
+  us_bond_10y?: number
+  erp_pct?: number
+  margin_balance_yi?: number
+  hs300_top3_shares_yi?: number
+  hs300_top3_scale_yi?: number
+  broad6_scale_yi?: number
+  nt_ratio_pctile_250d?: number
+  nt_share_chg_5d_pct?: number
+  nt_share_chg_20d_pct?: number
+  broad6_net_inflow_5d_yi?: number
+  top5pct_amt_share_pct?: number
+  decision: G3AR4MacroDecision
+  evidence_note?: string
+}
+
+export interface G3AR4CycleZone {
+  kind: 'heavy' | 'low' | 'overheat' | string
+  start: string
+  end: string
+  days: number
+}
+
+export interface G3AR4PulseEvent {
+  date: string
+  inflow_5d_yi: number
+  hs300_close: number
+  nt_pctile_250d: number
+  erp_pct: number
+  label: string
+}
+
+export interface G3AR4EtfBreakdownItem {
+  code: string
+  name: string
+  bucket: string
+  close: number
+  shares_yi: number
+  scale_yi: number
+  shares_chg_5d_yi: number
+  shares_chg_5d_pct: number
+  est_inflow_5d_yi: number
+}
+
+export interface G3AR4NationalTeamCycleResponse {
+  available: boolean
+  error?: string
+  years?: number
+  date_range?: { start: string; end: string; days: number }
+  latest?: G3AR4MacroSnapshot
+  thresholds?: {
+    heavy_pctile: number
+    low_pctile: number
+    pulse_5d_yi: number
+    erp_overheat_pct: number
+    erp_cheap_pct: number
+  }
+  series?: {
+    dates: string[]
+    hs300_close: number[]
+    nt_pctile_250d: number[]
+    hs300_top3_scale_yi: number[]
+    broad6_inflow_5d_yi: number[]
+    erp_pct: number[]
+  }
+  cycle_zones?: G3AR4CycleZone[]
+  pulse_events?: G3AR4PulseEvent[]
+  etf_breakdown?: G3AR4EtfBreakdownItem[]
+  methodology?: {
+    formula: string
+    bottom_rule: string
+    top_rule: string
+    backtest_proof: string
+  }
 }
 
 export interface G3AR3EtfItem {
@@ -1392,7 +1491,21 @@ export interface G3AR3DualCoreRadarResponse {
       headline: string
     }
   }
+  macro_dashboard?: G3AR4MacroSnapshot
 }
+
+export const getG3AR4NationalTeamCycle = (years = 3) =>
+  request.get<unknown, G3AR4NationalTeamCycleResponse>('/g3/mining/ar4/national-team', {
+    params: { years },
+    timeout: 30000,
+  })
+
+export const syncG3AR4MacroData = () =>
+  request.post<unknown, { status: string; sync: Record<string, unknown>; snapshot: G3AR4MacroSnapshot }>(
+    '/g3/mining/ar4/sync',
+    null,
+    { timeout: 120000 }
+  )
 
 export const getG3AR3Radar = (forceRefresh = false) =>
   request.get<unknown, G3AR3DualCoreRadarResponse>('/g3/mining/ar3/radar', {

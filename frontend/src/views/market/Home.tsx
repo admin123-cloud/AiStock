@@ -7,6 +7,7 @@ import { Button } from '@/components/catalyst/button'
 import { Card, ChangeValue, EmptyState, PageHeader, SectionTitle } from '@/components/ui'
 import MarketDashboardBlocks from './MarketDashboardBlocks'
 import R56MarketDashboardBlocks from '@/components/MarketDashboardBlocks'
+import NationalTeamCycleCard from './NationalTeamCycleCard'
 
 /* ------------------------------------------------------------------ */
 /* 常量与元数据（保持历史页面行为一致）                              */
@@ -1372,6 +1373,9 @@ export default function Home() {
             )}
           </div>
         </section>
+
+        {/* 国家队持仓周期 × 沪深300 逃顶/抄底分析 */}
+        <NationalTeamCycleCard dark={dark} />
 
         {/* 市场成交额趋势 */}
         <section className="mb-8 rounded-2xl border border-zinc-200 bg-gradient-to-b from-white to-zinc-50 p-4 shadow-sm dark:border-white/10 dark:bg-gradient-to-b dark:from-[#20252f] dark:to-[#171c26] dark:shadow-xl">

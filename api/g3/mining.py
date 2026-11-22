@@ -331,19 +331,21 @@ def get_ar3_dual_core_radar(force_refresh: bool = False) -> dict[str, Any]:
 class AR3ConfigUpdateRequest(BaseModel):
     active_stock_mode: str | None = None
     etf_core_mode: str | None = None
-    stock_budget_cap_pct: int | None = Field(default=None, ge=20, le=60)
+    stock_budget_cap_pct: int | None = Field(default=None, ge=20, le=65)
+    enable_macro_dynamic_cap: bool | None = None
     max_slots: int | None = Field(default=None, ge=2, le=6)
     note: str | None = None
 
 
 @router.post("/ar3/config")
 def post_ar3_dual_core_config(req: AR3ConfigUpdateRequest) -> dict[str, Any]:
-    """Scoped-write：随行情赚钱效应一键热切换 AR3 v3.0 个股主引擎（AB混合/F2A趋势/F3A回踩）与 ETF 核心。"""
+    """Scoped-write：随行情赚钱效应一键热切换 AR3 v3.0 个股主引擎、ETF 核心与 AR4 国家队动态股仓开关。"""
     try:
         cfg = save_ar3_config(
             active_stock_mode=req.active_stock_mode,
             etf_core_mode=req.etf_core_mode,
             stock_budget_cap_pct=req.stock_budget_cap_pct,
+            enable_macro_dynamic_cap=req.enable_macro_dynamic_cap,
             max_slots=req.max_slots,
             note=req.note,
         )
@@ -352,6 +354,33 @@ def post_ar3_dual_core_config(req: AR3ConfigUpdateRequest) -> dict[str, Any]:
     gate, panic = _resolve_live_gate_and_panic()
     radar = build_ar3_dual_core_radar(market_gate=gate, panic_signal=panic, force_refresh=True)
     return {"status": "ok", "config": cfg, "radar": radar}
+
+
+@router.get("/ar4/national-team")
+def get_ar4_national_team_cycle(years: int = 3) -> dict[str, Any]:
+    """返回国家队持仓周期（3大300ETF规模代理250日分位 + 6大宽基5日净申购 + 股债性价比ERP）全量图表数据。"""
+    from services.mining.ar4_macro_service import get_national_team_cycle_report
+
+    try:
+        return get_national_team_cycle_report(years=years)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"加载国家队持仓周期报告失败: {exc}") from exc
+
+
+@router.post("/ar4/sync")
+def post_ar4_macro_sync() -> dict[str, Any]:
+    """Scoped-write：增量同步最新上交所国家队 ETF 每日份额、国债收益率与沪深300 ERP，并刷新 AR3/AR4 缓存。"""
+    from scripts.sync_ar4_macro_etf_shares import sync_all
+    from services.mining.ar4_macro_service import get_ar4_macro_snapshot, invalidate_ar4_macro_cache
+
+    try:
+        sync_res = sync_all()
+        invalidate_ar4_macro_cache()
+        invalidate_ar3_radar_cache()
+        snap = get_ar4_macro_snapshot(force_refresh=True)
+        return {"status": "ok", "sync": sync_res, "latest": snap}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"同步 AR4 国家队与宏观数据失败: {exc}") from exc
 
 
 @router.post("/ar3/sync")

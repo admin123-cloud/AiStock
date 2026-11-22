@@ -225,7 +225,8 @@ def compile_ar3_rebalance_plan(
     regime = str(radar.get("regime") or market_gate.get("regime") or "defensive")
     is_offensive = bool(radar.get("is_offensive"))
     max_slots = int(cfg.get("max_slots") or 4)
-    stock_cap_pct = float(cfg.get("stock_budget_cap_pct") or 50)
+    raw_eff_cap = cfg.get("effective_stock_budget_cap_pct")
+    stock_cap_pct = float(raw_eff_cap if raw_eff_cap is not None else (cfg.get("stock_budget_cap_pct") or 50))
     slot_w_pct = stock_cap_pct / max(1, max_slots)
 
     total_assets = float(acct["total_assets"])
@@ -236,7 +237,7 @@ def compile_ar3_rebalance_plan(
     target_map: dict[str, dict[str, Any]] = {}
     stock_used_pct = 0.0
 
-    if is_offensive and stock_radar.get("available"):
+    if is_offensive and stock_cap_pct > 0 and stock_radar.get("available"):
         # 防频繁换手：若现有持仓已在 F2A/F3A 候选池内且未触发 -10% 硬止损，优先保留槽位
         f2a_pool = {c["code"]: c for c in (stock_radar.get("f2a_candidates") or [])}
         f3a_pool = {c["code"]: c for c in (stock_radar.get("f3a_candidates") or [])}
@@ -577,6 +578,7 @@ def compile_ar3_rebalance_plan(
         "hold_keep": hold_keep_list,
         "order_intents": order_intents,
         "money_effect_20d": stock_radar.get("money_effect_20d"),
+        "macro_dashboard": radar.get("macro_dashboard"),
         "execution_adapter": {
             "active": "ths_prefill_bridge",
             "mode": "prefill_only",

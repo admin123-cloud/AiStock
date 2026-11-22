@@ -104,6 +104,13 @@ def run_postclose() -> int:
     except Exception as exc:
         _log(f"WARN AR3 数据自动喂料失败（继续后续步骤）: {exc}")
 
+    # 1.5 增量同步 AR4 国家队 ETF 每日份额、国债收益率与沪深300 ERP（仅补当天，约 2 秒）
+    try:
+        ar4_sr = _http_json("/api/g3/mining/ar4/sync", method="POST", body={}, timeout=120)
+        _log(f"AR4 国家队份额与宏观数据增量同步完成: status={ar4_sr.get('status')}")
+    except Exception as exc:
+        _log(f"WARN AR4 国家队数据同步跳过: {exc}")
+
     # 2. 自动把当日同花顺回执入账，并运行 AR3 Shadow Ledger 对账与预编译明日调仓预案
     try:
         fills_res = _http_json("/api/g3/desk/sync-fills", method="POST", body={}, timeout=30)

@@ -83,14 +83,15 @@ def _config_path() -> Path:
 
 
 def load_ar3_config() -> dict[str, Any]:
-    """读取持久化的 AR3 v3.0 双核主引擎配置（默认 50% AB 混合 + #01 RegimeFocus）。"""
+    """读取持久化的 AR3 v3.0 双核主引擎配置（默认 50% AB 混合 + #01 RegimeFocus + AR4 国家队/ERP 动态股仓）。"""
     default_cfg: dict[str, Any] = {
         "active_stock_mode": "ab_blend",
         "etf_core_mode": "regime_focus",
         "stock_budget_cap_pct": 50,
+        "enable_macro_dynamic_cap": True,
         "max_slots": 4,
         "updated_at": None,
-        "note": "AR3 v3.0 默认实盘定型：50% AB混合(F3A+F2A) + #01 RegimeFocus_Top1+Panic",
+        "note": "AR3 v3.0 默认实盘定型：50% AB混合(F3A+F2A) + #01 RegimeFocus_Top1+Panic + AR4 国家队分位动态仓位",
     }
     p = _config_path()
     if not p.exists():
@@ -102,11 +103,13 @@ def load_ar3_config() -> dict[str, Any]:
         sm = str(raw.get("active_stock_mode") or "ab_blend")
         em = str(raw.get("etf_core_mode") or "regime_focus")
         cap = int(raw.get("stock_budget_cap_pct") or 50)
+        dyn = bool(raw.get("enable_macro_dynamic_cap", True))
         slots = int(raw.get("max_slots") or 4)
         return {
             "active_stock_mode": sm if sm in VALID_STOCK_MODES else "ab_blend",
             "etf_core_mode": em if em in VALID_ETF_MODES else "regime_focus",
-            "stock_budget_cap_pct": max(20, min(60, cap)),
+            "stock_budget_cap_pct": max(20, min(65, cap)),
+            "enable_macro_dynamic_cap": dyn,
             "max_slots": max(2, min(6, slots)),
             "updated_at": raw.get("updated_at"),
             "note": str(raw.get("note") or default_cfg["note"]),
@@ -120,6 +123,7 @@ def save_ar3_config(
     active_stock_mode: Optional[str] = None,
     etf_core_mode: Optional[str] = None,
     stock_budget_cap_pct: Optional[int] = None,
+    enable_macro_dynamic_cap: Optional[bool] = None,
     max_slots: Optional[int] = None,
     note: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -134,7 +138,9 @@ def save_ar3_config(
             raise ValueError(f"不支持的 ETF 核心模式: {etf_core_mode}")
         cur["etf_core_mode"] = etf_core_mode
     if stock_budget_cap_pct is not None:
-        cur["stock_budget_cap_pct"] = max(20, min(60, int(stock_budget_cap_pct)))
+        cur["stock_budget_cap_pct"] = max(20, min(65, int(stock_budget_cap_pct)))
+    if enable_macro_dynamic_cap is not None:
+        cur["enable_macro_dynamic_cap"] = bool(enable_macro_dynamic_cap)
     if max_slots is not None:
         cur["max_slots"] = max(2, min(6, int(max_slots)))
     if note is not None:
@@ -782,11 +788,14 @@ def build_ar3_dual_core_radar(
     panic_signal: Optional[Mapping[str, Any]] = None,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """构建 AR3 v3.0 终极双核实时雷达（120秒缓存，绝不拖慢作战台）。"""
+    """构建 AR3 v3.0 终极双核实时雷达（接入 AR4 国家队 250 日分位 + ERP 动态股仓上限）。"""
+    from services.mining.ar4_macro_service import get_ar4_macro_snapshot
+
     cfg = load_ar3_config()
     regime = str((market_gate or {}).get("regime") or "balanced")
     panic_flag = bool((panic_signal or {}).get("triggered"))
-    cache_key = f"{regime}|{panic_flag}|{cfg['active_stock_mode']}|{cfg['etf_core_mode']}|{cfg['stock_budget_cap_pct']}|{cfg['max_slots']}"
+    dyn_enabled = bool(cfg.get("enable_macro_dynamic_cap", True))
+    cache_key = f"{regime}|{panic_flag}|{cfg['active_stock_mode']}|{cfg['etf_core_mode']}|{cfg['stock_budget_cap_pct']}|{dyn_enabled}|{cfg['max_slots']}"
 
     now_mono = time.monotonic()
     if (
@@ -797,26 +806,39 @@ def build_ar3_dual_core_radar(
     ):
         return _RADAR_CACHE["payload"]
 
+    macro_snap = get_ar4_macro_snapshot(
+        base_stock_cap_pct=int(cfg["stock_budget_cap_pct"]),
+        enable_dynamic=dyn_enabled,
+        force_refresh=force_refresh,
+    )
+    macro_dec = macro_snap.get("decision") or {}
+    effective_stock_cap = int(macro_dec.get("effective_stock_cap_pct", cfg["stock_budget_cap_pct"]))
+
     is_offensive = regime in ("offensive", "extreme_offensive")
     etf_radar = _build_etf_radar(
         regime=regime,
         etf_core_mode=cfg["etf_core_mode"],
-        stock_budget_cap_pct=cfg["stock_budget_cap_pct"],
+        stock_budget_cap_pct=effective_stock_cap,
         panic_signal=panic_signal,
     )
     stock_radar = _scan_f2a_f3a_and_money_effect(
         active_stock_mode=cfg["active_stock_mode"],
         max_slots=cfg["max_slots"],
-        stock_budget_cap_pct=cfg["stock_budget_cap_pct"],
-        is_offensive=is_offensive,
+        stock_budget_cap_pct=effective_stock_cap,
+        is_offensive=is_offensive and effective_stock_cap > 0,
     )
 
+    cfg_with_eff = dict(cfg)
+    cfg_with_eff["effective_stock_budget_cap_pct"] = effective_stock_cap
+    cfg_with_eff["dynamic_cap_reason"] = str(macro_dec.get("cap_reason") or "")
+
     payload: dict[str, Any] = {
-        "version": "AR3 v3.0",
+        "version": "AR3 v3.0 + AR4 Macro",
         "generated_at": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         "regime": regime,
         "is_offensive": is_offensive,
-        "config": cfg,
+        "config": cfg_with_eff,
+        "macro_dashboard": macro_snap,
         "stock_mode_options": [
             {"id": k, **v} for k, v in STOCK_MODE_META.items()
         ],
@@ -824,6 +846,7 @@ def build_ar3_dual_core_radar(
             {"id": k, **v} for k, v in ETF_MODE_META.items()
         ],
         "evidence": {
+            "ab_blend_01_ar4": {"cum_ret_pct": 239.3, "ann_ret_pct": 37.0, "max_dd_pct": 23.0, "sharpe": 1.27, "calmar": 1.61, "oos_pct": 4.8},
             "ab_blend_01": {"cum_ret_pct": 218.6, "ann_ret_pct": 34.8, "max_dd_pct": 20.8, "sharpe": 1.25, "calmar": 1.67, "oos_pct": 4.1},
             "f2a_trend_01": {"cum_ret_pct": 220.9, "ann_ret_pct": 35.0, "max_dd_pct": 24.9, "sharpe": 1.26, "calmar": 1.41, "oos_pct": 10.4},
             "f3a_pullback_01": {"cum_ret_pct": 185.2, "ann_ret_pct": 31.0, "max_dd_pct": 23.5, "sharpe": 1.15, "calmar": 1.32, "oos_pct": 16.4},

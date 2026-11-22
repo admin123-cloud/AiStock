@@ -8,6 +8,7 @@ import AR3ExecutionOrderCard from '@/views/g3/AR3ExecutionOrderCard'
 import {
   getG3AR3Radar,
   syncG3AR3Data,
+  syncG3AR4MacroData,
   updateG3AR3Config,
   type G3AR3Config,
   type G3AR3DualCoreRadarResponse,
@@ -38,6 +39,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [syncingMacro, setSyncingMacro] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [stockTab, setStockTab] = useState<'exec' | 'f2a' | 'f3a'>('exec')
@@ -95,10 +97,29 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
     }
   }
 
+  const handleSyncMacro = async () => {
+    setSyncingMacro(true)
+    setError('')
+    setNotice('')
+    try {
+      await syncG3AR4MacroData()
+      await loadRadar(true)
+      setPlanReloadToken((n) => n + 1)
+      setNotice('已同步上交所官方国家队 ETF 份额与 ERP 宏观数据，动态股仓与上方买卖单已同步更新。')
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setError(err.response?.data?.detail || err.message || '同步国家队份额与宏观数据失败')
+    } finally {
+      setSyncingMacro(false)
+    }
+  }
+
   const cfg = radar?.config
   const etf = radar?.etf_radar
   const sr = radar?.stock_radar
   const me = sr?.money_effect_20d
+  const macro = radar?.macro_dashboard
+  const macroDec = macro?.decision
 
   const activeRows: G3AR3StockCandidate[] =
     stockTab === 'f2a'
@@ -152,6 +173,137 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
         <div className="mt-3 space-y-4">
           {/* 0. 唯一权威：主力单账号 ct1曾 今日最终买卖执行单（先卖后买精确100股 + 一键顺序预填 + Shadow对账） */}
           <AR3ExecutionOrderCard reloadToken={planReloadToken} />
+
+          {/* 0.5 国家队持仓分位 + 5日净申购 + 股债性价比 ERP 实时仪表盘（驱动 AR3 进攻股仓动态调节） */}
+          {macro && (
+            <div className="rounded-lg border border-emerald-500/35 bg-gradient-to-r from-emerald-950/20 via-zinc-900/70 to-violet-950/20 p-3 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-white">🏛️ 国家队持仓分位 + 5日净申购 + ERP 实时仪表盘</span>
+                  {macroDec && (
+                    <Badge
+                      color={
+                        macroDec.tone === 'red'
+                          ? 'red'
+                          : macroDec.tone === 'emerald'
+                            ? 'green'
+                            : macroDec.tone === 'amber'
+                              ? 'amber'
+                              : 'blue'
+                      }
+                    >
+                      {macroDec.phase_label}
+                    </Badge>
+                  )}
+                  {macro.trade_date && (
+                    <span className="font-mono text-[11px] text-zinc-400">截至 {macro.trade_date}</span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() =>
+                      void handleSwitchConfig(
+                        { enable_macro_dynamic_cap: !(cfg.enable_macro_dynamic_cap ?? true) },
+                        (cfg.enable_macro_dynamic_cap ?? true) ? '关闭国家队动态股仓调节（锁回固定基准）' : '开启国家队分位动态股仓调节（0/35/50/65%）'
+                      )
+                    }
+                    className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold transition ${
+                      (cfg.enable_macro_dynamic_cap ?? true)
+                        ? 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200'
+                        : 'border-zinc-700 bg-zinc-950/70 text-zinc-400 hover:border-zinc-500'
+                    }`}
+                  >
+                    {(cfg.enable_macro_dynamic_cap ?? true) ? '● 动态股仓联动：已开启' : '○ 动态股仓联动：已关闭'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={syncingMacro}
+                    onClick={() => void handleSyncMacro()}
+                    className="rounded-md border border-zinc-700 bg-zinc-950/70 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-sky-400 hover:text-sky-200 disabled:opacity-50"
+                  >
+                    {syncingMacro ? '同步中…' : '同步国家队份额'}
+                  </button>
+                  <Link to="/" className="text-[11px] font-medium text-sky-300 hover:text-sky-200">
+                    首页看周期大图 →
+                  </Link>
+                </div>
+              </div>
+
+              {macro.available && macroDec ? (
+                <>
+                  <div className="mt-2.5 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                    <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
+                      <div className="text-[11px] text-zinc-400">国家队 250 日持仓分位</div>
+                      <div className="mt-0.5 flex items-baseline gap-2 font-mono">
+                        <span className="text-base font-bold text-amber-300">
+                          {macro.nt_ratio_pctile_250d?.toFixed(1)}%
+                        </span>
+                        <span className="text-[10px] text-zinc-400">
+                          3大300ETF ¥{macro.hs300_top3_scale_yi?.toFixed(0)}亿
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
+                      <div className="text-[11px] text-zinc-400">6 大宽基 5 日纯份额净申购</div>
+                      <div className="mt-0.5 flex items-baseline gap-2 font-mono">
+                        <span
+                          className={`text-base font-bold ${
+                            (macro.broad6_net_inflow_5d_yi ?? 0) >= 0 ? 'text-rose-400' : 'text-emerald-400'
+                          }`}
+                        >
+                          {(macro.broad6_net_inflow_5d_yi ?? 0) >= 0 ? '+' : ''}
+                          {macro.broad6_net_inflow_5d_yi?.toFixed(1)}亿
+                        </span>
+                        <span className="text-[10px] text-zinc-400">
+                          5日份额 {fmtSigned(macro.nt_share_chg_5d_pct, 2)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
+                      <div className="text-[11px] text-zinc-400">沪深300 股债性价比 ERP</div>
+                      <div className="mt-0.5 flex items-baseline gap-2 font-mono">
+                        <span
+                          className={`text-base font-bold ${
+                            macroDec.erp_zone === 'overheated' ? 'text-red-400' : 'text-violet-300'
+                          }`}
+                        >
+                          {macro.erp_pct?.toFixed(2)}%
+                        </span>
+                        <span className="text-[10px] text-zinc-400">
+                          PE {macro.hs300_pe_ttm?.toFixed(1)} · 10Y债 {macro.cn_bond_10y?.toFixed(2)}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
+                      <div className="text-[11px] text-zinc-400">AR3 进攻期生效股仓上限</div>
+                      <div className="mt-0.5 flex items-baseline gap-2 font-mono">
+                        <span className="text-base font-bold text-emerald-300">
+                          {cfg.stock_budget_cap_pct}% → {cfg.effective_stock_budget_cap_pct ?? macroDec.effective_stock_cap_pct}%
+                        </span>
+                        <span className="text-[10px] text-zinc-400">
+                          {radar.is_offensive ? '进攻期即时生效' : '防守期仍硬锁0%'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-300">
+                    <span>📌 {cfg.dynamic_cap_reason || macroDec.cap_reason}</span>
+                    <span className="text-zinc-400">铁律：非进攻期绝不左侧抢跑；右侧转进攻后按国家队分位自动放/缩股仓。</span>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-2 text-[11px] text-amber-300">
+                  {macro.error || '宏观国家队数据暂未同步，请点击右上角「同步国家队份额」。'}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 1. 主引擎热切换控制台 + 近20日赚钱效应指示仪 */}
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-xs">
