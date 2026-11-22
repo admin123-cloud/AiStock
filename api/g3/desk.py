@@ -11,14 +11,13 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from services.broker.broker_accounts import get_accounts_overview
-from services.g3.ai_screening import load_saved_screening, lookup_stock_ai_sentinel, merge_screening_into_mainwave
+from services.g3.ai_screening import load_saved_screening, lookup_stock_ai_sentinel
 from services.g3.fill_autosync import (
     dispatch_prefill_order,
     get_prefill_bridge_status,
     get_prefill_dispatch_status,
     sync_broker_fills_to_desk_executions,
 )
-from services.g3.mainwave_scanner import scan_mainwave_daily
 from services.g3.market_regime_gate import evaluate_market_regime_gate
 from services.g3.order_prefill import evaluate_and_build_prefill_draft
 from services.g3.premarket_brief import (
@@ -286,15 +285,6 @@ def get_g3_desk(
             force_refresh=refresh_quotes,
         )
 
-    def _safe_mainwave() -> dict[str, Any]:
-        try:
-            return merge_screening_into_mainwave(
-                scan_mainwave_daily(force_refresh=False),
-                market_gate=market_regime_gate,
-            )
-        except Exception:
-            return {}
-
     def _safe_panic() -> dict[str, Any] | None:
         try:
             return evaluate_panic_rebound_signal(market_gate=market_regime_gate)
@@ -312,13 +302,11 @@ def get_g3_desk(
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         fut_rsi = executor.submit(_safe_rsi_batch)
-        fut_mw = executor.submit(_safe_mainwave)
         fut_panic = executor.submit(_safe_panic)
         fut_router = executor.submit(_safe_router)
         rsi_map = fut_rsi.result()
-        _mw_merged = fut_mw.result()
         panic_rebound_signal = fut_panic.result()
         strategy_router = fut_router.result()
 
@@ -475,8 +463,6 @@ def get_g3_desk(
         strategy_router=strategy_router,
         cards=cards,
         accounts_summary=accounts_summary_obj,
-        mainwave_ai_summary=_mw_merged.get("ai_screening_summary"),
-        mainwave_candidates=_mw_merged.get("candidates"),
         panic_rebound_signal=panic_rebound_signal,
     )
 

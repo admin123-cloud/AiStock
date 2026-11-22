@@ -1,4 +1,4 @@
-"""G3 主升浪每日选股池 API（实时直连 ClickHouse 最新日线与 30m 分钟线 + Phase 2A AI 排雷与催化过滤）。"""
+"""G3 AI 排雷与催化评分快照 API。"""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -6,13 +6,10 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from api.g3.desk import get_g3_market_gate
 from services.g3.ai_screening import (
     load_saved_screening,
-    merge_screening_into_mainwave,
     save_agent_screening,
 )
-from services.g3.mainwave_scanner import scan_mainwave_daily
 
 router = APIRouter()
 
@@ -34,17 +31,6 @@ class AiScreeningIngestRequest(BaseModel):
     summary_note: Optional[str] = None
     agent_name: str = "antigravity_agent"
     items: list[AiScreeningItemIn] = Field(default_factory=list)
-
-
-@router.get("/mainwave")
-def get_g3_mainwave(refresh: bool = Query(False, description="是否跳过 120s 缓存强制重算")) -> dict[str, Any]:
-    """获取 G3 Score88 主升浪候选池，并自动融合 Phase 2A AI 排雷/催化结果与 Phase 1A 大盘总闸门。"""
-    mw = scan_mainwave_daily(force_refresh=refresh)
-    try:
-        gate = get_g3_market_gate()
-    except Exception:
-        gate = None
-    return merge_screening_into_mainwave(mw, market_gate=gate)
 
 
 @router.get("/ai-screening")

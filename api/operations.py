@@ -8,7 +8,7 @@ from time import monotonic
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from services.operations.read_models import task_board, mainwave_daily, read_json
+from services.operations.read_models import task_board, read_json
 from services.operations.incidents import read_incidents
 from services.operations.delivery import build_delivery_calendar
 from utils.paths import runtime_path
@@ -247,11 +247,6 @@ def tasks(request: Request, force_refresh: bool = Query(False)):
 @router.get('/incidents')
 def incidents():
     return {'incidents':read_incidents(runtime_path('operations','incidents.sqlite3'))}
-
-
-@router.get('/mainwave-daily')
-def daily():
-    return mainwave_daily(runtime_path())
 
 
 def _refresh_calendar_bg(days: int) -> None:

@@ -1373,30 +1373,6 @@ export default function G3Desk() {
                 </div>
               )}
             </div>
-
-            {/* 5. AI 红灯一票否决雷区警示条（已移除旧主升观察池，新开仓选股统一以顶部 AR3 v3.0 终极双核雷达为准） */}
-            {cmd.new_entries.red_blocked.length > 0 && (
-              <div className="mt-4 rounded-lg border border-red-500/30 bg-red-950/15 p-3 text-xs">
-                <div className="font-semibold text-red-300">
-                  ⛔ AI 红灯一票否决雷区（{cmd.new_entries.red_blocked.length} 只已剔除）
-                </div>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {cmd.new_entries.red_blocked.map((rb) => (
-                    <div key={rb.code} className="rounded-md border border-red-500/25 bg-zinc-950/60 p-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-red-200">
-                          {rb.name} <span className="font-mono text-zinc-400">{rb.code}</span>
-                        </span>
-                        <span className="font-mono text-[11px] text-zinc-400">原评分 {rb.score ?? '—'}</span>
-                      </div>
-                      <div className="mt-0.5 text-[11px] text-red-200/90">
-                        {rb.risk_flags[0] || rb.one_line_thesis}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </Card>
         )
       })()}
