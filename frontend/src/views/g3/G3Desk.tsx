@@ -1517,7 +1517,7 @@ export default function G3Desk() {
 
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-zinc-400">2. 上证 AR3 复合周期</span>
+                    <span className="text-zinc-400">2. 上证五态趋势周期</span>
                     <Badge color={srcBadge(src.index_r51.status)}>{srcText(src.index_r51.status)}</Badge>
                   </div>
                   <div className="mt-1.5 font-mono text-sm font-semibold text-white">

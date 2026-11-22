@@ -514,7 +514,7 @@ def evaluate_market_regime_gate(
     elif is_idx_down or is_breadth_weak or is_mood_freezing:
         regime = "defensive"
         if is_idx_down:
-            reasons.append(f"上证指数 AR1 趋势确认处于下降周期（连续 {idx_r51.get('streak_days')} 日）")
+            reasons.append(f"上证指数五态趋势确认处于下降周期（连续 {idx_r51.get('streak_days')} 日）")
         if is_breadth_weak:
             reasons.append(f"全市场宽度弱势（站上MA20占比 {breadth_src.get('above_ma20_pct')}%）")
         if is_mood_freezing:
@@ -523,22 +523,22 @@ def evaluate_market_regime_gate(
             )
     elif (is_idx_up and is_breadth_strong and not is_mood_weak) or (is_idx_up and is_mood_warm and not is_breadth_weak):
         regime = "offensive"
-        reasons.append("AR1 复合状态机确认主升进攻周期（宽度/趋势/情绪共振），允许按上限积极布局")
+        reasons.append("大盘五态状态机确认主升进攻周期（宽度/趋势/情绪共振），开放 AR4.5-L3b 国家队动态股仓")
     else:
         regime = "balanced"
         if is_mood_weak:
             reasons.append(
-                f"情绪偏弱（跌停 {mood_src.get('limit_down_count')} 家、封板率 {round((mood_src.get('seal_rate') or 0) * 100, 1)}%），AR1 实证控制 ≤35% 轻仓"
+                f"情绪偏弱（跌停 {mood_src.get('limit_down_count')} 家、封板率 {round((mood_src.get('seal_rate') or 0) * 100, 1)}%），AR4.5-L3b 非进攻期清股切 Top2 逆波 ETF"
             )
         else:
-            reasons.append("AR1 复合状态机判定横盘平衡区（全市场无系统性贝塔），控仓 ≤35% 聚焦主线补涨与做T")
+            reasons.append("大盘五态状态机判定横盘平衡区，AR4.5-L3b 非进攻期个股 0% · 全切非A股风险调整 Top2 逆波 ETF")
 
-    # 额外检查 index_mom60（对齐主升浪 Score88 合约 <= 5% 诊断）
+    # 额外检查 index_mom60（大盘60日动量过热参考）
     mom60 = idx_r51.get("index_mom60")
     if mom60 is not None and mom60 > 0.05:
-        warnings.append(f"上证 60 日动量 {mom60 * 100:.1f}% > 5%（主升浪合约过热提示，追高需谨慎）")
+        warnings.append(f"上证 60 日动量 {mom60 * 100:.1f}% > 5%（短线涨幅偏快，注意结合 ERP 与国家队分位控仓）")
 
-    # 6. 映射 AR1 实证五态细分与水位上限（全面替代旧 R51）
+    # 6. 映射 AR4.5-L3b 大盘五态细分与 A 股风险警戒水位
     allow_new_mainwave = regime != "defensive"
 
     # 五态细分识别（在三档基础态之上叠加极端恐慌与极端高潮两个极端态）
@@ -551,18 +551,18 @@ def evaluate_market_regime_gate(
         phase_5 = "extreme_panic"
         regime_label = "极端防守·恐慌冰点"
         tone = "red"
-        action_summary = "AR1实证：死守现金严禁开新主升仓 · 宽度≤18%进入物极必反区，等首次缩量止跌且AI排除衰退后才可≤10%试错宽基/红利"
+        action_summary = "AR4.5-L3b 实证：个股硬锁 0%（严禁左侧抢跑）· 100% 切入非A股风险调整 Top2 逆波 ETF + 南向港科滤网；宽度≤18%进入冰点戒备，待双创右侧阳线确认再触发反抽"
     elif regime == "offensive" and lu_cnt >= 80 and (sr_val is None or sr_val >= 0.75) and (ma20_val is None or ma20_val >= 65.0):
         phase_5 = "extreme_offensive"
         regime_label = "极端进攻·情绪高潮"
         tone = "emerald"
-        action_summary = "AR1实证：高潮期满额顺势持有（≤85%）+ 卖晚买早正T · 同步盯防高潮转分歧预警"
+        action_summary = "AR4.5-L3b 实证：维持国家队动态股仓上限（0/35/50/65%）顺势持有 + 同步盯防 ERP<5% 逃顶警戒与高潮转分歧"
     else:
         phase_5 = regime
         meta_map = {
-            "offensive": ("主升进攻·趋势上升", "emerald", "AR1实证（胜率61%核心赚钱窗）：激活主升冠军策略 + 宽基ETF顺势腿（≤80%）"),
-            "balanced": ("横盘平衡·结构轮动", "amber", "AR1实证（大盘微负期望）：严控水位 ≤35%，仅做强主线补涨策略与双向做T"),
-            "defensive": ("防守退潮·趋势下跌", "red", "AR1实证（主跌亏钱浪）：严禁开新仓，确认转弱果断按 ≤30%/日 分步降水位至 ≤10%"),
+            "offensive": ("主升进攻·趋势上升", "emerald", "AR4.5-L3b 实证（右侧进攻窗）：按国家队250日分位动态调节股仓（0/35/50/65%）配 AB混合个股 + 剩余配 A股宽基 Top2 ETF"),
+            "balanced": ("横盘平衡·结构轮动", "amber", "AR4.5-L3b 实证（非进攻震荡态）：退出进攻即清股（0%），100% 切入非A股风险调整 Top2 逆波 ETF"),
+            "defensive": ("防守退潮·趋势下跌", "red", "AR4.5-L3b 实证（防守退潮浪）：个股硬锁 0%，非目标旧股按 ≤30%/日 分步清退并切入 Top2 逆波 ETF"),
         }
         regime_label, tone, action_summary = meta_map[regime]
 
@@ -582,26 +582,26 @@ def evaluate_market_regime_gate(
             step_pct = min(round(gap_ratio * 100, 1), round(AR1_MAX_STEP_RATIO * 100, 1))
             rebalance_status = "overweight"
             rebalance_advice = (
-                f"当前实际水位 {actual_ratio * 100:.1f}% 高于 AR1 上限 {target_cap * 100:.0f}%（超配 {gap_ratio * 100:.1f}%）："
-                f"按 AR1 实证宪法（4995股回测），次日开盘/盘中果断分步减仓 ≤{step_pct:.1f}%，2~3日内降至目标水位"
+                f"当前实际水位 {actual_ratio * 100:.1f}% 高于 A 股风险警戒线 {target_cap * 100:.0f}%（超配 {gap_ratio * 100:.1f}%）："
+                f"按 AR4.5-L3b 平稳调仓纪律，次日开盘/盘中分步清退非目标个股 ≤{step_pct:.1f}%，回款无缝切入 Top2 逆波 ETF"
             )
         elif gap_ratio < -AR1_DEADBAND_RATIO and allow_new_mainwave:
             step_pct = min(round(abs(gap_ratio) * 100, 1), round(AR1_MAX_STEP_RATIO * 100, 1))
             rebalance_status = "underweight"
             rebalance_advice = (
-                f"当前实际水位 {actual_ratio * 100:.1f}% 低于 AR1 目标上限 {target_cap * 100:.0f}%："
-                f"按 AR1 实证宪法，次日开盘/盘中分步加仓 ≤{step_pct:.1f}% 或切入生效周期冠军策略"
+                f"当前实际水位 {actual_ratio * 100:.1f}% 低于目标水位 {target_cap * 100:.0f}%："
+                f"按 AR4.5-L3b 纪律，次日开盘/盘中按顶部精确买卖单分步加仓 ≤{step_pct:.1f}%（含 Top2 逆波 ETF）"
             )
         else:
             rebalance_status = "aligned"
             rebalance_advice = (
-                f"当前实际水位 {actual_ratio * 100:.1f}% 符合 AR1 目标上限 {target_cap * 100:.0f}%，"
-                "维持现有底仓专注纪律执行与做T降本"
+                f"当前实际水位 {actual_ratio * 100:.1f}% 符合 A 股风险警戒要求（≤{target_cap * 100:.0f}%），"
+                "按顶部 AR4.5-L3b 最终执行单维持目标配比与止损纪律"
             )
 
     return {
         "schema": "g3_market_regime_gate/1",
-        "decision_framework": "AR1",
+        "decision_framework": "AR4.5-L3b",
         "as_of": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
         "ref_date": ref_date_str,
         "regime": regime,
