@@ -2028,6 +2028,76 @@ def serve(
         replace_existing=True,
     )
     logger.info("调度注册：tdx_sector_sync cron=[day_of_week=%s 16:45 Asia/Shanghai]（通达信标准板块盘后同步）", CRON_DAY_OF_WEEK)
+
+    # 每日盘后 17:15 容器级 24/7 自动喂料 AR4.5-L3b：14只跨资产ETF + 上交所国家队份额 + 南向资金 + 沪深300 ERP + 明日调仓预案
+    def _run_ar45_postclose_sync_job() -> None:
+        now_bj = cn_now()
+        try:
+            if not _default_is_trading_day(now_bj.date()):
+                return
+        except Exception as exc:
+            logger.warning("[ar45_postclose_sync] 交易日判断失败（fail-closed跳过）: %s", exc)
+            return
+
+        import urllib.request as _urlreq
+
+        opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
+        base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
+
+        def _post(path: str, payload: dict | None = None, timeout: int = 180) -> dict:
+            data = json.dumps(payload or {}).encode("utf-8")
+            req = _urlreq.Request(
+                f"{base}{path}",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with opener.open(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        def _get(path: str, timeout: int = 90) -> dict:
+            req = _urlreq.Request(f"{base}{path}", method="GET")
+            with opener.open(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        is_fri = now_bj.weekday() == 4
+        try:
+            ar3_res = _post(f"/api/g3/mining/ar3/sync?sync_etf=true&sync_financials={'true' if is_fri else 'false'}", timeout=240)
+            logger.info("[ar45_postclose_sync] 14只跨资产ETF同步完成 (fri_fin=%s): status=%s", is_fri, ar3_res.get("status"))
+        except Exception as exc:
+            logger.warning("[ar45_postclose_sync] AR3 ETF同步异常（继续AR4同步）: %s", exc)
+
+        try:
+            ar4_res = _post("/api/g3/mining/ar4/sync", timeout=180)
+            sb = (ar4_res.get("sync") or {}).get("southbound") or {}
+            logger.info(
+                "[ar45_postclose_sync] 国家队份额+南向资金+ERP同步完成: status=%s sb20d=%s",
+                ar4_res.get("status"), sb.get("sb_net_20d_yi"),
+            )
+        except Exception as exc:
+            logger.warning("[ar45_postclose_sync] AR4 国家队/南向/ERP同步异常: %s", exc)
+
+        try:
+            plan = _get("/api/g3/mining/ar3/rebalance-plan?account_id=acct1&smooth_step=true&persist=true", timeout=90)
+            _post("/api/g3/premarket-brief/generate", payload={"push_wechat": False}, timeout=90)
+            logger.info(
+                "[ar45_postclose_sync] 明日AR4.5-L3b调仓预案与简报缓存已刷新: regime=%s sells=%d buys=%d",
+                plan.get("regime"), len(plan.get("sell_orders") or []), len(plan.get("buy_orders") or []),
+            )
+        except Exception as exc:
+            logger.warning("[ar45_postclose_sync] 调仓预案/简报缓存刷新异常: %s", exc)
+
+    from apscheduler.triggers.cron import CronTrigger as _Ar45SyncCronTrigger
+    scheduler.add_job(
+        _run_ar45_postclose_sync_job,
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=17, minute=15, timezone=BEIJING_TZ),
+        id="ar45_postclose_sync",
+        name="AR4.5-L3b 跨资产ETF+国家队份额+南向资金+ERP盘后24/7自动喂料（工作日 17:15）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：ar45_postclose_sync cron=[day_of_week=%s 17:15 Asia/Shanghai]（AR4.5-L3b 跨资产ETF+国家队+南向+ERP盘后同步）", CRON_DAY_OF_WEEK)
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown
     except (KeyboardInterrupt, SystemExit):
