@@ -484,6 +484,7 @@ def _sync_publication_result(
         return
     try:
         from services.postclose_contracts import PublishCertificate, StageState
+        from services.postclose.postclose_publication import compute_publish_certificate_expiry
         from services.postclose_source_prepare import canonical_sha256
 
         if status == "success":
@@ -500,7 +501,7 @@ def _sync_publication_result(
                 generation=generation,
                 approval_id="scheduled_postclose_cutover",
                 issued_at=now_bj,
-                expires_at=now_bj + timedelta(hours=24),
+                expires_at=compute_publish_certificate_expiry(resolved_date, now_bj),
                 issuer="postclose_orchestrator",
                 evidence_refs=(str(summary_path),),
                 schema_digest=canonical_sha256("postclose_auto/1"),

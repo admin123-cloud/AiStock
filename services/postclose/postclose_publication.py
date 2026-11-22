@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -55,6 +55,60 @@ REBUILDING_STATUSES: frozenset[str] = frozenset({
     StageState.UNKNOWN_WRITES.value,
     StageState.RECOVERY_REQUIRED.value,
 })
+
+
+def compute_publish_certificate_expiry(target_date: date, issued_at: datetime) -> datetime:
+    """计算盘后发布认证证书的到期时间：覆盖至下一个交易日 17:00（Asia/Shanghai）。
+
+    解决原 +24h 写死 TTL 在周五/长假前签发后，周末或节假日休市期间证书过早过期导致
+    首页误报 certificate_validation_failed 的问题。
+    """
+    issued_bj = issued_at.astimezone(BEIJING_TZ) if issued_at.tzinfo else issued_at.replace(tzinfo=BEIJING_TZ)
+    next_td: Optional[date] = None
+
+    # 1. 优先查 ClickHouse trade_calendar 获取严格晚于 target_date 的下一个 A 股交易日
+    try:
+        from utils.market_warehouse import clickhouse_available, clickhouse_scalar
+
+        if clickhouse_available():
+            raw = clickhouse_scalar(
+                "SELECT min(trade_date) FROM stock.trade_calendar "
+                "WHERE market = 'SH' AND is_trading = 1 AND trade_date > ?",
+                [target_date.isoformat()],
+                raw=True,
+            )
+            text = str(raw or "")[:10]
+            if len(text) == 10 and text != "1970-01-01":
+                parsed = date.fromisoformat(text)
+                if parsed > target_date:
+                    next_td = parsed
+    except Exception:
+        next_td = None
+
+    # 2. 回退：尝试本地 TradingCalendar
+    if next_td is None:
+        try:
+            from scheduler.trading_calendar import TradingCalendar
+
+            cand = target_date + timedelta(days=1)
+            for _ in range(20):
+                if TradingCalendar.is_trading_day(datetime(cand.year, cand.month, cand.day)):
+                    next_td = cand
+                    break
+                cand += timedelta(days=1)
+        except Exception:
+            next_td = None
+
+    # 3. 最终兜底：跳过周末找到下一个工作日
+    if next_td is None:
+        cand = target_date + timedelta(days=1)
+        while cand.weekday() >= 5:
+            cand += timedelta(days=1)
+        next_td = cand
+
+    expiry = datetime(next_td.year, next_td.month, next_td.day, 17, 0, 0, tzinfo=BEIJING_TZ)
+    min_expiry = issued_bj + timedelta(hours=24)
+    return expiry if expiry > min_expiry else min_expiry
 
 
 @dataclass(frozen=True)
