@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from api.g3.desk import get_g3_market_gate
+from services.g3.ar45_review_service import build_ar45_review_report
 from services.g3.attribution import build_four_dim_attribution
 from services.g3.forward_eval import (
     evaluate_ai_screening_forward,
@@ -108,6 +109,15 @@ def get_g3_signal_quality(limit: int = Query(10, ge=1, le=30)) -> dict[str, Any]
             "summary": _read_json_safe(json_pair),
         })
     return {"reports": reports}
+
+
+@router.get("/review/ar45-attribution")
+def get_g3_review_ar45_attribution(
+    account_id: str = Query("acct1", description="目标主力账号（默认 acct1 / ct1曾）"),
+    days: int = Query(30, ge=7, le=180, description="复盘回溯自然日数"),
+) -> dict[str, Any]:
+    """AR4.5-L3b 实盘真钱复盘与三腿归因总账（实盘净值 vs 理想曲线 + Shadow 对账 + AI 交易教练）。"""
+    return build_ar45_review_report(account_id=account_id, days=days)
 
 
 @router.get("/review/attribution")

@@ -1440,6 +1440,10 @@ export interface G3AR3StockCandidate {
   industry_duplicate: boolean
   slot_rank?: number | null
   suggested_weight_pct: number
+  ai_risk_light?: 'green' | 'yellow' | 'red' | string
+  ai_catalyst_score?: number | null
+  ai_risk_flags?: string[]
+  ai_thesis?: string
 }
 
 export interface G3AR3MoneyEffectStats {
@@ -1691,3 +1695,94 @@ export const pushG3AR3PlanWechat = (accountId = 'acct1', smoothStep = true) =>
     null,
     { params: { account_id: accountId, smooth_step: smoothStep }, timeout: 60000 }
   )
+
+// ---------------------------------------------------------------------------
+// AR4.5-L3b 实盘复盘与三腿真钱归因（新复盘中心唯一主数据源）
+// ---------------------------------------------------------------------------
+
+export interface G3AR45ReviewNavPoint {
+  date: string
+  total_assets: number
+  position_pct: number
+  daily_profit?: number | null
+  actual_nav: number
+  actual_ret_pct: number
+  hs300_nav?: number | null
+  hs300_ret_pct?: number | null
+  ar45_ideal_nav?: number | null
+  ar45_ideal_ret_pct?: number | null
+}
+
+export interface G3AR45ReviewLegItem {
+  code: string
+  name: string
+  shares: number
+  cost_price: number
+  current_price: number
+  market_value: number
+  weight_pct: number
+  daily_profit: number
+  floating_profit: number
+  profit_pct?: number | null
+  status_tag: string
+  breached_stop: boolean
+}
+
+export interface G3AR45ReviewLeg {
+  leg_id: 'ar45_etf' | 'ar45_stock' | 'legacy_and_t' | string
+  label: string
+  market_value: number
+  daily_profit: number
+  floating_profit: number
+  count: number
+  items: G3AR45ReviewLegItem[]
+}
+
+export interface G3AR45ReviewResponse {
+  schema: string
+  generated_at: string
+  account: {
+    account_id: string
+    label: string
+    total_assets: number
+    market_value: number
+    available_cash: number
+    position_pct: number
+    daily_profit?: number | null
+    holding_profit?: number | null
+  }
+  window_days: number
+  kpis: {
+    tracked_days: number
+    period_pnl_yuan: number
+    actual_ret_pct?: number | null
+    hs300_ret_pct?: number | null
+    excess_vs_hs300_pct?: number | null
+    ar45_ideal_ret_pct?: number | null
+    completion_pct?: number | null
+    avg_slippage_bps?: number | null
+    in_strategy_floating_pnl: number
+    legacy_drag_floating_pnl: number
+    t_trade_pnl?: number | null
+    discipline_score: number
+    stop_violation_count: number
+  }
+  nav_curve: G3AR45ReviewNavPoint[]
+  legs: G3AR45ReviewLeg[]
+  stop_violations: Array<{
+    code: string
+    name: string
+    profit_pct: number
+    floating_profit: number
+    market_value: number
+  }>
+  shadow_reconcile: G3AR3ShadowReconcileResponse
+  coach: G3TradingCoachResponse
+  data_notes: string[]
+}
+
+export const getG3AR45Review = (days = 30, accountId = 'acct1') =>
+  request.get<unknown, G3AR45ReviewResponse>('/g3/review/ar45-attribution', {
+    params: { days, account_id: accountId },
+    timeout: 60000,
+  })

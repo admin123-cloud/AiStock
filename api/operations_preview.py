@@ -122,6 +122,7 @@ _ALLOWED_PREVIEW_PATHS = frozenset({
     '/api/g3/mining/router',
     '/api/g3/mining/runs/{run_id}',
     '/api/g3/premarket-brief',
+    '/api/g3/review/ar45-attribution',
     '/api/g3/review/attribution',
     '/api/g3/review/coach',
     '/api/g3/review/daily',

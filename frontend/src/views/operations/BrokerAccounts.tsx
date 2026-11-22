@@ -22,7 +22,7 @@ function pnlColor(val?: number | null): string {
   return val > 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'
 }
 
-export default function BrokerAccounts() {
+export default function BrokerAccounts({ embedded = false }: { embedded?: boolean } = {}) {
   const [data, setData] = useState<AccountsOverviewResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -131,17 +131,23 @@ export default function BrokerAccounts() {
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className={embedded ? 'space-y-5' : 'space-y-6 p-6'}>
       {/* 顶栏标题 + 宿主机桌面桥状态 + 一键同步 */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-950 dark:text-white">
-            资金账号管理
-          </h1>
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+        {embedded ? (
+          <div className="text-xs text-zinc-400">
             同花顺远航双账号只读监控（凭证零接触 · 绝不下单 · 原生控件安全切号）
-          </p>
-        </div>
+          </div>
+        ) : (
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-zinc-950 dark:text-white">
+              资金账号管理
+            </h1>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              同花顺远航双账号只读监控（凭证零接触 · 绝不下单 · 原生控件安全切号）
+            </p>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           {data?.bridge && (

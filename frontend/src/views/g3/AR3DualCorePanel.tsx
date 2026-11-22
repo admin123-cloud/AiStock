@@ -26,6 +26,7 @@ interface AR3DualCorePanelProps {
     note: string
   }) => void
   onAddWatchlist?: (code: string, name: string) => void
+  mode?: 'desk_compact' | 'signals_full' | 'all'
 }
 
 const fmtSigned = (v?: number | null, digits = 2): string => {
@@ -34,7 +35,7 @@ const fmtSigned = (v?: number | null, digits = 2): string => {
   return `${n > 0 ? '+' : ''}${n.toFixed(digits)}%`
 }
 
-export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3DualCorePanelProps) {
+export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode = 'all' }: AR3DualCorePanelProps) {
   const [radar, setRadar] = useState<G3AR3DualCoreRadarResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -43,7 +44,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [stockTab, setStockTab] = useState<'exec' | 'f2a' | 'f3a'>('exec')
-  const [showEtfUniverse, setShowEtfUniverse] = useState(false)
+  const [showEtfUniverse, setShowEtfUniverse] = useState(mode === 'signals_full')
   const [planReloadToken, setPlanReloadToken] = useState(0)
 
   const loadRadar = useCallback(async (forceRefresh = false) => {
@@ -171,11 +172,11 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
 
       {radar && cfg && (
         <div className="mt-3 space-y-4">
-          {/* 0. 唯一权威：主力单账号 ct1曾 今日最终买卖执行单（先卖后买精确100股 + 一键顺序预填 + Shadow对账） */}
-          <AR3ExecutionOrderCard reloadToken={planReloadToken} />
+          {/* 0. 唯一权威：主力单账号 ct1曾 今日最终买卖执行单（仅实战交易台显示，避免与选股中心重复） */}
+          {mode !== 'signals_full' && <AR3ExecutionOrderCard reloadToken={planReloadToken} />}
 
-          {/* 0.5 国家队持仓分位 + 5日净申购 + 南向资金 + ERP 实时仪表盘（AR4.5-L3b 核心宏观中枢） */}
-          {macro && (
+          {/* 0.5 国家队持仓分位 + 5日净申购 + 南向资金 + ERP 实时仪表盘（仅交易台/全量模式展示） */}
+          {mode !== 'signals_full' && macro && (
             <div className="rounded-lg border border-emerald-500/35 bg-gradient-to-r from-emerald-950/20 via-zinc-900/70 to-violet-950/20 p-3 text-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2">
@@ -330,8 +331,29 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
             </div>
           )}
 
-          {/* 1. 主引擎热切换控制台 + 近20日赚钱效应指示仪 */}
-          <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-xs">
+          {mode === 'desk_compact' ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800/80 bg-zinc-900/40 px-3 py-2 text-xs text-zinc-300">
+              <div className="flex flex-wrap items-center gap-3">
+                <span>
+                  🎯 当前生效配置：
+                  <b className="text-amber-300">{cfg.active_stock_mode}</b> +{' '}
+                  <b className="text-cyan-300">{etf?.etf_core_label || 'AR4.5-L3b Top2逆波'}</b>
+                </span>
+                {etf?.headline && <span className="text-zinc-400">· {etf.headline}</span>}
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <Link to="/g3/signals" className="font-semibold text-amber-300 hover:text-amber-200">
+                  展开 14 只 ETF 全景 & F2A/F3A 选股排雷 →
+                </Link>
+                <Link to="/g3/accounts" className="font-medium text-sky-300 hover:text-sky-200">
+                  资金账号与底仓做T →
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* 1. 主引擎热切换控制台 + 近20日赚钱效应指示仪 */}
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold text-zinc-200">个股主引擎（随行情赚钱效应热切换）：</span>
@@ -706,6 +728,8 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist }: AR3
               <div className="mt-2 text-amber-300">{sr?.error || '双选股雷达暂不可用'}</div>
             )}
           </div>
+            </>
+          )}
         </div>
       )}
     </Card>
