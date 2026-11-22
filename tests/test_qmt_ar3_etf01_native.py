@@ -14,9 +14,12 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "qmt_ar3_etf01_n
 
 
 def test_zero_file_io_and_zero_network_compliance() -> None:
-    """硬合规门禁：策略源码绝不允许任何文件 IO、外部网络库或 MiniQMT 依赖。"""
-    src = SCRIPT_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    """硬合规门禁：策略源码必须为 #coding:gbk，绝不允许任何文件 IO、外部网络库或 MiniQMT 依赖。"""
+    raw = SCRIPT_PATH.read_bytes()
+    assert raw.startswith(b"#coding:gbk"), "QMT 编辑器强制以 GBK 喂入代码，第一行必须为 #coding:gbk"
+    # 确保全部字节严格合法 GBK
+    raw.decode("gbk", errors="strict")
+    tree = ast.parse(raw)
 
     forbidden_imports = {
         "os", "pathlib", "io", "urllib", "urllib3", "requests", "http",

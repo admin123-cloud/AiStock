@@ -1,29 +1,29 @@
-# -*- coding: utf-8 -*-
+#coding:gbk
 """
 ===============================================================================
-AR3 v3.0 é˜¶æ®µä¸€ Â· å›½é‡‘æ ‡å‡† QMT çº¯å†…ç½®åŸç”Ÿç­–ç•¥ï¼ˆ#01 è·¨èµ„äº§ ETF å…¨å¤©å€™è½®åŠ¨ + AR2_2A å†°ç‚¹åæŠ½ï¼‰
+AR3 v3.0 ½×¶ÎÒ»  -  ¹ú½ğ±ê×¼ QMT ´¿ÄÚÖÃÔ­Éú²ßÂÔ£¨#01 ¿ç×Ê²ú ETF È«ÌìºòÂÖ¶¯ + AR2_2A ±ùµã·´³é£©
 ===============================================================================
-æ ¸å¿ƒç‰¹æ€§ï¼ˆ100% é€‚é… 2026-10 ç›‘ç®¡ä¸å›½é‡‘æ ‡å‡† QMT v2.1.19+ ç¯å¢ƒï¼‰ï¼š
-  1. é›¶æ–‡ä»¶ IOï¼ˆä¸è°ƒç”¨ open / os / pathlib è¯»å†™ä»»ä½•ç£ç›˜æ–‡ä»¶ï¼‰
-  2. é›¶å¤–éƒ¨ç½‘ç»œè¯·æ±‚ï¼ˆä¸è°ƒç”¨ requests / urllib / socketï¼Œç»ä¸è§¦å‘ onIllegalIPFindï¼‰
-  3. é›¶ MiniQMT / xtquant å¤–éƒ¨è¿›ç¨‹ä¾èµ–ï¼ˆ100% è¿è¡Œåœ¨æ ‡å‡†å¤§ QMT å†…ç½® Python 3.6 å¼•æ“å†…ï¼‰
-  4. ç­–ç•¥å£å¾„ä¸ AiStock AR3 v3.0 #01 å®è¯å† å†›ï¼ˆAR3_9_RegimeFocus_Top1 + AR2_2Aï¼‰100% ä¸€è‡´ï¼š
-       - è¿›æ”»æœŸï¼ˆä¸Šè¯ç¡®è®¤ä¸Šå‡ï¼‰ï¼šé… A è‚¡å¼ºåŠ¿å®½åŸº Top2ï¼ˆç«™ä¸Š MA20 ä¸” 20æ—¥åŠ¨é‡ > 0ï¼‰
-       - éè¿›æ”»æœŸï¼ˆæ¨ªç›˜/é˜²å®ˆ/å†°ç‚¹æœªä¼ç¨³ï¼‰ï¼š100% èšç„¦é A è‚¡è·¨èµ„äº§ 20æ—¥åŠ¨é‡ Top1
-         ï¼ˆçº¢åˆ©ä½æ³¢ / é»„é‡‘ / çº³æŒ‡ / æ ‡æ™®500 / æ’ç”Ÿç§‘æŠ€ / ä¸­æ¦‚äº’è”ï¼›å…¨ç ´ä½åˆ‡åå¹´å›½å€º 511260.SHï¼‰
-       - æç«¯å†°ç‚¹å³ä¾§åæŠ½ï¼ˆAR2_2Aï¼‰ï¼šé˜²å®ˆæ€ + æ²ªæ·±300å®½åº¦ <= 18% + åˆ›ä¸šæ¿/ä¸­è¯1000å‡æ¶¨ >= +0.50%
-         è§¦å‘ 30% åˆ›ä¸šæ¿ETF(159915.SZ) + 30% ä¸­è¯1000ETF(512100.SH) + 40% éAè‚¡æœ€å¼ºé¿é™©ETF
-         ï¼ˆåæŠ½ä»“ä½æ‰§è¡Œ -6% ç¡¬æ­¢æŸ / +12% æ­¢ç›ˆ / æœ€é•¿æŒæœ‰ 5 ä¸ªäº¤æ˜“æ—¥ï¼‰
-  5. å®ç›˜å®‰å…¨æŠ¤æ ï¼š
-       - é»˜è®¤ DRY_RUN = Trueï¼ˆä»…æ‰“å°å®Œæ•´æ’è¡Œã€äº”æ€åˆ¤å®šä¸ä¹°å–æ¼”ç»ƒå•ï¼Œç»ä¸å‘çœŸå®å§”æ‰˜ï¼‰
-       - ä»…ç®¡ç† 14 åª AR3 ETF ç™½åå•ï¼ˆç»ä¸è¯¯åŠ¨è´¦å·å†…å…¶ä»–æ‰‹å·¥è‚¡ç¥¨ï¼‰
-       - ä¸¥æ ¼ã€Œå…ˆå–åä¹°ã€åˆ†æ­¥ç¼–æ’ + 3ä½å°æ•°ä¿æŠ¤é™ä»· + 100è‚¡æ•´æ‰‹ + å•ç¬”é‡‘é¢ä¸Šé™
+ºËĞÄÌØĞÔ£¨100% ÊÊÅä 2026-10 ¼à¹ÜÓë¹ú½ğ±ê×¼ QMT v2.1.19+ »·¾³£©£º
+  1. ÁãÎÄ¼ş IO£¨²»µ÷ÓÃ open / os / pathlib ¶ÁĞ´ÈÎºÎ´ÅÅÌÎÄ¼ş£©
+  2. ÁãÍâ²¿ÍøÂçÇëÇó£¨²»µ÷ÓÃ requests / urllib / socket£¬¾ø²»´¥·¢ onIllegalIPFind£©
+  3. Áã MiniQMT / xtquant Íâ²¿½ø³ÌÒÀÀµ£¨100% ÔËĞĞÔÚ±ê×¼´ó QMT ÄÚÖÃ Python 3.6 ÒıÇæÄÚ£©
+  4. ²ßÂÔ¿Ú¾¶Óë AiStock AR3 v3.0 #01 ÊµÖ¤¹Ú¾ü£¨AR3_9_RegimeFocus_Top1 + AR2_2A£©100% Ò»ÖÂ£º
+       - ½ø¹¥ÆÚ£¨ÉÏÖ¤È·ÈÏÉÏÉı£©£ºÅä A ¹ÉÇ¿ÊÆ¿í»ù Top2£¨Õ¾ÉÏ MA20 ÇÒ 20ÈÕ¶¯Á¿ > 0£©
+       - ·Ç½ø¹¥ÆÚ£¨ºáÅÌ/·ÀÊØ/±ùµãÎ´ÆóÎÈ£©£º100% ¾Û½¹·Ç A ¹É¿ç×Ê²ú 20ÈÕ¶¯Á¿ Top1
+         £¨ºìÀûµÍ²¨ / »Æ½ğ / ÄÉÖ¸ / ±êÆÕ500 / ºãÉú¿Æ¼¼ / ÖĞ¸Å»¥Áª£»È«ÆÆÎ»ÇĞÊ®Äê¹úÕ® 511260.SH£©
+       - ¼«¶Ë±ùµãÓÒ²à·´³é£¨AR2_2A£©£º·ÀÊØÌ¬ + »¦Éî300¿í¶È <= 18% + ´´Òµ°å/ÖĞÖ¤1000¾ùÕÇ >= +0.50%
+         ´¥·¢ 30% ´´Òµ°åETF(159915.SZ) + 30% ÖĞÖ¤1000ETF(512100.SH) + 40% ·ÇA¹É×îÇ¿±ÜÏÕETF
+         £¨·´³é²ÖÎ»Ö´ĞĞ -6% Ó²Ö¹Ëğ / +12% Ö¹Ó¯ / ×î³¤³ÖÓĞ 5 ¸ö½»Ò×ÈÕ£©
+  5. ÊµÅÌ°²È«»¤À¸£º
+       - Ä¬ÈÏ DRY_RUN = True£¨½ö´òÓ¡ÍêÕûÅÅĞĞ¡¢ÎåÌ¬ÅĞ¶¨ÓëÂòÂôÑİÁ·µ¥£¬¾ø²»·¢ÕæÊµÎ¯ÍĞ£©
+       - ½ö¹ÜÀí 14 Ö» AR3 ETF °×Ãûµ¥£¨¾ø²»Îó¶¯ÕËºÅÄÚÆäËûÊÖ¹¤¹ÉÆ±£©
+       - ÑÏ¸ñ¡¸ÏÈÂôºóÂò¡¹·Ö²½±àÅÅ + 3Î»Ğ¡Êı±£»¤ÏŞ¼Û + 100¹ÉÕûÊÖ + µ¥±Ê½ğ¶îÉÏÏŞ
 
-ä½¿ç”¨æ­¥éª¤ï¼ˆ3 æ­¥ä¸Šæ‰‹ï¼‰ï¼š
-  1. å…³é—­ Clash Vergeã€Œç³»ç»Ÿä»£ç†ã€å¼€å…³ï¼ˆä»…ä¿ç•™ TUN æ¨¡å¼ï¼Œé¿å…è§¦å‘ QMT çš„ illegal IP: 127.0.0.1:7897 å¼ºåœï¼‰
-  2. æ‰“å¼€å›½é‡‘æ ‡å‡† QMT -> é¡¶éƒ¨ã€Œæ¨¡å‹ç ”ç©¶ã€æˆ–ã€Œæ¨¡å‹äº¤æ˜“ã€-> æ–°å»º Python ç­–ç•¥ -> å…¨æ–‡ç²˜è´´æœ¬æ–‡ä»¶
-  3. ä¿®æ”¹ä¸‹æ–¹ ACCOUNT_ID ä¸ºä½ çš„å›½é‡‘èµ„é‡‘è´¦å·ï¼Œä¿æŒ DRY_RUN = Trueï¼Œåœ¨ã€Œæ²ªæ·±300(000300.SH) æ—¥çº¿ã€è¿è¡ŒéªŒè¯
-     å¾…è§‚å¯Ÿ 1~2 ä¸ªäº¤æ˜“æ—¥é›¶æŠ¥é”™ä¸”ä¿¡å·ä¸ AiStock ä½œæˆ˜å°ä¸€è‡´åï¼Œå†æŒ‰éœ€å°† DRY_RUN æ”¹ä¸º Falseã€‚
+Ê¹ÓÃ²½Öè£¨3 ²½ÉÏÊÖ£©£º
+  1. ¹Ø±Õ Clash Verge¡¸ÏµÍ³´úÀí¡¹¿ª¹Ø£¨½ö±£Áô TUN Ä£Ê½£¬±ÜÃâ´¥·¢ QMT µÄ illegal IP: 127.0.0.1:7897 Ç¿Í££©
+  2. ´ò¿ª¹ú½ğ±ê×¼ QMT -> ¶¥²¿¡¸Ä£ĞÍÑĞ¾¿¡¹»ò¡¸Ä£ĞÍ½»Ò×¡¹-> ĞÂ½¨ Python ²ßÂÔ -> È«ÎÄÕ³Ìù±¾ÎÄ¼ş
+  3. ĞŞ¸ÄÏÂ·½ ACCOUNT_ID ÎªÄãµÄ¹ú½ğ×Ê½ğÕËºÅ£¬±£³Ö DRY_RUN = True£¬ÔÚ¡¸»¦Éî300(000300.SH) ÈÕÏß¡¹ÔËĞĞÑéÖ¤
+     ´ı¹Û²ì 1~2 ¸ö½»Ò×ÈÕÁã±¨´íÇÒĞÅºÅÓë AiStock ×÷Õ½Ì¨Ò»ÖÂºó£¬ÔÙ°´Ğè½« DRY_RUN ¸ÄÎª False¡£
 ===============================================================================
 """
 
@@ -32,52 +32,52 @@ import math
 import numpy as np
 
 # =============================================================================
-# ä¸€ã€ç”¨æˆ·é…ç½®åŒºï¼ˆä»…éœ€æŒ‰éœ€ä¿®æ”¹æ­¤åŒºåŸŸï¼‰
+# Ò»¡¢ÓÃ»§ÅäÖÃÇø£¨½öĞè°´ĞèĞŞ¸Ä´ËÇøÓò£©
 # =============================================================================
-ACCOUNT_ID = "8890729932"          # å›½é‡‘æ ‡å‡† QMT èµ„é‡‘è´¦å·ï¼ˆæ¨¡å‹äº¤æ˜“ä¸­ä¹Ÿå¯è‡ªåŠ¨è¯»å–å†…ç½® account å˜é‡ï¼‰
-DRY_RUN = True                     # å®‰å…¨é»˜è®¤ï¼šTrue=çº¯ä»¿çœŸæ¼”ç»ƒ(åªæ‰“å°ä¸å‘å•)ï¼›ç¡®è®¤æ— è¯¯åå†æ”¹ä¸º False
-TARGET_INVEST_RATIO = 0.98         # ç›®æ ‡æ€»æŠ•èµ„æ¯”ä¾‹ï¼ˆé¢„ç•™ 2% ç°é‡‘ç¼“å†²é˜²æ»‘ç‚¹ä¸æ‰‹ç»­è´¹ï¼‰
-MIN_REBALANCE_DIFF_YUAN = 1500.0   # æœ€å°è°ƒä»“é‡‘é¢é˜ˆå€¼ï¼ˆå°äºæ­¤é¢åº¦çš„å¾®è°ƒä¸äº¤æ˜“ï¼Œçœæ‘©æ“¦ï¼‰
-MAX_SINGLE_ORDER_YUAN = 50000.0    # å•ç¬”å§”æ‰˜é‡‘é¢ä¸Šé™ï¼ˆè¶…è¿‡æ—¶è‡ªåŠ¨æ‹†å•ï¼‰
-REBALANCE_TIME_HHMM = 935          # æ¯æ—¥ä¸»è°ƒä»“è§¦å‘æ—¶é—´ï¼ˆ09:35ï¼Œé¿å¼€é›†åˆç«ä»·å‰§çƒˆæ»‘ç‚¹ï¼‰
-BUY_SLIPPAGE_PCT = 0.002           # ä¹°å…¥ä¿æŠ¤é™ä»·ä¸Šæµ® +0.2%
-SELL_SLIPPAGE_PCT = 0.002          # å–å‡ºä¿æŠ¤é™ä»·ä¸‹æµ® -0.2%
-ONLY_MANAGE_ETF_UNIVERSE = True    # ä»…ç®¡ç†ä¸‹æ–¹ 14 åª AR3 ETFï¼Œç»ä¸å–å‡ºè´¦æˆ·ä¸­å…¶ä»–ä¸ªè‚¡
+ACCOUNT_ID = "8890729932"          # ¹ú½ğ±ê×¼ QMT ×Ê½ğÕËºÅ£¨Ä£ĞÍ½»Ò×ÖĞÒ²¿É×Ô¶¯¶ÁÈ¡ÄÚÖÃ account ±äÁ¿£©
+DRY_RUN = True                     # °²È«Ä¬ÈÏ£ºTrue=´¿·ÂÕæÑİÁ·(Ö»´òÓ¡²»·¢µ¥)£»È·ÈÏÎŞÎóºóÔÙ¸ÄÎª False
+TARGET_INVEST_RATIO = 0.98         # Ä¿±ê×ÜÍ¶×Ê±ÈÀı£¨Ô¤Áô 2% ÏÖ½ğ»º³å·À»¬µãÓëÊÖĞø·Ñ£©
+MIN_REBALANCE_DIFF_YUAN = 1500.0   # ×îĞ¡µ÷²Ö½ğ¶îãĞÖµ£¨Ğ¡ÓÚ´Ë¶î¶ÈµÄÎ¢µ÷²»½»Ò×£¬Ê¡Ä¦²Á£©
+MAX_SINGLE_ORDER_YUAN = 50000.0    # µ¥±ÊÎ¯ÍĞ½ğ¶îÉÏÏŞ£¨³¬¹ıÊ±×Ô¶¯²ğµ¥£©
+REBALANCE_TIME_HHMM = 935          # Ã¿ÈÕÖ÷µ÷²Ö´¥·¢Ê±¼ä£¨09:35£¬±Ü¿ª¼¯ºÏ¾º¼Û¾çÁÒ»¬µã£©
+BUY_SLIPPAGE_PCT = 0.002           # ÂòÈë±£»¤ÏŞ¼ÛÉÏ¸¡ +0.2%
+SELL_SLIPPAGE_PCT = 0.002          # Âô³ö±£»¤ÏŞ¼ÛÏÂ¸¡ -0.2%
+ONLY_MANAGE_ETF_UNIVERSE = True    # ½ö¹ÜÀíÏÂ·½ 14 Ö» AR3 ETF£¬¾ø²»Âô³öÕË»§ÖĞÆäËû¸ö¹É
 
-# AR2_2A æç«¯å†°ç‚¹åæŠ½å‚æ•°ï¼ˆä¸ AiStock å®è¯å‚æ•°ä¸€è‡´ï¼‰
-PANIC_BREADTH_THRESHOLD_PCT = 18.0 # å¸‚åœºç«™ä¸Š MA20 å®½åº¦ <= 18% è¿›å…¥å†°ç‚¹æˆ’å¤‡
-PANIC_PAIR_REVERSAL_PCT = 0.50     # åˆ›ä¸šæ¿æŒ‡ + ä¸­è¯1000 å½“æ—¥å‡æ¶¨ >= +0.50% ç¡®è®¤å³ä¾§åæŠ½
-PANIC_STOP_LOSS_PCT = -6.0         # åæŠ½ä»“ä½ç¡¬æ­¢æŸ -6%
-PANIC_TAKE_PROFIT_PCT = 12.0       # åæŠ½ä»“ä½æ­¢ç›ˆ +12%
-PANIC_MAX_HOLD_DAYS = 5            # åæŠ½ä»“ä½æœ€é•¿æŒæœ‰ 5 ä¸ªäº¤æ˜“æ—¥
+# AR2_2A ¼«¶Ë±ùµã·´³é²ÎÊı£¨Óë AiStock ÊµÖ¤²ÎÊıÒ»ÖÂ£©
+PANIC_BREADTH_THRESHOLD_PCT = 18.0 # ÊĞ³¡Õ¾ÉÏ MA20 ¿í¶È <= 18% ½øÈë±ùµã½ä±¸
+PANIC_PAIR_REVERSAL_PCT = 0.50     # ´´Òµ°åÖ¸ + ÖĞÖ¤1000 µ±ÈÕ¾ùÕÇ >= +0.50% È·ÈÏÓÒ²à·´³é
+PANIC_STOP_LOSS_PCT = -6.0         # ·´³é²ÖÎ»Ó²Ö¹Ëğ -6%
+PANIC_TAKE_PROFIT_PCT = 12.0       # ·´³é²ÖÎ»Ö¹Ó¯ +12%
+PANIC_MAX_HOLD_DAYS = 5            # ·´³é²ÖÎ»×î³¤³ÖÓĞ 5 ¸ö½»Ò×ÈÕ
 
 # =============================================================================
-# äºŒã€AR3 v3.0 14 åªè·¨èµ„äº§ ETF æ ‡çš„æ± ï¼ˆä¸ ClickHouse stock.etf_kline_daily 100% åŒæ­¥ï¼‰
+# ¶ş¡¢AR3 v3.0 14 Ö»¿ç×Ê²ú ETF ±êµÄ³Ø£¨Óë ClickHouse stock.etf_kline_daily 100% Í¬²½£©
 # =============================================================================
 SAFE_BOND_CODE = "511260.SH"
-INDEX_SH = "000001.SH"             # ä¸Šè¯æŒ‡æ•°ï¼ˆAR3 å¤§ç›˜äº”æ€æ‹©æ—¶é”šï¼‰
-INDEX_CYB = "399006.SZ"            # åˆ›ä¸šæ¿æŒ‡ï¼ˆAR2_2A å³ä¾§åæŠ½é”š 1ï¼‰
-INDEX_ZZ1000 = "000852.SH"         # ä¸­è¯1000ï¼ˆAR2_2A å³ä¾§åæŠ½é”š 2ï¼‰
-PANIC_ETF_CYB = "159915.SZ"        # åˆ›ä¸šæ¿ETF
-PANIC_ETF_ZZ1000 = "512100.SH"     # ä¸­è¯1000ETF
+INDEX_SH = "000001.SH"             # ÉÏÖ¤Ö¸Êı£¨AR3 ´óÅÌÎåÌ¬ÔñÊ±Ãª£©
+INDEX_CYB = "399006.SZ"            # ´´Òµ°åÖ¸£¨AR2_2A ÓÒ²à·´³éÃª 1£©
+INDEX_ZZ1000 = "000852.SH"         # ÖĞÖ¤1000£¨AR2_2A ÓÒ²à·´³éÃª 2£©
+PANIC_ETF_CYB = "159915.SZ"        # ´´Òµ°åETF
+PANIC_ETF_ZZ1000 = "512100.SH"     # ÖĞÖ¤1000ETF
 
-# æ ¼å¼: (QMTä»£ç , åç§°, èµ„äº§ç±»åˆ«)
-# ç±»åˆ«è¯´æ˜: cn_broad=Aè‚¡å®½åŸº, cn_dividend=Aè‚¡çº¢åˆ©, gold=é»„é‡‘, overseas=è·¨å¢ƒQDII, bond=åˆ©ç‡å€º
+# ¸ñÊ½: (QMT´úÂë, Ãû³Æ, ×Ê²úÀà±ğ)
+# Àà±ğËµÃ÷: cn_broad=A¹É¿í»ù, cn_dividend=A¹ÉºìÀû, gold=»Æ½ğ, overseas=¿ç¾³QDII, bond=ÀûÂÊÕ®
 ETF_UNIVERSE = [
-    ("510300.SH", "æ²ªæ·±300ETF",   "cn_broad"),
-    ("510500.SH", "ä¸­è¯500ETF",   "cn_broad"),
-    ("512100.SH", "ä¸­è¯1000ETF",  "cn_broad"),
-    ("159915.SZ", "åˆ›ä¸šæ¿ETF",    "cn_broad"),
-    ("588000.SH", "ç§‘åˆ›50ETF",    "cn_broad"),
-    ("510880.SH", "çº¢åˆ©ETF",      "cn_dividend"),
-    ("512890.SH", "çº¢åˆ©ä½æ³¢ETF",  "cn_dividend"),
-    ("518880.SH", "é»„é‡‘ETF",      "gold"),
-    ("513100.SH", "çº³æŒ‡ETF",      "overseas"),
-    ("513500.SH", "æ ‡æ™®500ETF",   "overseas"),
-    ("513180.SH", "æ’ç”Ÿç§‘æŠ€ETF",  "overseas"),
-    ("513050.SH", "ä¸­æ¦‚äº’è”ETF",  "overseas"),
-    ("511260.SH", "åå¹´å›½å€ºETF",  "bond"),
-    ("511090.SH", "30å¹´å›½å€ºETF",  "bond"),
+    ("510300.SH", "»¦Éî300ETF",   "cn_broad"),
+    ("510500.SH", "ÖĞÖ¤500ETF",   "cn_broad"),
+    ("512100.SH", "ÖĞÖ¤1000ETF",  "cn_broad"),
+    ("159915.SZ", "´´Òµ°åETF",    "cn_broad"),
+    ("588000.SH", "¿Æ´´50ETF",    "cn_broad"),
+    ("510880.SH", "ºìÀûETF",      "cn_dividend"),
+    ("512890.SH", "ºìÀûµÍ²¨ETF",  "cn_dividend"),
+    ("518880.SH", "»Æ½ğETF",      "gold"),
+    ("513100.SH", "ÄÉÖ¸ETF",      "overseas"),
+    ("513500.SH", "±êÆÕ500ETF",   "overseas"),
+    ("513180.SH", "ºãÉú¿Æ¼¼ETF",  "overseas"),
+    ("513050.SH", "ÖĞ¸Å»¥ÁªETF",  "overseas"),
+    ("511260.SH", "Ê®Äê¹úÕ®ETF",  "bond"),
+    ("511090.SH", "30Äê¹úÕ®ETF",  "bond"),
 ]
 
 ETF_CODES = [item[0] for item in ETF_UNIVERSE]
@@ -87,10 +87,10 @@ ALL_WATCH_CODES = ETF_CODES + [INDEX_SH, INDEX_CYB, INDEX_ZZ1000]
 
 
 # =============================================================================
-# ä¸‰ã€æ ¸å¿ƒç®—æ³•çº¯å‡½æ•°ï¼ˆé›¶å¤–éƒ¨ä¾èµ–ï¼Œå¯ç‹¬ç«‹ç¦»çº¿å•å…ƒæµ‹è¯•ï¼‰
+# Èı¡¢ºËĞÄËã·¨´¿º¯Êı£¨ÁãÍâ²¿ÒÀÀµ£¬¿É¶ÀÁ¢ÀëÏßµ¥Ôª²âÊÔ£©
 # =============================================================================
 def _to_float_list(seq):
-    """å®‰å…¨æå–æœ‰æ•ˆæµ®ç‚¹æ”¶ç›˜ä»·åºåˆ—ï¼Œå‰”é™¤ NaN / <=0ã€‚"""
+    """°²È«ÌáÈ¡ÓĞĞ§¸¡µãÊÕÅÌ¼ÛĞòÁĞ£¬ÌŞ³ı NaN / <=0¡£"""
     out = []
     if seq is None:
         return out
@@ -106,20 +106,20 @@ def _to_float_list(seq):
 
 def classify_sh_regime(sh_closes, breadth_pct=50.0, confirm_days=2):
     """
-    è®¡ç®—ä¸Šè¯æŒ‡æ•° AR3 å¤åˆäº”æ€ï¼ˆä¸ AiStock äº”æ€æ‹©æ—¶å£å¾„ä¸¥æ ¼ä¸€è‡´ï¼‰ï¼š
-      - åŸå§‹æ—¥æ€ï¼š
-          close > ma20 ä¸” ma20 > ma60 ä¸” mom60 > 0  -> up
-          close < ma20 ä¸” (close < ma60 æˆ– mom60 < 0) -> down
-          å…¶ä½™ -> sideways
-      - è¿ç»­ confirm_days=2 æ—¥ç¡®è®¤åæ‰åˆ‡æ¢ confirmed_regimeï¼Œé˜²æ­¢å•æ—¥å™ªå£°åå¤æ‰“è„¸
-      - ç»“åˆå¸‚åœºç«™ä¸Š MA20 å®½åº¦ breadth_pct <= 18% å‡çº§ä¸º extreme_panic
-    è¿”å› dict: {regime, regime_label, is_offensive, confirmed_regime, streak_days, mom60_pct, breadth_pct}
+    ¼ÆËãÉÏÖ¤Ö¸Êı AR3 ¸´ºÏÎåÌ¬£¨Óë AiStock ÎåÌ¬ÔñÊ±¿Ú¾¶ÑÏ¸ñÒ»ÖÂ£©£º
+      - Ô­Ê¼ÈÕÌ¬£º
+          close > ma20 ÇÒ ma20 > ma60 ÇÒ mom60 > 0  -> up
+          close < ma20 ÇÒ (close < ma60 »ò mom60 < 0) -> down
+          ÆäÓà -> sideways
+      - Á¬Ğø confirm_days=2 ÈÕÈ·ÈÏºó²ÅÇĞ»» confirmed_regime£¬·ÀÖ¹µ¥ÈÕÔëÉù·´¸´´òÁ³
+      - ½áºÏÊĞ³¡Õ¾ÉÏ MA20 ¿í¶È breadth_pct <= 18% Éı¼¶Îª extreme_panic
+    ·µ»Ø dict: {regime, regime_label, is_offensive, confirmed_regime, streak_days, mom60_pct, breadth_pct}
     """
     closes = _to_float_list(sh_closes)
     if len(closes) < 65:
         return {
             "regime": "defensive",
-            "regime_label": "é˜²å®ˆæ¨¡å¼(å†å²Kçº¿ä¸è¶³å®‰å…¨é™çº§)",
+            "regime_label": "·ÀÊØÄ£Ê½(ÀúÊ·KÏß²»×ã°²È«½µ¼¶)",
             "is_offensive": False,
             "confirmed_regime": "down",
             "streak_days": 0,
@@ -141,7 +141,7 @@ def classify_sh_regime(sh_closes, breadth_pct=50.0, confirm_days=2):
         else:
             raw_states.append("sideways")
 
-    # è¿ç»­ N=2 ç¡®è®¤é˜²æŠ–
+    # Á¬Ğø N=2 È·ÈÏ·À¶¶
     confirmed = raw_states[0]
     pending = None
     pending_cnt = 0
@@ -169,20 +169,20 @@ def classify_sh_regime(sh_closes, breadth_pct=50.0, confirm_days=2):
     if confirmed == "up":
         if b_pct >= 72.0 and mom60_pct >= 12.0:
             regime = "extreme_offensive"
-            label = "ä¸»å‡è¿›æ”»Â·é«˜çƒ­"
+            label = "Ö÷Éı½ø¹¥ - ¸ßÈÈ"
         else:
             regime = "offensive"
-            label = "è¿›æ”»æ¨¡å¼"
+            label = "½ø¹¥Ä£Ê½"
     elif confirmed == "sideways":
         regime = "balanced"
-        label = "å¹³è¡¡éœ‡è¡"
+        label = "Æ½ºâÕğµ´"
     else:
         if b_pct <= PANIC_BREADTH_THRESHOLD_PCT:
             regime = "extreme_panic"
-            label = "æç«¯é˜²å®ˆÂ·ææ…Œå†°ç‚¹"
+            label = "¼«¶Ë·ÀÊØ - ¿Ö»Å±ùµã"
         else:
             regime = "defensive"
-            label = "é˜²å®ˆæ¨¡å¼"
+            label = "·ÀÊØÄ£Ê½"
 
     return {
         "regime": regime,
@@ -197,8 +197,8 @@ def classify_sh_regime(sh_closes, breadth_pct=50.0, confirm_days=2):
 
 def compute_etf_metrics(close_map):
     """
-    è®¡ç®— 14 åªè·¨èµ„äº§ ETF çš„ 1æ—¥/20æ—¥åŠ¨é‡ã€MA20ã€å¹´åŒ–æ³¢åŠ¨ç‡ä¸é£é™©è°ƒæ•´åŠ¨é‡ã€‚
-    close_map: {code: [close_0, ..., close_t]}ï¼ˆä½¿ç”¨å‰å¤æƒæ—¥æ”¶ç›˜åºåˆ—ï¼‰
+    ¼ÆËã 14 Ö»¿ç×Ê²ú ETF µÄ 1ÈÕ/20ÈÕ¶¯Á¿¡¢MA20¡¢Äê»¯²¨¶¯ÂÊÓë·çÏÕµ÷Õû¶¯Á¿¡£
+    close_map: {code: [close_0, ..., close_t]}£¨Ê¹ÓÃÇ°¸´È¨ÈÕÊÕÅÌĞòÁĞ£©
     """
     rows = []
     for code, name, asset_class in ETF_UNIVERSE:
@@ -234,9 +234,9 @@ def compute_etf_metrics(close_map):
 
 def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
     """
-    AR3 #01ï¼ˆAR3_9_RegimeFocus_Top1 + AR2_2A å†°ç‚¹åæŠ½ï¼‰ç›®æ ‡æƒé‡å†³ç­–å™¨ã€‚
-    è¿”å›: (target_weights_dict, headline_str)
-      target_weights_dict: {code: weight_0_to_1}ï¼ˆæ€»å’Œ = 1.0ï¼‰
+    AR3 #01£¨AR3_9_RegimeFocus_Top1 + AR2_2A ±ùµã·´³é£©Ä¿±êÈ¨ÖØ¾ö²ßÆ÷¡£
+    ·µ»Ø: (target_weights_dict, headline_str)
+      target_weights_dict: {code: weight_0_to_1}£¨×ÜºÍ = 1.0£©
     """
     def _pick_top(pool, key, k):
         cands = [x for x in pool if x["eligible"]]
@@ -246,7 +246,7 @@ def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
     cn_broad = [x for x in etf_rows if x["asset_class"] == "cn_broad"]
     non_cn = [x for x in etf_rows if x["asset_class"] != "cn_broad"]
 
-    # 1. æç«¯å†°ç‚¹å³ä¾§åæŠ½æ¥ç®¡ï¼š30% åˆ›ä¸šæ¿ + 30% ä¸­è¯1000 + 40% éAè‚¡é£é™©è°ƒæ•´åŠ¨é‡ Top1
+    # 1. ¼«¶Ë±ùµãÓÒ²à·´³é½Ó¹Ü£º30% ´´Òµ°å + 30% ÖĞÖ¤1000 + 40% ·ÇA¹É·çÏÕµ÷Õû¶¯Á¿ Top1
     if panic_active:
         safe_top = _pick_top(non_cn, "risk_adj_mom", 1)
         safe_code = safe_top[0]["code"] if safe_top else SAFE_BOND_CODE
@@ -255,35 +255,35 @@ def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
             PANIC_ETF_ZZ1000: 0.30,
             safe_code: 0.40,
         }
-        headline = "AR2_2A å†°ç‚¹å³ä¾§åæŠ½ç”Ÿæ•ˆï¼š30%% åˆ›ä¸šæ¿ETF + 30%% ä¸­è¯1000ETF + 40%% %s" % ETF_NAME_MAP.get(safe_code, safe_code)
+        headline = "AR2_2A ±ùµãÓÒ²à·´³éÉúĞ§£º30%% ´´Òµ°åETF + 30%% ÖĞÖ¤1000ETF + 40%% %s" % ETF_NAME_MAP.get(safe_code, safe_code)
         return targets, headline
 
-    # 2. è¿›æ”»æœŸï¼šä¼˜å…ˆé… A è‚¡å¼ºåŠ¿å®½åŸº 20 æ—¥åŠ¨é‡ Top2
+    # 2. ½ø¹¥ÆÚ£ºÓÅÏÈÅä A ¹ÉÇ¿ÊÆ¿í»ù 20 ÈÕ¶¯Á¿ Top2
     if regime_info.get("is_offensive"):
         top_cn = _pick_top(cn_broad, "ret_20d_pct", 2)
         if top_cn:
             w = 1.0 / float(len(top_cn))
             targets = dict((x["code"], w) for x in top_cn)
             names = " + ".join(["%s(%.1f%%)" % (x["name"], x["ret_20d_pct"]) for x in top_cn])
-            headline = "è¿›æ”»æœŸ #01 å®½åŸºåŠ¨é‡ Top%dï¼š%s" % (len(top_cn), names)
+            headline = "½ø¹¥ÆÚ #01 ¿í»ù¶¯Á¿ Top%d£º%s" % (len(top_cn), names)
             return targets, headline
 
-        # è‹¥ A è‚¡å®½åŸºæš‚æœªç«™ä¸Šè¶‹åŠ¿ï¼Œåˆ‡é A è‚¡æœ€å¼ºå•æ ¸
+        # Èô A ¹É¿í»ùÔİÎ´Õ¾ÉÏÇ÷ÊÆ£¬ÇĞ·Ç A ¹É×îÇ¿µ¥ºË
         top_non = _pick_top(non_cn, "ret_20d_pct", 1)
         code = top_non[0]["code"] if top_non else SAFE_BOND_CODE
-        headline = "è¿›æ”»æœŸä½†Aè‚¡å®½åŸºæœªè¾¾æ ‡ -> æš‚åˆ‡éAè‚¡æœ€å¼º %s" % ETF_NAME_MAP.get(code, code)
+        headline = "½ø¹¥ÆÚµ«A¹É¿í»ùÎ´´ï±ê -> ÔİÇĞ·ÇA¹É×îÇ¿ %s" % ETF_NAME_MAP.get(code, code)
         return {code: 1.0}, headline
 
-    # 3. å¹³è¡¡ / é˜²å®ˆ / å†°ç‚¹æœªä¼ç¨³ï¼š100% èšç„¦é A è‚¡è·¨èµ„äº§ 20 æ—¥çº¯åŠ¨é‡ Top1
+    # 3. Æ½ºâ / ·ÀÊØ / ±ùµãÎ´ÆóÎÈ£º100% ¾Û½¹·Ç A ¹É¿ç×Ê²ú 20 ÈÕ´¿¶¯Á¿ Top1
     top_non = _pick_top(non_cn, "ret_20d_pct", 1)
     if top_non:
         winner = top_non[0]
-        headline = "éè¿›æ”»æœŸ(%s) -> 100%% åˆ‡å…¥éAè‚¡æœ€å¼ºå•æ ¸ï¼š%s(%s, 20d %+.2f%%)" % (
+        headline = "·Ç½ø¹¥ÆÚ(%s) -> 100%% ÇĞÈë·ÇA¹É×îÇ¿µ¥ºË£º%s(%s, 20d %+.2f%%)" % (
             regime_info.get("regime_label", ""), winner["name"], winner["code"], winner["ret_20d_pct"]
         )
         return {winner["code"]: 1.0}, headline
 
-    headline = "éè¿›æ”»æœŸä¸”å…¨çƒèµ„äº§å…¨ç ´ MA20 -> 100%% è½¬å…¥åå¹´å›½å€ºETF(%s)é¿é™©" % SAFE_BOND_CODE
+    headline = "·Ç½ø¹¥ÆÚÇÒÈ«Çò×Ê²úÈ«ÆÆ MA20 -> 100%% ×ªÈëÊ®Äê¹úÕ®ETF(%s)±ÜÏÕ" % SAFE_BOND_CODE
     return {SAFE_BOND_CODE: 1.0}, headline
 
 
@@ -298,9 +298,9 @@ def build_rebalance_orders(
     only_manage_etf=ONLY_MANAGE_ETF_UNIVERSE,
 ):
     """
-    è®¡ç®—ç²¾ç¡®ã€Œå…ˆå–åä¹°ã€100 è‚¡æ•´æ‰‹è°ƒä»“æŒ‡ä»¤å•ã€‚
+    ¼ÆËã¾«È·¡¸ÏÈÂôºóÂò¡¹100 ¹ÉÕûÊÖµ÷²ÖÖ¸Áîµ¥¡£
     holdings: {code: {"volume": int, "can_use": int, "open_price": float, "market_value": float}}
-    è¿”å›: (sell_orders, buy_orders)
+    ·µ»Ø: (sell_orders, buy_orders)
     """
     sell_orders = []
     buy_orders = []
@@ -310,7 +310,7 @@ def build_rebalance_orders(
     investable_assets = float(total_assets) * float(invest_ratio)
     managed_set = set(ETF_CODES) if only_manage_etf else set(list(holdings.keys()) + list(target_weights.keys()))
 
-    # ç¬¬ä¸€æ­¥ï¼šè®¡ç®—æ‰€æœ‰éœ€è¦å–å‡ºæˆ–å‡ä»“çš„æ ‡çš„ï¼ˆä¸¥æ ¼æŒ‰å¯ç”¨è‚¡æ•° can_useï¼‰
+    # µÚÒ»²½£º¼ÆËãËùÓĞĞèÒªÂô³ö»ò¼õ²ÖµÄ±êµÄ£¨ÑÏ¸ñ°´¿ÉÓÃ¹ÉÊı can_use£©
     for code, pos in holdings.items():
         if only_manage_etf and code not in managed_set:
             continue
@@ -325,7 +325,7 @@ def build_rebalance_orders(
         cur_yuan = cur_vol * px
 
         if tgt_w <= 0.0:
-            # éç›®æ ‡æ ‡çš„ï¼šå…¨éƒ¨æ¸…ä»“å¯ç”¨è‚¡æ•°ï¼ˆæŒ‰ 100 è‚¡å‘ä¸‹å–æ•´ï¼‰
+            # ·ÇÄ¿±ê±êµÄ£ºÈ«²¿Çå²Ö¿ÉÓÃ¹ÉÊı£¨°´ 100 ¹ÉÏòÏÂÈ¡Õû£©
             sell_vol = (can_use // 100) * 100
             if sell_vol >= 100:
                 sell_orders.append({
@@ -336,7 +336,7 @@ def build_rebalance_orders(
                     "ref_price": round(px, 3),
                     "limit_price": round(px * (1.0 - SELL_SLIPPAGE_PCT), 3),
                     "est_yuan": round(sell_vol * px, 2),
-                    "reason": "éç›®æ ‡ETFæ¸…é€€",
+                    "reason": "·ÇÄ¿±êETFÇåÍË",
                 })
         elif cur_yuan - tgt_yuan >= min_diff_yuan:
             diff_vol = int((cur_yuan - tgt_yuan) / px / 100.0) * 100
@@ -350,10 +350,10 @@ def build_rebalance_orders(
                     "ref_price": round(px, 3),
                     "limit_price": round(px * (1.0 - SELL_SLIPPAGE_PCT), 3),
                     "est_yuan": round(sell_vol * px, 2),
-                    "reason": "è¶…é…å‡ä»“è‡³ç›®æ ‡æƒé‡ %.0f%%" % (tgt_w * 100.0),
+                    "reason": "³¬Åä¼õ²ÖÖÁÄ¿±êÈ¨ÖØ %.0f%%" % (tgt_w * 100.0),
                 })
 
-    # ç¬¬äºŒæ­¥ï¼šæŒ‰å½“å‰çœŸå®å¯ç”¨ç°é‡‘è®¡ç®—ä¹°å…¥æŒ‡ä»¤ï¼ˆè‹¥æœ‰å–å•å¾…æˆäº¤ï¼Œæœ¬è½®åªç”¨ç°æœ‰å¯ç”¨ç°é‡‘ï¼Œå–åä¸‹è½®å†ä¹°å‰©ä½™ï¼‰
+    # µÚ¶ş²½£º°´µ±Ç°ÕæÊµ¿ÉÓÃÏÖ½ğ¼ÆËãÂòÈëÖ¸Áî£¨ÈôÓĞÂôµ¥´ı³É½»£¬±¾ÂÖÖ»ÓÃÏÖÓĞ¿ÉÓÃÏÖ½ğ£¬ÂôºóÏÂÂÖÔÙÂòÊ£Óà£©
     cash_left = max(0.0, float(available_cash) * 0.995)
     for code, tgt_w in sorted(target_weights.items(), key=lambda kv: kv[1], reverse=True):
         if tgt_w <= 0.0:
@@ -368,7 +368,7 @@ def build_rebalance_orders(
         if need_yuan < min_diff_yuan:
             continue
 
-        # æœ¬è½®å®é™…èƒ½ä¹°é‡‘é¢å—å½“å‰å¯ç”¨ç°é‡‘çº¦æŸ
+        # ±¾ÂÖÊµ¼ÊÄÜÂò½ğ¶îÊÜµ±Ç°¿ÉÓÃÏÖ½ğÔ¼Êø
         limit_px = round(px * (1.0 + BUY_SLIPPAGE_PCT), 3)
         alloc_yuan = min(need_yuan, cash_left)
         buy_vol = int(alloc_yuan / limit_px / 100.0) * 100
@@ -383,17 +383,17 @@ def build_rebalance_orders(
                 "ref_price": round(px, 3),
                 "limit_price": limit_px,
                 "est_yuan": est,
-                "reason": "æŒ‰ç›®æ ‡æƒé‡ %.0f%% å»ºä»“/è¡¥è¶³" % (tgt_w * 100.0),
+                "reason": "°´Ä¿±êÈ¨ÖØ %.0f%% ½¨²Ö/²¹×ã" % (tgt_w * 100.0),
             })
 
     return sell_orders, buy_orders
 
 
 # =============================================================================
-# å››ã€QMT åŸç”Ÿè¡Œæƒ…è¯»å–ã€è´¦æˆ·è¯»å–ä¸åˆè§„ä¸‹å•å°è£…ï¼ˆé›¶æ–‡ä»¶ IOã€é›¶ç½‘ç»œå¤–è¿ï¼‰
+# ËÄ¡¢QMT Ô­ÉúĞĞÇé¶ÁÈ¡¡¢ÕË»§¶ÁÈ¡ÓëºÏ¹æÏÂµ¥·â×°£¨ÁãÎÄ¼ş IO¡¢ÁãÍøÂçÍâÁ¬£©
 # =============================================================================
 def _get_active_account(ContextInfo):
-    """ä¼˜å…ˆä½¿ç”¨æ¨¡å‹äº¤æ˜“ç•Œé¢ç»‘å®šçš„å…¨å±€ account å˜é‡ï¼Œå¦åˆ™å›é€€é¡¶éƒ¨ ACCOUNT_IDã€‚"""
+    """ÓÅÏÈÊ¹ÓÃÄ£ĞÍ½»Ò×½çÃæ°ó¶¨µÄÈ«¾Ö account ±äÁ¿£¬·ñÔò»ØÍË¶¥²¿ ACCOUNT_ID¡£"""
     try:
         bound = globals().get("account")
         if bound and str(bound).strip():
@@ -405,11 +405,11 @@ def _get_active_account(ContextInfo):
 
 def _estimate_hs300_breadth(ContextInfo):
     """
-    ç”¨æ²ªæ·± 300 æˆåˆ†è‚¡ç«™ä¸Š MA20 çš„æ¯”ä¾‹ä¼°ç®—å…¨å¸‚åœºå®½åº¦ï¼ˆæœ¬åœ°çº¯å†…å­˜è®¡ç®—ï¼Œè€—æ—¶ <0.3 ç§’ï¼‰ã€‚
-    è‹¥æˆåˆ†è‚¡æ•°æ®æš‚ç¼ºï¼Œè‡ªåŠ¨å›é€€ç”¨ 5 åª A è‚¡å®½åŸº ETF ç«™ä¸Š MA20 æ¯”ä¾‹ã€‚
+    ÓÃ»¦Éî 300 ³É·Ö¹ÉÕ¾ÉÏ MA20 µÄ±ÈÀı¹ÀËãÈ«ÊĞ³¡¿í¶È£¨±¾µØ´¿ÄÚ´æ¼ÆËã£¬ºÄÊ± <0.3 Ãë£©¡£
+    Èô³É·Ö¹ÉÊı¾İÔİÈ±£¬×Ô¶¯»ØÍËÓÃ 5 Ö» A ¹É¿í»ù ETF Õ¾ÉÏ MA20 ±ÈÀı¡£
     """
     try:
-        members = ContextInfo.get_stock_list_in_sector("æ²ªæ·±300")
+        members = ContextInfo.get_stock_list_in_sector("»¦Éî300")
         if members and len(members) >= 50:
             md = ContextInfo.get_market_data_ex(
                 ["close"],
@@ -435,12 +435,12 @@ def _estimate_hs300_breadth(ContextInfo):
             if valid >= 50:
                 return round(100.0 * above / float(valid), 2)
     except Exception as exc:
-        print("[AR3-QMT][WARN] æ²ªæ·±300å®½åº¦è®¡ç®—å¼‚å¸¸ï¼Œä½¿ç”¨å®½åŸºETFå›é€€: %s" % exc)
+        print("[AR3-QMT][WARN] »¦Éî300¿í¶È¼ÆËãÒì³££¬Ê¹ÓÃ¿í»ùETF»ØÍË: %s" % exc)
     return 50.0
 
 
 def _fetch_daily_closes(ContextInfo, codes, count=90):
-    """é€šè¿‡ QMT åŸç”Ÿ get_market_data_ex è¯»å–å‰å¤æƒæ—¥çº¿æ”¶ç›˜ä»·ï¼ˆé›¶å¤–éƒ¨ç½‘ç»œè¯·æ±‚ï¼‰ã€‚"""
+    """Í¨¹ı QMT Ô­Éú get_market_data_ex ¶ÁÈ¡Ç°¸´È¨ÈÕÏßÊÕÅÌ¼Û£¨ÁãÍâ²¿ÍøÂçÇëÇó£©¡£"""
     md = ContextInfo.get_market_data_ex(
         ["close"],
         stock_code=codes,
@@ -461,7 +461,7 @@ def _fetch_daily_closes(ContextInfo, codes, count=90):
 
 
 def _fetch_realtime_prices(ContextInfo, codes, fallback_close_map):
-    """é€šè¿‡ QMT åŸç”Ÿ get_full_tick è·å–æœ€æ–°ä»·ï¼Œç›˜å/ä¼‘å¸‚è‡ªåŠ¨å›é€€æœ€è¿‘æ—¥æ”¶ç›˜ä»·ã€‚"""
+    """Í¨¹ı QMT Ô­Éú get_full_tick »ñÈ¡×îĞÂ¼Û£¬ÅÌºó/ĞİÊĞ×Ô¶¯»ØÍË×î½üÈÕÊÕÅÌ¼Û¡£"""
     prices = {}
     ticks = {}
     try:
@@ -490,7 +490,7 @@ def _fetch_realtime_prices(ContextInfo, codes, fallback_close_map):
 
 
 def _check_panic_intraday_reversal(ticks, fallback_close_map):
-    """æ£€æŸ¥ AR2_2A å†°ç‚¹å³ä¾§ç¡®è®¤æ¡ä»¶ï¼šåˆ›ä¸šæ¿æŒ‡ + ä¸­è¯1000 å½“æ—¥å‡æ¶¨ >= +0.50%ã€‚"""
+    """¼ì²é AR2_2A ±ùµãÓÒ²àÈ·ÈÏÌõ¼ş£º´´Òµ°åÖ¸ + ÖĞÖ¤1000 µ±ÈÕ¾ùÕÇ >= +0.50%¡£"""
     changes = []
     for idx_code in (INDEX_CYB, INDEX_ZZ1000):
         tk = ticks.get(idx_code) if isinstance(ticks, dict) else None
@@ -516,7 +516,7 @@ def _check_panic_intraday_reversal(ticks, fallback_close_map):
 
 
 def _read_account_and_holdings(account_id):
-    """é€šè¿‡ QMT åŸç”Ÿ get_trade_detail_data è¯»å–çœŸå®èµ„é‡‘ä¸æŒä»“ã€‚"""
+    """Í¨¹ı QMT Ô­Éú get_trade_detail_data ¶ÁÈ¡ÕæÊµ×Ê½ğÓë³Ö²Ö¡£"""
     total_assets = 0.0
     available_cash = 0.0
     holdings = {}
@@ -528,7 +528,7 @@ def _read_account_and_holdings(account_id):
             total_assets = float(getattr(a, "m_dBalance", 0.0) or 0.0)
             available_cash = float(getattr(a, "m_dAvailable", 0.0) or 0.0)
     except Exception as exc:
-        print("[AR3-QMT][WARN] è¯»å–è´¦æˆ·èµ„é‡‘å¤±è´¥(%s): %s" % (account_id, exc))
+        print("[AR3-QMT][WARN] ¶ÁÈ¡ÕË»§×Ê½ğÊ§°Ü(%s): %s" % (account_id, exc))
 
     try:
         positions = get_trade_detail_data(account_id, "STOCK", "POSITION") or []
@@ -544,20 +544,20 @@ def _read_account_and_holdings(account_id):
                 "market_value": float(getattr(p, "m_dMarketValue", 0.0) or 0.0),
             }
     except Exception as exc:
-        print("[AR3-QMT][WARN] è¯»å–è´¦æˆ·æŒä»“å¤±è´¥(%s): %s" % (account_id, exc))
+        print("[AR3-QMT][WARN] ¶ÁÈ¡ÕË»§³Ö²ÖÊ§°Ü(%s): %s" % (account_id, exc))
 
     return total_assets, available_cash, holdings
 
 
 def _submit_order_safely(ContextInfo, account_id, order):
-    """åˆè§„ä¸‹å•å°è£…ï¼šé»˜è®¤ DRY_RUN ä»…æ‰“å°ï¼›å®ç›˜æ—¶è‡ªåŠ¨æŒ‰å•ç¬”é‡‘é¢ä¸Šé™æ‹†å•è°ƒç”¨åŸç”Ÿ passorderã€‚"""
+    """ºÏ¹æÏÂµ¥·â×°£ºÄ¬ÈÏ DRY_RUN ½ö´òÓ¡£»ÊµÅÌÊ±×Ô¶¯°´µ¥±Ê½ğ¶îÉÏÏŞ²ğµ¥µ÷ÓÃÔ­Éú passorder¡£"""
     code = order["code"]
     side = order["side"]
     total_vol = int(order["volume"])
     limit_px = round(float(order["limit_price"]), 3)
     op_type = 23 if side == "BUY" else 24
 
-    # å•ç¬”ä¸Šé™æ‹†å•ä¿æŠ¤
+    # µ¥±ÊÉÏÏŞ²ğµ¥±£»¤
     max_shares_per_leg = max(100, int(MAX_SINGLE_ORDER_YUAN / max(limit_px, 0.01) / 100.0) * 100)
     remain = total_vol
     leg_idx = 0
@@ -570,12 +570,12 @@ def _submit_order_safely(ContextInfo, account_id, order):
         tag = "AR3_ETF01_%s_%s" % (side, datetime.datetime.now().strftime("%H%M%S"))
         if DRY_RUN:
             print(
-                "[AR3-QMT][DRY_RUN ä»¿çœŸå• #%d] è´¦å·=%s | %s %s(%s) | %dè‚¡ @ é™ä»·%.3f (çº¦Â¥%.0f) | åŸå› : %s"
+                "[AR3-QMT][DRY_RUN ·ÂÕæµ¥ #%d] ÕËºÅ=%s | %s %s(%s) | %d¹É @ ÏŞ¼Û%.3f (Ô¼RMB %.0f) | Ô­Òò: %s"
                 % (leg_idx, account_id, side, order["name"], code, leg_vol, limit_px, leg_vol * limit_px, order["reason"])
             )
         else:
             print(
-                "[AR3-QMT][LIVE å®ç›˜æŠ¥å• #%d] è´¦å·=%s | %s %s(%s) | %dè‚¡ @ é™ä»·%.3f (çº¦Â¥%.0f) | åŸå› : %s"
+                "[AR3-QMT][LIVE ÊµÅÌ±¨µ¥ #%d] ÕËºÅ=%s | %s %s(%s) | %d¹É @ ÏŞ¼Û%.3f (Ô¼RMB %.0f) | Ô­Òò: %s"
                 % (leg_idx, account_id, side, order["name"], code, leg_vol, limit_px, leg_vol * limit_px, order["reason"])
             )
             passorder(
@@ -595,7 +595,7 @@ def _submit_order_safely(ContextInfo, account_id, order):
 
 
 def _is_in_trading_window(now_dt):
-    """ä»…å…è®¸ A è‚¡è¿ç»­ç«ä»·å®‰å…¨çª—å£æ‰§è¡Œå®ç›˜ä¸‹å•ï¼ˆ09:32~11:28, 13:02~14:55ï¼‰ã€‚"""
+    """½öÔÊĞí A ¹ÉÁ¬Ğø¾º¼Û°²È«´°¿ÚÖ´ĞĞÊµÅÌÏÂµ¥£¨09:32~11:28, 13:02~14:55£©¡£"""
     if now_dt.weekday() >= 5:
         return False
     hhmm = now_dt.hour * 100 + now_dt.minute
@@ -603,58 +603,58 @@ def _is_in_trading_window(now_dt):
 
 
 def _run_ar3_cycle(ContextInfo, trigger_source="timer", allow_trade=False):
-    """æ‰§è¡Œä¸€æ¬¡å®Œæ•´çš„ AR3 #01 ä¿¡å·è¯„ä¼°ã€æ’è¡Œæ‰“å°ä¸ï¼ˆå¯é€‰ï¼‰åˆè§„è°ƒä»“ã€‚"""
+    """Ö´ĞĞÒ»´ÎÍêÕûµÄ AR3 #01 ĞÅºÅÆÀ¹À¡¢ÅÅĞĞ´òÓ¡Óë£¨¿ÉÑ¡£©ºÏ¹æµ÷²Ö¡£"""
     now_dt = datetime.datetime.now()
     today_str = now_dt.strftime("%Y-%m-%d")
     account_id = _get_active_account(ContextInfo)
 
-    # 1. æ‹‰å–è¡Œæƒ… + ä¼°ç®—å®½åº¦ + è®¡ç®—äº”æ€
+    # 1. À­È¡ĞĞÇé + ¹ÀËã¿í¶È + ¼ÆËãÎåÌ¬
     close_map = _fetch_daily_closes(ContextInfo, ALL_WATCH_CODES, count=90)
     price_map, ticks = _fetch_realtime_prices(ContextInfo, ALL_WATCH_CODES, close_map)
     breadth_pct = _estimate_hs300_breadth(ContextInfo)
     regime_info = classify_sh_regime(close_map.get(INDEX_SH, []), breadth_pct=breadth_pct)
     etf_rows = compute_etf_metrics(close_map)
 
-    # 2. æ£€æŸ¥ AR2_2A å†°ç‚¹åæŠ½çŠ¶æ€ï¼ˆå«æŒä»“æ­¢ç›ˆ/æ­¢æŸ/5æ—¥åˆ°æœŸé€€å‡ºæ£€æŸ¥ï¼‰
+    # 2. ¼ì²é AR2_2A ±ùµã·´³é×´Ì¬£¨º¬³Ö²ÖÖ¹Ó¯/Ö¹Ëğ/5ÈÕµ½ÆÚÍË³ö¼ì²é£©
     total_assets, available_cash, holdings = _read_account_and_holdings(account_id)
     panic_active = bool(getattr(ContextInfo, "ar3_panic_active", False))
     panic_entry_date = getattr(ContextInfo, "ar3_panic_entry_date", "")
     panic_hold_days = int(getattr(ContextInfo, "ar3_panic_hold_days", 0))
 
     if panic_active:
-        # æ¯æ—¥è·¨æ—¥ç´¯åŠ æŒæœ‰å¤©æ•°
+        # Ã¿ÈÕ¿çÈÕÀÛ¼Ó³ÖÓĞÌìÊı
         if panic_entry_date and panic_entry_date != today_str and getattr(ContextInfo, "ar3_panic_last_count_date", "") != today_str:
             panic_hold_days += 1
             ContextInfo.ar3_panic_hold_days = panic_hold_days
             ContextInfo.ar3_panic_last_count_date = today_str
 
-        # æ£€æŸ¥åæŠ½ ETFï¼ˆåˆ›ä¸šæ¿/ä¸­è¯1000ï¼‰æ˜¯å¦è§¦åŠ -6% ç¡¬æ­¢æŸã€+12% æ­¢ç›ˆæˆ–æ»¡ 5 æ—¥
+        # ¼ì²é·´³é ETF£¨´´Òµ°å/ÖĞÖ¤1000£©ÊÇ·ñ´¥¼° -6% Ó²Ö¹Ëğ¡¢+12% Ö¹Ó¯»òÂú 5 ÈÕ
         exit_reason = ""
         if panic_hold_days >= PANIC_MAX_HOLD_DAYS:
-            exit_reason = "æ»¡ %d ä¸ªäº¤æ˜“æ—¥åˆ°æœŸé€€å‡º" % PANIC_MAX_HOLD_DAYS
+            exit_reason = "Âú %d ¸ö½»Ò×ÈÕµ½ÆÚÍË³ö" % PANIC_MAX_HOLD_DAYS
         else:
             for p_code in (PANIC_ETF_CYB, PANIC_ETF_ZZ1000):
                 pos = holdings.get(p_code)
                 if pos and pos.get("open_price", 0.0) > 0.0 and price_map.get(p_code, 0.0) > 0.0:
                     pnl_pct = (price_map[p_code] / pos["open_price"] - 1.0) * 100.0
                     if pnl_pct <= PANIC_STOP_LOSS_PCT:
-                        exit_reason = "%s è§¦åŠç¡¬æ­¢æŸ(%.2f%% <= %.1f%%)" % (p_code, pnl_pct, PANIC_STOP_LOSS_PCT)
+                        exit_reason = "%s ´¥¼°Ó²Ö¹Ëğ(%.2f%% <= %.1f%%)" % (p_code, pnl_pct, PANIC_STOP_LOSS_PCT)
                         break
                     if pnl_pct >= PANIC_TAKE_PROFIT_PCT:
-                        exit_reason = "%s è§¦åŠæ­¢ç›ˆ(%.2f%% >= +%.1f%%)" % (p_code, pnl_pct, PANIC_TAKE_PROFIT_PCT)
+                        exit_reason = "%s ´¥¼°Ö¹Ó¯(%.2f%% >= +%.1f%%)" % (p_code, pnl_pct, PANIC_TAKE_PROFIT_PCT)
                         break
         if exit_reason:
-            print("[AR3-QMT][AR2_2A é€€å‡º] %sï¼Œå…³é—­åæŠ½æ€å›å½’ #01 å¸¸è§„é…ç½®" % exit_reason)
+            print("[AR3-QMT][AR2_2A ÍË³ö] %s£¬¹Ø±Õ·´³éÌ¬»Ø¹é #01 ³£¹æÅäÖÃ" % exit_reason)
             panic_active = False
             ContextInfo.ar3_panic_active = False
             ContextInfo.ar3_panic_hold_days = 0
             ContextInfo.ar3_panic_entry_date = ""
     else:
-        # è‹¥å¤„äºæç«¯å†°ç‚¹æ€ï¼Œæ£€æŸ¥å³ä¾§é˜³çº¿ç¡®è®¤
+        # Èô´¦ÓÚ¼«¶Ë±ùµãÌ¬£¬¼ì²éÓÒ²àÑôÏßÈ·ÈÏ
         if regime_info["regime"] == "extreme_panic":
             pair_ok, pair_avg = _check_panic_intraday_reversal(ticks, close_map)
             if pair_ok:
-                print("[AR3-QMT][AR2_2A è§¦å‘!] å†°ç‚¹å®½åº¦=%.1f%% ä¸” åˆ›ä¸šæ¿+ä¸­è¯1000å‡æ¶¨=%+.2f%% >= +%.2f%%"
+                print("[AR3-QMT][AR2_2A ´¥·¢!] ±ùµã¿í¶È=%.1f%% ÇÒ ´´Òµ°å+ÖĞÖ¤1000¾ùÕÇ=%+.2f%% >= +%.2f%%"
                       % (breadth_pct, pair_avg, PANIC_PAIR_REVERSAL_PCT))
                 panic_active = True
                 ContextInfo.ar3_panic_active = True
@@ -662,33 +662,33 @@ def _run_ar3_cycle(ContextInfo, trigger_source="timer", allow_trade=False):
                 ContextInfo.ar3_panic_last_count_date = today_str
                 ContextInfo.ar3_panic_hold_days = 0
 
-    # 3. å†³ç­–ä»Šæ—¥ #01 ç›®æ ‡æƒé‡
+    # 3. ¾ö²ß½ñÈÕ #01 Ä¿±êÈ¨ÖØ
     target_weights, headline = decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=panic_active)
 
-    # 4. æ‰“å°æ¸…æ™°è¯Šæ–­é¢æ¿ï¼ˆé›¶å¤–éƒ¨ä¾èµ–ï¼Œç›´æ¥åœ¨ QMT ç­–ç•¥è¾“å‡ºæ æŸ¥çœ‹ï¼‰
+    # 4. ´òÓ¡ÇåÎúÕï¶ÏÃæ°å£¨ÁãÍâ²¿ÒÀÀµ£¬Ö±½ÓÔÚ QMT ²ßÂÔÊä³öÀ¸²é¿´£©
     print("=" * 78)
-    print("[AR3-QMT #01 æˆ˜æŠ¥] %s | è§¦å‘=%s | æ¨¡å¼=%s | è´¦å·=%s"
-          % (now_dt.strftime("%Y-%m-%d %H:%M:%S"), trigger_source, "DRY_RUNä»¿çœŸ" if DRY_RUN else "LIVEå®ç›˜", account_id))
-    print("  å¤§ç›˜äº”æ€: %s (%s, è¿ç»­%dæ—¥, 60æ—¥åŠ¨é‡ %+.2f%%, æ²ªæ·±300å®½åº¦ %.1f%%)"
+    print("[AR3-QMT #01 Õ½±¨] %s | ´¥·¢=%s | Ä£Ê½=%s | ÕËºÅ=%s"
+          % (now_dt.strftime("%Y-%m-%d %H:%M:%S"), trigger_source, "DRY_RUN·ÂÕæ" if DRY_RUN else "LIVEÊµÅÌ", account_id))
+    print("  ´óÅÌÎåÌ¬: %s (%s, Á¬Ğø%dÈÕ, 60ÈÕ¶¯Á¿ %+.2f%%, »¦Éî300¿í¶È %.1f%%)"
           % (regime_info["regime_label"], regime_info["confirmed_regime"],
              regime_info["streak_days"], regime_info["mom60_pct"], regime_info["breadth_pct"]))
-    print("  æ ¸å¿ƒæŒ‡ä»¤: %s" % headline)
-    print("  è´¦æˆ·æ¦‚å†µ: æ€»èµ„äº§ Â¥%.2f | å¯ç”¨ Â¥%.2f | å½“å‰æŒä»“æ•° %d" % (total_assets, available_cash, len(holdings)))
+    print("  ºËĞÄÖ¸Áî: %s" % headline)
+    print("  ÕË»§¸Å¿ö: ×Ü×Ê²ú RMB %.2f | ¿ÉÓÃ RMB %.2f | µ±Ç°³Ö²ÖÊı %d" % (total_assets, available_cash, len(holdings)))
 
     ranked = sorted(etf_rows, key=lambda x: x["ret_20d_pct"], reverse=True)
-    print("  14åªè·¨èµ„äº§ETF 20æ—¥åŠ¨é‡å‰6å:")
+    print("  14Ö»¿ç×Ê²úETF 20ÈÕ¶¯Á¿Ç°6Ãû:")
     for r in ranked[:6]:
-        flag = "OK" if r["eligible"] else "ç ´è¶‹åŠ¿"
-        print("    - %s %-8s [%s] ç°ä»·=%.3f | 20d=%+6.2f%% | MA20=%.3f | RAM=%+.3f | %s"
+        flag = "OK" if r["eligible"] else "ÆÆÇ÷ÊÆ"
+        print("    - %s %-8s [%s] ÏÖ¼Û=%.3f | 20d=%+6.2f%% | MA20=%.3f | RAM=%+.3f | %s"
               % (r["code"], r["name"], r["asset_class"], r["close"], r["ret_20d_pct"], r["ma20"], r["risk_adj_mom"], flag))
 
-    # 5. è®¡ç®—å…ˆå–åä¹°è°ƒä»“å•ï¼ˆè‹¥è´¦å·å°šæœªå…¥é‡‘ä¸º 0ï¼Œåˆ™æŒ‰ Â¥100,000 ä»¿çœŸå±•ç¤ºæ¼”ç»ƒå•ï¼‰
+    # 5. ¼ÆËãÏÈÂôºóÂòµ÷²Öµ¥£¨ÈôÕËºÅÉĞÎ´Èë½ğÎª 0£¬Ôò°´ RMB 100,000 ·ÂÕæÕ¹Ê¾ÑİÁ·µ¥£©
     sim_mode_assets = total_assets
     sim_mode_cash = available_cash
     if DRY_RUN and total_assets < 1000.0:
         sim_mode_assets = 100000.0
         sim_mode_cash = 100000.0
-        print("  [æç¤º] å½“å‰å›½é‡‘è´¦å·ä½™é¢ä¸º Â¥0ï¼ŒDRY_RUN æŒ‰ Â¥100,000 æ¨¡æ‹Ÿå‡€å€¼æ¼”ç¤ºç²¾å‡†ä¹°å–è‚¡æ•°ï¼š")
+        print("  [ÌáÊ¾] µ±Ç°¹ú½ğÕËºÅÓà¶îÎª RMB 0£¬DRY_RUN °´ RMB 100,000 Ä£Äâ¾»ÖµÑİÊ¾¾«×¼ÂòÂô¹ÉÊı£º")
 
     sell_orders, buy_orders = build_rebalance_orders(
         total_assets=sim_mode_assets,
@@ -699,36 +699,36 @@ def _run_ar3_cycle(ContextInfo, trigger_source="timer", allow_trade=False):
     )
 
     if not sell_orders and not buy_orders:
-        print("  è°ƒä»“ç»“è®º: å½“å‰æŒä»“å·²ä¸ #01 ç›®æ ‡æƒé‡å¯¹é½ï¼ˆæˆ–å·®é¢ < Â¥%.0fï¼‰ï¼Œæ— éœ€è°ƒä»“ã€‚" % MIN_REBALANCE_DIFF_YUAN)
+        print("  µ÷²Ö½áÂÛ: µ±Ç°³Ö²ÖÒÑÓë #01 Ä¿±êÈ¨ÖØ¶ÔÆë£¨»ò²î¶î < RMB %.0f£©£¬ÎŞĞèµ÷²Ö¡£" % MIN_REBALANCE_DIFF_YUAN)
         print("=" * 78)
         return {"sells": [], "buys": [], "targets": target_weights, "regime": regime_info}
 
-    # å…ˆå–åä¹°å®‰å…¨ç¼–æ’ï¼šæœ¬è½®æœ‰å–å•æ—¶å…ˆåªæ‰§è¡Œå–å•ï¼Œå¾…ä¸‹è½®èµ„é‡‘åˆ°è´¦åå†ä¹°
+    # ÏÈÂôºóÂò°²È«±àÅÅ£º±¾ÂÖÓĞÂôµ¥Ê±ÏÈÖ»Ö´ĞĞÂôµ¥£¬´ıÏÂÂÖ×Ê½ğµ½ÕËºóÔÙÂò
     if sell_orders:
-        print("  >>> ç¬¬ä¸€æ­¥Â·å…ˆå–æ¸…å• (%d ç¬”):" % len(sell_orders))
+        print("  >>> µÚÒ»²½ - ÏÈÂôÇåµ¥ (%d ±Ê):" % len(sell_orders))
         for od in sell_orders:
             if allow_trade or DRY_RUN:
                 _submit_order_safely(ContextInfo, account_id, od)
             else:
-                print("    [éäº¤æ˜“çª—å£ä»…é¢„è§ˆ] SELL %s(%s) %dè‚¡ @ %.3f" % (od["name"], od["code"], od["volume"], od["limit_price"]))
+                print("    [·Ç½»Ò×´°¿Ú½öÔ¤ÀÀ] SELL %s(%s) %d¹É @ %.3f" % (od["name"], od["code"], od["volume"], od["limit_price"]))
         if buy_orders:
-            print("  >>> ç¬¬äºŒæ­¥Â·å¾…å–å•å›æ¬¾åä¹°å…¥ (%d ç¬”ï¼Œä¸‹è½®å®šæ—¶å™¨è‡ªåŠ¨æ¥ç»­):" % len(buy_orders))
+            print("  >>> µÚ¶ş²½ - ´ıÂôµ¥»Ø¿îºóÂòÈë (%d ±Ê£¬ÏÂÂÖ¶¨Ê±Æ÷×Ô¶¯½ÓĞø):" % len(buy_orders))
             for od in buy_orders:
-                print("    [å¾…ä¹°é¢„è§ˆ] BUY %s(%s) %dè‚¡ @ %.3f (çº¦Â¥%.0f)" % (od["name"], od["code"], od["volume"], od["limit_price"], od["est_yuan"]))
+                print("    [´ıÂòÔ¤ÀÀ] BUY %s(%s) %d¹É @ %.3f (Ô¼RMB %.0f)" % (od["name"], od["code"], od["volume"], od["limit_price"], od["est_yuan"]))
     else:
-        print("  >>> ä¹°å…¥æ¸…å• (%d ç¬”):" % len(buy_orders))
+        print("  >>> ÂòÈëÇåµ¥ (%d ±Ê):" % len(buy_orders))
         for od in buy_orders:
             if allow_trade or DRY_RUN:
                 _submit_order_safely(ContextInfo, account_id, od)
             else:
-                print("    [éäº¤æ˜“çª—å£ä»…é¢„è§ˆ] BUY %s(%s) %dè‚¡ @ %.3f" % (od["name"], od["code"], od["volume"], od["limit_price"]))
+                print("    [·Ç½»Ò×´°¿Ú½öÔ¤ÀÀ] BUY %s(%s) %d¹É @ %.3f" % (od["name"], od["code"], od["volume"], od["limit_price"]))
 
     print("=" * 78)
     return {"sells": sell_orders, "buys": buy_orders, "targets": target_weights, "regime": regime_info}
 
 
 # =============================================================================
-# äº”ã€QMT ç”Ÿå‘½å‘¨æœŸå›è°ƒå…¥å£ï¼ˆinit / handlebar / on_rebalance_timerï¼‰
+# Îå¡¢QMT ÉúÃüÖÜÆÚ»Øµ÷Èë¿Ú£¨init / handlebar / on_rebalance_timer£©
 # =============================================================================
 def init(ContextInfo):
     ContextInfo.set_universe(ALL_WATCH_CODES)
@@ -740,15 +740,15 @@ def init(ContextInfo):
     ContextInfo.ar3_panic_last_count_date = ""
     ContextInfo.ar3_panic_hold_days = 0
 
-    print("[AR3-QMT] åˆå§‹åŒ–å®Œæˆï¼š14åªè·¨èµ„äº§ETF #01å…¨å¤©å€™è½®åŠ¨ + AR2_2Aå†°ç‚¹åæŠ½ï¼ˆé›¶æ–‡ä»¶IO / é›¶å¤–éƒ¨ç½‘ç»œï¼‰")
-    print("[AR3-QMT] å½“å‰æ¨¡å¼: %s | ç»‘å®šè´¦å·: %s" % ("DRY_RUN ä»¿çœŸæ¼”ç»ƒ" if DRY_RUN else "LIVE å®ç›˜ä¸‹å•", _get_active_account(ContextInfo)))
+    print("[AR3-QMT] ³õÊ¼»¯Íê³É£º14Ö»¿ç×Ê²úETF #01È«ÌìºòÂÖ¶¯ + AR2_2A±ùµã·´³é£¨ÁãÎÄ¼şIO / ÁãÍâ²¿ÍøÂç£©")
+    print("[AR3-QMT] µ±Ç°Ä£Ê½: %s | °ó¶¨ÕËºÅ: %s" % ("DRY_RUN ·ÂÕæÑİÁ·" if DRY_RUN else "LIVE ÊµÅÌÏÂµ¥", _get_active_account(ContextInfo)))
 
-    # æ³¨å†Œ 60 ç§’è½®è¯¢å®šæ—¶å™¨ï¼ˆçº¯å†…ç½®è°ƒåº¦ï¼Œä¸ä¾èµ–å¤–é“¾ï¼‰
+    # ×¢²á 60 ÃëÂÖÑ¯¶¨Ê±Æ÷£¨´¿ÄÚÖÃµ÷¶È£¬²»ÒÀÀµÍâÁ´£©
     ContextInfo.run_time("on_rebalance_timer", "60nSecond", "2026-01-01 09:30:00", "SH")
 
 
 def handlebar(ContextInfo):
-    # ä»…åœ¨æœ€åä¸€æ ¹ K çº¿åšä¸€æ¬¡å¯åŠ¨å³æ—¶è‡ªæ£€ï¼Œæ–¹ä¾¿ç›˜åæˆ–æ¨¡å‹ç ”ç©¶é‡Œç«‹å³éªŒè¯è¾“å‡º
+    # ½öÔÚ×îºóÒ»¸ù K Ïß×öÒ»´ÎÆô¶¯¼´Ê±×Ô¼ì£¬·½±ãÅÌºó»òÄ£ĞÍÑĞ¾¿ÀïÁ¢¼´ÑéÖ¤Êä³ö
     if not ContextInfo.is_last_bar():
         return
     if not getattr(ContextInfo, "ar3_boot_printed", False):
@@ -762,16 +762,16 @@ def on_rebalance_timer(ContextInfo):
     hhmm = now_dt.hour * 100 + now_dt.minute
     in_window = _is_in_trading_window(now_dt)
 
-    # 1. æ¯æ—¥ 09:35 è§¦å‘ä¸»è°ƒä»“ï¼ˆè‹¥å…ˆå–åä¹°ï¼Œ09:36~09:42 ä¼šè‡ªåŠ¨è·Ÿè¿›ä¹°å•ï¼Œç›´åˆ°å¯¹é½ï¼‰
+    # 1. Ã¿ÈÕ 09:35 ´¥·¢Ö÷µ÷²Ö£¨ÈôÏÈÂôºóÂò£¬09:36~09:42 »á×Ô¶¯¸ú½øÂòµ¥£¬Ö±µ½¶ÔÆë£©
     if in_window and hhmm >= REBALANCE_TIME_HHMM and hhmm <= REBALANCE_TIME_HHMM + 10:
         if getattr(ContextInfo, "ar3_last_rebalance_date", "") != today_str:
             res = _run_ar3_cycle(ContextInfo, trigger_source="daily_rebalance", allow_trade=True)
-            # è‹¥å·²ç»æ²¡æœ‰å–å•ï¼ˆæˆ–å–å•å’Œä¹°å•éƒ½å·²å®Œæˆ/å¤„äºDRY_RUNï¼‰ï¼Œæ ‡è®°ä»Šæ—¥ä¸»è°ƒä»“å®Œæˆ
+            # ÈôÒÑ¾­Ã»ÓĞÂôµ¥£¨»òÂôµ¥ºÍÂòµ¥¶¼ÒÑÍê³É/´¦ÓÚDRY_RUN£©£¬±ê¼Ç½ñÈÕÖ÷µ÷²ÖÍê³É
             if DRY_RUN or not res.get("sells"):
                 ContextInfo.ar3_last_rebalance_date = today_str
         return
 
-    # 2. ç›˜ä¸­æ¯ 5 åˆ†é’Ÿï¼ˆ09:45 ~ 14:50ï¼‰å·¡æ£€ AR2_2A å†°ç‚¹åæŠ½å³ä¾§è§¦å‘ & æ­¢ç›ˆæ­¢æŸ
+    # 2. ÅÌÖĞÃ¿ 5 ·ÖÖÓ£¨09:45 ~ 14:50£©Ñ²¼ì AR2_2A ±ùµã·´³éÓÒ²à´¥·¢ & Ö¹Ó¯Ö¹Ëğ
     if in_window and now_dt.minute % 5 == 0 and now_dt.minute != getattr(ContextInfo, "ar3_last_poll_minute", -1):
         ContextInfo.ar3_last_poll_minute = now_dt.minute
         _run_ar3_cycle(ContextInfo, trigger_source="intraday_sentinel", allow_trade=True)
