@@ -821,3 +821,59 @@ def post_g3_premarket_brief_push_wechat() -> dict[str, Any]:
         brief = post_g3_premarket_brief_generate()
     res = push_premarket_brief_wechat(brief)
     return {"status": "ok" if res.get("ok") else "failed", "date": brief.get("date"), **res}
+
+
+class Acct1ConfirmFillRequest(BaseModel):
+    code: str
+    side: str
+    shares: int
+    price: float
+    name: str = ""
+    note: str = ""
+    trigger_next_intraday: bool = True
+
+
+@router.get("/acct1-advisor/status")
+def get_g3_acct1_advisor_status() -> dict[str, Any]:
+    """只读查询 acct1 AR4.5-L3b 盘中智能买卖提醒引擎当日状态、已推送记录与人工核销成交。"""
+    from services.g3.acct1_intraday_advisor import get_acct1_advisor_status
+
+    return get_acct1_advisor_status()
+
+
+@router.post("/acct1-advisor/run")
+def post_g3_acct1_advisor_run(
+    mode: str = Query(default="intraday", pattern="^(premarket|intraday|eod)$"),
+    dry_run: bool = Query(default=False),
+    bypass_session: bool = Query(default=False),
+) -> dict[str, Any]:
+    """触发 acct1 AR4.5-L3b 盘前/盘中/盘后巡检与微信买卖提醒（零自动下单，仅单向推送）。"""
+    from services.g3.acct1_intraday_advisor import run_acct1_advisor
+
+    return run_acct1_advisor(mode=mode, dry_run=dry_run, bypass_session=bypass_session)
+
+
+@router.post("/acct1-advisor/confirm-fill")
+def post_g3_acct1_advisor_confirm_fill(req: Acct1ConfirmFillRequest) -> dict[str, Any]:
+    """登记一笔 acct1 人工成交并校准当日实时账本；若在盘中可自动衔接推送下一笔 AR4.5-L3b 买卖单。"""
+    from services.g3.acct1_intraday_advisor import record_acct1_manual_fill, run_acct1_advisor
+
+    try:
+        fill = record_acct1_manual_fill(
+            code=req.code,
+            side=req.side,
+            shares=req.shares,
+            price=req.price,
+            name=req.name,
+            note=req.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    followup = None
+    if req.trigger_next_intraday:
+        try:
+            followup = run_acct1_advisor(mode="intraday", dry_run=False, bypass_session=False)
+        except Exception as exc:  # noqa: BLE001
+            followup = {"status": "error", "detail": str(exc)}
+    return {"status": "ok", "fill": fill, "followup_intraday": followup}

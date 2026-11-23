@@ -35,7 +35,8 @@ const AUTO_JOBS = [
   { time: '工作日 16:40', name: '市场情绪 / 涨跌停宽度计算', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
   { time: '工作日 17:15', name: 'AR4.5-L3b 全链路自动喂料（ETF+国家队+南向+策略刷新）', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
   { time: '工作日 09:10 / 17:45', name: '盘前晨会简报 & 盘后 AI 排雷与复盘', runner: 'Antigravity Sidecar', status: '宿主机常驻' },
-  { time: '交易日 09:40~14:50', name: '15m 盘中止损与冰点反抽哨兵', runner: 'aistock-backend', status: '盘中轮询' },
+  { time: '工作日 09:15 / 15:15', name: 'acct1 AR4.5-L3b 盘前计划 & 日终真钱复盘推送', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
+  { time: '交易日 09:35~14:50', name: 'acct1 AR4.5-L3b 盘中每10m智能买卖提醒（微信单向推）', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
 ]
 
 export default function G3Lab() {

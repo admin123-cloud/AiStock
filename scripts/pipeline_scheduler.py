@@ -2123,6 +2123,64 @@ def serve(
         replace_existing=True,
     )
     logger.info("调度注册：ar45_postclose_sync cron=[day_of_week=%s 17:15 Asia/Shanghai]（AR4.5-L3b 跨资产ETF+国家队+南向+ERP盘后同步）", CRON_DAY_OF_WEEK)
+
+    # 注册 acct1 AR4.5-L3b 专属盘前/盘中/盘后微信智能买卖提醒（对齐 acct2 同款体验，严格 AR4.5-L3b 策略驱动）
+    def _run_acct1_ar45_advisor_job(mode: str) -> None:
+        import urllib.request as _urlreq
+
+        now_bj = datetime.now(BEIJING_TZ)
+        today_d = now_bj.date()
+        try:
+            is_td = _default_is_trading_day(today_d)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[acct1_ar45_%s] 交易日校验异常（fail-closed 跳过）: %s", mode, exc)
+            return
+        if not is_td:
+            logger.info("[acct1_ar45_%s] %s 非交易日，静默跳过", mode, today_d)
+            return
+
+        base = os.getenv("AISTOCK_INTERNAL_API_URL", "http://aistock-backend:8000").rstrip("/")
+        opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
+        url = f"{base}/api/g3/acct1-advisor/run?mode={mode}&dry_run=false"
+        try:
+            req = _urlreq.Request(url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+            with opener.open(req, timeout=90) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+            logger.info(
+                "[acct1_ar45_%s] 巡检完成: status=%s pushed=%s regime=%s",
+                mode, res.get("status"), res.get("pushed_count", len(res.get("pushed") or [])), res.get("regime"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[acct1_ar45_%s] 调用失败: %s", mode, exc)
+
+    scheduler.add_job(
+        lambda: _run_acct1_ar45_advisor_job("premarket"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=9, minute=15, timezone=BEIJING_TZ),
+        id="acct1_ar45_premarket",
+        name="acct1 AR4.5-L3b 盘前作战计划推送（工作日 09:15）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_acct1_ar45_advisor_job("intraday"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour="9-11,13-14", minute="5,15,25,35,45,55", timezone=BEIJING_TZ),
+        id="acct1_ar45_intraday",
+        name="acct1 AR4.5-L3b 盘中实时买卖提醒（工作日 09:35~14:50 每10m）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_acct1_ar45_advisor_job("eod"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=15, minute=15, timezone=BEIJING_TZ),
+        id="acct1_ar45_eod",
+        name="acct1 AR4.5-L3b 日终真钱复盘推送（工作日 15:15）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：acct1_ar45_advisor (premarket=09:15 / intraday=09:35~14:50每10m / eod=15:15 Asia/Shanghai)")
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown
     except (KeyboardInterrupt, SystemExit):

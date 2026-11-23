@@ -1,0 +1,651 @@
+# -*- coding: utf-8 -*-
+"""acct1（广发证券-曾*）AR4.5-L3b 专属盘中智能买卖提醒引擎。
+
+设计定位（严格对齐用户指令与 acct2 托管微信体验）：
+1. 唯一策略大脑：100% 绑定 AR4.5-L3b（compile_ar3_rebalance_plan + build_ar3_dual_core_radar），
+   绝不混用旧做T RSI 买单；防守/平衡期严禁推送任何 A 股个股买入，只放行跨资产逆波 ETF 与旧底仓清退卖出；
+2. 允许盘中实时买卖（09:35~11:28 & 13:00~14:50，新开买仓截止 14:45），严格遵守 A 股 T+1、
+   100 股整手、涨跌停保护、最小下单额（>=2500 元，清仓尾单除外）与 ETF 盘中 MA20 站稳确认；
+3. 微信通知风格完全对标 acct2（独立账号标签 `acct1·AR4.5-L3b`，一眼区分操作方向、股数、盘口参考价、
+   金额、策略理由、止损位与执行后预计资金），并带 2 小时同向防刷屏冷却（每日同向至多 2 次）；
+4. 支持「聊天报单核销」（record_acct1_manual_fill）：在同花顺下次快照前自动叠加已成交回款与持股变化，
+   用户卖出回款后可立刻触发衔接的 AR4.5-L3b 买单提示；同花顺快照追平后自动以券商实盘为准。
+"""
+from __future__ import annotations
+
+import copy
+import json
+import logging
+import os
+from datetime import datetime, time as dt_time, timedelta, timezone
+from pathlib import Path
+from typing import Any, Mapping, Optional
+
+from services.broker.broker_accounts import get_accounts_overview
+from services.g3.ar45_review_service import build_ar45_review_report
+from services.g3.market_regime_gate import evaluate_market_regime_gate
+from services.mining.ar3_dual_core_live import build_ar3_dual_core_radar
+from services.mining.ar3_rebalance_compiler import compile_ar3_rebalance_plan
+from services.trading.t_daily_plan import fetch_batch_live_quotes
+from services.trading.t_notify import send_wechat_notification
+from utils.common.paths import runtime_path
+
+BJ_TZ = timezone(timedelta(hours=8))
+ACCOUNT_ID = "acct1"
+MIN_ORDER_YUAN = 2500.0  # 低于 2500 元的碎单不推送（清仓尾单除外），省去最低 5 元佣金摩擦
+COOLDOWN_SEC = 2 * 3600  # 同标的同方向未成交时 2 小时冷却
+MAX_PUSH_PER_KEY_PER_DAY = 2  # 同标的同方向每日至多推送 2 次（上午 1 次 + 下午 1 次）
+
+MORNING_START = dt_time(9, 35)
+MORNING_END = dt_time(11, 28)
+AFTERNOON_START = dt_time(13, 0)
+AFTERNOON_SELL_END = dt_time(14, 50)
+AFTERNOON_BUY_END = dt_time(14, 45)
+
+logger = logging.getLogger("acct1_advisor")
+
+
+def _advisor_dir(base_dir: Optional[Path] = None) -> Path:
+    p = base_dir or runtime_path("acct1_advisor")
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _state_path(trade_date: str, base_dir: Optional[Path] = None) -> Path:
+    return _advisor_dir(base_dir) / f"state_{trade_date.replace('-', '')}.json"
+
+
+def _fills_path(trade_date: str, base_dir: Optional[Path] = None) -> Path:
+    return _advisor_dir(base_dir) / f"fills_{trade_date.replace('-', '')}.jsonl"
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        return doc if isinstance(doc, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_json(path: Path, data: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _in_intraday_session(now_bj: datetime, *, for_buy: bool = False) -> bool:
+    if now_bj.weekday() >= 5:
+        return False
+    t = now_bj.time()
+    in_am = MORNING_START <= t <= MORNING_END
+    pm_end = AFTERNOON_BUY_END if for_buy else AFTERNOON_SELL_END
+    in_pm = AFTERNOON_START <= t <= pm_end
+    return in_am or in_pm
+
+
+def _parse_iso_bj(raw: Any) -> Optional[datetime]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=BJ_TZ)
+        return dt.astimezone(BJ_TZ)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s[:19], fmt).replace(tzinfo=BJ_TZ)
+        except ValueError:
+            continue
+    return None
+
+
+def _price_limit_pct(code6: str) -> float:
+    if code6.startswith(("300", "301", "688", "588", "159915")):
+        return 20.0
+    if code6.startswith(("8", "4", "92")):
+        return 30.0
+    return 10.0
+
+
+def _is_etf(code6: str) -> bool:
+    return code6.startswith(("51", "56", "58", "159", "16"))
+
+
+def _calc_fees(side: str, amount: float, is_etf: bool) -> float:
+    comm = max(5.0, round(amount * 0.00025, 2)) if amount > 0 else 0.0
+    tax = round(amount * 0.0005, 2) if (side.upper() == "SELL" and not is_etf and amount > 0) else 0.0
+    return round(comm + tax, 2)
+
+
+# ---------------------------------------------------------------------------
+# 手工成交核销与快照叠加（对齐 acct2 聊天回写体验）
+# ---------------------------------------------------------------------------
+
+def load_manual_fills(trade_date: str, *, base_dir: Optional[Path] = None) -> list[dict[str, Any]]:
+    fp = _fills_path(trade_date, base_dir)
+    if not fp.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in fp.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                rows.append(obj)
+        except ValueError:
+            continue
+    return rows
+
+
+def record_acct1_manual_fill(
+    *,
+    code: str,
+    side: str,
+    shares: int,
+    price: float,
+    name: str = "",
+    note: str = "",
+    now_bj: Optional[datetime] = None,
+    base_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """登记一笔 acct1 人工成交，立即生效并在快照追平前自动叠加到可用现金与持仓。"""
+    now = now_bj or datetime.now(BJ_TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BJ_TZ)
+    trade_date = now.strftime("%Y-%m-%d")
+    code6 = str(code).split(".")[0].strip().zfill(6)
+    side_u = "BUY" if str(side).strip().upper().startswith("B") else "SELL"
+    qty = int(shares)
+    px = float(price)
+    if qty <= 0 or px <= 0:
+        raise ValueError("成交股数与成交均价必须大于 0")
+    is_etf = _is_etf(code6)
+    amt = round(qty * px, 2)
+    fee = _calc_fees(side_u, amt, is_etf)
+    rec = {
+        "ts": now.isoformat(timespec="seconds"),
+        "trade_date": trade_date,
+        "account_id": ACCOUNT_ID,
+        "code": code6,
+        "name": name or code6,
+        "side": side_u,
+        "shares": qty,
+        "price": round(px, 3 if is_etf else 2),
+        "amount": amt,
+        "est_fee": fee,
+        "is_etf": is_etf,
+        "note": note,
+    }
+    fp = _fills_path(trade_date, base_dir)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    with fp.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return rec
+
+
+def apply_manual_fills_overlay(
+    overview: Mapping[str, Any],
+    trade_date: str,
+    *,
+    base_dir: Optional[Path] = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """将晚于 acct1 快照时间的手工成交叠加至 overview 副本中，确保卖出回款后立即可推买单。"""
+    fills = load_manual_fills(trade_date, base_dir=base_dir)
+    if not fills:
+        return copy.deepcopy(dict(overview)), []
+
+    ov = copy.deepcopy(dict(overview))
+    accounts = ov.get("accounts") or []
+    acct = next((a for a in accounts if isinstance(a, dict) and str(a.get("account_id")) == ACCOUNT_ID), None)
+    if not acct:
+        return ov, []
+
+    snap_dt = _parse_iso_bj(acct.get("generated_at"))
+    applied: list[dict[str, Any]] = []
+    funds = acct.setdefault("funds", {})
+    holdings: list[dict[str, Any]] = acct.setdefault("holdings", [])
+
+    avail_cash = float(funds.get("available") or 0.0)
+    by_code: dict[str, dict[str, Any]] = {}
+    for h in holdings:
+        if isinstance(h, dict):
+            c6 = str(h.get("code") or "").split(".")[0].strip().zfill(6)
+            if c6:
+                by_code[c6] = h
+
+    for f in fills:
+        f_dt = _parse_iso_bj(f.get("ts"))
+        if snap_dt is not None and f_dt is not None and f_dt <= snap_dt:
+            continue  # 券商实盘快照已包含该笔成交，跳过叠加
+        c6 = str(f["code"]).zfill(6)
+        side_u = str(f["side"]).upper()
+        qty = int(f["shares"])
+        px = float(f["price"])
+        amt = float(f.get("amount") or (qty * px))
+        fee = float(f.get("est_fee") or _calc_fees(side_u, amt, _is_etf(c6)))
+
+        if side_u == "SELL":
+            avail_cash += max(0.0, amt - fee)
+            if c6 in by_code:
+                cur_q = int(float(by_code[c6].get("quantity") or 0))
+                cur_av = int(float(by_code[c6].get("available_quantity") if by_code[c6].get("available_quantity") is not None else cur_q))
+                new_q = max(0, cur_q - qty)
+                by_code[c6]["quantity"] = new_q
+                by_code[c6]["available_quantity"] = max(0, min(new_q, cur_av - qty))
+                by_code[c6]["current_price"] = px
+                by_code[c6]["market_value"] = round(new_q * px, 2)
+        else:
+            avail_cash = max(0.0, avail_cash - (amt + fee))
+            if c6 in by_code:
+                cur_q = int(float(by_code[c6].get("quantity") or 0))
+                new_q = cur_q + qty
+                by_code[c6]["quantity"] = new_q
+                # 今日新买入受 T+1 冻结，不增加 available_quantity
+                by_code[c6]["current_price"] = px
+                by_code[c6]["market_value"] = round(new_q * px, 2)
+            else:
+                item = {
+                    "code": c6,
+                    "name": f.get("name") or c6,
+                    "quantity": qty,
+                    "available_quantity": 0,
+                    "cost_price": px,
+                    "current_price": px,
+                    "market_value": round(qty * px, 2),
+                }
+                holdings.append(item)
+                by_code[c6] = item
+        applied.append(f)
+
+    if applied:
+        mv_total = sum(
+            float(h.get("quantity") or 0) * float(h.get("current_price") or 0)
+            for h in holdings
+            if isinstance(h, dict) and float(h.get("quantity") or 0) > 0
+        )
+        funds["available"] = round(avail_cash, 2)
+        funds["market_value"] = round(mv_total, 2)
+        funds["total_assets"] = round(avail_cash + mv_total, 2)
+        acct["holdings"] = [h for h in holdings if isinstance(h, dict) and float(h.get("quantity") or 0) > 0]
+    return ov, applied
+
+
+# ---------------------------------------------------------------------------
+# 微信文案格式化（严格对标 acct2 清晰可读风格）
+# ---------------------------------------------------------------------------
+
+def _format_sell_wechat(
+    order: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    live_px: float,
+    pct_chg: Optional[float],
+    now_str: str,
+) -> tuple[str, str]:
+    acct = plan["account"]
+    code = str(order["code"])
+    name = str(order["name"])
+    qty = int(order["suggested_shares"])
+    full_sh = int(order.get("full_clear_shares") or qty)
+    amt = round(qty * live_px, 2)
+    est_cash_after = round(float(acct["available_cash"]) + amt * 0.9992, 2)
+    px_str = f"{live_px:.3f}" if order.get("is_etf") else f"{live_px:.2f}"
+    chg_str = f"（当日 {pct_chg:+.2f}%）" if pct_chg is not None else ""
+
+    buy_hint_parts = [
+        f"{b['name']}({b['code']})目标{b['target_weight_pct']}%"
+        for b in (plan.get("buy_orders") or [])[:2]
+    ]
+    next_hint = f"卖出回款后将自动衔接推送买单（{' + '.join(buy_hint_parts)}）" if buy_hint_parts else "卖出后保留现金防守"
+
+    title = f"【🔴 acct1·AR4.5-L3b 卖出】{name}({code}) {qty}股 @ {px_str}"
+    lines = [
+        f"- 账号：`acct1`（{acct['label']} · AR4.5-L3b 策略驱动）",
+        f"- 操作：**卖出 {qty} 股** `{code}` {name}" + (f"（总可卖 {full_sh} 股，平稳步长分批）" if full_sh > qty else "（清仓可用）"),
+        f"- 盘口参考：`{px_str}`{chg_str}，预计回款 `{amt:,.2f}` 元",
+        f"- 时间：`{now_str}`｜当前大盘：`{plan['regime_label']}`",
+        f"- 策略理由：{order.get('reason') or 'AR4.5-L3b 调仓卖出'}",
+        f"- 卖后预计可用现金：`{est_cash_after:,.2f}` 元｜{next_hint}",
+        f"- 提示：请在同花顺 `acct1` 核对盘口后手动卖出（或至 `/g3/desk` 一键预填）；成交后直接回我「acct1 已卖 {code} {qty}股 @ 均价」即可实时校准账本并衔接买单。",
+    ]
+    return title, "\n".join(lines)
+
+
+def _format_buy_wechat(
+    order: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    live_px: float,
+    pct_chg: Optional[float],
+    ma20: Optional[float],
+    now_str: str,
+) -> tuple[str, str]:
+    acct = plan["account"]
+    code = str(order["code"])
+    name = str(order["name"])
+    qty = int(order["immediate_shares"])
+    is_etf = bool(order.get("is_etf") or order.get("asset_kind") == "etf")
+    amt = round(qty * live_px, 2)
+    rem_cash = max(0.0, round(float(acct["available_cash"]) - amt - _calc_fees("BUY", amt, is_etf), 2))
+    px_str = f"{live_px:.3f}" if is_etf else f"{live_px:.2f}"
+    stop_px = order.get("stop_loss_price")
+    stop_str = (f"{float(stop_px):.3f}" if is_etf else f"{float(stop_px):.2f}") if stop_px else "—"
+    chg_str = f"（当日 {pct_chg:+.2f}%）" if pct_chg is not None else ""
+    ma20_str = f"｜盘中站稳 MA20(`{ma20:.3f}`)" if (is_etf and ma20 and live_px >= ma20 * 0.995) else ""
+
+    title = f"【🟢 acct1·AR4.5-L3b 买入】{name}({code}) {qty}股 @ {px_str}"
+    lines = [
+        f"- 账号：`acct1`（{acct['label']} · AR4.5-L3b 策略驱动）",
+        f"- 操作：**买入 {qty} 股** `{code}` {name}（目标占比 `{order.get('target_weight_pct', 0)}%`）",
+        f"- 盘口参考：`{px_str}`{chg_str}，预计金额 `{amt:,.2f}` 元｜参考止损：`{stop_str}`",
+        f"- 时间：`{now_str}`｜当前大盘：`{plan['regime_label']}`{ma20_str}",
+        f"- 策略理由：{order.get('reason') or 'AR4.5-L3b 目标配置建仓'}",
+        f"- 买后预计剩余现金：`{rem_cash:,.2f}` 元｜账户总资产：`{float(acct['total_assets']):,.2f}` 元",
+        f"- 提示：请在同花顺 `acct1` 核对盘口后手动买入（或至 `/g3/desk` 一键预填）；成交后直接回我「acct1 已买 {code} {qty}股 @ 均价」即可同步账本。",
+    ]
+    return title, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 三大标准执行模式：premarket / intraday / eod
+# ---------------------------------------------------------------------------
+
+def run_acct1_advisor(
+    mode: str = "intraday",
+    *,
+    dry_run: bool = False,
+    bypass_session: bool = False,
+    now_bj: Optional[datetime] = None,
+    base_dir: Optional[Path] = None,
+    overview_override: Optional[Mapping[str, Any]] = None,
+    radar_override: Optional[Mapping[str, Any]] = None,
+    quotes_override: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> dict[str, Any]:
+    """执行 acct1 AR4.5-L3b 盘前/盘中/盘后巡检与微信买卖提醒。"""
+    now = now_bj or datetime.now(BJ_TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BJ_TZ)
+    trade_date = now.strftime("%Y-%m-%d")
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    if mode == "intraday" and not bypass_session and not _in_intraday_session(now, for_buy=False):
+        return {
+            "status": "skipped_outside_session",
+            "mode": mode,
+            "ts": now_str,
+            "pushed": [],
+        }
+
+    # 1. 拉取真实账户概览并叠加尚未入快照的手工成交
+    raw_overview = dict(overview_override) if overview_override is not None else get_accounts_overview()
+    eff_overview, applied_fills = apply_manual_fills_overlay(raw_overview, trade_date, base_dir=base_dir)
+
+    # 2. 日终复盘模式直接走 AR4.5 真钱归因报告
+    if mode == "eod":
+        rev = build_ar45_review_report(account_id=ACCOUNT_ID, days=30, accounts_overview=eff_overview)
+        acct = rev["account"]
+        kpis = rev["kpis"]
+        leg_lines = [
+            f"  • {leg['label']}：{leg['count']} 只，市值 `{leg['market_value']:,.0f}` 元，浮盈 `{leg['floating_profit']:+,.2f}` 元"
+            for leg in (rev.get("legs") or [])
+        ]
+        title = f"【📊 acct1·AR4.5-L3b 日终复盘】{trade_date}"
+        body = "\n".join([
+            f"- 账号：`acct1`（{acct['label']}）",
+            f"- 总资产：`{acct['total_assets']:,.2f}` 元｜现金 `{acct['available_cash']:,.2f}`｜仓位 `{acct['position_pct']}%`",
+            f"- 当日真钱盈亏：`{acct['daily_profit']:+,.2f}` 元" if acct.get("daily_profit") is not None else "- 当日盈亏：待券商快照更新",
+            f"- 纪律评分：`{kpis['discipline_score']}/100`｜破-10%止损红线持仓：`{kpis['stop_violation_count']}` 只",
+            "- 三腿持仓归因：",
+            *leg_lines,
+            "- 复盘详情：打开 `/g3/review` 查看净值曲线与逐笔 Shadow 对账。",
+        ])
+        notify_res = {"ok": True, "detail": "dry_run"} if dry_run else send_wechat_notification(title, body)
+        return {
+            "status": "ok",
+            "mode": "eod",
+            "ts": now_str,
+            "title": title,
+            "body": body,
+            "notify": notify_res,
+            "applied_manual_fills": len(applied_fills),
+        }
+
+    # 3. 编译 AR4.5-L3b 唯一权威调仓计划（先卖后买）
+    if radar_override is not None:
+        radar = dict(radar_override)
+        market_gate = {
+            "regime": str(radar.get("regime") or "defensive"),
+            "regime_label": "主升进攻期" if radar.get("is_offensive") else "防守退潮·趋势下跌",
+            "allow_new_mainwave": bool(radar.get("is_offensive")),
+        }
+    else:
+        market_gate = evaluate_market_regime_gate()
+        radar = build_ar3_dual_core_radar(market_gate=market_gate, force_refresh=False)
+
+    plan = compile_ar3_rebalance_plan(
+        market_gate=market_gate,
+        account_id=ACCOUNT_ID,
+        smooth_step=True,
+        persist=False,
+        ar3_radar=radar,
+        accounts_overview=eff_overview,
+    )
+    acct = plan["account"]
+    is_offensive = bool(plan.get("is_offensive"))
+
+    # 收集 ETF MA20 字典（用于盘中买 ETF 前站稳 MA20 校验）
+    etf_ma20_map: dict[str, float] = {}
+    for e in ((radar.get("etf_radar") or {}).get("universe") or []) + ((radar.get("etf_radar") or {}).get("targets") or []):
+        if isinstance(e, Mapping) and e.get("code") and e.get("ma20"):
+            etf_ma20_map[str(e["code"]).split(".")[0].zfill(6)] = float(e["ma20"])
+
+    # 4. 盘前计划推送模式
+    if mode == "premarket":
+        sell_lines = [
+            f"  • [卖出] {s['name']}({s['code']}) {s['suggested_shares']}股 @ ~{s['ref_price']}（约 ¥{s['est_amount']:,.0f}）"
+            for s in (plan.get("sell_orders") or [])
+            if int(s.get("suggested_shares") or 0) >= 100 and not s.get("blocked_t1")
+        ]
+        buy_lines = [
+            f"  • [买入] {b['name']}({b['code']}) 现可买 {b['immediate_shares']}股 / 卖后应买 {b['post_sell_shares']}股 @ ~{b['ref_price']}（目标 {b['target_weight_pct']}%）"
+            for b in (plan.get("buy_orders") or [])
+        ]
+        title = f"【📋 acct1·AR4.5-L3b 盘前计划】{trade_date}"
+        body_lines = [
+            f"- 账号：`acct1`（{acct['label']}）｜大盘：**{plan['regime_label']}**",
+            f"- 总资产：`{acct['total_assets']:,.2f}` 元｜可用现金：`{acct['available_cash']:,.2f}` 元｜仓位：`{acct['position_pct']}%`",
+            "- 第一步·今日拟卖出：",
+            *(sell_lines or ["  • 无卖出任务"]),
+            "- 第二步·今日拟买入（卖后衔接）：",
+            *(buy_lines or ["  • 无买入任务"]),
+            "- 盘中巡检：09:35~14:50 每 10 分钟实时校验盘口与 MA20，触发即推送单笔可执行指令。",
+        ]
+        body = "\n".join(body_lines)
+        notify_res = {"ok": True, "detail": "dry_run"} if dry_run else send_wechat_notification(title, body)
+        return {
+            "status": "ok",
+            "mode": "premarket",
+            "ts": now_str,
+            "title": title,
+            "body": body,
+            "notify": notify_res,
+        }
+
+    # 5. 盘中巡检模式（mode == "intraday"）：严格实时盘口 + 门禁校验 + 冷却去重
+    codes_needed = list({
+        str(x["code"]).zfill(6)
+        for x in (plan.get("sell_orders") or []) + (plan.get("buy_orders") or [])
+        if x.get("code")
+    })
+    if quotes_override is not None:
+        live_quotes = dict(quotes_override)
+    else:
+        try:
+            live_quotes = fetch_batch_live_quotes(codes_needed) if codes_needed else {}
+        except Exception:  # noqa: BLE001
+            live_quotes = {}
+
+    st_path = _state_path(trade_date, base_dir)
+    state = _load_json(st_path)
+    sent_map: dict[str, dict[str, Any]] = state.setdefault("sent", {})
+    now_epoch = now.timestamp()
+
+    pushed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    def _can_push(key: str, fingerprint: str) -> tuple[bool, str]:
+        rec = sent_map.get(key)
+        if not rec:
+            return True, "first_today"
+        if int(rec.get("count") or 0) >= MAX_PUSH_PER_KEY_PER_DAY and rec.get("fingerprint") == fingerprint:
+            return False, "daily_cap_reached"
+        elapsed = now_epoch - float(rec.get("last_ts") or 0.0)
+        if rec.get("fingerprint") == fingerprint and elapsed < COOLDOWN_SEC:
+            return False, f"cooldown_{int(elapsed)}s"
+        return True, "refresh_or_changed"
+
+    # 5A. 先审卖出单（优先清退破位/非 AR4.5 持仓）
+    for s in plan.get("sell_orders") or []:
+        c6 = str(s["code"]).zfill(6)
+        qty = int(s.get("suggested_shares") or 0)
+        full_sh = int(s.get("full_clear_shares") or qty)
+        if s.get("blocked_t1") or qty < 100:
+            skipped.append({"code": c6, "side": "SELL", "reason": "t1_blocked_or_zero"})
+            continue
+        q = live_quotes.get(c6) or {}
+        live_px = float(q.get("price") or s.get("ref_price") or 0.0)
+        pct_chg = float(q["change_pct"]) if q.get("change_pct") is not None else None
+        if live_px <= 0:
+            skipped.append({"code": c6, "side": "SELL", "reason": "no_live_price"})
+            continue
+        est_amt = qty * live_px
+        is_tail_clear = (qty == full_sh and qty == int(s.get("current_shares") or 0))
+        if est_amt < MIN_ORDER_YUAN and not is_tail_clear:
+            skipped.append({"code": c6, "side": "SELL", "reason": f"below_min_order_{est_amt:.0f}"})
+            continue
+        # 跌停保护：封死跌停不发无效卖单
+        lim = _price_limit_pct(c6)
+        if pct_chg is not None and pct_chg <= -(lim - 0.5):
+            skipped.append({"code": c6, "side": "SELL", "reason": f"limit_down_{pct_chg:.2f}%"})
+            continue
+
+        key = f"{c6}:SELL"
+        fp = f"SELL:{qty}:{int(s.get('available_shares') or 0)}"
+        ok_push, why = _can_push(key, fp)
+        if not ok_push:
+            skipped.append({"code": c6, "side": "SELL", "reason": why})
+            continue
+
+        title, body = _format_sell_wechat(s, plan, live_px, pct_chg, now_str)
+        res = {"ok": True, "detail": "dry_run"} if dry_run else send_wechat_notification(title, body)
+        if res.get("ok"):
+            if not dry_run:
+                prev_cnt = int((sent_map.get(key) or {}).get("count") or 0)
+                sent_map[key] = {"last_ts": now_epoch, "last_at": now_str, "count": prev_cnt + 1, "fingerprint": fp}
+            pushed.append({"code": c6, "name": s["name"], "side": "SELL", "shares": qty, "price": live_px, "title": title, "body": body, "notify": res})
+        else:
+            skipped.append({"code": c6, "side": "SELL", "reason": f"notify_failed:{res.get('detail')}"})
+
+    # 5B. 再审买入单（仅在买窗内、现金立即可买 >= 2500 元、且严守 AR4.5-L3b 总闸门！）
+    in_buy_window = bypass_session or _in_intraday_session(now, for_buy=True)
+    for b in plan.get("buy_orders") or []:
+        c6 = str(b["code"]).zfill(6)
+        qty = int(b.get("immediate_shares") or 0)
+        is_etf = bool(b.get("is_etf") or b.get("asset_kind") == "etf" or _is_etf(c6))
+        if not in_buy_window:
+            skipped.append({"code": c6, "side": "BUY", "reason": "after_1445_buy_cutoff"})
+            continue
+        # AR4.5-L3b 终极红线：非进攻期绝对禁止推送任何 A 股个股买单
+        if not is_offensive and not is_etf:
+            skipped.append({"code": c6, "side": "BUY", "reason": "ar45_defensive_block_a_stock"})
+            continue
+        if qty < 100:
+            skipped.append({"code": c6, "side": "BUY", "reason": "insufficient_cash_wait_sell"})
+            continue
+        q = live_quotes.get(c6) or {}
+        live_px = float(q.get("price") or b.get("ref_price") or 0.0)
+        pct_chg = float(q["change_pct"]) if q.get("change_pct") is not None else None
+        if live_px <= 0:
+            skipped.append({"code": c6, "side": "BUY", "reason": "no_live_price"})
+            continue
+        est_amt = qty * live_px
+        if est_amt < MIN_ORDER_YUAN:
+            skipped.append({"code": c6, "side": "BUY", "reason": f"below_min_order_{est_amt:.0f}"})
+            continue
+        # 涨停保护：不追涨停板
+        lim = _price_limit_pct(c6)
+        if pct_chg is not None and pct_chg >= (lim - 0.5):
+            skipped.append({"code": c6, "side": "BUY", "reason": f"limit_up_{pct_chg:.2f}%"})
+            continue
+        # 防守期 ETF 盘中趋势确认：现价须站稳 MA20（允许 0.5% 盘中毛刺容差）
+        ma20 = etf_ma20_map.get(c6)
+        if is_etf and not is_offensive and ma20 and live_px < ma20 * 0.995:
+            skipped.append({"code": c6, "side": "BUY", "reason": f"etf_below_ma20_{live_px:.3f}<{ma20:.3f}"})
+            continue
+
+        key = f"{c6}:BUY"
+        # 用「可用现金按 2500 元分档」作为指纹：卖出回款后现金跃升会立即允许推送衔接买单
+        cash_bucket = int(float(acct["available_cash"]) // 2500)
+        fp = f"BUY:{qty}:c{cash_bucket}"
+        ok_push, why = _can_push(key, fp)
+        if not ok_push:
+            skipped.append({"code": c6, "side": "BUY", "reason": why})
+            continue
+
+        title, body = _format_buy_wechat(b, plan, live_px, pct_chg, ma20, now_str)
+        res = {"ok": True, "detail": "dry_run"} if dry_run else send_wechat_notification(title, body)
+        if res.get("ok"):
+            if not dry_run:
+                prev_cnt = int((sent_map.get(key) or {}).get("count") or 0)
+                sent_map[key] = {"last_ts": now_epoch, "last_at": now_str, "count": prev_cnt + 1, "fingerprint": fp}
+            pushed.append({"code": c6, "name": b["name"], "side": "BUY", "shares": qty, "price": live_px, "title": title, "body": body, "notify": res})
+        else:
+            skipped.append({"code": c6, "side": "BUY", "reason": f"notify_failed:{res.get('detail')}"})
+
+    if not dry_run and pushed:
+        state["date"] = trade_date
+        state["updated_at"] = now_str
+        _save_json(st_path, state)
+
+    return {
+        "status": "ok",
+        "mode": "intraday",
+        "ts": now_str,
+        "regime": plan["regime"],
+        "regime_label": plan["regime_label"],
+        "available_cash": acct["available_cash"],
+        "applied_manual_fills": len(applied_fills),
+        "pushed_count": len(pushed),
+        "pushed": pushed,
+        "skipped": skipped,
+    }
+
+
+def get_acct1_advisor_status(
+    *,
+    now_bj: Optional[datetime] = None,
+    base_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    now = now_bj or datetime.now(BJ_TZ)
+    trade_date = now.strftime("%Y-%m-%d")
+    state = _load_json(_state_path(trade_date, base_dir))
+    fills = load_manual_fills(trade_date, base_dir=base_dir)
+    return {
+        "account_id": ACCOUNT_ID,
+        "date": trade_date,
+        "in_sell_session": _in_intraday_session(now, for_buy=False),
+        "in_buy_session": _in_intraday_session(now, for_buy=True),
+        "sent_today": state.get("sent") or {},
+        "manual_fills_today": fills,
+        "schedule": {
+            "premarket": "mon-fri 09:15 (Asia/Shanghai)",
+            "intraday": "mon-fri 09:35~11:25 & 13:05~14:45 每10分钟 (Asia/Shanghai)",
+            "eod": "mon-fri 15:15 (Asia/Shanghai)",
+        },
+    }
