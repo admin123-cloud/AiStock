@@ -367,5 +367,9 @@ def push_premarket_brief_wechat(brief: Mapping[str, Any]) -> dict[str, Any]:
 
     title = f"AiStock 盘前主线简报 ({brief.get('date') or ''})"
     content = str(brief.get("markdown_text") or "")
-    ok, channel, detail = send_wechat_notification(title=title, content=content)
-    return {"ok": ok, "channel": channel, "detail": detail}
+    res = send_wechat_notification(title=title, markdown_body=content)
+    return {
+        "ok": bool(res.get("ok")),
+        "channel": str(res.get("channel") or ""),
+        "detail": str(res.get("detail") or ""),
+    }

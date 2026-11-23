@@ -13,6 +13,7 @@ from services.g3.ai_screening import (
 from services.g3.premarket_brief import (
     generate_premarket_brief,
     load_latest_premarket_brief,
+    push_premarket_brief_wechat,
 )
 
 
@@ -158,3 +159,28 @@ def test_ai_sentinel_incremental_merge_and_forbid_forward_t(tmp_path: Path):
     assert s_pf is not None and s_pf["risk_light"] == "green"
     assert s_xx is not None and s_xx["forbid_forward_t"] is False
     assert s_sj is not None and s_sj["forbid_forward_t"] is True
+
+
+def test_push_premarket_brief_wechat_matches_t_notify_signature(monkeypatch):
+    """回归验证：push_premarket_brief_wechat 必须按 markdown_body 传参并解析 dict 返回值。"""
+    import inspect
+    from services.trading import t_notify
+
+    sig = inspect.signature(t_notify.send_wechat_notification)
+    captured: dict = {}
+
+    def _fake_send(*args, **kwargs):
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        captured.update(bound.arguments)
+        return {"ok": True, "channel": "ilink_bridge", "detail": "已送达微信"}
+
+    monkeypatch.setattr(t_notify, "send_wechat_notification", _fake_send)
+
+    res = push_premarket_brief_wechat({
+        "date": "2026-11-23",
+        "markdown_text": "⚡ 【AR4.5-L3b 盘前终极战报】测试内容",
+    })
+    assert res == {"ok": True, "channel": "ilink_bridge", "detail": "已送达微信"}
+    assert captured["title"] == "AiStock 盘前主线简报 (2026-11-23)"
+    assert "AR4.5-L3b" in captured["markdown_body"]

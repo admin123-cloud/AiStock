@@ -495,7 +495,6 @@ def post_ar3_push_plan_wechat(
     md = format_ar3_plan_wechat_markdown(plan)
     res = send_wechat_notification(
         title=f"AR3 v3.0 今日买卖单 ({plan.get('date')}) · {plan.get('regime_label')}",
-        content=md,
-        bypass_trading_hours=True,
+        markdown_body=md,
     )
     return {"status": "ok" if res.get("ok") else "failed", "wechat": res, "plan_date": plan.get("date")}

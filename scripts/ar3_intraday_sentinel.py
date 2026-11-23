@@ -135,8 +135,7 @@ def run_sentinel(*, force: bool = False, dry_run: bool = False) -> int:
 
     res = send_wechat_notification(
         title=f"AR3 盘中风控告警 ({now.strftime('%H:%M')})",
-        content=body,
-        bypass_trading_hours=force,
+        markdown_body=body,
     )
     print(f"微信告警推送结果: {res}")
     if res.get("ok"):
