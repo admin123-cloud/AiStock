@@ -2139,7 +2139,7 @@ def serve(
             logger.info("[acct1_ar45_%s] %s 非交易日，静默跳过", mode, today_d)
             return
 
-        base = os.getenv("AISTOCK_INTERNAL_API_URL", "http://aistock-backend:8000").rstrip("/")
+        base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
         opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
         url = f"{base}/api/g3/acct1-advisor/run?mode={mode}&dry_run=false"
         try:
