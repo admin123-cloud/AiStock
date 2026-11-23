@@ -280,3 +280,100 @@ def test_panic_rebound_uses_live_etf_intraday_over_stale_ch_close():
     assert abs(res["metrics"]["pair_avg_change_pct"] - 2.695) < 0.01
     assert res["metrics"]["cyb_change_pct"] == 2.78
     assert res["metrics"]["zz1000_change_pct"] == 2.61
+
+
+def test_four_regime_contract_matrix_zero_rule_conflict(tmp_path: Path):
+    """全 4 态契约矩阵回归测试：防止策略大脑与执行层规则打架（事后才发现问题）。
+
+    1) defensive 常规防守：禁止买 A 股，且防守 ETF 严格要求现价 >= MA20；
+    2) defensive + panic_triggered 冰点反抽：159915/512100 虽在 MA20 下方，但标记为 panic_rebound_etf 必须正常放行；
+    3) offensive 主升进攻：允许买策略目标 A 股与 ETF。
+    """
+    now_am = datetime(2026, 11, 24, 9, 45, 0, tzinfo=BJ_TZ)
+
+    # 场景 1：常规防守期（510880 跌破 MA20 被拦截，512890 站稳 MA20 放行）
+    r_def = adv.run_acct1_advisor(
+        mode="intraday",
+        dry_run=True,
+        now_bj=now_am,
+        base_dir=tmp_path / "s1",
+        overview_override=_mock_overview(avail_cash=35000.0, gcl_qty=0),
+        radar_override=_mock_radar(False),
+        quotes_override={
+            "512890": {"price": 1.260, "change_pct": 0.2},  # >= 1.250 放行
+            "510880": {"price": 3.380, "change_pct": -0.5}, # < 3.395 拦截
+        },
+    )
+    assert any(p["code"] == "512890" and p["side"] == "BUY" for p in r_def["pushed"])
+    assert any(s["code"] == "510880" and "etf_below_ma20" in s["reason"] for s in r_def["skipped"])
+
+    # 场景 2：冰点反抽期（panic_triggered=True，159915/512100 在 MA20 下方必须放行，绝不能被常规 MA20 误杀！）
+    radar_panic = {
+        "regime": "defensive",
+        "is_offensive": False,
+        "etf_radar": {
+            "available": True,
+            "panic_triggered": True,
+            "targets": [
+                {"code": "159915", "name": "创业板ETF", "close": 2.295, "ma20": 2.451, "basket_weight_pct": 30.0, "reason": "冰点企稳右侧反抽"},
+                {"code": "512100", "name": "中证1000ETF", "close": 2.362, "ma20": 2.565, "basket_weight_pct": 30.0, "reason": "冰点企稳右侧反抽"},
+                {"code": "512890", "name": "红利低波ETF", "close": 1.256, "ma20": 1.243, "basket_weight_pct": 40.0, "reason": "冰点期避险压舱石"},
+            ],
+            "universe": [
+                {"code": "159915", "name": "创业板ETF", "close": 2.295, "ma20": 2.451},
+                {"code": "512100", "name": "中证1000ETF", "close": 2.362, "ma20": 2.565},
+                {"code": "512890", "name": "红利低波ETF", "close": 1.256, "ma20": 1.243},
+            ],
+        },
+        "stock_radar": {"available": True, "is_offensive": False, "exec_queue": []},
+    }
+    r_panic = adv.run_acct1_advisor(
+        mode="intraday",
+        dry_run=True,
+        now_bj=now_am,
+        base_dir=tmp_path / "s2",
+        overview_override=_mock_overview(avail_cash=35000.0, gcl_qty=0),
+        radar_override=radar_panic,
+        quotes_override={
+            "159915": {"price": 2.300, "change_pct": 0.2},  # 低于 MA20 2.451，但属于 panic_rebound_etf 必须放行！
+            "512100": {"price": 2.365, "change_pct": 0.1},  # 低于 MA20 2.565，但属于 panic_rebound_etf 必须放行！
+            "512890": {"price": 1.256, "change_pct": 0.0},
+        },
+    )
+    pushed_codes = {p["code"] for p in r_panic["pushed"] if p["side"] == "BUY"}
+    assert "159915" in pushed_codes
+    assert "512100" in pushed_codes
+
+    # 场景 3：主升进攻期（允许买入 AR4.5-L3b 目标个股）
+    radar_off = {
+        "regime": "offensive",
+        "is_offensive": True,
+        "etf_radar": {
+            "available": True,
+            "panic_triggered": False,
+            "targets": [
+                {"code": "510300", "name": "沪深300ETF", "close": 4.200, "ma20": 4.050, "basket_weight_pct": 100.0, "reason": "进攻期宽基"},
+            ],
+            "universe": [{"code": "510300", "name": "沪深300ETF", "close": 4.200, "ma20": 4.050}],
+        },
+        "stock_radar": {
+            "available": True,
+            "is_offensive": True,
+            "stock_budget_active_pct": 50.0,
+            "slot_weight_pct": 12.5,
+            "max_slots": 4,
+            "exec_queue": [
+                {"code": "002415", "name": "海康威视测试", "industry": "电子", "source_label": "F3A", "close": 25.0, "stop_loss_price": 22.5, "notice_date": "2026-10-30", "net_profit_yoy_pct": 35.0},
+            ],
+        },
+    }
+    r_off = adv.run_acct1_advisor(
+        mode="intraday",
+        dry_run=True,
+        now_bj=now_am,
+        base_dir=tmp_path / "s3",
+        overview_override=_mock_overview(avail_cash=35000.0, gcl_qty=0),
+        radar_override=radar_off,
+        quotes_override={"002415": {"price": 25.10, "change_pct": 0.4}, "510300": {"price": 4.210, "change_pct": 0.2}},
+    )
+    assert any(p["code"] == "002415" and p["side"] == "BUY" for p in r_off["pushed"])

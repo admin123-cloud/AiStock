@@ -211,7 +211,17 @@ def compile_ar3_rebalance_plan(
     today_str = now.strftime("%Y-%m-%d")
     ymd = now.strftime("%Y%m%d")
 
-    overview = accounts_overview if accounts_overview is not None else get_accounts_overview()
+    if accounts_overview is not None:
+        overview = accounts_overview
+    else:
+        overview = get_accounts_overview()
+        if account_id == DEFAULT_PRIMARY_ACCOUNT_ID:
+            try:
+                from services.g3.acct1_intraday_advisor import apply_manual_fills_overlay
+
+                overview, _ = apply_manual_fills_overlay(overview, today_str)
+            except Exception:
+                pass
     acct = _extract_account_snapshot(overview, account_id=account_id)
     radar = (
         dict(ar3_radar)
@@ -311,6 +321,8 @@ def compile_ar3_rebalance_plan(
             "code": c6,
             "name": str(item["name"]),
             "asset_kind": "etf",
+            "entry_rule": "panic_rebound_etf" if is_panic_etf else "trend_above_ma20",
+            "is_panic_etf": is_panic_etf,
             "target_weight_pct": w_pct,
             "ref_price": cl,
             "stop_loss_price": stop_px,
@@ -493,6 +505,8 @@ def compile_ar3_rebalance_plan(
             "code": c6,
             "name": tgt["name"],
             "asset_kind": tgt["asset_kind"],
+            "entry_rule": tgt.get("entry_rule") or ("offensive_stock" if not is_etf else "trend_above_ma20"),
+            "is_panic_etf": bool(tgt.get("is_panic_etf")),
             "is_etf": is_etf,
             "side": "BUY",
             "order_type": "base_rebalance",
@@ -562,6 +576,7 @@ def compile_ar3_rebalance_plan(
         "regime": regime,
         "regime_label": str(market_gate.get("regime_label") or regime),
         "is_offensive": is_offensive,
+        "panic_triggered": bool(etf_radar.get("panic_triggered")),
         "smooth_step": smooth_step,
         "config": cfg,
         "account": {k: v for k, v in acct.items() if k != "fills"},

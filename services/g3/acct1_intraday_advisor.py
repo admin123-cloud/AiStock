@@ -432,9 +432,16 @@ def run_acct1_advisor(
             "allow_new_mainwave": bool(radar.get("is_offensive")),
             "sources": {"breadth": {"above_ma20_pct": raw_b}} if raw_b is not None else {},
         }
+        panic_sig = {"triggered": bool((radar.get("etf_radar") or {}).get("panic_triggered"))}
     else:
         market_gate = evaluate_market_regime_gate()
-        radar = build_ar3_dual_core_radar(market_gate=market_gate, force_refresh=False)
+        try:
+            from services.mining.panic_rebound_monitor import evaluate_panic_rebound_signal
+
+            panic_sig = evaluate_panic_rebound_signal(market_gate=market_gate)
+        except Exception:
+            panic_sig = None
+        radar = build_ar3_dual_core_radar(market_gate=market_gate, panic_signal=panic_sig, force_refresh=False)
 
     # 提取当前市场宽度（用于冰点防地板割肉保护 & AR2_2A 实时右侧反抽播报）
     _b_src = ((market_gate.get("sources") or {}).get("breadth") or {}) if isinstance(market_gate, Mapping) else {}
@@ -453,6 +460,7 @@ def run_acct1_advisor(
 
     plan = compile_ar3_rebalance_plan(
         market_gate=market_gate,
+        panic_signal=panic_sig,
         account_id=ACCOUNT_ID,
         smooth_step=True,
         persist=False,
@@ -630,9 +638,12 @@ def run_acct1_advisor(
         if pct_chg is not None and pct_chg >= (lim - 0.5):
             skipped.append({"code": c6, "side": "BUY", "reason": f"limit_up_{pct_chg:.2f}%"})
             continue
-        # 防守期 ETF 盘中趋势确认：严格要求现价 >= MA20，绝不提前接在均线下方
+        # 单一权威裁决：严格按策略编译器标出的 entry_rule 校验，绝不私自发明与策略大脑冲突的二次规则
+        # - trend_above_ma20（常规防守趋势 ETF）：严格要求现价 >= MA20
+        # - panic_rebound_etf（AR2_2A 冰点右侧反抽 159915/512100）：天然超跌在 MA20 下方，豁免 MA20 校验
+        entry_rule = str(b.get("entry_rule") or ("panic_rebound_etf" if b.get("is_panic_etf") else "trend_above_ma20"))
         ma20 = etf_ma20_map.get(c6)
-        if is_etf and not is_offensive and ma20 and live_px < ma20:
+        if is_etf and not is_offensive and entry_rule != "panic_rebound_etf" and ma20 and live_px < ma20:
             skipped.append({"code": c6, "side": "BUY", "reason": f"etf_below_ma20_{live_px:.3f}<{ma20:.3f}"})
             continue
 

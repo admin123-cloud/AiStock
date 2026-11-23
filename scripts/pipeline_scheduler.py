@@ -2181,6 +2181,76 @@ def serve(
         replace_existing=True,
     )
     logger.info("调度注册：acct1_ar45_advisor (premarket=09:15 / intraday=09:35~14:50每10m / eod=15:15 Asia/Shanghai)")
+
+    # 注册每日 15:08 收盘同花顺双账号自动只读快照同步 + 20:00 晚间快照时效自检（根治快照停在上午）
+    def _run_eod_broker_snapshot_sync_job(stage: str) -> None:
+        import urllib.request as _urlreq
+
+        now_bj = datetime.now(BEIJING_TZ)
+        today_d = now_bj.date()
+        try:
+            is_td = _default_is_trading_day(today_d)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[broker_sync_%s] 交易日校验异常跳过: %s", stage, exc)
+            return
+        if not is_td:
+            return
+
+        base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
+        opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
+        try:
+            if stage == "evening_check":
+                with opener.open(_urlreq.Request(f"{base}/api/accounts/overview", method="GET"), timeout=15) as r:
+                    ov = json.loads(r.read().decode("utf-8"))
+                a1 = next((a for a in (ov.get("accounts") or []) if a.get("account_id") == "acct1"), None)
+                gen_at = str((a1 or {}).get("generated_at") or "")
+                # 判断快照是否已覆盖今日 15:00 后（UTC 07:00+ 或北京时间 15:00+）
+                today_s = today_d.isoformat()
+                is_fresh_eod = False
+                if gen_at.startswith(today_s):
+                    try:
+                        dt_snap = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
+                        dt_bj = dt_snap.astimezone(BEIJING_TZ) if dt_snap.tzinfo else dt_snap.replace(tzinfo=BEIJING_TZ)
+                        is_fresh_eod = dt_bj.hour >= 15
+                    except ValueError:
+                        pass
+                if is_fresh_eod:
+                    logger.info("[broker_sync_evening_check] acct1 今日盘后快照已新鲜 (%s)，无需补采", gen_at)
+                    return
+                logger.warning("[broker_sync_evening_check] acct1 快照仍停留在盘中 (%s)，立即触发补采", gen_at)
+
+            payload = json.dumps({"accounts": ["acct1", "acct2"], "minimize_after": True}).encode("utf-8")
+            req = _urlreq.Request(
+                f"{base}/api/accounts/sync",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with opener.open(req, timeout=20) as r:
+                res = json.loads(r.read().decode("utf-8"))
+            logger.info("[broker_sync_%s] 已触发双账号只读同步: status=%s req=%s", stage, res.get("status"), res.get("request_id"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[broker_sync_%s] 触发双账号同步异常: %s", stage, exc)
+
+    scheduler.add_job(
+        lambda: _run_eod_broker_snapshot_sync_job("close_1508"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=15, minute=8, timezone=BEIJING_TZ),
+        id="broker_snapshot_sync_1508",
+        name="收盘后双账号同花顺自动只读快照同步（工作日 15:08）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_eod_broker_snapshot_sync_job("evening_check"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=20, minute=0, timezone=BEIJING_TZ),
+        id="broker_snapshot_check_2000",
+        name="晚间 20:00 复盘前快照时效核查与补采（工作日 20:00）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：broker_snapshot_sync (close=15:08 / evening_check=20:00 Asia/Shanghai)")
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown
     except (KeyboardInterrupt, SystemExit):
