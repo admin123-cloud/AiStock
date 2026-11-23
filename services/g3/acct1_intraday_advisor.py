@@ -337,7 +337,7 @@ def _format_buy_wechat(
     stop_px = order.get("stop_loss_price")
     stop_str = (f"{float(stop_px):.3f}" if is_etf else f"{float(stop_px):.2f}") if stop_px else "—"
     chg_str = f"（当日 {pct_chg:+.2f}%）" if pct_chg is not None else ""
-    ma20_str = f"｜盘中站稳 MA20(`{ma20:.3f}`)" if (is_etf and ma20 and live_px >= ma20 * 0.995) else ""
+    ma20_str = f"｜盘中站稳 MA20(`{ma20:.3f}`)" if (is_etf and ma20 and live_px >= ma20) else ""
 
     title = f"【🟢 acct1·AR4.5-L3b 买入】{name}({code}) {qty}股 @ {px_str}"
     lines = [
@@ -583,9 +583,9 @@ def run_acct1_advisor(
         if pct_chg is not None and pct_chg >= (lim - 0.5):
             skipped.append({"code": c6, "side": "BUY", "reason": f"limit_up_{pct_chg:.2f}%"})
             continue
-        # 防守期 ETF 盘中趋势确认：现价须站稳 MA20（允许 0.5% 盘中毛刺容差）
+        # 防守期 ETF 盘中趋势确认：严格要求现价 >= MA20，绝不提前接在均线下方
         ma20 = etf_ma20_map.get(c6)
-        if is_etf and not is_offensive and ma20 and live_px < ma20 * 0.995:
+        if is_etf and not is_offensive and ma20 and live_px < ma20:
             skipped.append({"code": c6, "side": "BUY", "reason": f"etf_below_ma20_{live_px:.3f}<{ma20:.3f}"})
             continue
 
