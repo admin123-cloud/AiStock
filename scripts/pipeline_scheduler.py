@@ -2228,7 +2228,60 @@ def serve(
             )
             with opener.open(req, timeout=20) as r:
                 res = json.loads(r.read().decode("utf-8"))
-            logger.info("[broker_sync_%s] 已触发双账号只读同步: status=%s req=%s", stage, res.get("status"), res.get("request_id"))
+            req_id = str(res.get("request_id") or "")
+            bridge_now = res.get("bridge") if isinstance(res.get("bridge"), dict) else {}
+            logger.info("[broker_sync_%s] 已触发双账号只读同步: status=%s req=%s", stage, res.get("status"), req_id)
+
+            # 轮询最多 90 秒等待宿主机桌面桥回执；若离线/需人工重登(need_manual_panel_login)/超时，立即推微信告警
+            fail_reason = ""
+            if not bridge_now.get("online", True):
+                fail_reason = "宿主机同花顺桌面桥离线（bridge_offline）"
+            elif req_id:
+                done_rec = None
+                for _ in range(18):
+                    time.sleep(5)
+                    try:
+                        with opener.open(_urlreq.Request(f"{base}/api/accounts/overview", method="GET"), timeout=15) as r2:
+                            ov2 = json.loads(r2.read().decode("utf-8"))
+                        lc = (ov2.get("bridge") or {}).get("latest_completed") or {}
+                        if str(lc.get("request_id") or "") == req_id:
+                            done_rec = lc
+                            break
+                    except Exception:
+                        continue
+                if done_rec is None:
+                    fail_reason = f"同步指令 {req_id} 超过 90 秒未完成（可能同花顺未打开或正处于人工键鼠活跃窗口）"
+                else:
+                    st_done = str(done_rec.get("status") or "")
+                    rc_done = done_rec.get("rc")
+                    if st_done == "need_manual_panel_login":
+                        fail_reason = "同花顺交易面板已自动超时锁屏/退出登录（need_manual_panel_login），系统严守「凭证零接触」不自动输密码"
+                    elif st_done != "ok" or (rc_done is not None and int(rc_done) != 0):
+                        fail_reason = f"双账号同步未成功（status={st_done}, rc={rc_done}）"
+                    else:
+                        logger.info("[broker_sync_%s] 双账号收盘快照已成功对齐 (req=%s)", stage, req_id)
+
+            if fail_reason:
+                logger.warning("[broker_sync_%s] 触发人工介入告警: %s", stage, fail_reason)
+                try:
+                    from services.trading.t_notify import load_notify_config, send_wechat_notification
+
+                    stage_label = "15:08 收盘快照同步" if stage == "close_1508" else "20:00 晚间复盘快照自检"
+                    alert_title = f"【⚠️ 同花顺快照同步需要人工处理】{stage_label}"
+                    alert_body = "\n".join([
+                        f"- 触发节点：`{stage_label}`（`{now_bj.strftime('%Y-%m-%d %H:%M')}`）",
+                        f"- 失败原因：{fail_reason}",
+                        "- 影响说明：未同步前券商原始快照可能停留在盘中旧时点（`acct1` 聊天核销成交仍会自动叠加兜底）。",
+                        "- 处理动作：请重新打开/登录同花顺远航交易面板，然后在网页 `/g3/accounts` 点击「一键同步双账号」即可立即对齐。",
+                    ])
+                    wres = send_wechat_notification(alert_title, alert_body)
+                    if not wres.get("ok"):
+                        # 微信失败自动降级走 QQ 邮箱 SMTP 告警，确保必达
+                        cfg_mail = {**load_notify_config(), "channel": "qq_email"}
+                        mres = send_wechat_notification(alert_title, alert_body, config=cfg_mail)
+                        logger.info("[broker_sync_%s] 微信失败已降级邮件告警: %s", stage, mres)
+                except Exception as nexc:  # noqa: BLE001
+                    logger.warning("[broker_sync_%s] 发送告警通知失败: %s", stage, nexc)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[broker_sync_%s] 触发双账号同步异常: %s", stage, exc)
 
