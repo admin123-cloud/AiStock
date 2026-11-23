@@ -347,6 +347,8 @@ export default function G3TTradeWorkbench() {
         const name = String(d.name || card?.name || code)
         const sideStr = String(d.side || '')
         const isBuy = sideStr.toLowerCase().includes('buy')
+        // AR4.5-L3b 总闸门：非进攻期严禁弹出任何 A 股个股买入T桌面提醒
+        if (isBuy && res.market_regime_gate?.regime !== 'offensive') continue
         const px = Number(d.price ?? d.trigger_price ?? d.px ?? 0)
         const qty = Number(d.qty || card?.daily_plan?.recommended_lot || card?.t_lot_cap || 0)
         triggerSignalAlert({

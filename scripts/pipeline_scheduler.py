@@ -1494,6 +1494,15 @@ def _run_l2_heartbeat(now_bj: datetime, log: logging.Logger) -> dict[str, Any]:
     except Exception as exc:
         log.warning("[t_trade_monitor] 行情刷新失败: %s", exc)
 
+    # 2.5 AR4.5-L3b 大盘总闸门（最高权威：非进攻期源头严禁生成任何 A 股个股 buy-T 草案）
+    ar45_gate = {"allow_buy": False, "regime": "defensive"}
+    try:
+        from services.trading.t_notify import get_ar45_buy_gate_status
+
+        ar45_gate = get_ar45_buy_gate_status()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[t_trade_monitor] 读取 AR4.5-L3b 总闸门异常，按 fail-closed 拦截 buy-T: %s", exc)
+
     # 3. 逐票评估
     for holding in holdings.get("holdings") or []:
         code = str(holding.get("code") or "").split(".")[0]
@@ -1547,6 +1556,22 @@ def _run_l2_heartbeat(now_bj: datetime, log: logging.Logger) -> dict[str, Any]:
         if sig_result.get("signal"):
             signal = sig_result["signal"]
             draft = sig_result.get("draft")
+            # 1) 冷却门禁生效时严禁重复落盘或弹窗（修复原先每 30 秒刷屏漏洞）
+            if sig_result.get("cooldown_active"):
+                code_report["suppressed"] = "cooldown"
+                report["codes"][code] = code_report
+                continue
+            # 2) AR4.5-L3b 大盘总闸门拦截：防守/平衡/恐慌期严禁发出任何 A 股个股 buy-T 买入提醒
+            if "buy" in str(signal).lower() and not ar45_gate.get("allow_buy"):
+                code_report["suppressed"] = f"ar45_{ar45_gate.get('regime', 'defensive')}_buy_blocked"
+                log.info(
+                    "[t_trade_monitor] AR4.5-L3b 总闸门拦截 %s(%s) buy-T 信号（当前大盘=%s，严禁买A股）",
+                    name,
+                    code,
+                    ar45_gate.get("regime"),
+                )
+                report["codes"][code] = code_report
+                continue
             code_report["signal"] = signal
             if draft:
                 code_report["draft_id"] = draft["id"]

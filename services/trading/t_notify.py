@@ -35,6 +35,47 @@ logger = logging.getLogger("t_notify")
 _watcher_started = False
 _watcher_lock = threading.Lock()
 
+# AR4.5-L3b 大盘总闸门 60 秒缓存 + 同向防刷屏冷却（30 分钟）+ 过期草案拦截（15 分钟）
+_GATE_CACHE_TTL_SEC = 60.0
+_gate_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+_SAME_SIDE_COOLDOWN_SEC = 30 * 60
+_STALE_DRAFT_MAX_AGE_SEC = 15 * 60
+
+
+def get_ar45_buy_gate_status(*, force_refresh: bool = False) -> dict[str, Any]:
+    """查询当前 AR4.5-L3b 大盘总闸门是否允许任何 A 股个股买入（含底仓做T买侧）。
+
+    遵循 fail-closed 原则：只要市场非 offensive（即防守/平衡/恐慌期），或门禁查询异常，
+    一律禁止发出任何 A 股个股 buy-T 买入提醒（仅放行 sell-T 高抛反T减仓）。
+    """
+    now_mono = time.monotonic()
+    if not force_refresh and _gate_cache["data"] is not None and (now_mono - float(_gate_cache["ts"])) < _GATE_CACHE_TTL_SEC:
+        return dict(_gate_cache["data"])
+    try:
+        from services.g3.market_regime_gate import evaluate_market_regime_gate
+
+        gate = evaluate_market_regime_gate()
+        regime = str(gate.get("regime") or "defensive")
+        allow_new = bool(gate.get("allow_new_mainwave"))
+        allow_buy = (regime == "offensive") and allow_new
+        res = {
+            "allow_buy": allow_buy,
+            "regime": regime,
+            "regime_label": str(gate.get("regime_label") or regime),
+            "reason": "ok" if allow_buy else f"ar45_{regime}_no_a_stock_buy",
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[t_notify] 查询 AR4.5-L3b 总闸门异常，按 fail-closed 拦截买入信号: %s", exc)
+        res = {
+            "allow_buy": False,
+            "regime": "unknown_fail_closed",
+            "regime_label": "闸门异常·默认禁买",
+            "reason": "ar45_gate_error_fail_closed",
+        }
+    _gate_cache["ts"] = now_mono
+    _gate_cache["data"] = res
+    return dict(res)
+
 
 def _store_dir() -> Path:
     p = runtime_path("g3_desk_plans")
@@ -290,25 +331,57 @@ def send_wechat_notification(
 # 后台轻量监听器：自动捕捉新做T信号草案并单向推送微信（带去重）
 # ---------------------------------------------------------------------------
 
-def _load_notified_ids(trade_date: str) -> set[str]:
+def _load_notified_state(trade_date: str) -> tuple[set[str], dict[str, float]]:
     p = _notified_path(trade_date)
     if not p.exists():
-        return set()
+        return set(), {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        return set(data.get("ids") or []) if isinstance(data, dict) else set()
+        if not isinstance(data, dict):
+            return set(), {}
+        ids = set(data.get("ids") or [])
+        raw_cd = data.get("cooldowns") or {}
+        cooldowns = {str(k): float(v) for k, v in raw_cd.items() if isinstance(v, (int, float))}
+        return ids, cooldowns
     except Exception:  # noqa: BLE001
-        return set()
+        return set(), {}
 
 
-def _save_notified_ids(trade_date: str, ids: set[str]) -> None:
+def _save_notified_state(trade_date: str, ids: set[str], cooldowns: Mapping[str, float]) -> None:
     p = _notified_path(trade_date)
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(
-        json.dumps({"date": trade_date, "ids": sorted(ids)}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            {"date": trade_date, "ids": sorted(ids), "cooldowns": dict(cooldowns)},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     os.replace(tmp, p)
+
+
+def _load_notified_ids(trade_date: str) -> set[str]:
+    ids, _ = _load_notified_state(trade_date)
+    return ids
+
+
+def _save_notified_ids(trade_date: str, ids: set[str]) -> None:
+    _, cooldowns = _load_notified_state(trade_date)
+    _save_notified_state(trade_date, ids, cooldowns)
+
+
+def _parse_draft_ts_bj(raw: Any) -> Optional[datetime]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s[:19], fmt).replace(tzinfo=BJ_TZ)
+        except ValueError:
+            continue
+    return None
 
 
 def _in_trading_hours(now_bj: datetime) -> bool:
@@ -318,20 +391,31 @@ def _in_trading_hours(now_bj: datetime) -> bool:
     return (dt_time(9, 15) <= t <= dt_time(11, 35)) or (dt_time(12, 55) <= t <= dt_time(15, 5))
 
 
-def format_draft_message(draft: Mapping[str, Any]) -> tuple[str, str]:
+def format_draft_message(
+    draft: Mapping[str, Any],
+    *,
+    gate_info: Optional[Mapping[str, Any]] = None,
+) -> tuple[str, str]:
     """将一条做T信号草案格式化为单向推送标题与 Markdown 正文。"""
     code = str(draft.get("code") or "")
     name = str(draft.get("name") or code)
     side_raw = str(draft.get("side") or "")
     is_buy = "buy" in side_raw.lower()
-    side_label = "🟢 买入T信号" if is_buy else "🔴 卖出T信号"
+    side_label = "🟢 买入T信号" if is_buy else "🔴 卖出T/高抛减仓信号"
     px = draft.get("px") or draft.get("price") or draft.get("trigger_price") or "—"
     qty = draft.get("qty") or draft.get("shares") or "—"
     ts = str(draft.get("ts") or draft.get("created_at") or "")
     trig = draft.get("trigger") if isinstance(draft.get("trigger"), Mapping) else {}
-    kind = str(trig.get("kind") or draft.get("trigger_kind") or draft.get("lane") or "做T信号")
-    rsi5 = trig.get("rsi5") or draft.get("intrabar_rsi5")
-    rsi15 = trig.get("rsi15")
+    sig_blk = draft.get("signal") if isinstance(draft.get("signal"), Mapping) else {}
+    kind = str(
+        trig.get("kind")
+        or draft.get("trigger_kind")
+        or sig_blk.get("type")
+        or draft.get("lane")
+        or "做T信号"
+    )
+    rsi5 = trig.get("rsi5") if trig.get("rsi5") is not None else (sig_blk.get("rsi5") if sig_blk.get("rsi5") is not None else draft.get("intrabar_rsi5"))
+    rsi15 = trig.get("rsi15") if trig.get("rsi15") is not None else sig_blk.get("rsi15")
     vwap = trig.get("vwap")
 
     title = f"【{side_label}】{name}({code}) @ {px}"
@@ -342,24 +426,37 @@ def format_draft_message(draft: Mapping[str, Any]) -> tuple[str, str]:
         f"- **触发依据**：`{kind}`",
     ]
     if rsi5 is not None or rsi15 is not None:
-        lines.append(f"- **实时指标**：RSI5m=`{rsi5 if rsi5 is not None else '—'}` / RSI15m=`{rsi15 if rsi15 is not None else '—'}` / VWAP=`{vwap if vwap is not None else '—'}`")
-    lines.append("- **提示**：单向提醒，请结合同花顺盘口与做T实战台确认后手动操作。")
+        lines.append(f"- **实时指标**：RSI15m=`{rsi15 if rsi15 is not None else '—'}` / RSI5m=`{rsi5 if rsi5 is not None else '—'}` / VWAP=`{vwap if vwap is not None else '—'}`")
+    if gate_info and gate_info.get("regime_label"):
+        lines.append(f"- **AR4.5-L3b 大盘状态**：`{gate_info['regime_label']}`")
+    if not is_buy:
+        lines.append("- **提示**：高抛减仓/反T卖点参考（若为非 AR4.5-L3b 历史旧底仓，优先按实战交易台清退）。")
+    else:
+        lines.append("- **提示**：单向提醒，请结合同花顺盘口与「资金账号与做T」确认后手动操作。")
     return title, "\n".join(lines)
 
 
-def poll_and_push_new_drafts_once() -> int:
-    """扫描今日 drafts 与 pending_push，若发现未推送的活跃草案则单向推送微信。返回本次发送条数。"""
+def poll_and_push_new_drafts_once(
+    *,
+    now_bj: Optional[datetime] = None,
+    tracker_dir_override: Optional[Path] = None,
+    gate_info_override: Optional[Mapping[str, Any]] = None,
+) -> int:
+    """扫描今日 drafts 与 pending_push，经 AR4.5-L3b 总闸门与 30m 防刷屏冷却后单向推送微信。"""
     cfg = load_notify_config()
     if not cfg.get("enabled") or not cfg.get("notify_on_draft", True):
         return 0
-    now_bj = datetime.now(BJ_TZ)
-    if cfg.get("only_trading_hours", True) and not _in_trading_hours(now_bj):
+    now_dt = now_bj or datetime.now(BJ_TZ)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=BJ_TZ)
+    if cfg.get("only_trading_hours", True) and not _in_trading_hours(now_dt):
         return 0
 
-    today_str = now_bj.strftime("%Y-%m-%d")
+    today_str = now_dt.strftime("%Y-%m-%d")
     ymd = today_str.replace("-", "")
-    tracker_dir = runtime_path("t_tracker")
-    notified = _load_notified_ids(today_str)
+    tracker_dir = tracker_dir_override or runtime_path("t_tracker")
+    notified, cooldowns = _load_notified_state(today_str)
+    state_dirty = False
 
     candidates: list[dict[str, Any]] = []
     # 1) 优先扫描 pending_push
@@ -389,27 +486,75 @@ def poll_and_push_new_drafts_once() -> int:
             except ValueError:
                 continue
 
+    if not candidates:
+        return 0
+
+    gate_info = dict(gate_info_override) if gate_info_override is not None else get_ar45_buy_gate_status()
+    allow_buy = bool(gate_info.get("allow_buy"))
+    now_epoch = now_dt.timestamp()
+
     sent_count = 0
     for d in candidates:
         did = str(d.get("id") or "")
         if not did or did in notified:
             continue
-        # 仅推送非过期草案；已过期的直接标为已见避免补发陈旧信号
+        # 1) 已过期草案直接标为已见
         status = str(d.get("bar_status") or d.get("status") or "")
         if status == "expired_unconfirmed":
             notified.add(did)
+            state_dirty = True
             continue
-        title, body = format_draft_message(d)
+
+        # 2) 超过 15 分钟的滞留旧草案不再补发（防断线恢复后集中轰炸）
+        dts = _parse_draft_ts_bj(d.get("ts") or d.get("created_at"))
+        if dts is not None and (now_dt - dts).total_seconds() > _STALE_DRAFT_MAX_AGE_SEC:
+            notified.add(did)
+            state_dirty = True
+            logger.info("[t_notify] 跳过超时滞留草案 %s (ts=%s)", did, d.get("ts"))
+            continue
+
+        # 3) AR4.5-L3b 总闸门硬拦截：非进攻期严禁推送任何 A 股个股买入T信号
+        side_raw = str(d.get("side") or "")
+        is_buy = "buy" in side_raw.lower()
+        code6 = str(d.get("code") or "").split(".")[0].strip()
+        if is_buy and not allow_buy:
+            notified.add(did)
+            state_dirty = True
+            logger.info(
+                "[t_notify] AR4.5-L3b 总闸门拦截冲突 buy-T 信号 %s (%s, regime=%s)",
+                did,
+                code6,
+                gate_info.get("regime"),
+            )
+            continue
+
+        # 4) 同标的同方向 30 分钟冷却门禁（杜绝 L2 心跳每 30 秒换 draft_id 重复刷屏）
+        cd_key = f"{code6}:{'buy' if is_buy else 'sell'}"
+        last_sent_ts = float(cooldowns.get(cd_key) or 0.0)
+        if last_sent_ts > 0 and (now_epoch - last_sent_ts) < _SAME_SIDE_COOLDOWN_SEC:
+            notified.add(did)
+            state_dirty = True
+            logger.info(
+                "[t_notify] 同向 30m 冷却跳过重复草案 %s (%s, 距上次 %ds)",
+                did,
+                cd_key,
+                int(now_epoch - last_sent_ts),
+            )
+            continue
+
+        title, body = format_draft_message(d, gate_info=gate_info)
         res = send_wechat_notification(title, body, config=cfg)
         if res.get("ok"):
             notified.add(did)
+            cooldowns[cd_key] = now_epoch
+            state_dirty = True
             sent_count += 1
             logger.info("[t_notify] 已单向推送做T草案 %s -> %s", did, res.get("channel"))
         else:
             logger.warning("[t_notify] 推送草案 %s 失败: %s", did, res.get("detail"))
 
-    if sent_count > 0 or len(notified) > 0:
-        _save_notified_ids(today_str, notified)
+    if state_dirty:
+        _save_notified_state(today_str, notified, cooldowns)
     return sent_count
 
 
