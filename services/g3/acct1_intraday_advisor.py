@@ -36,6 +36,12 @@ MIN_ORDER_YUAN = 2500.0  # 低于 2500 元的碎单不推送（清仓尾单除�
 COOLDOWN_SEC = 2 * 3600  # 同标的同方向未成交时 2 小时冷却
 MAX_PUSH_PER_KEY_PER_DAY = 2  # 同标的同方向每日至多推送 2 次（上午 1 次 + 下午 1 次）
 
+# 2026-11-23 实盘自省补丁：极端冰点防地板割肉保护阈值
+PANIC_BREADTH_THRESHOLD = 18.0   # 全市场站上 MA20 宽度 <= 18% 视为极端恐慌冰点区
+PANIC_SHARP_DROP_PCT = -2.5      # 极端冰点区内，个股盘中急跌 <= -2.5% 禁止在早盘/盘中地板价催卖
+PANIC_TAIL_CONFIRM_TIME = dt_time(14, 35)  # 冰点急跌保护至 14:35 尾盘确认，或等盘中反抽至 VWAP 上方/跌幅收窄至 -1% 内
+SMOOTH_DAILY_DONE_RATIO = 0.25   # 单票当日已人工核销卖出额 >= 总资产 25% 即视为完成当日 30% 平稳步长，不再二次催卖
+
 MORNING_START = dt_time(9, 35)
 MORNING_END = dt_time(11, 28)
 AFTERNOON_START = dt_time(13, 0)
@@ -419,14 +425,31 @@ def run_acct1_advisor(
     # 3. 编译 AR4.5-L3b 唯一权威调仓计划（先卖后买）
     if radar_override is not None:
         radar = dict(radar_override)
+        raw_b = (radar.get("market_breadth_pct") if radar.get("market_breadth_pct") is not None else None)
         market_gate = {
             "regime": str(radar.get("regime") or "defensive"),
             "regime_label": "主升进攻期" if radar.get("is_offensive") else "防守退潮·趋势下跌",
             "allow_new_mainwave": bool(radar.get("is_offensive")),
+            "sources": {"breadth": {"above_ma20_pct": raw_b}} if raw_b is not None else {},
         }
     else:
         market_gate = evaluate_market_regime_gate()
         radar = build_ar3_dual_core_radar(market_gate=market_gate, force_refresh=False)
+
+    # 提取当前市场宽度（用于冰点防地板割肉保护 & AR2_2A 实时右侧反抽播报）
+    _b_src = ((market_gate.get("sources") or {}).get("breadth") or {}) if isinstance(market_gate, Mapping) else {}
+    try:
+        breadth_pct: Optional[float] = float(_b_src["above_ma20_pct"]) if _b_src.get("above_ma20_pct") is not None else None
+    except (TypeError, ValueError):
+        breadth_pct = None
+    in_panic_zone = breadth_pct is not None and breadth_pct <= PANIC_BREADTH_THRESHOLD
+
+    # 汇总当日已核销卖出金额（按代码，用于判断 30% 单日平稳减仓步长是否已完成，避免二次催卖）
+    today_sold_yuan_by_code: dict[str, float] = {}
+    for f in load_manual_fills(trade_date, base_dir=base_dir):
+        if str(f.get("side") or "").upper() == "SELL":
+            fc = str(f.get("code") or "").zfill(6)
+            today_sold_yuan_by_code[fc] = today_sold_yuan_by_code.get(fc, 0.0) + float(f.get("amount") or 0.0)
 
     plan = compile_ar3_rebalance_plan(
         market_gate=market_gate,
@@ -535,6 +558,30 @@ def run_acct1_advisor(
             skipped.append({"code": c6, "side": "SELL", "reason": f"limit_down_{pct_chg:.2f}%"})
             continue
 
+        # 2026-11-23 补丁①：单日 30% 平稳减仓步长已完成（当日已核销卖出额 >= 总资产 25%）→ 不再同日二次催卖
+        total_assets_cur = float(acct.get("total_assets") or 0.0)
+        sold_today_amt = today_sold_yuan_by_code.get(c6, 0.0)
+        if total_assets_cur > 0 and sold_today_amt >= total_assets_cur * SMOOTH_DAILY_DONE_RATIO:
+            skipped.append({"code": c6, "side": "SELL", "reason": f"smooth_step_daily_done_{sold_today_amt:.0f}"})
+            continue
+
+        # 2026-11-23 补丁②：极端冰点防地板割肉保护门
+        # 当全市场宽度 <= 18% 且拟卖为 A 股非 ETF 个股、且时间早于 14:35 尾盘确认时：
+        # 若盘中急跌 <= -2.5%（或明显跌破分时均价线 VWAP 且跌幅 < -1%），禁止早盘恐慌地板割肉，
+        # 改等盘中反抽修复或 14:35 尾盘确认！
+        is_etf_sell = bool(s.get("is_etf") or _is_etf(c6))
+        vwap_px = float(q["vwap"]) if q.get("vwap") else 0.0
+        if in_panic_zone and not is_etf_sell and now.time() < PANIC_TAIL_CONFIRM_TIME:
+            is_sharp_drop = pct_chg is not None and pct_chg <= PANIC_SHARP_DROP_PCT
+            is_weak_below_vwap = (vwap_px > 0 and live_px < vwap_px * 0.992 and pct_chg is not None and pct_chg < -1.0)
+            if is_sharp_drop or is_weak_below_vwap:
+                skipped.append({
+                    "code": c6,
+                    "side": "SELL",
+                    "reason": f"panic_zone_no_floor_sell_chg_{pct_chg:.2f}%_wait_rebound_or_1435",
+                })
+                continue
+
         key = f"{c6}:SELL"
         fp = f"SELL:{qty}:{int(s.get('available_shares') or 0)}"
         ok_push, why = _can_push(key, fp)
@@ -607,6 +654,36 @@ def run_acct1_advisor(
             pushed.append({"code": c6, "name": b["name"], "side": "BUY", "shares": qty, "price": live_px, "title": title, "body": body, "notify": res})
         else:
             skipped.append({"code": c6, "side": "BUY", "reason": f"notify_failed:{res.get('detail')}"})
+
+    # 5C. 2026-11-23 补丁③：极端冰点右侧反抽雷达（AR2_2A）盘中实时触发播报（当日至多推 1 次）
+    if in_panic_zone and "PANIC_REBOUND:ALERT" not in sent_map:
+        try:
+            from services.mining.panic_rebound_monitor import evaluate_panic_rebound_signal
+
+            pr = evaluate_panic_rebound_signal(
+                market_gate=market_gate,
+                etf_quote_fetcher=(lambda _codes: {k: v for k, v in live_quotes.items()}) if quotes_override is not None else None,
+            )
+            if pr.get("triggered"):
+                m = pr.get("metrics") or {}
+                avg_chg = m.get("pair_avg_change_pct")
+                cyb_chg = m.get("cyb_change_pct")
+                zz_chg = m.get("zz1000_change_pct")
+                p_title = f"【🎯 acct1·AR2_2A 冰点右侧拐点触发】创业板+中证1000 盘中均涨 {avg_chg:+.2f}%"
+                p_body = "\n".join([
+                    f"- 账号：`acct1`（{acct['label']} · AR4.5-L3b × AR2_2A 冰点反抽雷达）",
+                    f"- 触发依据：全市场宽度 `{breadth_pct:.2f}% ≤ 18%`（极端冰点）且 **创业板 `{cyb_chg:+.2f}%` + 中证1000 `{zz_chg:+.2f}%` = 均涨 `{avg_chg:+.2f}%` ≥ +0.50%**",
+                    f"- 历史实证：近 4 年仅触发 13 次（胜率 69.2% · 单笔均 +2.06% · 最大回撤 3.7%）",
+                    "- 操作纪律：① 如手里还有待清退弱势旧仓，可借情绪修复反抽逢高减仓，**切忌地板割肉后又追高买回单票**；② 如需博弈短期情绪反抽，仅限高流动性宽基 ETF（`159915` 创业板ETF + `512100` 中证1000ETF，止损 -6% / 止盈 +12% / 持 5 日或宽度 ≥ 38% 离场）。",
+                    f"- 时间：`{now_str}`｜当前可用现金：`{float(acct['available_cash']):,.2f}` 元",
+                ])
+                res = {"ok": True, "detail": "dry_run"} if dry_run else send_wechat_notification(p_title, p_body)
+                if res.get("ok"):
+                    if not dry_run:
+                        sent_map["PANIC_REBOUND:ALERT"] = {"last_ts": now_epoch, "last_at": now_str, "count": 1, "fingerprint": f"PR:{trade_date}"}
+                    pushed.append({"code": "AR2_2A", "name": "冰点右侧反抽拐点", "side": "ALERT", "shares": 0, "price": 0.0, "title": p_title, "body": p_body, "notify": res})
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[acct1_advisor] 冰点右侧雷达检测跳过: %s", exc)
 
     if not dry_run and pushed:
         state["date"] = trade_date

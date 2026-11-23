@@ -165,10 +165,46 @@ def evaluate_panic_rebound_signal(
 
     in_panic_zone = breadth_pct is not None and breadth_pct <= PANIC_BREADTH_THRESHOLD
 
-    # 获取 399006.SZ 与 000852.SH 最新涨跌幅（盘中若已有实时行情优先实时，否则用 ClickHouse 最新收盘）
+    # 拉取 ETF 实时参考价（便于前端直接展示价格、一键预填，以及盘中实时替代滞后的 T-1 日线涨跌幅）
+    etf_quotes: dict[str, dict[str, Any]] = {}
+    if in_panic_zone:
+        try:
+            q_fn = etf_quote_fetcher or (lambda codes: fetch_batch_live_quotes(codes, timeout=3.0))
+            etf_quotes = q_fn([t["code"] for t in PANIC_ETF_TARGETS]) or {}
+        except Exception:
+            etf_quotes = {}
+
+    # 获取 399006.SZ 与 000852.SH 最新涨跌幅；
+    # 关键修复（2026-11-23 补丁）：盘中 ClickHouse 仅含 T-1 收盘日线，若实时 ETF 行情有效且当日日期 > CH 最新日线日期，
+    # 必须优先以 159915/512100 当日实时盘口涨跌幅作为右侧企稳阳线实时依据，杜绝盘中漏报大拐点！
     idx_data = (index_chg_fetcher or _fetch_latest_pair_index_chg_from_ch)()
-    cyb = idx_data.get("399006.SZ") or {}
-    zz1000 = idx_data.get("000852.SH") or {}
+    cyb = dict(idx_data.get("399006.SZ") or {})
+    zz1000 = dict(idx_data.get("000852.SH") or {})
+    today_bj = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+    used_live_intraday = False
+    if in_panic_zone and index_chg_fetcher is None and etf_quotes:
+        q_cyb = etf_quotes.get("159915") or {}
+        q_zz = etf_quotes.get("512100") or {}
+        ch_latest_dt = str(cyb.get("date") or zz1000.get("date") or "")
+        if (
+            q_cyb.get("change_pct") is not None
+            and q_zz.get("change_pct") is not None
+            and (not ch_latest_dt or today_bj > ch_latest_dt)
+        ):
+            cyb = {
+                "date": today_bj,
+                "close": q_cyb.get("price"),
+                "change_pct": round(float(q_cyb["change_pct"]), 2),
+                "source": "live_etf_159915",
+            }
+            zz1000 = {
+                "date": today_bj,
+                "close": q_zz.get("price"),
+                "change_pct": round(float(q_zz["change_pct"]), 2),
+                "source": "live_etf_512100",
+            }
+            used_live_intraday = True
+
     chg_list = [v["change_pct"] for v in (cyb, zz1000) if v.get("change_pct") is not None]
     pair_avg_chg = round(sum(chg_list) / len(chg_list), 2) if len(chg_list) == 2 else None
     reversal_confirmed = pair_avg_chg is not None and pair_avg_chg >= REVERSAL_MIN_AVG_CHG_PCT
@@ -187,31 +223,23 @@ def evaluate_panic_rebound_signal(
             if pair_avg_chg is not None
             else "等待双指数最新行情"
         )
-        headline = f"全市场宽度 {breadth_pct:.2f}% ≤ 18% 已达极端冰点！{gap_str}，严禁左侧盲抄，等创业板+中证1000 均涨 ≥ +0.50% 右侧确认后次日开盘出击。"
+        headline = f"全市场宽度 {breadth_pct:.2f}% ≤ 18% 已达极端冰点！{gap_str}，严禁左侧盲抄，等创业板+中证1000 均涨 ≥ +0.50% 右侧确认后出击。"
     else:
         status = "TRIGGERED_BUY_ETF"
-        status_label = "⚡ 冰点企稳触发 · 建议次日开盘买ETF"
+        status_label = "⚡ 冰点企稳触发 · 右侧反抽信号"
         tone = "emerald"
+        src_note = "（盘中实时确认）" if used_live_intraday else "（收盘确认）"
         headline = (
-            f"AR2_2A 冰点企稳右侧触发！宽度 {breadth_pct:.2f}% ≤ 18% 且 创业板+中证1000 均涨 {pair_avg_chg:+.2f}% ≥ +0.50%（历史13战9胜，胜率69.2%）；"
-            f"建议次日开盘等权切入 159915 + 512100（总仓位 60%，止损 -6% / 止盈 +12% / 持满 5 日或宽度 ≥ 38% 离场）。"
+            f"AR2_2A 冰点企稳右侧触发{src_note}！宽度 {breadth_pct:.2f}% ≤ 18% 且 创业板+中证1000 均涨 {pair_avg_chg:+.2f}% ≥ +0.50%（历史13战9胜，胜率69.2%）；"
+            f"右侧博弈反抽仅建议宽基 ETF（159915 + 512100，止损 -6% / 止盈 +12% / 持满 5 日或宽度 ≥ 38% 离场）。"
         )
-
-    # 拉取 ETF 实时参考价（便于前端直接展示价格与一键带入 L2 预检/预填）
-    etf_quotes: dict[str, dict[str, Any]] = {}
-    if in_panic_zone:
-        try:
-            q_fn = etf_quote_fetcher or (lambda codes: fetch_batch_live_quotes(codes, timeout=3.0))
-            etf_quotes = q_fn([t["code"] for t in PANIC_ETF_TARGETS]) or {}
-        except Exception:
-            etf_quotes = {}
 
     etf_plans: list[dict[str, Any]] = []
     for t in PANIC_ETF_TARGETS:
         q = etf_quotes.get(t["code"]) or {}
         px = q.get("price") or q.get("prev_close")
         px_f = round(float(px), 3) if px else None
-        idx_info = idx_data.get(t["index_code"]) or {}
+        idx_info = cyb if t["index_code"] == "399006.SZ" else zz1000
         etf_plans.append(
             {
                 "code": t["code"],
