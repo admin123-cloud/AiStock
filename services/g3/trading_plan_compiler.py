@@ -41,16 +41,16 @@ def compile_daily_trading_command(
     is_offensive = regime in ("offensive", "extreme_offensive")
     router_mode = "active_strategy" if is_offensive else "ar3_cross_asset_defense"
     active_strategy_name = (
-        "AR4.5-L3b 终极双核（国家队动态股仓 AB混合 + 宽基ETF）"
+        "AR4.6 终极双核（国家队动态股仓 AB混合 + 宽基ETF）"
         if is_offensive
-        else "AR4.5-L3b 非进攻跨资产避险（0% 个股 + 100% 风险调整Top2逆波ETF + 南向港科滤网）"
+        else "AR4.6 非进攻跨资产避险（0% 个股 + 100% 风险调整Top2逆波ETF + 南向港科滤网）"
     )
 
-    # 1. 允许 / 禁止交易模式（AR4.5-L3b 终极双核实盘纪律）
+    # 1. 允许 / 禁止交易模式（AR4.6 终极双核实盘纪律）
     if is_defensive:
         allowed_modes = [
-            "按上方 AR4.5-L3b 买卖执行单清退非目标/破止损个股（平稳 ≤30%/日 或一步到位）",
-            "将可用现金与卖出回款无缝切入 AR4.5-L3b 非A股风险调整 Top2 逆波 ETF（红利/黄金/纳指/恒科/十年国债）",
+            "按上方 AR4.6 买卖执行单清退非目标/破止损个股（平稳 ≤30%/日 或一步到位）",
+            "将可用现金与卖出回款无缝切入 AR4.6 非A股风险调整 Top2 逆波 ETF（红利/黄金/纳指/恒科/十年国债）",
             "已有未清退历史底仓仅允许反T降本（先卖后买）",
         ]
         forbidden_modes = [
@@ -59,8 +59,8 @@ def compile_daily_trading_command(
         ]
     elif regime == "balanced":
         allowed_modes = [
-            "非进攻期（横盘平衡）：个股预算锁死 0%，100% 资金走 AR4.5-L3b 非A股风险调整 Top2 逆波 ETF 轮动",
-            "持续观察 AR4.5（F2A/F3A）双雷达与近20日赚钱效应，等待大盘确认进入进攻期",
+            "非进攻期（横盘平衡）：个股预算锁死 0%，100% 资金走 AR4.6 非A股风险调整 Top2 逆波 ETF 轮动",
+            "持续观察 AR4.6（F2A/F3A）双雷达与近20日赚钱效应，等待大盘确认进入进攻期",
         ]
         forbidden_modes = [
             "严禁在横盘震荡期抢跑重仓买个股（实证平衡期清股切ETF可将卡玛由1.69提至1.86）",
@@ -68,7 +68,7 @@ def compile_daily_trading_command(
         ]
     else:
         allowed_modes = [
-            "AR4.5-L3b 进攻期开放：按国家队250日分位动态 0/35/50/65% 仓位配 AB混合个股（4槽单行业限1只，-10%硬止损）",
+            "AR4.6 进攻期开放：按国家队250日分位动态 0/35/50/65% 仓位配 AB混合个股（4槽单行业限1只，-10%硬止损）",
             "剩余资金+未满槽闲置现金同步配置 A 股强势宽基 Top2 ETF",
             "随近20日双线赚钱效应随时在作战台热切换 AB混合 / L4自动切 / F2A / F3A 主引擎",
         ]

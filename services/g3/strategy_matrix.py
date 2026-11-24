@@ -279,10 +279,10 @@ def build_strategy_matrix(
     coach_metrics = coach.get("metrics") if isinstance(coach.get("metrics"), Mapping) else {}
     r40 = _load_r40_shadow_progress(tracker_dir)
 
-    # 组装三条策略腿的健康度与实时状态（统一 AR4.5-L3b 终版口径）
+    # 组装三条策略腿的健康度与实时状态（统一 AR4.6 终版口径）
     offense_status = "active" if regime == "offensive" else "halted"
     offense_status_label = (
-        "AR4.5-L3b 进攻期开放（国家队分位动态 0/35/50/65%）"
+        "AR4.6 进攻期开放（国家队分位动态 0/35/50/65%）"
         if regime == "offensive"
         else "非进攻期锁仓 0%（仅作备选观察）"
     )
@@ -309,7 +309,7 @@ def build_strategy_matrix(
     legs = [
         {
             "leg_id": "offense",
-            "name": "进攻核 · AR4.5 基本面业绩 × 趋势 (AB混合)",
+            "name": "进攻核 · AR4.6 基本面业绩 × 趋势 (AB混合)",
             "role": "仅右侧进攻期启动：按国家队250日分位动态调节股仓(0/35/50/65%)，F3A+F2A交替填4槽（单行业限1只，-10%硬止损）",
             "target_pct": effective_alloc["offense_pct"],
             "base_pct": base_alloc["offense_pct"],
@@ -318,19 +318,19 @@ def build_strategy_matrix(
             "contracts_count": len(by_leg["offense"]),
             "contracts": by_leg["offense"],
             "action_route": "/g3/mainwave",
-            "action_label": "查看 AR4.5 双雷达与排雷",
+            "action_label": "查看 AR4.6 双雷达与排雷",
             "feedback_note": (
-                "AR4.5-L3b 物理单账户实证：4年 +283.2%、年化 +41.3%、回撤 19.1%、卡玛 2.17、OOS回撤 11.3%。"
+                "AR4.6 物理单账户实证：4年 +308.0%、年化 +43.5%、回撤 19.1%、卡玛 2.28、OOS +11.3% / OOS回撤 10.7%。"
                 + (
                     " 当前处于非进攻期，个股预算锁死 0%，严禁开新个股仓。"
                     if regime != "offensive"
-                    else " 当前处于进攻期，按 AR4.5-L3b 双核执行单择优填槽（支持一键切换 L4 赚钱效应自动热切）。"
+                    else " 当前处于进攻期，按 AR4.6 双核执行单择优填槽（支持一键切换 L4 赚钱效应自动热切）。"
                 )
             ),
         },
         {
             "leg_id": "defense_etf",
-            "name": "压舱核 · AR4.5-L3b 风险调整 Top2 逆波 ETF",
+            "name": "压舱核 · AR4.6 风险调整 Top2 逆波 ETF",
             "role": "14只5大类场内ETF（A股宽基/红利/黄金/纳指标普/恒科/国债）+ 极端冰点企稳反抽",
             "target_pct": effective_alloc["defense_etf_pct"],
             "base_pct": base_alloc["defense_etf_pct"],
@@ -339,7 +339,7 @@ def build_strategy_matrix(
             "contracts_count": len(by_leg["defense_etf"]),
             "contracts": by_leg["defense_etf"],
             "action_route": "/g3/desk",
-            "action_label": "前往 AR4.5-L3b 作战台查看今日目标ETF",
+            "action_label": "前往 AR4.6 作战台查看今日目标ETF",
             "feedback_note": (
                 "进攻期配置 A 股最强宽基 Top2 承接剩余资金；非进攻期 100% 切入非 A 股风险调整 Top2 逆波组合 + 南向港科滤网；极端冰点企稳自动触发 60% 双创反抽 + 40% 避险。"
             ),
@@ -358,7 +358,7 @@ def build_strategy_matrix(
             "action_label": "前往作战台处理底仓",
             "feedback_note": (
                 f"近窗做T净额={t_pnl if t_pnl is not None else '—'}；"
-                + ("请优先按 AR4.5-L3b 执行单清退破止损/非目标个股再谈做T。" if stop_viol > 0 else "盘中 15 分钟哨兵自动盯紧 -10% 硬止损与冰点信号。")
+                + ("请优先按 AR4.6 执行单清退破止损/非目标个股再谈做T。" if stop_viol > 0 else "盘中 15 分钟哨兵自动盯紧 -10% 硬止损与冰点信号。")
             ),
         },
     ]

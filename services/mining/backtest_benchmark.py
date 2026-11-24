@@ -45,7 +45,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "宽度回落 < 75% 或 动量/量比降温 → 退回「主升进攻」；若触发防守条件（N=2）→ 直接切入「防守退潮」",
         "confirm_days": "N=3 进攻确认叠加当日极值",
         "position_cap_pct": 100,
-        "active_strategy": "AR4.5-L3b 现役双核：按国家队250日分位动态 0/35/50/65% AB混合个股（F3A回踩+F2A趋势，4槽每行业限1只，叠加ERP<5%逃顶锁0%）+ 剩余配 A股宽基Top2 ETF",
+        "active_strategy": "AR4.6 现役双核：按国家队250日分位动态 0/35/50/65% AB混合个股（F3A回踩+F2A趋势，4槽每行业限1只，日收盘-10%宽追踪，严禁主观猜顶/30m洗盘；叠加ERP<5%逃顶锁0%）+ 剩余配 A股宽基Top2 ETF",
     },
     {
         "phase": "offensive",
@@ -55,7 +55,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "任一进攻条件失效且未达防守线 → 切入「横盘平衡」；连续 N=2 日触及防守线 → 直接切入「防守退潮」",
         "confirm_days": "N=3（进攻宁稳勿急，防一日游假突破）",
         "position_cap_pct": 100,
-        "active_strategy": "AR4.5-L3b 现役双核：国家队分位 ≥70%→65% / 中性→50% / <30%→35% AB混合个股（-10%硬止损+10%追踪止盈）+ 剩余资金配 A股强势宽基Top2 ETF",
+        "active_strategy": "AR4.6 现役双核：国家队分位 ≥70%→65% / 中性→50% / <30%→35% AB混合个股（日收盘-10%硬止损与-10%宽追踪，绝不用30m止损/高潮刹车）+ 剩余资金配 A股强势宽基Top2 ETF",
     },
     {
         "phase": "balanced",
@@ -65,7 +65,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "连续 N=3 日走强达标 → 升级「主升进攻」；连续 N=2 日跌破MA20/宽度<30% 或 单日宽度<25% → 降级「防守退潮」",
         "confirm_days": "实时状态承接",
         "position_cap_pct": 100,
-        "active_strategy": "AR4.5-L3b 非进攻清股切换：退出进攻态即清股（个股 0%），100% 切入非A股风险调整动量 Top2 逆波动率加权 ETF + 南向20日港科滤网",
+        "active_strategy": "AR4.6 非进攻清股切换：退出进攻态即清股（个股 0%，绝不在18%~52%半山腰赌个股），100% 切入非A股风险调整动量 Top2 逆波动率加权 ETF + 南向20日港科滤网",
     },
     {
         "phase": "defensive",
@@ -75,7 +75,7 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "宽度继续杀跌至 ≤ 18% → 进入「极端恐慌」；宽度恢复 ≥ 30% 且 上证企稳 → 回到「横盘平衡」",
         "confirm_days": "N=2 快速防守（防守宁快勿慢，绝不恋战）",
         "position_cap_pct": 100,
-        "active_strategy": "AR4.5-L3b 跨资产逆波避险：清退全部非目标个股（0% 个股），100% 切入非A股风险调整 Top2 逆波 ETF（南向<0拦截港科，全破位切十年国债）",
+        "active_strategy": "AR4.6 跨资产逆波避险：清退全部非目标个股（0% 个股），100% 切入非A股风险调整 Top2 逆波 ETF（南向<0拦截港科，全破位切十年国债）",
     },
     {
         "phase": "extreme_panic",
@@ -85,9 +85,212 @@ AR1_FIVE_REGIME_RULES: list[dict[str, Any]] = [
         "exit_switch": "宽度反弹回升 > 18% → 回到「防守退潮」或「横盘平衡」",
         "confirm_days": "N=2 防守确认叠加宽度 ≤ 18%",
         "position_cap_pct": 100,
-        "active_strategy": "AR4.5-L3b 严禁左侧抢跑个股 · 默认 100% 持非A股风险调整 Top2 逆波 ETF；一旦创业板+中证1000均涨 ≥+0.50% 右侧确认，触发 60% 159915+512100 反抽 + 40% 非A股避险底仓",
+        "active_strategy": "AR4.6 冰点 30m 真龙狙击：未确认前 100% 持非A股逆波 ETF；一旦 10:30~14:30 创业板+中证1000 30m K线双收阳且均涨 ≥+0.80%，下根开盘半仓 50% 切入 10万可执行 AB_BLEND Top4 真龙（单手≤1.5万，逐票-6%止损/+5%后-3.5%追踪/≤5日）+ 50% 避险 ETF（严禁 T+1 高开≥+2%追买）",
     },
 ]
+
+
+def _build_ar46_panic_30m_sleeve_map(
+    dates: list[str],
+    breadth_map: dict[str, float],
+    by_date_pit: dict[str, pd.DataFrame],
+    sel_ab_fn: Any,
+    *,
+    max_lot_yuan: float = 15000.0,
+    max_slots: int = 4,
+) -> dict[str, dict[str, Any]]:
+    """基于 ClickHouse 真实 30m/15m 分钟线构建 AR4.6 极端冰点半仓 10万可执行 AB_BLEND（B档逐票止损+追踪）逐日净收益表。"""
+    idx_codes = ("399006.SZ", "000852.SH")
+    cand_indices = [i for i in range(1, len(dates) - 1) if breadth_map.get(dates[i - 1], 50.0) <= 18.0]
+    if not cand_indices:
+        return {}
+    cand_dates = [dates[i] for i in cand_indices]
+    c_sql = ",".join(f"'{c}'" for c in idx_codes)
+    d_sql = ",".join(f"'{d}'" for d in sorted(set(cand_dates)))
+    # 指数前收
+    idx_daily = _ch_query_df(
+        f"""
+        SELECT code, toString(trade_date) AS d, close
+        FROM stock.kline_daily FINAL
+        WHERE code IN ({c_sql}) AND trade_date >= '2022-12-15' AND trade_date <= '{dates[-1]}'
+        ORDER BY code, trade_date
+        """
+    )
+    if idx_daily.empty:
+        return {}
+    idx_daily["pc"] = idx_daily.groupby("code", sort=False)["close"].shift(1)
+    idx_pc = {(str(c), str(d)): float(p) for c, d, p in zip(idx_daily["code"], idx_daily["d"], idx_daily["pc"]) if pd.notna(p) and float(p) > 0}
+
+    idx_30m = _ch_query_df(
+        f"""
+        SELECT code, toString(datetime) AS dt_str, open, close
+        FROM stock.kline_minute_30 FINAL
+        WHERE code IN ({c_sql}) AND toDate(datetime) IN ({d_sql})
+        ORDER BY code, datetime
+        """
+    )
+    if idx_30m.empty:
+        return {}
+    idx_30m["d"] = idx_30m["dt_str"].str.slice(0, 10)
+    idx_30m["hm"] = idx_30m["dt_str"].str.slice(11, 16)
+    by_d_30 = {d: g for d, g in idx_30m.groupby("d", sort=False)}
+
+    events: list[dict[str, Any]] = []
+    next_ok = 0
+    for i in cand_indices:
+        if i < next_ok:
+            continue
+        d = dates[i]
+        g = by_d_30.get(d)
+        if g is None or g.empty:
+            continue
+        sub = {c: {str(r.hm): (float(r.open), float(r.close)) for r in gc.itertuples(index=False)} for c, gc in g.groupby("code", sort=False)}
+        hms = sorted(set(sub.get(idx_codes[0], {})) & set(sub.get(idx_codes[1], {})))
+        for k, hm in enumerate(hms):
+            if hm < "10:30" or hm > "14:30" or k + 1 >= len(hms):
+                continue
+            o0, c0 = sub[idx_codes[0]][hm]
+            o1, c1 = sub[idx_codes[1]][hm]
+            p0, p1 = idx_pc.get((idx_codes[0], d), 0.0), idx_pc.get((idx_codes[1], d), 0.0)
+            if p0 <= 0 or p1 <= 0:
+                continue
+            avg_r = 0.5 * ((c0 / p0 - 1.0) + (c1 / p1 - 1.0))
+            if c0 > o0 and c1 > o1 and avg_r >= 0.008:
+                events.append({"idx": i, "t0": d, "t_prev": dates[i - 1], "entry_hm": hms[k + 1]})
+                next_ok = i + 6
+                break
+
+    if not events:
+        return {}
+
+    needed_dates: set[str] = set()
+    needed_codes: set[str] = set()
+    cands_ranked: dict[str, list[dict[str, Any]]] = {}
+    for ev in events:
+        i, dp = ev["idx"], ev["t_prev"]
+        for step in range(0, 7):
+            if i + step < len(dates):
+                needed_dates.add(dates[i + step])
+        if dp not in cands_ranked:
+            ab = sel_ab_fn(by_date_pit.get(dp, pd.DataFrame()))
+            lst = []
+            for r in ab.head(24).itertuples(index=False):
+                lst.append({"code": str(r.code), "ind": str(getattr(r, "industry", "other") or "other")})
+                needed_codes.add(str(r.code))
+            cands_ranked[dp] = lst
+
+    if not needed_codes:
+        return {}
+    sc_sql = ",".join(f"'{c}'" for c in sorted(needed_codes))
+    sd_sql = ",".join(f"'{d}'" for d in sorted(needed_dates))
+    bars_15 = _ch_query_df(
+        f"""
+        SELECT code, toString(datetime) AS dt_str, open, close
+        FROM stock.kline_minute_15 FINAL
+        WHERE code IN ({sc_sql}) AND toDate(datetime) IN ({sd_sql})
+        ORDER BY code, datetime
+        """
+    )
+    if bars_15.empty:
+        return {}
+    bars_15["d"] = bars_15["dt_str"].str.slice(0, 10)
+    bars_15["hm"] = bars_15["dt_str"].str.slice(11, 16)
+    b15_map = {(str(c), str(d)): g.reset_index(drop=True) for (c, d), g in bars_15.groupby(["code", "d"], sort=False)}
+
+    stk_daily = _ch_query_df(
+        f"""
+        SELECT code, toString(trade_date) AS d, close
+        FROM stock.kline_daily FINAL
+        WHERE code IN ({sc_sql}) AND trade_date >= '2022-12-15' AND trade_date <= '{dates[-1]}'
+        ORDER BY code, trade_date
+        """
+    )
+    stk_daily["pc"] = stk_daily.groupby("code", sort=False)["close"].shift(1)
+    stk_pc = {(str(c), str(d)): float(p) for c, d, p in zip(stk_daily["code"], stk_daily["d"], stk_daily["pc"]) if pd.notna(p) and float(p) > 0}
+
+    sleeve_map: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        i0, t0, dp, ehm = ev["idx"], ev["t0"], ev["t_prev"], ev["entry_hm"]
+        picked: list[dict[str, Any]] = []
+        used_inds: set[str] = set()
+        for cand in cands_ranked.get(dp, []):
+            if len(picked) >= max_slots:
+                break
+            c, ind = cand["code"], cand["ind"]
+            if ind != "未分类" and ind in used_inds:
+                continue
+            df_t0 = b15_map.get((c, t0))
+            if df_t0 is None or df_t0.empty:
+                continue
+            rows_e = df_t0[df_t0["hm"] >= ehm]
+            if rows_e.empty:
+                continue
+            epx = float(rows_e.iloc[0]["open"])
+            if epx <= 0:
+                continue
+            min_lot = 200 if c.startswith("688") else 100
+            if epx * min_lot > max_lot_yuan:
+                continue
+            pc = stk_pc.get((c, t0), 0.0)
+            lim_up = 19.5 if c.startswith(("300", "301", "688")) else 9.5
+            if pc > 0 and (epx / pc - 1.0) * 100.0 >= lim_up:
+                continue
+            picked.append({"code": c, "entry_px": epx * (1.0 + BUY_COST), "peak_px": epx, "last_px": float(df_t0.iloc[-1]["close"]), "alive": True, "cash_val": 0.0})
+            used_inds.add(ind)
+
+        if not picked:
+            continue
+        w_each = 1.0 / len(picked)
+        prev_basket_val = 1.0
+        # T0 当日收盘市值（已含买入摩擦）
+        t0_val = sum(w_each * (p["last_px"] / p["entry_px"]) for p in picked)
+        for p in picked:
+            p["peak_px"] = max(p["peak_px"], p["last_px"])
+        sleeve_map[t0] = {"is_entry": True, "is_exit": False, "daily_ret": t0_val / prev_basket_val - 1.0}
+        prev_basket_val = t0_val
+
+        for step in range(1, 6):
+            idx_d = i0 + step
+            if idx_d >= len(dates):
+                break
+            d = dates[idx_d]
+            is_last = (step == 5) or (breadth_map.get(dates[idx_d - 1], 0.0) >= 38.0) or (idx_d == len(dates) - 1)
+            for p in picked:
+                if not p["alive"]:
+                    continue
+                df_d = b15_map.get((p["code"], d))
+                if df_d is None or df_d.empty:
+                    continue
+                if is_last:
+                    ex_px = float(df_d.iloc[-1]["close"]) * (1.0 - SELL_COST)
+                    p["cash_val"] = w_each * (ex_px / p["entry_px"])
+                    p["alive"] = False
+                    continue
+                # 逐 15m 监控 B 档风控（-6% 硬止损 / 浮盈>=+5% 后 -3.5% 追踪止盈）
+                n_b = len(df_d)
+                for k in range(n_b):
+                    cl = float(df_d.iloc[k]["close"])
+                    if cl > p["peak_px"]:
+                        p["peak_px"] = cl
+                    pnl = cl / p["entry_px"] - 1.0
+                    pk_g = p["peak_px"] / p["entry_px"] - 1.0
+                    dd_pk = cl / p["peak_px"] - 1.0
+                    if pnl <= -0.06 or (pk_g >= 0.05 and dd_pk <= -0.035):
+                        ex_raw = float(df_d.iloc[k + 1]["open"]) if k + 1 < n_b else cl
+                        ex_px = ex_raw * (1.0 - SELL_COST)
+                        p["cash_val"] = w_each * (ex_px / p["entry_px"])
+                        p["alive"] = False
+                        break
+                if p["alive"]:
+                    p["last_px"] = float(df_d.iloc[-1]["close"])
+
+            cur_val = sum((w_each * (p["last_px"] / p["entry_px"]) if p["alive"] else p["cash_val"]) for p in picked)
+            all_dead = all(not p["alive"] for p in picked)
+            sleeve_map[d] = {"is_entry": False, "is_exit": bool(is_last or all_dead), "daily_ret": cur_val / prev_basket_val - 1.0 if prev_basket_val > 0 else 0.0}
+            prev_basket_val = cur_val
+            if is_last or all_dead:
+                break
+    return sleeve_map
 
 
 def _report_path() -> Path:
@@ -392,7 +595,9 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "meta": meta,
         }
 
-    # 7. AR4.5-L3b（现役主策略）+ AR4.5-L4（可选低回撤）+ AR3 v3.0（升级前历史基准）物理单账户零杠杆对照
+    # 7. AR4.6（现役主策略）+ AR4.5-L3b（升级前基准）+ AR4.5-L4（可选低回撤）+ AR3 v3.0（历史基准）物理单账户零杠杆对照
+    ar46_nav: pd.Series | None = None
+    ar46_meta: dict[str, Any] = {}
     ar45_l3b_nav: pd.Series | None = None
     ar45_l3b_meta: dict[str, Any] = {}
     ar45_l4_nav: pd.Series | None = None
@@ -550,7 +755,7 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
 
                 ar45_l3b_nav, ar45_l3b_meta = simulate_ar45_physical(
                     day_df, sig_map, by_date_pit, px_lookup, div_lookup, piv_o, piv_c, code_to_class,
-                    name="AR4.5-L3b 现役主策略",
+                    name="AR4.5-L3b 升级前基准",
                     stock_cap_fn=_cap_ar45,
                     erp_active_exit=True,
                     etf_policy="def_ram_top2_invvol",
@@ -558,6 +763,22 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
                     southbound_hk_boost=0.25,
                 )
                 ar45_l3b_meta["max_gross_exposure_pct"] = 100.0
+
+                # 7c. 现役冠军主策略：AR4.6（AR4.5-L3b 底座 + 冰点 30m K线半仓 10万可执行 AB_BLEND 4真龙 B档追踪）
+                breadth_map_ar46 = dict(zip(dates, day_df["market_above_ma20_pct"].fillna(50.0).tolist()))
+                panic_ab_sleeve = _build_ar46_panic_30m_sleeve_map(dates, breadth_map_ar46, by_date_pit, _sel_ab_blend)
+                ar46_nav, ar46_meta = simulate_ar45_physical(
+                    day_df, sig_map, by_date_pit, px_lookup, div_lookup, piv_o, piv_c, code_to_class,
+                    name="AR4.6 现役主策略",
+                    stock_cap_fn=_cap_ar45,
+                    erp_active_exit=True,
+                    etf_policy="def_ram_top2_invvol",
+                    southbound_hk_filter=True,
+                    southbound_hk_boost=0.25,
+                    panic_ab_sleeve_map=panic_ab_sleeve if panic_ab_sleeve else None,
+                    panic_ab_weight=0.50,
+                )
+                ar46_meta["max_gross_exposure_pct"] = 100.0
 
                 ar45_l4_nav, ar45_l4_meta = simulate_ar45_physical(
                     day_df, sig_map, by_date_pit, px_lookup, div_lookup, piv_o, piv_c, code_to_class,
@@ -571,20 +792,33 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
                 )
                 ar45_l4_meta["max_gross_exposure_pct"] = 100.0
         except Exception:
+            ar46_nav = None
             ar45_l3b_nav = None
             ar45_l4_nav = None
     except Exception:
+        ar46_nav = None
         ar3_dual_nav = None
         ar3_etf01_nav = None
 
     comparisons = []
+    if ar46_nav is not None:
+        comparisons.append(
+            pack_series(
+                "ar46_champion",
+                "★ AR4.6 现役主策略（AR4.5-L3b 底座 + 冰点 30m 半仓 10万可执行 AB真龙）",
+                "物理级单一现金账户：进攻期日线收盘宽容持有 AB_BLEND（国家队动态0/35/50/65%）；非进攻18%~52%零个股100%非A股逆波Top2 ETF；极端冰点≤18%经30m双指确认半仓50%切入10万可执行AB真龙(B档-6%/+5%→-3.5%追踪)+50%避险ETF",
+                "active_combo",
+                ar46_nav,
+                ar46_meta,
+            )
+        )
     if ar45_l3b_nav is not None:
         comparisons.append(
             pack_series(
                 "ar45_l3b_champion",
-                "★ AR4.5-L3b 现役主策略（国家队动态股仓 + 风险调整Top2逆波 + 南向港科滤网）",
-                "物理级单一现金账户：进攻期按国家队250日分位动态 0/35/50/65% AB混合个股；非进攻期清股全切非A股风险调整Top2逆波ETF + 南向20日港科滤网（4年全双位数正收益）",
-                "active_combo",
+                "历史演进 · AR4.5-L3b 升级前基准（冰点 60% 宽基 ETF 版）",
+                "AR4.6 升级前上一代主策略：保留作为同单账户演进对照（进攻与常规防守与 AR4.6 完全一致，差异仅在冰点腿）",
+                "legacy_combo",
                 ar45_l3b_nav,
                 ar45_l3b_meta,
             )
@@ -708,6 +942,8 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "panic_etf": round(float(panic_nav.iloc[idx]), 4),
             "retired_mw04": round(float(legacy_nav.iloc[idx]), 4),
         }
+        if ar46_nav is not None:
+            pt["ar46"] = round(float(ar46_nav.iloc[idx]), 4)
         if ar45_l3b_nav is not None:
             pt["ar45_l3b"] = round(float(ar45_l3b_nav.iloc[idx]), 4)
         if ar45_l4_nav is not None:
@@ -726,7 +962,7 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "status": "PASS",
             "detail": (
                 "大盘五态周期、国家队250日分位、南向20日净流、跨资产ETF动量、个股均线/量能均严格使用 T-1 收盘数据；"
-                "AR4.5 财报与业绩预告 100% 按真实公告披露日 notice_date 对齐（严禁使用 report_date），每笔个股成交硬断言 notice_date <= signal_date < entry_date。"
+                "AR4.6 财报与业绩预告 100% 按真实公告披露日 notice_date 对齐（严禁使用 report_date），每笔个股成交硬断言 notice_date <= signal_date < entry_date；冰点 30m 触发使用 ClickHouse 真实 30m/15m 分钟线，确认后下根开盘成交。"
             ),
         },
         {
@@ -740,8 +976,8 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "title": "3. 物理级单一现金账户硬锁死总仓位 ≤ 100%（零隐形杠杆）",
             "status": "PASS",
             "detail": (
-                f"拒绝把独立策略收益率直接相加造假；AR4.5-L3b、AR4.5-L4、AR3 v3.0 与 AR1 全天候组合均在共享唯一 cash 变量的单一账户逐日撮合，"
-                f"实测最大总仓位 100.00%、最低现金 0.0000，股/ETF 资金切换双向实扣摩擦，绝无超 100% 隐形杠杆。"
+                f"拒绝把独立策略收益率直接相加造假；AR4.6、AR4.5-L3b、AR4.5-L4、AR3 v3.0 与 AR1 全天候组合均在共享唯一 cash 变量的单一账户逐日撮合，"
+                f"实测最大总仓位 100.00%、最低现金 0.0000，股/ETF 与冰点半仓切换双向实扣摩擦，绝无超 100% 隐形杠杆。"
             ),
         },
         {

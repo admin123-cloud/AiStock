@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""acct1（广发证券-曾*）AR4.5-L3b 专属盘中智能买卖提醒引擎。
+"""acct1（广发证券-曾*）AR4.6 专属盘中智能买卖提醒引擎。
 
 设计定位（严格对齐用户指令与 acct2 托管微信体验）：
-1. 唯一策略大脑：100% 绑定 AR4.5-L3b（compile_ar3_rebalance_plan + build_ar3_dual_core_radar），
+1. 唯一策略大脑：100% 绑定 AR4.6（compile_ar3_rebalance_plan + build_ar3_dual_core_radar），
    绝不混用旧做T RSI 买单；防守/平衡期严禁推送任何 A 股个股买入，只放行跨资产逆波 ETF 与旧底仓清退卖出；
 2. 允许盘中实时买卖（09:35~11:28 & 13:00~14:50，新开买仓截止 14:45），严格遵守 A 股 T+1、
    100 股整手、涨跌停保护、最小下单额（>=2500 元，清仓尾单除外）与 ETF 盘中 MA20 站稳确认；
-3. 微信通知风格完全对标 acct2（独立账号标签 `acct1·AR4.5-L3b`，一眼区分操作方向、股数、盘口参考价、
+3. 微信通知风格完全对标 acct2（独立账号标签 `acct1·AR4.6`，一眼区分操作方向、股数、盘口参考价、
    金额、策略理由、止损位与执行后预计资金），并带 2 小时同向防刷屏冷却（每日同向至多 2 次）；
 4. 支持「聊天报单核销」（record_acct1_manual_fill）：在同花顺下次快照前自动叠加已成交回款与持股变化，
-   用户卖出回款后可立刻触发衔接的 AR4.5-L3b 买单提示；同花顺快照追平后自动以券商实盘为准。
+   用户卖出回款后可立刻触发衔接的 AR4.6 买单提示；同花顺快照追平后自动以券商实盘为准。
 """
 from __future__ import annotations
 
@@ -337,13 +337,13 @@ def _format_sell_wechat(
     ]
     next_hint = f"卖出回款后将自动衔接推送买单（{' + '.join(buy_hint_parts)}）" if buy_hint_parts else "卖出后保留现金防守"
 
-    title = f"【🔴 acct1·AR4.5-L3b 卖出】{name}({code}) {qty}股 @ {px_str}"
+    title = f"【🔴 acct1·AR4.6 卖出】{name}({code}) {qty}股 @ {px_str}"
     lines = [
-        f"- 账号：`acct1`（{acct['label']} · AR4.5-L3b 策略驱动）",
+        f"- 账号：`acct1`（{acct['label']} · AR4.6 策略驱动）",
         f"- 操作：**卖出 {qty} 股** `{code}` {name}" + (f"（总可卖 {full_sh} 股，平稳步长分批）" if full_sh > qty else "（清仓可用）"),
         f"- 盘口参考：`{px_str}`{chg_str}，预计回款 `{amt:,.2f}` 元",
         f"- 时间：`{now_str}`｜当前大盘：`{plan['regime_label']}`",
-        f"- 策略理由：{order.get('reason') or 'AR4.5-L3b 调仓卖出'}",
+        f"- 策略理由：{order.get('reason') or 'AR4.6 调仓卖出'}",
         f"- 卖后预计可用现金：`{est_cash_after:,.2f}` 元｜{next_hint}",
         f"- 提示：请在同花顺 `acct1` 核对盘口后手动卖出（或至 `/g3/desk` 一键预填）；成交后直接回我「acct1 已卖 {code} {qty}股 @ 均价」即可实时校准账本并衔接买单。",
     ]
@@ -371,13 +371,13 @@ def _format_buy_wechat(
     chg_str = f"（当日 {pct_chg:+.2f}%）" if pct_chg is not None else ""
     ma20_str = f"｜盘中站稳 MA20(`{ma20:.3f}`)" if (is_etf and ma20 and live_px >= ma20) else ""
 
-    title = f"【🟢 acct1·AR4.5-L3b 买入】{name}({code}) {qty}股 @ {px_str}"
+    title = f"【🟢 acct1·AR4.6 买入】{name}({code}) {qty}股 @ {px_str}"
     lines = [
-        f"- 账号：`acct1`（{acct['label']} · AR4.5-L3b 策略驱动）",
+        f"- 账号：`acct1`（{acct['label']} · AR4.6 策略驱动）",
         f"- 操作：**买入 {qty} 股** `{code}` {name}（目标占比 `{order.get('target_weight_pct', 0)}%`）",
         f"- 盘口参考：`{px_str}`{chg_str}，预计金额 `{amt:,.2f}` 元｜参考止损：`{stop_str}`",
         f"- 时间：`{now_str}`｜当前大盘：`{plan['regime_label']}`{ma20_str}",
-        f"- 策略理由：{order.get('reason') or 'AR4.5-L3b 目标配置建仓'}",
+        f"- 策略理由：{order.get('reason') or 'AR4.6 目标配置建仓'}",
         f"- 买后预计剩余现金：`{rem_cash:,.2f}` 元｜账户总资产：`{float(acct['total_assets']):,.2f}` 元",
         f"- 提示：请在同花顺 `acct1` 核对盘口后手动买入（或至 `/g3/desk` 一键预填）；成交后直接回我「acct1 已买 {code} {qty}股 @ 均价」即可同步账本。",
     ]
@@ -399,7 +399,7 @@ def run_acct1_advisor(
     radar_override: Optional[Mapping[str, Any]] = None,
     quotes_override: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
-    """执行 acct1 AR4.5-L3b 盘前/盘中/盘后巡检与微信买卖提醒。"""
+    """执行 acct1 AR4.6 盘前/盘中/盘后巡检与微信买卖提醒。"""
     now = now_bj or datetime.now(BJ_TZ)
     if now.tzinfo is None:
         now = now.replace(tzinfo=BJ_TZ)
@@ -431,7 +431,7 @@ def run_acct1_advisor(
     raw_overview = dict(overview_override) if overview_override is not None else get_accounts_overview()
     eff_overview, applied_fills = apply_manual_fills_overlay(raw_overview, trade_date, base_dir=base_dir)
 
-    # 2. 日终复盘模式直接走 AR4.5 真钱归因报告
+    # 2. 日终复盘模式直接走 AR4.6 真钱归因报告
     if mode == "eod":
         rev = build_ar45_review_report(account_id=ACCOUNT_ID, days=30, accounts_overview=eff_overview)
         acct = rev["account"]
@@ -440,7 +440,7 @@ def run_acct1_advisor(
             f"  • {leg['label']}：{leg['count']} 只，市值 `{leg['market_value']:,.0f}` 元，浮盈 `{leg['floating_profit']:+,.2f}` 元"
             for leg in (rev.get("legs") or [])
         ]
-        title = f"【📊 acct1·AR4.5-L3b 日终复盘】{trade_date}"
+        title = f"【📊 acct1·AR4.6 日终复盘】{trade_date}"
         body = "\n".join([
             f"- 账号：`acct1`（{acct['label']}）",
             f"- 总资产：`{acct['total_assets']:,.2f}` 元｜现金 `{acct['available_cash']:,.2f}`｜仓位 `{acct['position_pct']}%`",
@@ -461,7 +461,7 @@ def run_acct1_advisor(
             "applied_manual_fills": len(applied_fills),
         }
 
-    # 3. 编译 AR4.5-L3b 唯一权威调仓计划（先卖后买）
+    # 3. 编译 AR4.6 唯一权威调仓计划（先卖后买）
     if radar_override is not None:
         radar = dict(radar_override)
         raw_b = (radar.get("market_breadth_pct") if radar.get("market_breadth_pct") is not None else None)
@@ -526,7 +526,7 @@ def run_acct1_advisor(
             f"  • [买入] {b['name']}({b['code']}) 现可买 {b['immediate_shares']}股 / 卖后应买 {b['post_sell_shares']}股 @ ~{b['ref_price']}（目标 {b['target_weight_pct']}%）"
             for b in (plan.get("buy_orders") or [])
         ]
-        title = f"【📋 acct1·AR4.5-L3b 盘前计划】{trade_date}"
+        title = f"【📋 acct1·AR4.6 盘前计划】{trade_date}"
         body_lines = [
             f"- 账号：`acct1`（{acct['label']}）｜大盘：**{plan['regime_label']}**",
             f"- 总资产：`{acct['total_assets']:,.2f}` 元｜可用现金：`{acct['available_cash']:,.2f}` 元｜仓位：`{acct['position_pct']}%`",
@@ -580,7 +580,7 @@ def run_acct1_advisor(
             return False, f"cooldown_{int(elapsed)}s"
         return True, "refresh_or_changed"
 
-    # 5A. 先审卖出单（优先清退破位/非 AR4.5 持仓）
+    # 5A. 先审卖出单（优先清退破位/非 AR4.6 持仓）
     for s in plan.get("sell_orders") or []:
         c6 = str(s["code"]).zfill(6)
         qty = int(s.get("suggested_shares") or 0)
@@ -648,7 +648,7 @@ def run_acct1_advisor(
         else:
             skipped.append({"code": c6, "side": "SELL", "reason": f"notify_failed:{res.get('detail')}"})
 
-    # 5B. 再审买入单（仅在买窗内、现金立即可买 >= 2500 元、且严守 AR4.5-L3b 总闸门！）
+    # 5B. 再审买入单（仅在买窗内、现金立即可买 >= 2500 元、且严守 AR4.6 总闸门！）
     in_buy_window = bypass_session or _in_intraday_session(now, for_buy=True)
     for b in plan.get("buy_orders") or []:
         c6 = str(b["code"]).zfill(6)
@@ -657,7 +657,7 @@ def run_acct1_advisor(
         if not in_buy_window:
             skipped.append({"code": c6, "side": "BUY", "reason": "after_1445_buy_cutoff"})
             continue
-        # AR4.5-L3b 终极红线：非进攻期绝对禁止推送任何 A 股个股买单
+        # AR4.6 终极红线：非进攻期绝对禁止推送任何 A 股个股买单
         if not is_offensive and not is_etf:
             skipped.append({"code": c6, "side": "BUY", "reason": "ar45_defensive_block_a_stock"})
             continue
@@ -716,6 +716,7 @@ def run_acct1_advisor(
             pr = evaluate_panic_rebound_signal(
                 market_gate=market_gate,
                 etf_quote_fetcher=(lambda _codes: {k: v for k, v in live_quotes.items()}) if quotes_override is not None else None,
+                now_bj=now,
             )
             if pr.get("triggered"):
                 m = pr.get("metrics") or {}
@@ -724,7 +725,7 @@ def run_acct1_advisor(
                 zz_chg = m.get("zz1000_change_pct")
                 p_title = f"【🎯 acct1·AR2_2A 冰点右侧拐点触发】创业板+中证1000 盘中均涨 {avg_chg:+.2f}%"
                 p_body = "\n".join([
-                    f"- 账号：`acct1`（{acct['label']} · AR4.5-L3b × AR2_2A 冰点反抽雷达）",
+                    f"- 账号：`acct1`（{acct['label']} · AR4.6 × AR2_2A 冰点反抽雷达）",
                     f"- 触发依据：全市场宽度 `{breadth_pct:.2f}% ≤ 18%`（极端冰点）且 **创业板 `{cyb_chg:+.2f}%` + 中证1000 `{zz_chg:+.2f}%` = 均涨 `{avg_chg:+.2f}%` ≥ +0.50%**",
                     f"- 历史实证：近 4 年仅触发 13 次（胜率 69.2% · 单笔均 +2.06% · 最大回撤 3.7%）",
                     "- 操作纪律：① 如手里还有待清退弱势旧仓，可借情绪修复反抽逢高减仓，**切忌地板割肉后又追高买回单票**；② 如需博弈短期情绪反抽，仅限高流动性宽基 ETF（`159915` 创业板ETF + `512100` 中证1000ETF，止损 -6% / 止盈 +12% / 持 5 日或宽度 ≥ 38% 离场）。",

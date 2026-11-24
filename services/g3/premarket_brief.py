@@ -118,17 +118,17 @@ def generate_premarket_brief(
         stock_cap = int(raw_eff_cap if raw_eff_cap is not None else (cfg.get("stock_budget_cap_pct") or 50))
         stock_mode = str(cfg.get("active_stock_mode") or "ab_blend")
         etf_mode = str(cfg.get("etf_core_mode") or "regime_focus")
-        active_strat_name = f"AR4.5-L3b 终极双核（{stock_cap}% {stock_mode} + 风险调整Top2逆波ETF）"
+        active_strat_name = f"AR4.6 终极双核（{stock_cap}% {stock_mode} + 风险调整Top2逆波ETF）"
         actual_pct = acct.get("position_pct")
-        cap_pct = 100.0  # AR4.5-L3b 物理单账户零杠杆：进攻期按国家队分位动态调节股仓(0/35/50/65%)，非进攻期 0%股+100%非A股Top2逆波ETF
+        cap_pct = 100.0  # AR4.6 物理单账户零杠杆：进攻期按国家队分位动态调节股仓(0/35/50/65%)，非进攻期 0%股+100%非A股Top2逆波ETF
 
         alloc_line = (
-            f"AR3-F基本面个股 {stock_cap}%({stock_mode}) + AR4.5跨资产ETF {100 - stock_cap}%(含闲置现金)"
+            f"AR3-F基本面个股 {stock_cap}%({stock_mode}) + AR4.6跨资产ETF {100 - stock_cap}%(含闲置现金)"
             if is_offensive and stock_cap > 0
             else (
-                "ERP极贵逃顶阀(<5%)触发 -> AR3-F个股 0% + AR4.5避险ETF 100%"
+                "ERP极贵逃顶阀(<5%)触发 -> AR3-F个股 0% + AR4.6避险ETF 100%"
                 if is_offensive and stock_cap <= 0
-                else "AR3-F个股 0%(锁仓禁开) + AR4.5非A股风险调整Top2逆波ETF 100%(含冰点反抽)"
+                else "AR3-F个股 0%(锁仓禁开) + AR4.6非A股风险调整Top2逆波ETF 100%(含冰点反抽)"
             )
         )
         macro_line = None
@@ -144,7 +144,7 @@ def generate_premarket_brief(
             )
 
         checklist: list[str] = [
-            f"【AR4.5-L3b 总控】大盘={regime_label}｜主力账号 {acct.get('label')}（总资产 ¥{acct.get('total_assets', 0):,.0f}｜可用 ¥{acct.get('available_cash', 0):,.0f}｜现仓位 {actual_pct}%）",
+            f"【AR4.6 总控】大盘={regime_label}｜主力账号 {acct.get('label')}（总资产 ¥{acct.get('total_assets', 0):,.0f}｜可用 ¥{acct.get('available_cash', 0):,.0f}｜现仓位 {actual_pct}%）",
             f"【目标配额】{alloc_line}",
         ]
         if sells:
@@ -170,10 +170,10 @@ def generate_premarket_brief(
 
         turnover_str = f"{tf['forecast_trillion']}万亿" if tf.get("forecast_trillion") is not None else "—"
         lines = [
-            f"⚡ 【AR4.5-L3b 盘前终极战报 & 买卖单 · {d_str}】",
+            f"⚡ 【AR4.6 盘前终极战报 & 买卖单 · {d_str}】",
             f"■ 主力账号：{acct.get('label') or acct.get('display_name') or acct.get('account_id', 'acct1')}｜总资产 ¥{float(acct.get('total_assets') or 0):,.0f}｜可用 ¥{float(acct.get('available_cash') or 0):,.0f}｜现仓位 {actual_pct}%",
             f"■ 大盘五态：{regime_label}｜上证趋势={idx.get('confirmed_regime') or '—'}（连{idx.get('streak_days') or 0}日）｜涨停{mood.get('limit_up_count', '—')}/跌停{mood.get('limit_down_count', '—')}｜成交额={turnover_str}",
-            f"■ AR4.5 配额：{alloc_line}",
+            f"■ AR4.6 配额：{alloc_line}",
         ]
         if macro_line:
             lines.append(f"■ 国家队与ERP：{macro_line}")
@@ -203,7 +203,7 @@ def generate_premarket_brief(
                 "waterline_advice": alloc_line,
             },
             "core_themes": [],
-            "themes_title": "AR4.5-L3b 终极双核目标配置",
+            "themes_title": "AR4.6 终极双核目标配置",
             "active_strategy_name": active_strat_name,
             "top_picks": [],
             "ar3_summary": {

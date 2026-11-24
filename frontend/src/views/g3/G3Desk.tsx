@@ -105,7 +105,7 @@ export default function G3Desk() {
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="G3 AR4.5-L3b 实战交易台"
+        title="G3 AR4.6 实战交易台"
         subtitle={`主力账号 ct1曾 · 今日一键调仓与风险总览（极简执行动线 · 规划日 ${data?.trade_date || '—'} · 严格 prefill_only 不自动下单）`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -190,7 +190,7 @@ export default function G3Desk() {
                 <span className="text-sm font-semibold text-white">大盘择时总闸门</span>
                 <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
                 <Badge color={gate.allow_new_mainwave ? 'emerald' : 'red'}>
-                  {gate.allow_new_mainwave ? '允许 AR4.5 个股开新仓' : '防守切 100% AR4.5 逆波ETF · 严禁买A股'}
+                  {gate.allow_new_mainwave ? '允许 AR4.6 个股开新仓' : '防守切 100% AR4.6 逆波ETF · 严禁买A股'}
                 </Badge>
                 <Badge color="blue">A股风险上限 ≤ {capPct.toFixed(0)}%</Badge>
               </div>
@@ -235,7 +235,7 @@ export default function G3Desk() {
         )
       })()}
 
-      {/* 2. 绝对核心主视图：AR4.5-L3b 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，14只ETF与选股明细已迁至 /g3/signals） */}
+      {/* 2. 绝对核心主视图：AR4.6 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，14只ETF与选股明细已迁至 /g3/signals） */}
       <AR3DualCorePanel
         mode="desk_compact"
         onPrefillOrder={() => {
@@ -254,15 +254,15 @@ export default function G3Desk() {
         }}
       />
 
-      {/* 3. 底部紧凑卡：盘前 AI 晨会核心研判（AR4.5-L3b 单一口径） */}
+      {/* 3. 底部紧凑卡：盘前 AI 晨会核心研判（AR4.6 单一口径） */}
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-white">盘前 AI 晨会简报（AR4.5-L3b 单一口径）</span>
+            <span className="text-sm font-semibold text-white">盘前 AI 晨会简报（AR4.6 单一口径）</span>
             {data?.premarket_brief ? (
               <>
                 <Badge color={data.premarket_brief.source === 'agent_enriched' ? 'emerald' : 'blue'}>
-                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : 'AR4.5 自动基线版'}
+                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : 'AR4.6 自动基线版'}
                 </Badge>
                 <span className="font-mono text-xs text-zinc-400">
                   {data.premarket_brief.date} · {fmtTimeOnly(data.premarket_brief.generated_at)}
@@ -305,7 +305,7 @@ export default function G3Desk() {
           </div>
         ) : (
           <p className="mt-2.5 text-xs text-zinc-400">
-            点击右上角「生成/刷新简报」或等待每日 09:10 盘前 Agent 自动生成 AR4.5-L3b 晨会简报并推送微信。
+            点击右上角「生成/刷新简报」或等待每日 09:10 盘前 Agent 自动生成 AR4.6 晨会简报并推送微信。
           </p>
         )}
       </Card>

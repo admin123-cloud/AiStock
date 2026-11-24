@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""AR4.5-L3b 实盘复盘与真钱归因聚合服务（彻底替代旧 R40/AR1 鸡肋台账）。
+"""AR4.6 实盘复盘与真钱归因聚合服务（彻底替代旧 R40/AR1 鸡肋台账）。
 
 核心原则（铁律防造假）：
 1. 100% 基于主力账号 ct1曾（默认 acct1）的真实每日账户快照（runtime/ths_read_account/read_multi_*.json）与当前真实持仓/回执，
    绝不虚构历史不存在的账户净值；
 2. 净值采用「真实当日盈亏 ÷ 前日总资产」累乘口径（避免银证转入/转出被误算成虚假盈利或亏损）；
-3. 同步对齐同期沪深300 基准与 AR4.5-L3b 理想机械执行影子净值，直观暴露实盘与策略之间的执行剪刀差；
-4. 将当前持仓与近期成交按三腿清晰拆账：AR4.5 跨资产 ETF 腿 / AR4.5 绩优个股腿 / 历史旧底仓与做T腿；
+3. 同步对齐同期沪深300 基准与 AR4.6 理想机械执行影子净值，直观暴露实盘与策略之间的执行剪刀差；
+4. 将当前持仓与近期成交按三腿清晰拆账：AR4.6 跨资产 ETF 腿 / AR4.6 绩优个股腿 / 历史旧底仓与做T腿；
 5. 联动 Shadow Ledger 计划单逐笔对账与 AI 交易教练出血点诊断，一屏完成盘后复盘闭环。
 """
 from __future__ import annotations
@@ -141,7 +141,7 @@ def _fetch_hs300_close_map(start_date: str) -> dict[str, float]:
 
 
 def _load_ar45_backtest_curve_map() -> dict[str, float]:
-    """从已落盘的历史回测报告读取 AR4.5-L3b 理想净值点位映射（按日期前向填充使用）。"""
+    """从已落盘的历史回测报告读取 AR4.6 理想净值点位映射（按日期前向填充使用）。"""
     rp = runtime_path("mining_runs") / "ar1_historical_backtest_latest.json"
     doc = _read_json_safe(rp)
     if not isinstance(doc, Mapping):
@@ -169,7 +169,7 @@ def build_ar45_review_report(
     accounts_overview: Optional[Mapping[str, Any]] = None,
     snap_dir: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """构建 AR4.5-L3b 真钱实盘复盘与策略腿归因完整数据包。"""
+    """构建 AR4.6 真钱实盘复盘与策略腿归因完整数据包。"""
     now = datetime.now(BJ_TZ)
     overview = accounts_overview if accounts_overview is not None else get_accounts_overview()
     accounts_list = overview.get("accounts") or []
@@ -186,7 +186,7 @@ def build_ar45_review_report(
     cur_daily_pnl = _safe_float(funds.get("daily_profit"))
     cur_holding_pnl = _safe_float(funds.get("holding_profit"))
 
-    # 1. 每日实盘净值 vs 沪深300 vs AR4.5-L3b 理想影子曲线
+    # 1. 每日实盘净值 vs 沪深300 vs AR4.6 理想影子曲线
     snaps = _collect_account_daily_snapshots(account_id=account_id, days=days, snap_dir=snap_dir)
     # 若今日最新 overview 尚未落入 snapshots，补上最新一条
     if chosen_acct and cur_assets > 0:
@@ -252,7 +252,7 @@ def build_ar45_review_report(
     # 2. Shadow Ledger 逐日计划单 vs 实盘成交对账
     shadow = reconcile_ar3_shadow_ledger(account_id=account_id, days=days)
 
-    # 3. 持仓三腿真钱归因（AR4.5 跨资产 ETF / AR4.5 绩优个股 / 历史旧底仓与做T）
+    # 3. 持仓三腿真钱归因（AR4.6 跨资产 ETF / AR4.6 绩优个股 / 历史旧底仓与做T）
     # 读取最新计划单中的目标标的集合，用于精准划分哪些是现役目标、哪些是历史遗留旧票
     latest_plan = _read_json_safe(runtime_path("ar3_execution_plans") / f"latest_{account_id}.json") or {}
     target_codes = {
@@ -262,8 +262,8 @@ def build_ar45_review_report(
     }
 
     legs_summary: dict[str, dict[str, Any]] = {
-        "ar45_etf": {"leg_id": "ar45_etf", "label": "AR4.5 跨资产 ETF 腿", "market_value": 0.0, "daily_profit": 0.0, "floating_profit": 0.0, "count": 0, "items": []},
-        "ar45_stock": {"leg_id": "ar45_stock", "label": "AR4.5 绩优基本面个股腿", "market_value": 0.0, "daily_profit": 0.0, "floating_profit": 0.0, "count": 0, "items": []},
+        "ar45_etf": {"leg_id": "ar45_etf", "label": "AR4.6 跨资产 ETF 腿", "market_value": 0.0, "daily_profit": 0.0, "floating_profit": 0.0, "count": 0, "items": []},
+        "ar45_stock": {"leg_id": "ar45_stock", "label": "AR4.6 绩优基本面个股腿", "market_value": 0.0, "daily_profit": 0.0, "floating_profit": 0.0, "count": 0, "items": []},
         "legacy_and_t": {"leg_id": "legacy_and_t", "label": "历史旧底仓 & 待清退腿", "market_value": 0.0, "daily_profit": 0.0, "floating_profit": 0.0, "count": 0, "items": []},
     }
     stop_violations: list[dict[str, Any]] = []
@@ -287,10 +287,10 @@ def build_ar45_review_report(
 
         if is_etf:
             bucket = "ar45_etf"
-            status_tag = "AR4.5目标ETF" if in_target else "非目标ETF"
+            status_tag = "AR4.6目标ETF" if in_target else "非目标ETF"
         elif in_target:
             bucket = "ar45_stock"
-            status_tag = "AR4.5目标个股"
+            status_tag = "AR4.6目标个股"
         else:
             bucket = "legacy_and_t"
             status_tag = "历史旧底仓·待清退"
@@ -355,7 +355,7 @@ def build_ar45_review_report(
         )
     if shadow.get("days_tracked", 0) < 3:
         data_notes.append(
-            f"AR4.5-L3b 每日计划单 Shadow 对账已开始追踪（当前 {shadow.get('days_tracked', 0)} 天），每个交易日 15:15 同步回执后自动更新滑点与跟单完成率。"
+            f"AR4.6 每日计划单 Shadow 对账已开始追踪（当前 {shadow.get('days_tracked', 0)} 天），每个交易日 15:15 同步回执后自动更新滑点与跟单完成率。"
         )
 
     return {

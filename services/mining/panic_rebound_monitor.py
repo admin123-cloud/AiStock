@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
-"""AR1 v2.1 / AR2_2A_Panic_Rev18：极端恐慌冰点企稳反抽 ETF 实时监控引擎。
+"""AR4.6 极端恐慌冰点 30m K线右侧狙击引擎（原 AR2_2A_Panic_Rev18 升级版）。
 
-全市场 4 年（940 交易日）实证依据（ar2_high_return_experiment_v1）：
-- 规则：全市场站上 MA20 宽度 <= 18.0%（极端恐慌冰点） 且 创业板指(399006.SZ) + 中证1000(000852.SH)
-  当日等权平均涨幅 >= +0.50%（右侧首根企稳阳线确认，绝不左侧盲抄）；
-- 标的：159915（创业板ETF）+ 512100（中证1000ETF）等权各半（总仓位 60%，进攻方案可至 80%）；
-- 退出：持满 5 个交易日 或 宽度回升 >= 38% 或 硬止损 -6% / 止盈 +12%；
-- 实证表现：近 4 年 13 次出手胜率 69.2%、单笔均 +2.06%、累计 +16.9%、最大回撤仅 3.7%、三段全正（OOS 2026 熊市 +3.3%）。
+全市场 4 年（2023~2026，941 交易日，ClickHouse 真实 30m/15m 分钟线）零未来函数实证依据：
+- 触发条件：T-1 全市场站上 MA20 宽度 <= 18.0%（极端恐慌冰点）且盘中 10:30~14:30 创业板指(399006.SZ) + 中证1000(000852.SH)
+  30m K线双收阳且等权日内涨幅 >= +0.80%（收盘兜底 >= +0.50%）；
+- AR4.6 核心升级标的：下根 30m 开盘半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（单手 <= 1.5 万，科创板 200 股，同业限 1）
+  + 50% 非 A 股逆波避险 ETF（取代旧版 60% 宽基 ETF）；
+- 熊市 B 档退出纪律：逐票硬止损 -6% / 浮盈 >= +5% 后自峰值回撤 -3.5% 移动追踪止盈 / 持满 <= 5 日或宽度 >= 38% 离场；
+  严禁错过 T0 后在 T+1 次日高开 >= +2.0% 追买！
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Optional
 
@@ -23,10 +26,83 @@ BJ_TZ = timezone(timedelta(hours=8))
 
 PANIC_BREADTH_THRESHOLD = 18.0
 REVERSAL_MIN_AVG_CHG_PCT = 0.50
+REVERSAL_30M_MIN_AVG_CHG_PCT = 0.80
+PANIC_STOCK_BUDGET_PCT = 50
+PANIC_MAX_LOT_YUAN = 15000.0
 EXIT_HOLD_DAYS = 5
 EXIT_STOP_LOSS_PCT = -6.0
+EXIT_TRAIL_ARM_PCT = 5.0
+EXIT_TRAIL_DD_PCT = -3.5
 EXIT_TAKE_PROFIT_PCT = 12.0
 EXIT_BREADTH_TARGET = 38.0
+
+_M30_CACHE: dict[str, Any] = {"expires_at": 0.0, "date": "", "payload": None}
+_M30_LOCK = threading.Lock()
+
+
+def _fetch_tx_m30_bars(tx_sym: str, count: int = 16) -> list[tuple[str, str, float, float]]:
+    """拉取腾讯 30m K 线，返回 [(YYYY-MM-DD, HH:MM, open, close), ...]。"""
+    url = f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={tx_sym},m30,,{count}"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=4.0) as resp:
+        doc = json.loads(resp.read().decode("utf-8"))
+    raw = ((doc.get("data") or {}).get(tx_sym) or {}).get("m30") or []
+    out: list[tuple[str, str, float, float]] = []
+    for row in raw:
+        if len(row) < 3:
+            continue
+        ts = str(row[0])
+        if len(ts) >= 12:
+            d_s = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+            hm = f"{ts[8:10]}:{ts[10:12]}"
+            out.append((d_s, hm, float(row[1]), float(row[2])))
+    return out
+
+
+def _evaluate_live_30m_confirmation(today_bj: str, cyb_prev_close: Optional[float], zz_prev_close: Optional[float]) -> dict[str, Any]:
+    """实时评估 10:30~14:30 已收盘 30m K线双指收阳且均涨 >= +0.80%（60s 缓存）。"""
+    now_mono = time.monotonic()
+    with _M30_LOCK:
+        if _M30_CACHE["payload"] is not None and _M30_CACHE["date"] == today_bj and now_mono < float(_M30_CACHE["expires_at"]):
+            return dict(_M30_CACHE["payload"])
+
+    res: dict[str, Any] = {"available": False, "triggered_30m": False, "trigger_30m_hm": None, "trigger_30m_avg_pct": None}
+    try:
+        b_cyb = _fetch_tx_m30_bars("sz399006", 16)
+        b_zz = _fetch_tx_m30_bars("sh000852", 16)
+        prev_cyb = cyb_prev_close
+        prev_zz = zz_prev_close
+        if not prev_cyb:
+            prev_rows = [r[3] for r in b_cyb if r[0] < today_bj]
+            prev_cyb = prev_rows[-1] if prev_rows else None
+        if not prev_zz:
+            prev_rows = [r[3] for r in b_zz if r[0] < today_bj]
+            prev_zz = prev_rows[-1] if prev_rows else None
+
+        m_cyb = {hm: (o, c) for d, hm, o, c in b_cyb if d == today_bj}
+        m_zz = {hm: (o, c) for d, hm, o, c in b_zz if d == today_bj}
+        hms = sorted(set(m_cyb) & set(m_zz))
+        if hms and prev_cyb and prev_zz and prev_cyb > 0 and prev_zz > 0:
+            res["available"] = True
+            for hm in hms:
+                if hm < "10:30" or hm > "14:30":
+                    continue
+                o0, c0 = m_cyb[hm]
+                o1, c1 = m_zz[hm]
+                avg_pct = 0.5 * ((c0 / prev_cyb - 1.0) + (c1 / prev_zz - 1.0)) * 100.0
+                if c0 > o0 and c1 > o1 and avg_pct >= REVERSAL_30M_MIN_AVG_CHG_PCT:
+                    res["triggered_30m"] = True
+                    res["trigger_30m_hm"] = hm
+                    res["trigger_30m_avg_pct"] = round(avg_pct, 2)
+                    break
+    except Exception:
+        pass
+
+    with _M30_LOCK:
+        _M30_CACHE["date"] = today_bj
+        _M30_CACHE["expires_at"] = now_mono + 60.0
+        _M30_CACHE["payload"] = dict(res)
+    return res
 
 PANIC_ETF_TARGETS = (
     {"code": "159915", "name": "创业板ETF", "index_code": "399006.SZ", "index_name": "创业板指", "weight_pct": 30.0},
@@ -194,7 +270,7 @@ def evaluate_panic_rebound_signal(
         if (
             q_cyb.get("change_pct") is not None
             and q_zz.get("change_pct") is not None
-            and (not ch_latest_dt or today_bj > ch_latest_dt)
+            and (etf_quote_fetcher is not None or not ch_latest_dt or today_bj > ch_latest_dt)
         ):
             cyb = {
                 "date": today_bj,
@@ -214,29 +290,49 @@ def evaluate_panic_rebound_signal(
     pair_avg_chg = round(sum(chg_list) / len(chg_list), 2) if len(chg_list) == 2 else None
     reversal_confirmed = pair_avg_chg is not None and pair_avg_chg >= REVERSAL_MIN_AVG_CHG_PCT
 
+    # AR4.6 30m K线实时确认（盘中真实行情拉取腾讯 30m；单测注入 index_chg_fetcher 或盘后则用日线 >= +0.80% 兜底）
+    m30_info: dict[str, Any] = {"available": False, "triggered_30m": False, "trigger_30m_hm": None, "trigger_30m_avg_pct": None}
+    if in_panic_zone:
+        if in_live_market and index_chg_fetcher is None:
+            m30_info = _evaluate_live_30m_confirmation(today_bj, None, None)
+        if not m30_info["available"] and pair_avg_chg is not None and pair_avg_chg >= REVERSAL_30M_MIN_AVG_CHG_PCT:
+            m30_info["triggered_30m"] = True
+            m30_info["trigger_30m_hm"] = "收盘确认"
+            m30_info["trigger_30m_avg_pct"] = pair_avg_chg
+
+    triggered_30m = bool(in_panic_zone and m30_info.get("triggered_30m"))
+    any_triggered = bool(in_panic_zone and (triggered_30m or reversal_confirmed))
+
     if not in_panic_zone:
         status = "STANDBY_OFF"
         status_label = "未进冰点（休眠）"
         tone = "zinc"
-        headline = f"当前全市场宽度 {breadth_pct if breadth_pct is not None else '—'}% > 18%，AR2 冰点反抽雷达静默待机。"
-    elif in_panic_zone and not reversal_confirmed:
+        headline = f"当前全市场宽度 {breadth_pct if breadth_pct is not None else '—'}% > 18%，AR4.6 冰点 30m 真龙雷达静默待机。"
+    elif in_panic_zone and not any_triggered:
         status = "ARMED_WAITING_REVERSAL"
-        status_label = "冰点已武装 · 待企稳阳线"
+        status_label = "冰点已武装 · 待 30m 阳线确认"
         tone = "amber"
         gap_str = (
-            f"当前双指数均涨 {pair_avg_chg:+.2f}%（距触发线 +{REVERSAL_MIN_AVG_CHG_PCT:.2f}% 还差 {REVERSAL_MIN_AVG_CHG_PCT - pair_avg_chg:.2f}%）"
+            f"当前双指数均涨 {pair_avg_chg:+.2f}%（30m 触发线 +{REVERSAL_30M_MIN_AVG_CHG_PCT:.2f}% / 日线 +{REVERSAL_MIN_AVG_CHG_PCT:.2f}%）"
             if pair_avg_chg is not None
             else "等待双指数最新行情"
         )
-        headline = f"全市场宽度 {breadth_pct:.2f}% ≤ 18% 已达极端冰点！{gap_str}，严禁左侧盲抄，等创业板+中证1000 均涨 ≥ +0.50% 右侧确认后出击。"
+        headline = (
+            f"全市场宽度 {breadth_pct:.2f}% ≤ 18% 已达极端冰点！{gap_str}，严禁左侧盲抄；"
+            f"等 10:30~14:30 创业板+中证1000 30m 双收阳且均涨 ≥ +0.80% 后半仓切入 10 万可执行 AB_BLEND Top4 真龙。"
+        )
     else:
         status = "TRIGGERED_BUY_ETF"
-        status_label = "⚡ 冰点企稳触发 · 右侧反抽信号"
+        status_label = "⚡ AR4.6 冰点 30m 触发 · 半仓 AB 真龙"
         tone = "emerald"
-        src_note = "（盘中实时确认）" if used_live_intraday else "（收盘确认）"
+        src_note = (
+            f"（30m@{m30_info['trigger_30m_hm']} 均涨 {m30_info['trigger_30m_avg_pct']:+.2f}%）"
+            if triggered_30m and m30_info.get("trigger_30m_hm")
+            else ("（盘中实时确认）" if used_live_intraday else "（收盘确认）")
+        )
         headline = (
-            f"AR2_2A 冰点企稳右侧触发{src_note}！宽度 {breadth_pct:.2f}% ≤ 18% 且 创业板+中证1000 均涨 {pair_avg_chg:+.2f}% ≥ +0.50%（历史13战9胜，胜率69.2%）；"
-            f"右侧博弈反抽仅建议宽基 ETF（159915 + 512100，止损 -6% / 止盈 +12% / 持满 5 日或宽度 ≥ 38% 离场）。"
+            f"AR4.6 冰点 30m 右侧触发{src_note}！宽度 {breadth_pct:.2f}% ≤ 18%，双指均涨 {pair_avg_chg:+.2f}%；"
+            f"执行半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（单手≤1.5万，逐票 -6% 硬止损 / +5%后-3.5%追踪 / ≤5日）+ 50% 非A股避险 ETF（严禁次日高开≥+2%追买）。"
         )
 
     etf_plans: list[dict[str, Any]] = []
@@ -263,19 +359,27 @@ def evaluate_panic_rebound_signal(
 
     return {
         "schema": "ar2_panic_rebound_signal/1",
-        "strategy_id": "AR2_2A_Panic_Rev18",
+        "strategy_id": "AR4.6_Panic_30m_AB",
+        "strategy_version": "AR4.6",
+        "panic_leg_mode": "AR4.6_PANIC_30M_AB",
         "as_of": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
         "status": status,
         "status_label": status_label,
         "tone": tone,
         "triggered": status == "TRIGGERED_BUY_ETF",
+        "triggered_30m": triggered_30m,
         "armed": in_panic_zone,
         "headline": headline,
+        "panic_stock_budget_pct": PANIC_STOCK_BUDGET_PCT if any_triggered else 0,
+        "panic_max_lot_yuan": PANIC_MAX_LOT_YUAN,
         "metrics": {
             "breadth_pct": breadth_pct,
             "breadth_threshold": PANIC_BREADTH_THRESHOLD,
             "pair_avg_change_pct": pair_avg_chg,
             "reversal_threshold_pct": REVERSAL_MIN_AVG_CHG_PCT,
+            "reversal_30m_threshold_pct": REVERSAL_30M_MIN_AVG_CHG_PCT,
+            "trigger_30m_hm": m30_info.get("trigger_30m_hm"),
+            "trigger_30m_avg_pct": m30_info.get("trigger_30m_avg_pct"),
             "cyb_change_pct": cyb.get("change_pct"),
             "zz1000_change_pct": zz1000.get("change_pct"),
             "index_date": cyb.get("date") or zz1000.get("date"),
@@ -283,15 +387,18 @@ def evaluate_panic_rebound_signal(
         "exit_rules": {
             "hold_days": EXIT_HOLD_DAYS,
             "stop_loss_pct": EXIT_STOP_LOSS_PCT,
+            "trail_arm_pct": EXIT_TRAIL_ARM_PCT,
+            "trail_dd_pct": EXIT_TRAIL_DD_PCT,
             "take_profit_pct": EXIT_TAKE_PROFIT_PCT,
             "exit_breadth_pct": EXIT_BREADTH_TARGET,
         },
         "evidence": {
-            "trades_4y": 13,
-            "win_rate_pct": 69.2,
-            "avg_ret_pct": 2.06,
-            "cum_ret_pct": 16.9,
-            "max_dd_pct": 3.7,
+            "trades_4y": 22,
+            "win_rate_pct": 68.2,
+            "avg_ret_pct": 1.81,
+            "cum_ret_pct": 44.63,
+            "oos_2026_b_tier_pct": 12.15,
+            "max_dd_pct": 5.12,
         },
         "etf_plans": etf_plans,
     }

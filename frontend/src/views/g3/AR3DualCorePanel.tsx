@@ -55,7 +55,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
       setRadar(res)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
-      setError(err.response?.data?.detail || err.message || '加载 AR4.5-L3b 双核雷达失败')
+      setError(err.response?.data?.detail || err.message || '加载 AR4.6 双核雷达失败')
     } finally {
       setLoading(false)
     }
@@ -131,13 +131,13 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
 
   return (
     <Card className="border-amber-500/45 bg-zinc-950/90 ring-1 ring-amber-500/15">
-      {/* 顶栏：AR4.5-L3b 终极双核总控 */}
+      {/* 顶栏：AR4.6 终极双核总控 */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-base font-bold text-white">⚡ AR4.5-L3b 终极双核作战雷达</span>
+          <span className="text-base font-bold text-white">⚡ AR4.6 终极双核作战雷达</span>
           <Badge color="amber">国家队动态股仓 + 风险调整Top2逆波 + 南向港科滤网</Badge>
           <span className="font-mono text-[11px] text-zinc-400">
-            物理单账户实证：4年 +283.2% · 年化 +41.3% · 回撤 19.1% · 卡玛 2.17 · OOS回撤 11.3%
+            物理单账户实证：4年 +308.0% · 年化 +43.5% · 回撤 19.1% · 卡玛 2.28 · OOS回撤 11.3%
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -307,7 +307,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
                     </div>
 
                     <div className="rounded-md border border-zinc-800 bg-zinc-950/80 px-2.5 py-2">
-                      <div className="text-[11px] text-zinc-400">AR4.5 进攻期生效股仓上限</div>
+                      <div className="text-[11px] text-zinc-400">AR4.6 进攻期生效股仓上限</div>
                       <div className="mt-0.5 flex items-baseline gap-2 font-mono">
                         <span className="text-base font-bold text-emerald-300">
                           {cfg.stock_budget_cap_pct}% → {cfg.effective_stock_budget_cap_pct ?? macroDec.effective_stock_cap_pct}%
@@ -337,7 +337,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
                 <span>
                   🎯 当前生效配置：
                   <b className="text-amber-300">{cfg.active_stock_mode}</b> +{' '}
-                  <b className="text-cyan-300">{etf?.etf_core_label || 'AR4.5-L3b Top2逆波'}</b>
+                  <b className="text-cyan-300">{etf?.etf_core_label || 'AR4.6 Top2逆波'}</b>
                 </span>
                 {etf?.headline && <span className="text-zinc-400">· {etf.headline}</span>}
               </div>
@@ -396,7 +396,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
                           : 'border-zinc-700 bg-zinc-950/70 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
                       }`}
                     >
-                      {opt.id === 'regime_focus' ? 'AR4.5-L3b 风险调整Top2逆波' : '#02 全天候跨类分散Top2'}
+                      {opt.id === 'regime_focus' ? 'AR4.6 风险调整Top2逆波' : '#02 全天候跨类分散Top2'}
                     </button>
                   )
                 })}
@@ -491,7 +491,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
                               order_type: 'base_rebalance',
                               price: item.close.toFixed(3),
                               shares: '1000',
-                              note: `AR4.5-L3b 跨资产ETF(${item.asset_class_label}) 目标配额${item.account_weight_pct}%`,
+                              note: `AR4.6 跨资产ETF(${item.asset_class_label}) 目标配额${item.account_weight_pct}%`,
                             })
                           }
                         >
@@ -556,7 +556,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
           <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-white">🎯 AR4.5 基本面业绩 × 趋势双选股雷达</span>
+                <span className="font-bold text-white">🎯 AR4.6 基本面业绩 × 趋势双选股雷达</span>
                 <Badge color={radar.is_offensive ? 'emerald' : 'red'}>
                   {radar.is_offensive
                     ? `进攻期开放 · 个股预算 ${cfg.stock_budget_cap_pct}%（${cfg.max_slots}槽，每行业限1只）`
@@ -608,7 +608,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
 
             {!radar.is_offensive && (
               <div className="mt-2 rounded-md border border-amber-500/35 bg-amber-950/20 px-3 py-1.5 text-[11px] text-amber-200">
-                🔒 当前大盘处于非进攻期（{radar.regime}）：按 AR4.5-L3b 物理单账户纪律，个股仓位预算为 0%，禁止新开个股仓；下方名单仅保留作为大盘转入进攻期后的第一梯队基本面储备池。
+                🔒 当前大盘处于非进攻期（{radar.regime}）：按 AR4.6 物理单账户纪律，个股仓位预算为 0%，禁止新开个股仓；下方名单仅保留作为大盘转入进攻期后的第一梯队基本面储备池。
               </div>
             )}
 
@@ -710,7 +710,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
                                     order_type: 'base_rebalance',
                                     price: row.close.toFixed(2),
                                     shares: '100',
-                                    note: `AR4.5 ${row.source_label} 公告${row.notice_date} 净利+${row.net_profit_yoy_pct}% 止损${row.stop_loss_price}`,
+                                    note: `AR4.6 ${row.source_label} 公告${row.notice_date} 净利+${row.net_profit_yoy_pct}% 止损${row.stop_loss_price}`,
                                   })
                                 }
                               >

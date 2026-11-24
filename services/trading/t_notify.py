@@ -35,7 +35,7 @@ logger = logging.getLogger("t_notify")
 _watcher_started = False
 _watcher_lock = threading.Lock()
 
-# AR4.5-L3b 大盘总闸门 60 秒缓存 + 同向防刷屏冷却（30 分钟）+ 过期草案拦截（15 分钟）
+# AR4.6 大盘总闸门 60 秒缓存 + 同向防刷屏冷却（30 分钟）+ 过期草案拦截（15 分钟）
 _GATE_CACHE_TTL_SEC = 60.0
 _gate_cache: dict[str, Any] = {"ts": 0.0, "data": None}
 _SAME_SIDE_COOLDOWN_SEC = 30 * 60
@@ -43,7 +43,7 @@ _STALE_DRAFT_MAX_AGE_SEC = 15 * 60
 
 
 def get_ar45_buy_gate_status(*, force_refresh: bool = False) -> dict[str, Any]:
-    """查询当前 AR4.5-L3b 大盘总闸门是否允许任何 A 股个股买入（含底仓做T买侧）。
+    """查询当前 AR4.6 大盘总闸门是否允许任何 A 股个股买入（含底仓做T买侧）。
 
     遵循 fail-closed 原则：只要市场非 offensive（即防守/平衡/恐慌期），或门禁查询异常，
     一律禁止发出任何 A 股个股 buy-T 买入提醒（仅放行 sell-T 高抛反T减仓）。
@@ -65,7 +65,7 @@ def get_ar45_buy_gate_status(*, force_refresh: bool = False) -> dict[str, Any]:
             "reason": "ok" if allow_buy else f"ar45_{regime}_no_a_stock_buy",
         }
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[t_notify] 查询 AR4.5-L3b 总闸门异常，按 fail-closed 拦截买入信号: %s", exc)
+        logger.warning("[t_notify] 查询 AR4.6 总闸门异常，按 fail-closed 拦截买入信号: %s", exc)
         res = {
             "allow_buy": False,
             "regime": "unknown_fail_closed",
@@ -428,9 +428,9 @@ def format_draft_message(
     if rsi5 is not None or rsi15 is not None:
         lines.append(f"- **实时指标**：RSI15m=`{rsi15 if rsi15 is not None else '—'}` / RSI5m=`{rsi5 if rsi5 is not None else '—'}` / VWAP=`{vwap if vwap is not None else '—'}`")
     if gate_info and gate_info.get("regime_label"):
-        lines.append(f"- **AR4.5-L3b 大盘状态**：`{gate_info['regime_label']}`")
+        lines.append(f"- **AR4.6 大盘状态**：`{gate_info['regime_label']}`")
     if not is_buy:
-        lines.append("- **提示**：高抛减仓/反T卖点参考（若为非 AR4.5-L3b 历史旧底仓，优先按实战交易台清退）。")
+        lines.append("- **提示**：高抛减仓/反T卖点参考（若为非 AR4.6 历史旧底仓，优先按实战交易台清退）。")
     else:
         lines.append("- **提示**：单向提醒，请结合同花顺盘口与「资金账号与做T」确认后手动操作。")
     return title, "\n".join(lines)
@@ -442,7 +442,7 @@ def poll_and_push_new_drafts_once(
     tracker_dir_override: Optional[Path] = None,
     gate_info_override: Optional[Mapping[str, Any]] = None,
 ) -> int:
-    """扫描今日 drafts 与 pending_push，经 AR4.5-L3b 总闸门与 30m 防刷屏冷却后单向推送微信。"""
+    """扫描今日 drafts 与 pending_push，经 AR4.6 总闸门与 30m 防刷屏冷却后单向推送微信。"""
     cfg = load_notify_config()
     if not cfg.get("enabled") or not cfg.get("notify_on_draft", True):
         return 0
@@ -513,7 +513,7 @@ def poll_and_push_new_drafts_once(
             logger.info("[t_notify] 跳过超时滞留草案 %s (ts=%s)", did, d.get("ts"))
             continue
 
-        # 3) AR4.5-L3b 总闸门硬拦截：非进攻期严禁推送任何 A 股个股买入T信号
+        # 3) AR4.6 总闸门硬拦截：非进攻期严禁推送任何 A 股个股买入T信号
         side_raw = str(d.get("side") or "")
         is_buy = "buy" in side_raw.lower()
         code6 = str(d.get("code") or "").split(".")[0].strip()
@@ -521,7 +521,7 @@ def poll_and_push_new_drafts_once(
             notified.add(did)
             state_dirty = True
             logger.info(
-                "[t_notify] AR4.5-L3b 总闸门拦截冲突 buy-T 信号 %s (%s, regime=%s)",
+                "[t_notify] AR4.6 总闸门拦截冲突 buy-T 信号 %s (%s, regime=%s)",
                 did,
                 code6,
                 gate_info.get("regime"),

@@ -42,7 +42,7 @@ export default function G3Review() {
       setData(res)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
-      setError(err.response?.data?.detail || err.message || '加载 AR4.5 实盘复盘与归因数据失败')
+      setError(err.response?.data?.detail || err.message || '加载 AR4.6 实盘复盘与归因数据失败')
     } finally {
       setLoading(false)
     }
@@ -67,7 +67,7 @@ export default function G3Review() {
       legend: {
         top: 2,
         textStyle: { color: '#cbd5e1', fontSize: 11 },
-        data: ['实盘净值 (ct1曾)', 'AR4.5-L3b 理想影子净值', '沪深300 基准'],
+        data: ['实盘净值 (ct1曾)', 'AR4.6 理想影子净值', '沪深300 基准'],
       },
       grid: { left: 52, right: 24, top: 36, bottom: 28 },
       xAxis: {
@@ -92,7 +92,7 @@ export default function G3Review() {
           itemStyle: { color: '#f59e0b' },
         },
         {
-          name: 'AR4.5-L3b 理想影子净值',
+          name: 'AR4.6 理想影子净值',
           type: 'line',
           data: pts.map((p) => p.ar45_ideal_nav),
           smooth: 0.15,
@@ -118,7 +118,7 @@ export default function G3Review() {
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="AR4.5-L3b 实盘复盘与真钱归因"
+        title="AR4.6 实盘复盘与真钱归因"
         subtitle={
           data
             ? `主力账号 ${data.account.label}（总资产 ${fmtYuan(data.account.total_assets, false)} · 现仓位 ${data.account.position_pct}%）· 真实盈亏归因 × Shadow 执行对账 × AI 交易教练`
@@ -180,7 +180,7 @@ export default function G3Review() {
             label="策略内浮盈 vs 旧底仓拖累"
             value={`${fmtYuan(kpis.in_strategy_floating_pnl)} / ${fmtYuan(kpis.legacy_drag_floating_pnl)}`}
             tone={kpis.legacy_drag_floating_pnl < -5000 ? 'down' : 'info'}
-            hint={`左=AR4.5策略腿浮盈 · 右=历史旧底仓浮亏 · 做T净增厚 ${fmtYuan(kpis.t_trade_pnl)}`}
+            hint={`左=AR4.6策略腿浮盈 · 右=历史旧底仓浮亏 · 做T净增厚 ${fmtYuan(kpis.t_trade_pnl)}`}
           />
           <StatCard
             label="风控与止损纪律得分"
@@ -195,11 +195,11 @@ export default function G3Review() {
         </div>
       )}
 
-      {/* 2. 实盘净值 vs AR4.5 理想影子曲线 vs 沪深300 */}
+      {/* 2. 实盘净值 vs AR4.6 理想影子曲线 vs 沪深300 */}
       {data && (
         <Card>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <SectionTitle title="1. 实盘净值 vs AR4.5-L3b 理想影子曲线 vs 沪深300（检视执行剪刀差）" />
+            <SectionTitle title="1. 实盘净值 vs AR4.6 理想影子曲线 vs 沪深300（检视执行剪刀差）" />
             <span className="font-mono text-[11px] text-zinc-400">
               按「当日真实盈亏 ÷ 前日总资产」累乘，自动剔除出入金干扰
             </span>
@@ -212,7 +212,7 @@ export default function G3Review() {
                 📈 净值追踪已启动（当前累计 {data.nav_curve.length} 个交易日快照）
               </div>
               <p className="mt-1 text-zinc-400">
-                每个交易日 15:15 自动采集主力账号真实资产后，满 2 个交易日起自动绘制「实盘净值 vs AR4.5-L3b 理想影子曲线 vs 沪深300」三线对比图。
+                每个交易日 15:15 自动采集主力账号真实资产后，满 2 个交易日起自动绘制「实盘净值 vs AR4.6 理想影子曲线 vs 沪深300」三线对比图。
               </p>
               {data.nav_curve.length === 1 && (
                 <div className="mt-2 flex flex-wrap gap-4 font-mono text-[11px] text-zinc-200">
@@ -333,7 +333,7 @@ export default function G3Review() {
             </div>
           </div>
           {shadow.daily_records.length === 0 ? (
-            <EmptyState text="暂无历史计划单对账记录：每次在交易台编译并执行 AR4.5-L3b 买卖单后，15:15 同步同花顺回执将自动生成逐笔滑点与完成率审计。" />
+            <EmptyState text="暂无历史计划单对账记录：每次在交易台编译并执行 AR4.6 买卖单后，15:15 同步同花顺回执将自动生成逐笔滑点与完成率审计。" />
           ) : (
             <div className="space-y-2">
               {shadow.daily_records.map((rec) => {
@@ -417,7 +417,7 @@ export default function G3Review() {
                 </div>
               ) : (
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-zinc-400">
-                  每日 17:45 盘后复盘任务会自动生成围绕 AR4.5-L3b 纪律的 AI 深度点评。
+                  每日 17:45 盘后复盘任务会自动生成围绕 AR4.6 纪律的 AI 深度点评。
                 </div>
               )}
 

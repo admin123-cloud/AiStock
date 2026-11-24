@@ -199,7 +199,7 @@ export default function G3Mining({ embedded = false }: { embedded?: boolean } = 
           <div className="flex flex-wrap items-center gap-2">
             <Badge color="emerald">ClickHouse 只读</Badge>
             <Badge color="blue">严格 T+1 零未来函数</Badge>
-            <Badge color="amber">最高输出 candidate_shadow（不自动覆盖现役 AR4.5-L3b）</Badge>
+            <Badge color="amber">最高输出 candidate_shadow（不自动覆盖现役 AR4.6）</Badge>
           </div>
           <Button outline onClick={() => void loadOverview(activeRun?.run_id)} disabled={loading}>
             {loading ? '刷新中…' : '刷新记录'}
@@ -434,7 +434,7 @@ export default function G3Mining({ embedded = false }: { embedded?: boolean } = 
         )}
       </Card>
 
-      {/* 2. 已导出候选影子合约池（原旧版五态周期路由器已退役，现役实盘统一由 AR4.5-L3b 双核引擎驱动） */}
+      {/* 2. 已导出候选影子合约池（原旧版五态周期路由器已退役，现役实盘统一由 AR4.6 双核引擎驱动） */}
       <Card>
         <SectionTitle
           title={`2. 已导出影子观察合约池（${overview?.exported_contracts.length || 0} 份 · candidate_shadow）`}

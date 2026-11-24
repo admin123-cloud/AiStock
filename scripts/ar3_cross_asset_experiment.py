@@ -30,20 +30,27 @@ ETF_ONE_WAY_COST = 0.0006  # 场内 ETF 单边佣金+滑点（免印花税，往
 SAFE_BOND_CODE = "511260.SH"
 
 
-def _load_etf_panels() -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str], dict[str, str]]:
+CORE_CROSS_ASSET_CLASSES = ("cn_broad", "cn_dividend", "gold", "overseas", "bond")
+
+
+def _load_etf_panels(*, include_sectors: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str], dict[str, str]]:
+    cls_filter = ""
+    if not include_sectors:
+        cls_sql = ",".join(f"'{c}'" for c in CORE_CROSS_ASSET_CLASSES)
+        cls_filter = f" AND asset_class IN ({cls_sql})"
     raw = _ch_query_df(
-        """
+        f"""
         SELECT code, name, asset_class, toString(trade_date) AS trade_date, open, close
         FROM stock.etf_kline_daily FINAL
-        WHERE trade_date >= '2022-06-01' AND trade_date <= '2026-11-20'
+        WHERE trade_date >= '2022-06-01' AND trade_date <= '2026-11-30'{cls_filter}
         ORDER BY code, trade_date
         """
     )
     meta_df = raw.drop_duplicates("code")[["code", "name", "asset_class"]]
     code_to_class = dict(zip(meta_df["code"], meta_df["asset_class"]))
     code_to_name = dict(zip(meta_df["code"], meta_df["name"]))
-    piv_o = raw.pivot(index="trade_date", columns="code", values="open").sort_index()
-    piv_c = raw.pivot(index="trade_date", columns="code", values="close").sort_index()
+    piv_o = raw.pivot(index="trade_date", columns="code", values="open").sort_index().ffill()
+    piv_c = raw.pivot(index="trade_date", columns="code", values="close").sort_index().ffill()
     return piv_o, piv_c, code_to_class, code_to_name
 
 

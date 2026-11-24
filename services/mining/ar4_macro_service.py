@@ -79,7 +79,7 @@ def evaluate_ar4_macro_decision(
         tone = "red"
         advice = (
             f"股债性价比 ERP={erp:.2f}% 跌破 {ERP_OVERHEAT_PCT:.1f}% 极贵红线（历史 60 日沪深300均跌 -15.2%），"
-            "建议逢高兑现权益仓位，AR4.5-L3b 进攻期个股上限强制锁定 0%，全切跨资产避险 ETF。"
+            "建议逢高兑现权益仓位，AR4.6 进攻期个股上限强制锁定 0%，全切跨资产避险 ETF。"
         )
     elif pctile >= NT_HEAVY_PCTILE and inflow5 >= NT_PULSE_5D_YI:
         phase = "heavy_support_pulse"
@@ -87,7 +87,7 @@ def evaluate_ar4_macro_decision(
         tone = "emerald"
         advice = (
             f"国家队 250 日分位 {pctile:.1f}%（≥70% 重仓区）且 5 日 6 大宽基净申购 +{inflow5:,.0f} 亿元，"
-            "政策底特征显著！铁律：防守期仍严禁左侧抢跑，一旦大盘确认右侧反转进入进攻期，AR4.5-L3b 个股上限自动放大至 65%。"
+            "政策底特征显著！铁律：防守期仍严禁左侧抢跑，一旦大盘确认右侧反转进入进攻期，AR4.6 个股上限自动放大至 65%。"
         )
     elif pctile >= NT_HEAVY_PCTILE:
         phase = "heavy_support"
@@ -95,7 +95,7 @@ def evaluate_ar4_macro_decision(
         tone = "emerald"
         advice = (
             f"国家队 250 日持仓分位处于 {pctile:.1f}% 高位（≥70%），筹码承接力强；"
-            "右侧进攻期 AR4.5-L3b 个股上限动态放大至 65%（实证全样本年化 +41.3% · 卡玛 2.17）。"
+            "右侧进攻期 AR4.6 个股上限动态放大至 65%（实证全样本年化 +43.5% · 卡玛 2.28）。"
         )
     elif pctile < NT_LOW_PCTILE:
         phase = "distribution_low"
@@ -103,7 +103,7 @@ def evaluate_ar4_macro_decision(
         tone = "amber"
         advice = (
             f"国家队 250 日持仓分位回落至 {pctile:.1f}%（<30% 低位派发区），大资金兑现意愿偏强；"
-            "进攻期 AR4.5-L3b 个股上限自动收紧至 35% 以防高位回撤，其余资金保留在跨资产逆波 ETF。"
+            "进攻期 AR4.6 个股上限自动收紧至 35% 以防高位回撤，其余资金保留在跨资产逆波 ETF。"
         )
     else:
         phase = "neutral"
@@ -111,7 +111,7 @@ def evaluate_ar4_macro_decision(
         tone = "blue"
         advice = (
             f"国家队 250 日持仓分位 {pctile:.1f}%（30%~70% 中性区），"
-            f"进攻期维持 AR4.5-L3b 标准个股预算 {base_stock_cap_pct}% + 跨资产 ETF {100 - base_stock_cap_pct}%。"
+            f"进攻期维持 AR4.6 标准个股预算 {base_stock_cap_pct}% + 跨资产 ETF {100 - base_stock_cap_pct}%。"
         )
 
     # 2. 计算进攻期有效个股预算上限（受开关控制）
@@ -269,7 +269,7 @@ def get_ar4_macro_snapshot(
         "sb_hk_status": sb_hk_status,
         "sb_hk_label": sb_hk_label,
         "decision": decision,
-        "evidence_note": "AR4.5-L3b 物理单账户实证(2023~2026)：国家队分位动态股仓 + 防守ETF风险调整Top2逆波 + 南向港科滤网，4年收益 +283.2%（年化 +41.3% · 回撤 19.1% · 卡玛 2.17 · OOS回撤降半至 11.3%）。",
+        "evidence_note": "AR4.6 物理单账户实证(2023~2026)：国家队分位动态股仓 + 防守ETF风险调整Top2逆波 + 南向港科滤网，4年收益 +308.0%（年化 +43.5% · 回撤 19.1% · 卡玛 2.28 · OOS回撤降半至 11.3%）。",
     }
 
 
@@ -429,8 +429,8 @@ def get_national_team_cycle_report(years: int = 3) -> dict[str, Any]:
         "etf_breakdown": etf_breakdown,
         "methodology": {
             "formula": "国家队核心持仓代理 = (510300 + 510310 + 510330 每日官方份额 × 收盘价) ÷ 沪深300点位 -> 过去250交易日滚动分位",
-            "bottom_rule": "抄底用法：分位 ≥ 70%（重仓托底）+ 5日净买 ≥ 300亿代表政策底强托，但严禁左侧抢跑；须待大盘确认右侧反转后，将 AR4.5-L3b 进攻股仓由 50% 放大至 65%。",
+            "bottom_rule": "抄底用法：分位 ≥ 70%（重仓托底）+ 5日净买 ≥ 300亿代表政策底强托，但严禁左侧抢跑；须待大盘确认右侧反转后，将 AR4.6 进攻股仓由 50% 放大至 65%。",
             "top_rule": "逃顶用法：分位跌破 30%（国家队持续派发）自动将进攻股仓收紧至 35%；若股债性价比 ERP < 5.0%（历史60日均跌 -15.2%），硬锁进攻股仓至 0%。",
-            "backtest_proof": "AR4.5-L3b 2023~2026 物理单账户零杠杆消融：4年收益 +211.9% -> +283.2%（年化 +41.3% / 回撤 19.1% / 夏普 1.64 / 卡玛 2.17 / OOS +8.87% 且回撤腰斩至 11.3%）。",
+            "backtest_proof": "AR4.6 2023~2026 物理单账户零杠杆消融：4年收益 +211.9% -> +308.0%（年化 +43.5% / 回撤 19.1% / 夏普 1.70 / 卡玛 2.28 / OOS +8.87% 且回撤腰斩至 11.3%）。",
         },
     }

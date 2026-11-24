@@ -1242,6 +1242,7 @@ export interface G3BacktestCurvePoint {
   lowvol: number
   panic_etf: number
   retired_mw04: number
+  ar46?: number
   ar45_l3b?: number
   ar45_l4?: number
   ar3_dual_ab?: number
@@ -1697,7 +1698,7 @@ export const pushG3AR3PlanWechat = (accountId = 'acct1', smoothStep = true) =>
   )
 
 // ---------------------------------------------------------------------------
-// AR4.5-L3b 实盘复盘与三腿真钱归因（新复盘中心唯一主数据源）
+// AR4.6 实盘复盘与三腿真钱归因（新复盘中心唯一主数据源）
 // ---------------------------------------------------------------------------
 
 export interface G3AR45ReviewNavPoint {

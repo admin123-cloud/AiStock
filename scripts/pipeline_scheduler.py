@@ -1494,14 +1494,14 @@ def _run_l2_heartbeat(now_bj: datetime, log: logging.Logger) -> dict[str, Any]:
     except Exception as exc:
         log.warning("[t_trade_monitor] 行情刷新失败: %s", exc)
 
-    # 2.5 AR4.5-L3b 大盘总闸门（最高权威：非进攻期源头严禁生成任何 A 股个股 buy-T 草案）
+    # 2.5 AR4.6 大盘总闸门（最高权威：非进攻期源头严禁生成任何 A 股个股 buy-T 草案）
     ar45_gate = {"allow_buy": False, "regime": "defensive"}
     try:
         from services.trading.t_notify import get_ar45_buy_gate_status
 
         ar45_gate = get_ar45_buy_gate_status()
     except Exception as exc:  # noqa: BLE001
-        log.warning("[t_trade_monitor] 读取 AR4.5-L3b 总闸门异常，按 fail-closed 拦截 buy-T: %s", exc)
+        log.warning("[t_trade_monitor] 读取 AR4.6 总闸门异常，按 fail-closed 拦截 buy-T: %s", exc)
 
     # 3. 逐票评估
     for holding in holdings.get("holdings") or []:
@@ -1561,11 +1561,11 @@ def _run_l2_heartbeat(now_bj: datetime, log: logging.Logger) -> dict[str, Any]:
                 code_report["suppressed"] = "cooldown"
                 report["codes"][code] = code_report
                 continue
-            # 2) AR4.5-L3b 大盘总闸门拦截：防守/平衡/恐慌期严禁发出任何 A 股个股 buy-T 买入提醒
+            # 2) AR4.6 大盘总闸门拦截：防守/平衡/恐慌期严禁发出任何 A 股个股 buy-T 买入提醒
             if "buy" in str(signal).lower() and not ar45_gate.get("allow_buy"):
                 code_report["suppressed"] = f"ar45_{ar45_gate.get('regime', 'defensive')}_buy_blocked"
                 log.info(
-                    "[t_trade_monitor] AR4.5-L3b 总闸门拦截 %s(%s) buy-T 信号（当前大盘=%s，严禁买A股）",
+                    "[t_trade_monitor] AR4.6 总闸门拦截 %s(%s) buy-T 信号（当前大盘=%s，严禁买A股）",
                     name,
                     code,
                     ar45_gate.get("regime"),
@@ -2054,7 +2054,7 @@ def serve(
     )
     logger.info("调度注册：tdx_sector_sync cron=[day_of_week=%s 16:45 Asia/Shanghai]（通达信标准板块盘后同步）", CRON_DAY_OF_WEEK)
 
-    # 每日盘后 17:15 容器级 24/7 自动喂料 AR4.5-L3b：14只跨资产ETF + 上交所国家队份额 + 南向资金 + 沪深300 ERP + 明日调仓预案
+    # 每日盘后 17:15 容器级 24/7 自动喂料 AR4.6：14只跨资产ETF + 上交所国家队份额 + 南向资金 + 沪深300 ERP + 明日调仓预案
     def _run_ar45_postclose_sync_job() -> None:
         now_bj = cn_now()
         try:
@@ -2106,7 +2106,7 @@ def serve(
             plan = _get("/api/g3/mining/ar3/rebalance-plan?account_id=acct1&smooth_step=true&persist=true", timeout=90)
             _post("/api/g3/premarket-brief/generate", payload={"push_wechat": False}, timeout=90)
             logger.info(
-                "[ar45_postclose_sync] 明日AR4.5-L3b调仓预案与简报缓存已刷新: regime=%s sells=%d buys=%d",
+                "[ar45_postclose_sync] 明日AR4.6调仓预案与简报缓存已刷新: regime=%s sells=%d buys=%d",
                 plan.get("regime"), len(plan.get("sell_orders") or []), len(plan.get("buy_orders") or []),
             )
         except Exception as exc:
@@ -2117,14 +2117,14 @@ def serve(
         _run_ar45_postclose_sync_job,
         trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=17, minute=15, timezone=BEIJING_TZ),
         id="ar45_postclose_sync",
-        name="AR4.5-L3b 跨资产ETF+国家队份额+南向资金+ERP盘后24/7自动喂料（工作日 17:15）",
+        name="AR4.6 跨资产ETF+国家队份额+南向资金+ERP盘后24/7自动喂料（工作日 17:15）",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
     )
-    logger.info("调度注册：ar45_postclose_sync cron=[day_of_week=%s 17:15 Asia/Shanghai]（AR4.5-L3b 跨资产ETF+国家队+南向+ERP盘后同步）", CRON_DAY_OF_WEEK)
+    logger.info("调度注册：ar45_postclose_sync cron=[day_of_week=%s 17:15 Asia/Shanghai]（AR4.6 跨资产ETF+国家队+南向+ERP盘后同步）", CRON_DAY_OF_WEEK)
 
-    # 注册 acct1 AR4.5-L3b 专属盘前/盘中/盘后微信智能买卖提醒（对齐 acct2 同款体验，严格 AR4.5-L3b 策略驱动）
+    # 注册 acct1 AR4.6 专属盘前/盘中/盘后微信智能买卖提醒（对齐 acct2 同款体验，严格 AR4.6 策略驱动）
     def _run_acct1_ar45_advisor_job(mode: str) -> None:
         import urllib.request as _urlreq
 
@@ -2157,7 +2157,7 @@ def serve(
         lambda: _run_acct1_ar45_advisor_job("premarket"),
         trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=9, minute=15, timezone=BEIJING_TZ),
         id="acct1_ar45_premarket",
-        name="acct1 AR4.5-L3b 盘前作战计划推送（工作日 09:15）",
+        name="acct1 AR4.6 盘前作战计划推送（工作日 09:15）",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
@@ -2166,7 +2166,7 @@ def serve(
         lambda: _run_acct1_ar45_advisor_job("intraday"),
         trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour="9-11,13-14", minute="5,15,25,35,45,55", timezone=BEIJING_TZ),
         id="acct1_ar45_intraday",
-        name="acct1 AR4.5-L3b 盘中实时买卖提醒（工作日 09:35~14:50 每10m）",
+        name="acct1 AR4.6 盘中实时买卖提醒（工作日 09:35~14:50 每10m）",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
@@ -2175,7 +2175,7 @@ def serve(
         lambda: _run_acct1_ar45_advisor_job("eod"),
         trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=15, minute=15, timezone=BEIJING_TZ),
         id="acct1_ar45_eod",
-        name="acct1 AR4.5-L3b 日终真钱复盘推送（工作日 15:15）",
+        name="acct1 AR4.6 日终真钱复盘推送（工作日 15:15）",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

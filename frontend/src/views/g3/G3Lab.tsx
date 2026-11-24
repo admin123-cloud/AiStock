@@ -33,10 +33,10 @@ const etfSignalColor = (sig: string) => {
 const AUTO_JOBS = [
   { time: '工作日 16:15', name: '全市场日线 K 线同步', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
   { time: '工作日 16:40', name: '市场情绪 / 涨跌停宽度计算', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
-  { time: '工作日 17:15', name: 'AR4.5-L3b 全链路自动喂料（ETF+国家队+南向+策略刷新）', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
+  { time: '工作日 17:15', name: 'AR4.6 全链路自动喂料（ETF+国家队+南向+策略刷新）', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
   { time: '工作日 09:10 / 17:45', name: '盘前晨会简报 & 盘后 AI 排雷与复盘', runner: 'Antigravity Sidecar', status: '宿主机常驻' },
-  { time: '工作日 09:15 / 15:15', name: 'acct1 AR4.5-L3b 盘前计划 & 日终真钱复盘推送', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
-  { time: '交易日 09:35~14:50', name: 'acct1 AR4.5-L3b 盘中每10m智能买卖提醒（微信单向推）', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
+  { time: '工作日 09:15 / 15:15', name: 'acct1 AR4.6 盘前计划 & 日终真钱复盘推送', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
+  { time: '交易日 09:35~14:50', name: 'acct1 AR4.6 盘中每10m智能买卖提醒（微信单向推）', runner: 'aistock-pipeline-runner', status: '24/7 容器级' },
 ]
 
 export default function G3Lab() {
@@ -172,7 +172,7 @@ export default function G3Lab() {
     <div className="flex w-full flex-col gap-4">
       <PageHeader
         title="G3 策略研投与风控设置中心"
-        subtitle="AI 策略挖掘与防过拟合实验工坊 × AR4.5-L3b 策略矩阵、L2 硬风控门禁、24/7 自动喂料与微信通知配置"
+        subtitle="AI 策略挖掘与防过拟合实验工坊 × AR4.6 策略矩阵、L2 硬风控门禁、24/7 自动喂料与微信通知配置"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Link to="/g3/desk">
@@ -378,7 +378,7 @@ export default function G3Lab() {
           {/* 2. 24/7 自动喂料与任务调度总览 */}
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <SectionTitle title="2. AR4.5-L3b 24/7 自动喂料与策略切换调度" />
+              <SectionTitle title="2. AR4.6 24/7 自动喂料与策略切换调度" />
               <Badge color="emerald">全自动无值守运行中</Badge>
             </div>
             <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 lg:grid-cols-5">
@@ -395,17 +395,17 @@ export default function G3Lab() {
             </div>
           </Card>
 
-          {/* 3. AR4.5-L3b 策略矩阵与三腿配额 */}
+          {/* 3. AR4.6 策略矩阵与三腿配额 */}
           {matrix && (
             <>
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatCard
-                  label="进攻核 · AR4.5 个股 (AB混合)"
+                  label="进攻核 · AR4.6 个股 (AB混合)"
                   value={`${matrix.allocation.offense_pct}%`}
                   hint={`大盘状态：${matrix.regime_label}`}
                 />
                 <StatCard
-                  label="压舱核 · AR4.5-L3b Top2 逆波 ETF"
+                  label="压舱核 · AR4.6 Top2 逆波 ETF"
                   value={`${matrix.allocation.defense_etf_pct}%`}
                   hint="跨资产全天候风险调整轮动"
                 />
@@ -531,7 +531,7 @@ export default function G3Lab() {
                 <div className="mt-1 font-mono text-sm font-bold text-white">
                   {settingsData?.strategy_contracts?.length ?? 0} 份
                 </div>
-                <div className="mt-0.5 text-[11px] text-zinc-500">含 AR4.5-L3b 与做T正式合约</div>
+                <div className="mt-0.5 text-[11px] text-zinc-500">含 AR4.6 与做T正式合约</div>
               </div>
             </div>
 

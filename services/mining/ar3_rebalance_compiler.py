@@ -234,21 +234,25 @@ def compile_ar3_rebalance_plan(
     stock_radar = radar.get("stock_radar") or {}
     regime = str(radar.get("regime") or market_gate.get("regime") or "defensive")
     is_offensive = bool(radar.get("is_offensive"))
+    is_panic_ab_active = bool(stock_radar.get("is_panic_ab_active")) and not is_offensive
     max_slots = int(cfg.get("max_slots") or 4)
     raw_eff_cap = cfg.get("effective_stock_budget_cap_pct")
-    stock_cap_pct = float(raw_eff_cap if raw_eff_cap is not None else (cfg.get("stock_budget_cap_pct") or 50))
+    base_stock_cap = float(raw_eff_cap if raw_eff_cap is not None else (cfg.get("stock_budget_cap_pct") or 50))
+    stock_cap_pct = float(stock_radar.get("stock_budget_active_pct") or 50.0) if is_panic_ab_active else base_stock_cap
     slot_w_pct = stock_cap_pct / max(1, max_slots)
 
     total_assets = float(acct["total_assets"])
     avail_cash = float(acct["available_cash"])
     holdings_by_code = {h["code"]: h for h in acct["holdings"]}
 
-    # 1. 构建 AR3 v3.0 物理单账户目标权重表（总和硬锁死 <= 100.0%）
+    # 1. 构建 AR4.6 物理单账户目标权重表（总和硬锁死 <= 100.0%）
     target_map: dict[str, dict[str, Any]] = {}
     stock_used_pct = 0.0
 
-    if is_offensive and stock_cap_pct > 0 and stock_radar.get("available"):
-        # 防频繁换手：若现有持仓已在 F2A/F3A 候选池内且未触发 -10% 硬止损，优先保留槽位
+    if (is_offensive or is_panic_ab_active) and stock_cap_pct > 0 and stock_radar.get("available"):
+        # 防频繁换手：若现有持仓已在 F2A/F3A 候选池内且未触发硬止损，优先保留槽位
+        hard_stop_thr = -6.0 if is_panic_ab_active else -10.0
+        stop_mult = 0.94 if is_panic_ab_active else 0.90
         f2a_pool = {c["code"]: c for c in (stock_radar.get("f2a_candidates") or [])}
         f3a_pool = {c["code"]: c for c in (stock_radar.get("f3a_candidates") or [])}
         all_pool = {**f3a_pool, **f2a_pool}
@@ -259,15 +263,20 @@ def compile_ar3_rebalance_plan(
             if h["is_etf"]:
                 continue
             cand = all_pool.get(h["code"])
-            if cand and (h["profit_pct"] is None or h["profit_pct"] > -10.0) and slots_taken < max_slots:
+            if cand and (h["profit_pct"] is None or h["profit_pct"] > hard_stop_thr) and slots_taken < max_slots:
                 target_map[h["code"]] = {
                     "code": h["code"],
                     "name": cand["name"],
                     "asset_kind": "stock",
+                    "entry_rule": "panic_30m_ab_blend" if is_panic_ab_active else "offensive_ab_blend",
                     "target_weight_pct": round(slot_w_pct, 2),
                     "ref_price": float(cand["close"]),
-                    "stop_loss_price": round(float(cand["close"]) * 0.90, 2),
-                    "reason": f"已在持仓且仍在 {cand['source_label']} 池内（防换手保留槽位）",
+                    "stop_loss_price": round(float(cand["close"]) * stop_mult, 2),
+                    "reason": (
+                        f"AR4.6 冰点真龙持仓保留（逐票-6%止损/+5%后-3.5%追踪/≤5日）"
+                        if is_panic_ab_active
+                        else f"已在持仓且仍在 {cand['source_label']} 池内（防换手保留槽位）"
+                    ),
                     "source_label": cand["source_label"],
                     "notice_date": cand.get("notice_date"),
                     "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
@@ -287,14 +296,22 @@ def compile_ar3_rebalance_plan(
                 continue
             if ind != "未分类" and ind in kept_inds:
                 continue
+            if is_panic_ab_active and cand.get("executable_10w") is False:
+                continue
+            cl_c = float(cand["close"])
             target_map[c6] = {
                 "code": c6,
                 "name": cand["name"],
                 "asset_kind": "stock",
+                "entry_rule": "panic_30m_ab_blend" if is_panic_ab_active else "offensive_ab_blend",
                 "target_weight_pct": round(slot_w_pct, 2),
-                "ref_price": float(cand["close"]),
-                "stop_loss_price": float(cand["stop_loss_price"]),
-                "reason": f"{cand['source_label']} 优先第 {slots_taken + 1} 槽（公告 {cand.get('notice_date')} · 净利+{cand.get('net_profit_yoy_pct')}%）",
+                "ref_price": cl_c,
+                "stop_loss_price": round(cl_c * stop_mult, 2) if is_panic_ab_active else float(cand["stop_loss_price"]),
+                "reason": (
+                    f"AR4.6 冰点 30m 真龙第 {slots_taken + 1} 槽（10万可执行 · 逐票-6%止损/+5%后-3.5%追踪/≤5日 · 净利+{cand.get('net_profit_yoy_pct')}%）"
+                    if is_panic_ab_active
+                    else f"{cand['source_label']} 优先第 {slots_taken + 1} 槽（公告 {cand.get('notice_date')} · 净利+{cand.get('net_profit_yoy_pct')}%）"
+                ),
                 "source_label": cand["source_label"],
                 "notice_date": cand.get("notice_date"),
                 "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
@@ -326,7 +343,7 @@ def compile_ar3_rebalance_plan(
             "target_weight_pct": w_pct,
             "ref_price": cl,
             "stop_loss_price": stop_px,
-            "reason": str(item.get("reason") or "AR4.5-L3b 跨资产 ETF 轮动目标"),
+            "reason": str(item.get("reason") or "AR4.6 跨资产 ETF 轮动目标"),
             "source_label": str(item.get("asset_class_label") or "跨资产ETF"),
             "notice_date": None,
             "net_profit_yoy_pct": None,
@@ -442,7 +459,7 @@ def compile_ar3_rebalance_plan(
         limit_px = _round_px(px * 0.998, h["is_etf"])  # 卖单让价 0.2% 保障成交
         why_parts: list[str] = []
         if tgt is None:
-            why_parts.append("非 AR4.5-L3b 当前目标标的")
+            why_parts.append("非 AR4.6 当前目标标的")
         else:
             why_parts.append(f"超配（现 {round(cur_mv / total_assets * 100, 1)}% > 目标 {tgt['target_weight_pct']}%）")
         if h["profit_pct"] is not None and h["profit_pct"] <= -10.0:
@@ -833,7 +850,7 @@ def format_ar3_plan_wechat_markdown(plan: Mapping[str, Any]) -> str:
     me = plan.get("money_effect_20d") or {}
 
     lines = [
-        f"⚡ **AR4.5-L3b 今日最终买卖单 ({plan.get('date')})**",
+        f"⚡ **AR4.6 今日最终买卖单 ({plan.get('date')})**",
         f"• 主力账号：{acct.get('label')}（总资产 ¥{acct.get('total_assets', 0):,.0f}｜可用 ¥{acct.get('available_cash', 0):,.0f}｜现仓位 {acct.get('position_pct', 0)}%）",
         f"• 大盘五态：**{plan.get('regime_label')}**｜个股模式：`{cfg.get('active_stock_mode')}`｜ETF底座：`{cfg.get('etf_core_mode')}`",
         "",

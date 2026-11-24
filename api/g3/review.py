@@ -116,7 +116,7 @@ def get_g3_review_ar45_attribution(
     account_id: str = Query("acct1", description="目标主力账号（默认 acct1 / ct1曾）"),
     days: int = Query(30, ge=7, le=180, description="复盘回溯自然日数"),
 ) -> dict[str, Any]:
-    """AR4.5-L3b 实盘真钱复盘与三腿归因总账（实盘净值 vs 理想曲线 + Shadow 对账 + AI 交易教练）。"""
+    """AR4.6 实盘真钱复盘与三腿归因总账（实盘净值 vs 理想曲线 + Shadow 对账 + AI 交易教练）。"""
     return build_ar45_review_report(account_id=account_id, days=days)
 
 

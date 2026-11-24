@@ -199,6 +199,8 @@ def simulate_ar45_physical(
     max_hold_days: int = 60,
     rebal_every: int = 5,
     record_trace: bool = False,
+    panic_ab_sleeve_map: dict[str, dict[str, Any]] | None = None,
+    panic_ab_weight: float = 0.50,
 ) -> tuple[pd.Series, dict[str, Any]]:
     """AR4.5 物理单账户零杠杆联合撮合引擎（严格 T-1 可见 -> T 开盘撮合，支持全部新信息源与风控钩子）。"""
     dates = day_df["trade_date"].astype(str).tolist()
@@ -302,6 +304,8 @@ def simulate_ar45_physical(
     panic_days = 0
     panic_cum = 1.0
     panic_cd = 0
+    panic_ab_val = 0.0
+    panic_ab_triggers = 0
 
     nav_list: list[float] = [1.0]
     stock_trades = 0
@@ -333,22 +337,23 @@ def simulate_ar45_physical(
                 pos.peak_close = max(0.01, (pos.peak_close - cash_ps) / mult)
                 pos.last_close = max(0.01, (pos.last_close - cash_ps) / mult)
 
-        # B. 冰点反抽状态机
+        # B. 冰点反抽状态机（AR4.5 走 60% ETF 冰点腿；AR4.6 走 30m 确认 50% 10万可执行 AB_BLEND 真龙腿 + 50% 避险 ETF）
         panic_changed = False
-        if panic_active:
-            if panic_days >= 5 or (panic_cum - 1.0) <= -0.06 or (panic_cum - 1.0) >= 0.12 or b_prev >= 38.0:
-                panic_active = False
-                panic_days = 0
-                panic_cd = 2
-                panic_changed = True
-        else:
-            if panic_cd > 0:
-                panic_cd -= 1
-            elif b_prev <= 18.0 and pair_r_prev >= 0.005:
-                panic_active = True
-                panic_days = 0
-                panic_cum = 1.0
-                panic_changed = True
+        if panic_ab_sleeve_map is None:
+            if panic_active:
+                if panic_days >= 5 or (panic_cum - 1.0) <= -0.06 or (panic_cum - 1.0) >= 0.12 or b_prev >= 38.0:
+                    panic_active = False
+                    panic_days = 0
+                    panic_cd = 2
+                    panic_changed = True
+            else:
+                if panic_cd > 0:
+                    panic_cd -= 1
+                elif b_prev <= 18.0 and pair_r_prev >= 0.005:
+                    panic_active = True
+                    panic_days = 0
+                    panic_cum = 1.0
+                    panic_changed = True
 
         days_since_rebal += 1
         need_etf_eval = panic_changed or (not panic_active and (days_since_rebal >= rebal_every or not etf_target_norm))
@@ -417,7 +422,31 @@ def simulate_ar45_physical(
             for c, pos in stock_pos.items()
         )
         cur_etf_val_open = sum(sh * _etf_open(c) for c, sh in etf_shares.items() if sh > 1e-12)
-        total_eq_open = cash + cur_stock_val_open + cur_etf_val_open
+        total_eq_open = cash + cur_stock_val_open + cur_etf_val_open + panic_ab_val
+
+        # B2. AR4.6 极端冰点 30m K线半仓 AB_BLEND 真龙腿物理资金划转（单账户总仓位硬锁死 <= 100%）
+        pab_ev = panic_ab_sleeve_map.get(dt) if panic_ab_sleeve_map is not None else None
+        if pab_ev is not None and pab_ev.get("is_entry") and panic_ab_val <= 1e-9 and reg_prev not in ("offensive", "extreme_offensive"):
+            target_pab = total_eq_open * panic_ab_weight
+            if cash < target_pab and etf_shares:
+                need = (target_pab - cash) / (1.0 - ETF_ONE_WAY_COST)
+                cur_e_val = sum(sh * _etf_open(c) for c, sh in etf_shares.items() if sh > 1e-12)
+                if cur_e_val > 1e-9:
+                    frac = min(1.0, need / cur_e_val)
+                    for ec in list(etf_shares.keys()):
+                        e_op = _etf_open(ec)
+                        if e_op <= 0 or etf_shares[ec] <= 1e-12:
+                            continue
+                        sell_sh = etf_shares[ec] * frac
+                        etf_shares[ec] -= sell_sh
+                        cash += sell_sh * e_op * (1.0 - ETF_ONE_WAY_COST)
+                        if etf_shares[ec] <= 1e-12:
+                            del etf_shares[ec]
+            alloc_pab = min(target_pab, cash)
+            if alloc_pab > 1e-6:
+                cash -= alloc_pab
+                panic_ab_val = alloc_pab
+                panic_ab_triggers += 1
 
         # C2. 股票开仓
         if pending_stock_buys and reg_prev in ("offensive", "extreme_offensive") and dyn_stock_cap > 0.0:
@@ -529,6 +558,15 @@ def simulate_ar45_physical(
             r_pair = float(panic_pair_cc.get(dt, 0.0)) if dt in panic_pair_cc.index and pd.notna(panic_pair_cc.get(dt)) else 0.0
             panic_cum *= (1.0 + r_pair)
 
+        if panic_ab_val > 1e-9 and pab_ev is not None:
+            panic_ab_val *= (1.0 + float(pab_ev.get("daily_ret", 0.0)))
+            if pab_ev.get("is_exit"):
+                cash += panic_ab_val
+                panic_ab_val = 0.0
+        elif panic_ab_val > 1e-9:
+            cash += panic_ab_val
+            panic_ab_val = 0.0
+
         s_val_close = 0.0
         for code, pos in stock_pos.items():
             px_t = px_lookup.get((code, dt))
@@ -540,7 +578,7 @@ def simulate_ar45_physical(
             s_val_close += pos.shares * pos.last_close
 
         e_val_close = sum(sh * _etf_close(c) for c, sh in etf_shares.items() if sh > 1e-12)
-        total_eq_close = cash + s_val_close + e_val_close
+        total_eq_close = cash + s_val_close + e_val_close + panic_ab_val
         nav_list.append(total_eq_close)
 
         if record_trace:
@@ -580,7 +618,7 @@ def simulate_ar45_physical(
                     })
 
     nav = pd.Series(nav_list, index=dates, dtype=float)
-    return nav, {"name": name, "stock_trades": stock_trades, "trace": trace_rows}
+    return nav, {"name": name, "stock_trades": stock_trades, "panic_ab_triggers": panic_ab_triggers, "trace": trace_rows}
 
 
 def main() -> int:

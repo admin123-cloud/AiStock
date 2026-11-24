@@ -177,7 +177,7 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0 }: AR3ExecutionO
     try {
       const res = await pushG3AR3PlanWechat(accountId, smoothStep)
       if (res.status === 'ok') {
-        setMsg(`已将 ${res.plan_date || '今日'} AR4.5-L3b 最终买卖调仓单推送到你的微信。`)
+        setMsg(`已将 ${res.plan_date || '今日'} AR4.6 最终买卖调仓单推送到你的微信。`)
       } else {
         setErr(`微信推送未成功：${JSON.stringify(res.wechat)}`)
       }
@@ -198,7 +198,7 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0 }: AR3ExecutionO
       {/* 顶栏：主力单账号 + 资金诊断 + 一键操作 */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/90 pb-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-bold text-white">📋 AR4.5-L3b 今日最终买卖执行单</span>
+          <span className="text-sm font-bold text-white">📋 AR4.6 今日最终买卖执行单</span>
           <Badge color="emerald">主力单账号：{acct?.label || 'ct1曾 (acct1)'}</Badge>
           {acct && acct.available && (
             <span className="font-mono text-[11px] text-zinc-200">
@@ -299,10 +299,10 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0 }: AR3ExecutionO
 
       {/* 最终买卖明细表（支持人工勾选与微调股数/价格） */}
       {loading && !plan ? (
-        <div className="py-5 text-center text-zinc-400">正在基于主力账号真实持仓计算 AR4.5-L3b 精确买卖股数…</div>
+        <div className="py-5 text-center text-zinc-400">正在基于主力账号真实持仓计算 AR4.6 精确买卖股数…</div>
       ) : orders.length === 0 ? (
         <div className="py-4 text-center text-zinc-300">
-          ✅ 当前账户持仓已与 AR4.5-L3b 目标组合对齐（差额均小于 ¥1,800），今日无需调仓。
+          ✅ 当前账户持仓已与 AR4.6 目标组合对齐（差额均小于 ¥1,800），今日无需调仓。
         </div>
       ) : (
         <div className="mt-2.5 overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950/80">

@@ -114,7 +114,7 @@ export default function G3Signals() {
       })
     }
 
-    // 2. AR4.5 候选股（F3A + F2A）
+    // 2. AR4.6 候选股（F3A + F2A）
     const addStockList = (list: G3AR3DualCoreRadarResponse['stock_radar']['f2a_candidates'], grp: 'f2a' | 'f3a', grpLabel: string) => {
       for (const s of list || []) {
         const key = `${grp}_${s.code}`
@@ -163,7 +163,7 @@ export default function G3Signals() {
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="AR4.5-L3b 选股与排雷雷达中心"
+        title="AR4.6 选股与排雷雷达中心"
         subtitle="14 只跨资产全天候 ETF 深度全景 × F2A/F3A 业绩双核选股队列 × AI 红黄绿灯排雷档案与前向胜率验真"
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -189,7 +189,7 @@ export default function G3Signals() {
                 : 'text-zinc-400 hover:text-zinc-100'
             }`}
           >
-            📡 AR4.5-L3b 双核雷达（14只ETF + F2A/F3A）
+            📡 AR4.6 双核雷达（14只ETF + F2A/F3A）
           </button>
           <button
             type="button"
@@ -254,10 +254,10 @@ export default function G3Signals() {
             />
           </div>
 
-          {/* 1. 实盘持仓 + AR4.5 候选股实时排雷明细 */}
+          {/* 1. 实盘持仓 + AR4.6 候选股实时排雷明细 */}
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <SectionTitle title={`1. 实时持仓与 AR4.5 候选股 AI 排雷明细（共 ${filteredRows.length} 只）`} />
+              <SectionTitle title={`1. 实时持仓与 AR4.6 候选股 AI 排雷明细（共 ${filteredRows.length} 只）`} />
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 {(['all', 'red', 'yellow', 'green'] as LightFilter[]).map((f) => (
                   <button

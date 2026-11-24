@@ -47,8 +47,8 @@ export default function G3Settings() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageHeader
-        title="AR4.5-L3b 终极双核策略矩阵与风控总控台"
-        subtitle="AR4.5-L3b 双核驱动（进攻期按国家队分位动态 0/35/50/65% AB混合个股 + 宽基ETF · 防守/平衡期 100% 非A股风险调整Top2逆波ETF + 南向港科滤网）× 已有底仓反T哨兵 × L2 硬风控门禁"
+        title="AR4.6 终极双核策略矩阵与风控总控台"
+        subtitle="AR4.6 双核驱动（进攻期按国家队分位动态 0/35/50/65% AB混合个股 + 宽基ETF · 防守/平衡期 100% 非A股风险调整Top2逆波ETF + 南向港科滤网）× 已有底仓反T哨兵 × L2 硬风控门禁"
         actions={
           <Button onClick={() => void load()} disabled={loading}>
             {loading ? '刷新中…' : '刷新'}
@@ -62,17 +62,17 @@ export default function G3Settings() {
         </div>
       )}
 
-      {/* Phase 4：AR4.5-L3b 终极双核策略矩阵与动态配额 */}
+      {/* Phase 4：AR4.6 终极双核策略矩阵与动态配额 */}
       {matrix && (
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
-              label="进攻核 · AR4.5 基本面个股 (AB混合)"
+              label="进攻核 · AR4.6 基本面个股 (AB混合)"
               value={`${matrix.allocation.offense_pct}%`}
               hint={`大盘状态：${matrix.regime_label}`}
             />
             <StatCard
-              label="压舱核 · AR4.5-L3b Top2 逆波 ETF"
+              label="压舱核 · AR4.6 Top2 逆波 ETF"
               value={`${matrix.allocation.defense_etf_pct}%`}
               hint="纳指/黄金/红利/政金债跨资产全天候轮动"
             />
@@ -113,10 +113,10 @@ export default function G3Settings() {
             ))}
           </div>
 
-          {/* 辅助参考：6 大 A 股宽基 ETF 趋势温度计（AR4.5-L3b 实盘选标的请以作战台跨资产雷达为准） */}
+          {/* 辅助参考：6 大 A 股宽基 ETF 趋势温度计（AR4.6 实盘选标的请以作战台跨资产雷达为准） */}
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <SectionTitle title="A 股宽基趋势温度计（6 大宽基参考 · AR4.5-L3b 压舱实盘由风险调整 Top2 逆波 ETF 驱动）" />
+              <SectionTitle title="A 股宽基趋势温度计（6 大宽基参考 · AR4.6 压舱实盘由风险调整 Top2 逆波 ETF 驱动）" />
               <Badge color={matrix.defense_auto_cash ? 'amber' : 'emerald'}>
                 {matrix.defense_auto_cash ? 'A 股宽基全破位 · 已切非A股风险调整Top2逆波ETF' : 'A 股宽基存在上升趋势'}
               </Badge>

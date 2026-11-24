@@ -1,7 +1,7 @@
 #coding:gbk
 """
 ===============================================================================
-AR4.5-L3b  -  国金标准 QMT 纯内置原生策略（跨资产风险调整 Top2 逆波轮动 + AR2_2A 冰点反抽）
+AR4.6  -  国金标准 QMT 纯内置原生策略（跨资产风险调整 Top2 逆波轮动 + AR2_2A 冰点反抽）
 ===============================================================================
 核心特性（100% 适配 2026-10 监管与国金标准 QMT v2.1.19+ 环境）：
   1. 零文件 IO（不调用 open / os / pathlib 读写任何磁盘文件）
@@ -43,7 +43,7 @@ REBALANCE_TIME_HHMM = 935          # 每日主调仓触发时间（09:35，避开集合竞价剧烈
 BUY_SLIPPAGE_PCT = 0.002           # 买入保护限价上浮 +0.2%
 SELL_SLIPPAGE_PCT = 0.002          # 卖出保护限价下浮 -0.2%
 ONLY_MANAGE_ETF_UNIVERSE = True    # 仅管理下方 14 只 AR3 ETF，绝不卖出账户中其他个股
-ALLOW_HK_TECH = True               # AR4.5 南向滤网开关：若作战台提示南向20日净流出(<0亿)，改为 False 拦截港科
+ALLOW_HK_TECH = True               # AR4.6 南向滤网开关：若作战台提示南向20日净流出(<0亿)，改为 False 拦截港科
 HK_SOUTHBOUND_BOOST = False        # 若作战台提示南向20日净买>=600亿，可改为 True 享+25%动量加权
 
 # AR2_2A 极端冰点反抽参数（与 AiStock 实证参数一致）
@@ -236,7 +236,7 @@ def compute_etf_metrics(close_map):
 
 def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
     """
-    AR4.5-L3b（进攻期A股宽基Top2 + 非进攻期非A股风险调整动量Top2逆波动加权 + AR2_2A冰点反抽）目标权重决策器。
+    AR4.6（进攻期A股宽基Top2 + 非进攻期非A股风险调整动量Top2逆波动加权 + AR2_2A冰点反抽）目标权重决策器。
     返回: (target_weights_dict, headline_str)
       target_weights_dict: {code: weight_0_to_1}（总和 = 1.0）
     """
@@ -295,7 +295,7 @@ def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
             w = 1.0 / float(len(top_cn))
             targets = dict((x["code"], w) for x in top_cn)
             names = " + ".join(["%s(%.1f%%)" % (x["name"], x["ret_20d_pct"]) for x in top_cn])
-            headline = "AR4.5 进攻期宽基动量 Top%d：%s" % (len(top_cn), names)
+            headline = "AR4.6 进攻期宽基动量 Top%d：%s" % (len(top_cn), names)
             return targets, headline
 
         # 若 A 股宽基暂未站上趋势，切非 A 股风险调整 Top2 逆波
@@ -307,12 +307,12 @@ def decide_ar3_etf01_targets(regime_info, etf_rows, panic_active=False):
             return targets, headline
         return {SAFE_BOND_CODE: 1.0}, "进攻期宽基与跨资产全破位 -> 切十年国债避险"
 
-    # 3. 平衡 / 防守 / 冰点未企稳：AR4.5-L3b 100% 配置非A股风险调整动量 Top2 逆波动率加权
+    # 3. 平衡 / 防守 / 冰点未企稳：AR4.6 100% 配置非A股风险调整动量 Top2 逆波动率加权
     top_non = _pick_non_cn_ar45(non_cn, 2)
     if top_non:
         targets = _inv_vol_dict(top_non)
         names = " + ".join(["%s(%s %.0f%%, RAM=%.3f)" % (x["name"], x["code"], targets[x["code"]] * 100.0, _score_ram(x)) for x in top_non])
-        headline = "AR4.5-L3b 非进攻期(%s) -> 风险调整Top%d逆波：%s" % (
+        headline = "AR4.6 非进攻期(%s) -> 风险调整Top%d逆波：%s" % (
             regime_info.get("regime_label", ""), len(top_non), names
         )
         return targets, headline

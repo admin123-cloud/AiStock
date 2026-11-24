@@ -32,19 +32,20 @@ BJ_TZ = timezone(timedelta(hours=8))
 
 SAFE_BOND_CODE = "511260.SH"
 HK_TECH_ETF_CODES = frozenset({"513180.SH", "513050.SH"})
+CORE_CROSS_ASSET_CLASSES = ("cn_broad", "cn_dividend", "gold", "overseas", "bond")
 VALID_STOCK_MODES = ("ab_blend", "auto_lag_me20", "f2a_trend", "f3a_pullback")
 VALID_ETF_MODES = ("regime_focus", "risk_adj_mom")
 
 STOCK_MODE_META: dict[str, dict[str, Any]] = {
     "ab_blend": {
-        "label": "AB 混合（AR4.5-L3b 冠军主力）",
-        "short_label": "AB 混合（L3b 收益王）",
-        "desc": "交替填槽 F3A 绩优回踩与 F2A 业绩趋势主升，实证 4 年 +283.2% · 年化 +41.3% · 回撤 19.1% · 卡玛 2.17 · OOS 回撤 11.3%",
+        "label": "AB 混合（AR4.6 冠军主力）",
+        "short_label": "AB 混合（AR4.6 收益王）",
+        "desc": "进攻期日收盘宽容死拿 F3A+F2A 真龙，冰点≤18%经30m确认半仓50%切入10万可执行AB真龙(B档-6%/+5%→-3.5%)；物理单账户实证 4 年 +308.0% · 年化 +43.5% · 回撤 19.1% · 卡玛 2.28 · 2026熊市OOS +11.3%（OOS回撤仅 10.7%）",
     },
     "auto_lag_me20": {
-        "label": "AR4.5-L4 赚钱效应自动热切（低回撤版）",
+        "label": "AR4.6-L4 赚钱效应自动热切（低回撤版）",
         "short_label": "L4 赚钱效应自动切（回撤14.4%）",
-        "desc": "严格按近20日已闭合5日实现赚钱效应差（±1.5%）自动切换 F2A/F3A/AB，实证卡玛 2.69 · 最大回撤仅 14.4% · 年化 +38.8%",
+        "desc": "严格按近20日已闭合5日实现赚钱效应差（±1.5%）自动切换 F2A/F3A/AB，大幅压低回撤并拉升卡玛比率",
     },
     "f2a_trend": {
         "label": "F2A 业绩趋势主升优先",
@@ -60,9 +61,9 @@ STOCK_MODE_META: dict[str, dict[str, Any]] = {
 
 ETF_MODE_META: dict[str, dict[str, Any]] = {
     "regime_focus": {
-        "label": "AR4.5-L3b 风险调整Top2逆波 + 南向港科滤网",
-        "short_label": "AR4.5-L3b 风险调整Top2逆波",
-        "desc": "进攻期配 A 股强势宽基 Top2；非进攻期选非 A 股风险调整动量 Top2 并按逆波动率配权（叠加南向20日净流港科滤网，告别单品满仓硬扛，OOS回撤腰斩至 11.3%）",
+        "label": "AR4.6 风险调整Top2逆波 + 南向港科滤网 + 冰点50%避险",
+        "short_label": "AR4.6 风险调整Top2逆波",
+        "desc": "进攻期配 A 股强势宽基 Top2；非进攻常规期 100% 配非 A 股风险调整 Top2 逆波 ETF（南向港科滤网）；极端冰点 30m 确认时配 50% 避险 ETF 护航 50% AB 真龙",
     },
     "risk_adj_mom": {
         "label": "#02 全市场5大类跨资产分散 Top2",
@@ -186,11 +187,13 @@ def _build_etf_radar(
     """从 stock.etf_kline_daily 计算 14 只跨资产 ETF 最新动量与 AR4.5-L3b 今日目标配置。"""
     since_90 = (datetime.now(BJ_TZ) - timedelta(days=100)).strftime("%Y-%m-%d")
     try:
+        cls_sql = ",".join(f"'{c}'" for c in CORE_CROSS_ASSET_CLASSES)
         raw = _ch_query_df(
             f"""
             SELECT code, name, asset_class, toString(trade_date) AS trade_date, open, close
             FROM stock.etf_kline_daily FINAL
             WHERE trade_date >= '{since_90}'
+              AND asset_class IN ({cls_sql})
             ORDER BY code, trade_date
             """,
             timeout=15,
@@ -286,7 +289,8 @@ def _build_etf_radar(
 
     is_offensive = regime in ("offensive", "extreme_offensive")
     panic_triggered = bool((panic_signal or {}).get("triggered"))
-    etf_total_budget_pct = (100 - stock_budget_cap_pct) if is_offensive else 100
+    is_panic_ab = bool(panic_triggered and not is_offensive)
+    etf_total_budget_pct = (100 - stock_budget_cap_pct) if is_offensive else (50 if is_panic_ab else 100)
 
     # 计算 ETF 子篮子内部归一化权重（总和 = 100%，再按 etf_total_budget_pct 折算账户绝对权重）
     norm_targets: list[tuple[str, float, str]] = []
@@ -302,26 +306,31 @@ def _build_etf_radar(
         total_iv = sum(ivs)
         return [iv / total_iv for iv in ivs]
 
-    if panic_triggered:
-        # 冰点企稳右侧触发：30% 创业板 + 30% 中证1000 + 40% 非A股风险调整动量最强（否则十年国债）
-        safe_top = _pick(non_cn, "ar45_score", 1, False)
-        safe_ts = safe_top[0]["ts_code"] if safe_top else SAFE_BOND_CODE
-        norm_targets = [
-            ("159915.SZ", 0.30, "冰点企稳右侧反抽（止损-6%/止盈+12%/持5日）"),
-            ("512100.SH", 0.30, "冰点企稳右侧反抽（止损-6%/止盈+12%/持5日）"),
-            (safe_ts, 0.40, "冰点期跨资产避险压舱石（非A股最强）"),
-        ]
-        decision_headline = "极端冰点右侧阳线已确认：触发 AR2_2A 反抽接管（60% 双创小盘反抽 + 40% 非A股避险底仓）。"
+    if is_panic_ab:
+        # AR4.6 核心升级：极端冰点 30m 确认 -> 50% 10万可执行 AB_BLEND 真龙（个股腿）+ 50% 非A股逆波避险 ETF（本 ETF 腿）
+        def_top = _pick(non_cn, "ar45_score", 2, False)
+        if def_top:
+            ws = _inv_vol_weights(def_top)
+            for item, w in zip(def_top, ws):
+                norm_targets.append((item["ts_code"], w, "AR4.6 冰点期 50% 非A股避险底仓（护航 50% AB_BLEND 真龙）"))
+            names_txt = " + ".join(f"{x['name']} {w*50:.0f}%" for x, w in zip(def_top, ws))
+        else:
+            norm_targets.append((SAFE_BOND_CODE, 1.0, "AR4.6 冰点期 50% 十年国债避险底仓"))
+            names_txt = "十年国债ETF 50%"
+        decision_headline = (
+            f"⚡ AR4.6 极端冰点 30m 确认触发：半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（逐票-6%止损/+5%后-3.5%追踪/≤5日）"
+            f" + 50% 非 A 股避险底仓「{names_txt}」（严禁 T+1 高开≥+2% 追买）。"
+        )
     elif etf_core_mode == "regime_focus":
-        # AR4.5-L3b 实证冠军：进攻期配 A股宽基 Top2；非进攻期配非A股风险调整动量 Top2 逆波动加权 + 南向港科滤网
+        # AR4.6 实证冠军：进攻期配 A股宽基 Top2；非进攻期配非A股风险调整动量 Top2 逆波动加权 + 南向港科滤网
         if is_offensive:
             cn_top = _pick(cn_broad, "ret_20d_pct", 2, False)
             if cn_top:
                 w_each = 1.0 / len(cn_top)
                 for item in cn_top:
-                    norm_targets.append((item["ts_code"], w_each, "AR4.5 进攻期 · A股宽基20日动量 Top2"))
+                    norm_targets.append((item["ts_code"], w_each, "AR4.6 进攻期 · A股宽基20日动量 Top2"))
                 decision_headline = (
-                    f"当前处于 A 股进攻期：个股预算 {stock_budget_cap_pct}%（未满槽闲置现金亦归入 ETF），"
+                    f"当前处于 A 股进攻期：个股预算 {stock_budget_cap_pct}%（日收盘-10%宽追踪死拿，未满槽闲置现金归入 ETF），"
                     f"ETF 底仓配置 A 股最强宽基 Top{len(cn_top)}。"
                 )
             else:
@@ -343,14 +352,14 @@ def _build_etf_radar(
                     norm_targets.append((
                         item["ts_code"],
                         w,
-                        f"AR4.5-L3b 非进攻期 · 风险调整Top{len(def_top)}逆波配权(20d波动{item['vol_20d_pct']}%{sb_note})",
+                        f"AR4.6 非进攻期 · 风险调整Top{len(def_top)}逆波配权(20d波动{item['vol_20d_pct']}%{sb_note})",
                     ))
                 names_txt = " + ".join(f"{x['name']} {w*100:.0f}%" for x, w in zip(def_top, ws))
                 sb_hint = "（南向20日净流出，已自动拦截港科ETF）" if sb_net_20d_yi < 0 else (
                     f"（南向20日净买 +{sb_net_20d_yi:.0f}亿，港科享+25%顺风加权）" if sb_net_20d_yi >= 600 else ""
                 )
                 decision_headline = (
-                    f"AR4.5-L3b 非进攻期（{regime}）：个股硬锁 0%，"
+                    f"AR4.6 非进攻期（{regime}）：18%~52% 半山腰个股硬锁 0%，"
                     f"100% 切入非 A 股风险调整 Top{len(def_top)} 逆波组合「{names_txt}」{sb_hint}。"
                 )
             else:
@@ -391,8 +400,9 @@ def _build_etf_radar(
         "etf_core_mode": etf_core_mode,
         "etf_core_label": ETF_MODE_META[etf_core_mode]["label"],
         "etf_total_budget_pct": etf_total_budget_pct,
-        "stock_budget_active_pct": stock_budget_cap_pct if is_offensive else 0,
+        "stock_budget_active_pct": stock_budget_cap_pct if is_offensive else (50 if is_panic_ab else 0),
         "panic_triggered": panic_triggered,
+        "is_panic_ab": is_panic_ab,
         "headline": decision_headline,
         "targets": targets,
         "universe": universe_sorted,
@@ -405,6 +415,7 @@ def _scan_f2a_f3a_and_money_effect(
     max_slots: int,
     stock_budget_cap_pct: int,
     is_offensive: bool,
+    is_panic_ab_active: bool = False,
 ) -> dict[str, Any]:
     """实时扫描 F2A / F3A 双选股雷达，并滚动回算近 20 日赚钱效应对比。"""
     try:
@@ -657,15 +668,21 @@ def _scan_f2a_f3a_and_money_effect(
                 slot_idx += 1
             both = (code in f2a_codes) and (code in f3a_codes)
             cl = float(r.close)
+            c6 = code.split(".")[0]
+            min_lot = 200 if c6.startswith("688") else 100
+            min_lot_yuan = round(cl * min_lot, 1)
             out.append({
-                "code": code.split(".")[0],
+                "code": c6,
                 "ts_code": code,
                 "name": str(r.name),
                 "industry": ind,
                 "source_engine": "BOTH" if both else engine_tag,
                 "source_label": "F2A+F3A双共振" if both else ("F2A业绩趋势" if engine_tag == "F2A" else "F3A绩优回踩"),
                 "close": round(cl, 2),
-                "stop_loss_price": round(cl * 0.90, 2),
+                "min_lot_shares": min_lot,
+                "min_lot_yuan": min_lot_yuan,
+                "executable_10w": bool(min_lot_yuan <= 15000.0),
+                "stop_loss_price": round(cl * (0.94 if is_panic_ab_active else 0.90), 2),
                 "ret_1d_pct": round(float(r.ret_1d_pct), 2) if pd.notna(r.ret_1d_pct) else 0.0,
                 "ret_20d_pct": round(float(r.ret_20d_pct), 2) if pd.notna(r.ret_20d_pct) else 0.0,
                 "rs_20d_pct": round(float(r.rs_20d_vs_hs300), 2) if pd.notna(r.rs_20d_vs_hs300) else 0.0,
@@ -739,7 +756,7 @@ def _scan_f2a_f3a_and_money_effect(
             suggested_mode = "ab_blend"
             me_headline = (
                 f"近20日两条线5日均收益均偏弱（F2A {r_f2a:+.2f}% vs F3A {r_f3a:+.2f}%），"
-                "赚钱效应退潮阶段切勿重仓追高，优先执行 AR4.5-L3b 跨资产 ETF 防守。"
+                "赚钱效应退潮阶段切勿重仓追高，优先执行 AR4.6 跨资产 ETF 防守。"
             )
         elif diff >= 1.5:
             suggested_mode = "f2a_trend"
@@ -757,7 +774,7 @@ def _scan_f2a_f3a_and_money_effect(
             suggested_mode = "ab_blend"
             me_headline = (
                 f"近20日两条线赚钱效应接近（F2A {r_f2a:+.2f}% vs F3A {r_f3a:+.2f}%），"
-                "推荐保持默认「AB 混合（AR4.5-L3b 冠军主力）」交替填槽。"
+                "推荐保持默认「AB 混合（AR4.6 冠军主力）」交替填槽。"
             )
         if active_stock_mode == "auto_lag_me20":
             if me_f2a["samples"] >= 3 and me_f3a["samples"] >= 3:
@@ -771,7 +788,7 @@ def _scan_f2a_f3a_and_money_effect(
                 effective_stock_mode = "ab_blend"
     else:
         suggested_mode = "ab_blend"
-        me_headline = "近期有效样本较少，默认保持「AB 混合（AR4.5-L3b 冠军主力）」。"
+        me_headline = "近期有效样本较少，默认保持「AB 混合（AR4.6 冠军主力）」。"
         if active_stock_mode == "auto_lag_me20":
             effective_stock_mode = "ab_blend"
 
@@ -792,11 +809,14 @@ def _scan_f2a_f3a_and_money_effect(
                 raw_exec.append(dict(f2a_list[idx]))
                 seen_c.add(f2a_list[idx]["ts_code"])
 
+    stock_open = is_offensive or is_panic_ab_active
     exec_queue: list[dict[str, Any]] = []
     seen_inds_exec: set[str] = set()
     rank_exec = 0
     for item in raw_exec:
         ind = item["industry"]
+        if is_panic_ab_active and not item.get("executable_10w", True):
+            continue
         dup = (ind != "未分类") and (ind in seen_inds_exec)
         if not dup:
             seen_inds_exec.add(ind)
@@ -805,7 +825,7 @@ def _scan_f2a_f3a_and_money_effect(
         item_copy["industry_duplicate"] = dup
         item_copy["slot_rank"] = None if dup else rank_exec
         item_copy["suggested_weight_pct"] = (
-            slot_w_pct if (not dup and rank_exec <= max_slots and is_offensive) else 0.0
+            slot_w_pct if (not dup and rank_exec <= max_slots and stock_open) else 0.0
         )
         exec_queue.append(item_copy)
         if len(exec_queue) >= 10:
@@ -815,9 +835,10 @@ def _scan_f2a_f3a_and_money_effect(
         "available": True,
         "latest_date": latest_dt,
         "is_offensive": is_offensive,
-        "effective_stock_mode": effective_stock_mode,
-        "stock_budget_active_pct": stock_budget_cap_pct if is_offensive else 0,
-        "slot_weight_pct": slot_w_pct if is_offensive else 0.0,
+        "is_panic_ab_active": is_panic_ab_active,
+        "effective_stock_mode": "ab_blend" if is_panic_ab_active else effective_stock_mode,
+        "stock_budget_active_pct": stock_budget_cap_pct if stock_open else 0,
+        "slot_weight_pct": slot_w_pct if stock_open else 0.0,
         "max_slots": max_slots,
         "f2a_total_hits": int(len(f2a_df)),
         "f3a_total_hits": int(len(f3a_df)),
@@ -840,7 +861,7 @@ def build_ar3_dual_core_radar(
     panic_signal: Optional[Mapping[str, Any]] = None,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """构建 AR3 v3.0 终极双核实时雷达（接入 AR4 国家队 250 日分位 + ERP 动态股仓上限）。"""
+    """构建 AR4.6 终极双核实时雷达（AR4.5-L3b 底座 + 冰点 30m 半仓 10万可执行 AB_BLEND 真龙）。"""
     from services.mining.ar4_macro_service import get_ar4_macro_snapshot
 
     cfg = load_ar3_config()
@@ -868,6 +889,9 @@ def build_ar3_dual_core_radar(
     sb_net_20d_yi = float(macro_snap.get("sb_net_20d_yi") or 0.0) if macro_snap.get("available") else 0.0
 
     is_offensive = regime in ("offensive", "extreme_offensive")
+    is_panic_ab_active = bool(panic_flag and not is_offensive)
+    stock_cap_for_scan = 50 if is_panic_ab_active else effective_stock_cap
+
     etf_radar = _build_etf_radar(
         regime=regime,
         etf_core_mode=cfg["etf_core_mode"],
@@ -876,21 +900,27 @@ def build_ar3_dual_core_radar(
         sb_net_20d_yi=sb_net_20d_yi,
     )
     stock_radar = _scan_f2a_f3a_and_money_effect(
-        active_stock_mode=cfg["active_stock_mode"],
+        active_stock_mode="ab_blend" if is_panic_ab_active else cfg["active_stock_mode"],
         max_slots=cfg["max_slots"],
-        stock_budget_cap_pct=effective_stock_cap,
+        stock_budget_cap_pct=stock_cap_for_scan,
         is_offensive=is_offensive and effective_stock_cap > 0,
+        is_panic_ab_active=is_panic_ab_active,
     )
 
     cfg_with_eff = dict(cfg)
-    cfg_with_eff["effective_stock_budget_cap_pct"] = effective_stock_cap
-    cfg_with_eff["dynamic_cap_reason"] = str(macro_dec.get("cap_reason") or "")
+    cfg_with_eff["effective_stock_budget_cap_pct"] = stock_cap_for_scan if is_panic_ab_active else effective_stock_cap
+    cfg_with_eff["dynamic_cap_reason"] = (
+        "AR4.6 极端冰点 30m 确认：临时开放 50% 半仓切入 10 万可执行 AB_BLEND Top4 真龙 + 50% 避险 ETF"
+        if is_panic_ab_active
+        else str(macro_dec.get("cap_reason") or "")
+    )
 
     payload: dict[str, Any] = {
-        "version": "AR4.5-L3b",
+        "version": "AR4.6",
         "generated_at": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         "regime": regime,
         "is_offensive": is_offensive,
+        "is_panic_ab_active": is_panic_ab_active,
         "config": cfg_with_eff,
         "macro_dashboard": macro_snap,
         "stock_mode_options": [
@@ -900,10 +930,11 @@ def build_ar3_dual_core_radar(
             {"id": k, **v} for k, v in ETF_MODE_META.items()
         ],
         "evidence": {
-            "ar45_l3b": {"cum_ret_pct": 283.2, "ann_ret_pct": 41.32, "max_dd_pct": 19.07, "sharpe": 1.64, "calmar": 2.17, "oos_pct": 8.87},
-            "ar45_l4": {"cum_ret_pct": 257.4, "ann_ret_pct": 38.81, "max_dd_pct": 14.42, "sharpe": 1.64, "calmar": 2.69, "oos_pct": 8.16},
+            "ar46": {"cum_ret_pct": 307.95, "ann_ret_pct": 43.50, "max_dd_pct": 19.07, "sharpe": 1.70, "calmar": 2.28, "oos_pct": 11.29, "oos_dd_pct": 10.68},
+            "ar45_l3b": {"cum_ret_pct": 281.55, "ann_ret_pct": 41.06, "max_dd_pct": 19.07, "sharpe": 1.64, "calmar": 2.15, "oos_pct": 8.48, "oos_dd_pct": 11.61},
+            "ar45_l4": {"cum_ret_pct": 255.91, "ann_ret_pct": 38.56, "max_dd_pct": 14.42, "sharpe": 1.63, "calmar": 2.67, "oos_pct": 7.77},
             "ab_blend_01_ar4": {"cum_ret_pct": 243.1, "ann_ret_pct": 37.36, "max_dd_pct": 22.11, "sharpe": 1.28, "calmar": 1.69, "oos_pct": 4.71},
-            "ab_blend_01": {"cum_ret_pct": 211.9, "ann_ret_pct": 34.03, "max_dd_pct": 22.69, "sharpe": 1.21, "calmar": 1.50, "oos_pct": 3.97},
+            "ab_blend_01": {"cum_ret_pct": 217.64, "ann_ret_pct": 34.57, "max_dd_pct": 20.84, "sharpe": 1.25, "calmar": 1.66, "oos_pct": 3.41},
         },
         "etf_radar": etf_radar,
         "stock_radar": stock_radar,

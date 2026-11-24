@@ -835,7 +835,7 @@ class Acct1ConfirmFillRequest(BaseModel):
 
 @router.get("/acct1-advisor/status")
 def get_g3_acct1_advisor_status() -> dict[str, Any]:
-    """只读查询 acct1 AR4.5-L3b 盘中智能买卖提醒引擎当日状态、已推送记录与人工核销成交。"""
+    """只读查询 acct1 AR4.6 盘中智能买卖提醒引擎当日状态、已推送记录与人工核销成交。"""
     from services.g3.acct1_intraday_advisor import get_acct1_advisor_status
 
     return get_acct1_advisor_status()
@@ -847,7 +847,7 @@ def post_g3_acct1_advisor_run(
     dry_run: bool = Query(default=False),
     bypass_session: bool = Query(default=False),
 ) -> dict[str, Any]:
-    """触发 acct1 AR4.5-L3b 盘前/盘中/盘后巡检与微信买卖提醒（零自动下单，仅单向推送）。"""
+    """触发 acct1 AR4.6 盘前/盘中/盘后巡检与微信买卖提醒（零自动下单，仅单向推送）。"""
     from services.g3.acct1_intraday_advisor import run_acct1_advisor
 
     return run_acct1_advisor(mode=mode, dry_run=dry_run, bypass_session=bypass_session)
@@ -855,7 +855,7 @@ def post_g3_acct1_advisor_run(
 
 @router.post("/acct1-advisor/confirm-fill")
 def post_g3_acct1_advisor_confirm_fill(req: Acct1ConfirmFillRequest) -> dict[str, Any]:
-    """登记一笔 acct1 人工成交并校准当日实时账本；若在盘中可自动衔接推送下一笔 AR4.5-L3b 买卖单。"""
+    """登记一笔 acct1 人工成交并校准当日实时账本；若在盘中可自动衔接推送下一笔 AR4.6 买卖单。"""
     from services.g3.acct1_intraday_advisor import record_acct1_manual_fill, run_acct1_advisor
 
     try:

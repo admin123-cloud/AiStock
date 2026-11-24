@@ -104,7 +104,7 @@ def run_sentinel(*, force: bool = False, dry_run: bool = False) -> int:
                         if key not in sent:
                             alerts.append((
                                 key,
-                                f"🚨 **硬止损告警**：{name}({c6}) 现价 ¥{px:.2f}，较成本 ¥{cost:.2f} 浮亏 **{pnl_pct:.1f}%**（≤-10%红线），持仓 {qty} 股，请按 AR4.5-L3b 纪律在 `/g3/desk` 确认减仓/止损。",
+                                f"🚨 **硬止损告警**：{name}({c6}) 现价 ¥{px:.2f}，较成本 ¥{cost:.2f} 浮亏 **{pnl_pct:.1f}%**（≤-10%红线），持仓 {qty} 股，请按 AR4.6 纪律在 `/g3/desk` 确认减仓/止损。",
                             ))
     except Exception as exc:
         print(f"持仓巡检异常: {exc}")
@@ -143,7 +143,7 @@ def run_sentinel(*, force: bool = False, dry_run: bool = False) -> int:
         return 0
 
     res = send_wechat_notification(
-        title=f"AR4.5-L3b 盘中风控告警 ({now.strftime('%H:%M')})",
+        title=f"AR4.6 盘中风控告警 ({now.strftime('%H:%M')})",
         markdown_body=body,
     )
     print(f"微信告警推送结果: {res}")

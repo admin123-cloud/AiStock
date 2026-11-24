@@ -118,7 +118,7 @@ def test_defensive_intraday_pushes_sell_skips_tiny_buy_and_cooldowns(tmp_path: P
     assert r1["pushed_count"] == 1
     assert r1["pushed"][0]["code"] == "002015"
     assert r1["pushed"][0]["side"] == "SELL"
-    assert "acct1·AR4.5-L3b 卖出" in sent_msgs[0][0]
+    assert "acct1·AR4.6 卖出" in sent_msgs[0][0]
     assert r2["pushed_count"] == 0
 
 
@@ -162,7 +162,7 @@ def test_manual_sell_fill_overlay_immediately_unlocks_ar45_etf_buy(tmp_path: Pat
     buys = [x for x in r["pushed"] if x["side"] == "BUY"]
     assert len(buys) == 1
     assert buys[0]["code"] == "512890"
-    assert "acct1·AR4.5-L3b 买入" in buys[0]["title"]
+    assert "acct1·AR4.6 买入" in buys[0]["title"]
     # 510880 盘中跌破 MA20 被拦截跳过
     assert any(s["code"] == "510880" and "etf_below_ma20" in s["reason"] for s in r["skipped"])
 

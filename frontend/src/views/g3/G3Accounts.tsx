@@ -65,7 +65,7 @@ export default function G3Accounts() {
         </div>
 
         <div className="text-xs text-zinc-400">
-          AR4.5-L3b 每日精准买卖调仓单请前往{' '}
+          AR4.6 每日精准买卖调仓单请前往{' '}
           <Link to="/g3/desk" className="font-medium text-blue-400 hover:underline">
             实战交易台
           </Link>{' '}

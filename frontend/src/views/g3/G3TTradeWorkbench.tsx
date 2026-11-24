@@ -347,7 +347,7 @@ export default function G3TTradeWorkbench() {
         const name = String(d.name || card?.name || code)
         const sideStr = String(d.side || '')
         const isBuy = sideStr.toLowerCase().includes('buy')
-        // AR4.5-L3b 总闸门：非进攻期严禁弹出任何 A 股个股买入T桌面提醒
+        // AR4.6 总闸门：非进攻期严禁弹出任何 A 股个股买入T桌面提醒
         if (isBuy && res.market_regime_gate?.regime !== 'offensive') continue
         const px = Number(d.price ?? d.trigger_price ?? d.px ?? 0)
         const qty = Number(d.qty || card?.daily_plan?.recommended_lot || card?.t_lot_cap || 0)
@@ -627,7 +627,7 @@ export default function G3TTradeWorkbench() {
         account_label: execForm.account_label,
         note: execForm.note,
       })
-      const typeLabel = execForm.order_type === 'base_rebalance' ? 'AR4.5-L3b调仓' : '做T'
+      const typeLabel = execForm.order_type === 'base_rebalance' ? 'AR4.6调仓' : '做T'
       setMsg(`已登记${typeLabel}成交：${execForm.name} ${execForm.side === 'BUY' ? '买入' : '卖出'} ${shares} 股 @ ${price.toFixed(2)}`)
       setExecForm(EMPTY_EXEC_FORM)
       setPrefillRes(null)
@@ -874,14 +874,14 @@ export default function G3TTradeWorkbench() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-7">
             <div>
-              <label className="block text-xs text-zinc-400">单据分型（AR4.5-L3b）</label>
+              <label className="block text-xs text-zinc-400">单据分型（AR4.6）</label>
               <select
                 value={execForm.order_type}
                 onChange={(e) => { setExecForm((f) => ({ ...f, order_type: e.target.value as 't_trade' | 'base_rebalance' })); setPrefillRes(null) }}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
               >
                 <option value="t_trade">做T滚动单 (t_trade)</option>
-                <option value="base_rebalance">AR4.5-L3b 精准调仓 (rebalance)</option>
+                <option value="base_rebalance">AR4.6 精准调仓 (rebalance)</option>
               </select>
             </div>
             <div>
@@ -922,7 +922,7 @@ export default function G3TTradeWorkbench() {
                 type="text"
                 value={execForm.note}
                 onChange={(e) => setExecForm((f) => ({ ...f, note: e.target.value }))}
-                placeholder="如：反T卖1 / AR4.5减仓"
+                placeholder="如：反T卖1 / AR4.6减仓"
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-sm text-white"
               />
             </div>
@@ -1422,7 +1422,7 @@ export default function G3TTradeWorkbench() {
                           {ex.side === 'BUY' ? '买入' : '卖出'}
                         </Badge>
                         <Badge color={ex.order_type === 'base_rebalance' ? 'amber' : 'blue'}>
-                          {ex.order_type === 'base_rebalance' ? 'AR4.5调仓' : '做T'}
+                          {ex.order_type === 'base_rebalance' ? 'AR4.6调仓' : '做T'}
                         </Badge>
                       </div>
                     </TableCell>
