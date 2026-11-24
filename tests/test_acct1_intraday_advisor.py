@@ -260,9 +260,10 @@ def test_smooth_step_daily_done_stops_second_sell_same_day(tmp_path: Path):
 
 
 def test_panic_rebound_uses_live_etf_intraday_over_stale_ch_close():
-    """2026-11-23 补丁：盘中 CH 仍是 T-1 日线时，优先采用 159915/512100 实时涨跌幅实时触发右侧信号。"""
+    """2026-11-23/24 补丁：09:30 开盘后才用实时 ETF 覆盖 T-1 日线；09:10 盘前 0.0% 绝不覆盖昨日已确认大涨！"""
     from services.mining import panic_rebound_monitor as prm
 
+    # 1) 盘中 14:25：CH 仍是 T-1 日线 -> 使用实时 ETF 涨跌幅
     stale_ch = {
         "399006.SZ": {"date": "2026-11-20", "close": 2200.0, "change_pct": -3.54},
         "000852.SH": {"date": "2026-11-20", "close": 5800.0, "change_pct": -4.89},
@@ -275,11 +276,31 @@ def test_panic_rebound_uses_live_etf_intraday_over_stale_ch_close():
         res = prm.evaluate_panic_rebound_signal(
             market_gate={"sources": {"breadth": {"above_ma20_pct": 7.71}}},
             etf_quote_fetcher=lambda _codes: live_etfs,
+            now_bj=datetime(2026, 11, 23, 14, 25, 0, tzinfo=BJ_TZ),
         )
     assert res["triggered"] is True
     assert abs(res["metrics"]["pair_avg_change_pct"] - 2.695) < 0.01
     assert res["metrics"]["cyb_change_pct"] == 2.78
     assert res["metrics"]["zz1000_change_pct"] == 2.61
+
+    # 2) 盘前 09:10（未开盘）：即使实时接口吐出 0.0%，必须保留昨日 CH 权威大涨 (+3.08%/+2.90%)，绝不误判！
+    yest_ch = {
+        "399006.SZ": {"date": "2026-11-23", "close": 2280.2, "change_pct": 3.08},
+        "000852.SH": {"date": "2026-11-23", "close": 5812.32, "change_pct": 2.90},
+    }
+    premarket_zero_etfs = {
+        "159915": {"price": 2.295, "change_pct": 0.0},
+        "512100": {"price": 2.362, "change_pct": 0.0},
+    }
+    with patch.object(prm, "_fetch_latest_pair_index_chg_from_ch", return_value=yest_ch):
+        res_pre = prm.evaluate_panic_rebound_signal(
+            market_gate={"sources": {"breadth": {"above_ma20_pct": 7.71}}},
+            etf_quote_fetcher=lambda _codes: premarket_zero_etfs,
+            now_bj=datetime(2026, 11, 24, 9, 10, 0, tzinfo=BJ_TZ),
+        )
+    assert res_pre["triggered"] is True
+    assert res_pre["metrics"]["pair_avg_change_pct"] == 2.99
+    assert res_pre["metrics"]["index_date"] == "2026-11-23"
 
 
 def test_four_regime_contract_matrix_zero_rule_conflict(tmp_path: Path):

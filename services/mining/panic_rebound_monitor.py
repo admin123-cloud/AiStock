@@ -153,6 +153,7 @@ def evaluate_panic_rebound_signal(
     market_gate: Mapping[str, Any],
     index_chg_fetcher: Optional[Callable[[], dict[str, dict[str, Any]]]] = None,
     etf_quote_fetcher: Optional[Callable[[list[str]], dict[str, dict[str, Any]]]] = None,
+    now_bj: Optional[datetime] = None,
 ) -> dict[str, Any]:
     """实时评估 AR2_2A_Panic_Rev18 极端冰点企稳反抽 ETF 信号状态。"""
     sources = market_gate.get("sources") if isinstance(market_gate.get("sources"), Mapping) else {}
@@ -180,9 +181,13 @@ def evaluate_panic_rebound_signal(
     idx_data = (index_chg_fetcher or _fetch_latest_pair_index_chg_from_ch)()
     cyb = dict(idx_data.get("399006.SZ") or {})
     zz1000 = dict(idx_data.get("000852.SH") or {})
-    today_bj = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+    now_dt = now_bj or datetime.now(BJ_TZ)
+    today_bj = now_dt.strftime("%Y-%m-%d")
+    # 2026-11-24 关键修复：仅在 09:30 正式开盘后才允许用实时 ETF 盘口覆盖 T-1 日线！
+    # 09:00~09:29 盘前未开盘时行情接口常返回 0.0% 或虚高集合竞价，严禁覆盖昨日已确认的权威收盘涨跌幅！
+    in_live_market = (now_dt.hour > 9 or (now_dt.hour == 9 and now_dt.minute >= 30)) and now_dt.hour < 16
     used_live_intraday = False
-    if in_panic_zone and index_chg_fetcher is None and etf_quotes:
+    if in_panic_zone and in_live_market and index_chg_fetcher is None and etf_quotes:
         q_cyb = etf_quotes.get("159915") or {}
         q_zz = etf_quotes.get("512100") or {}
         ch_latest_dt = str(cyb.get("date") or zz1000.get("date") or "")

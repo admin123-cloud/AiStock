@@ -133,21 +133,28 @@ def _calc_fees(side: str, amount: float, is_etf: bool) -> float:
 # 手工成交核销与快照叠加（对齐 acct2 聊天回写体验）
 # ---------------------------------------------------------------------------
 
-def load_manual_fills(trade_date: str, *, base_dir: Optional[Path] = None) -> list[dict[str, Any]]:
-    fp = _fills_path(trade_date, base_dir)
-    if not fp.exists():
-        return []
+def load_manual_fills(trade_date: str, *, base_dir: Optional[Path] = None, lookback_days: int = 1) -> list[dict[str, Any]]:
+    """加载当日（或近 lookback_days 天）人工核销成交记录，用于跨日仍早于券商快照时的精准叠加。"""
+    try:
+        base_dt = datetime.strptime(trade_date, "%Y-%m-%d").date()
+    except ValueError:
+        base_dt = datetime.now(BJ_TZ).date()
     rows: list[dict[str, Any]] = []
-    for line in fp.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = line.strip()
-        if not line:
+    for delta in range(max(1, lookback_days) - 1, -1, -1):
+        d_str = (base_dt - timedelta(days=delta)).strftime("%Y-%m-%d")
+        fp = _fills_path(d_str, base_dir)
+        if not fp.exists():
             continue
-        try:
-            obj = json.loads(line)
-            if isinstance(obj, dict):
-                rows.append(obj)
-        except ValueError:
-            continue
+        for line in fp.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    rows.append(obj)
+            except ValueError:
+                continue
     return rows
 
 
@@ -203,8 +210,8 @@ def apply_manual_fills_overlay(
     *,
     base_dir: Optional[Path] = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """将晚于 acct1 快照时间的手工成交叠加至 overview 副本中，确保卖出回款后立即可推买单。"""
-    fills = load_manual_fills(trade_date, base_dir=base_dir)
+    """将晚于 acct1 快照时间（含近 4 天跨日未刷新快照期间）的手工成交叠加至 overview 副本中。"""
+    fills = load_manual_fills(trade_date, base_dir=base_dir, lookback_days=4)
     if not fills:
         return copy.deepcopy(dict(overview)), []
 
@@ -254,15 +261,19 @@ def apply_manual_fills_overlay(
                 cur_q = int(float(by_code[c6].get("quantity") or 0))
                 new_q = cur_q + qty
                 by_code[c6]["quantity"] = new_q
-                # 今日新买入受 T+1 冻结，不增加 available_quantity
+                # 跨日已解锁：若成交日 < 今日，则 T+1 自动解冻进 available_quantity
+                if str(f.get("trade_date") or "") < trade_date:
+                    cur_av = int(float(by_code[c6].get("available_quantity") or 0))
+                    by_code[c6]["available_quantity"] = min(new_q, cur_av + qty)
                 by_code[c6]["current_price"] = px
                 by_code[c6]["market_value"] = round(new_q * px, 2)
             else:
+                unlocked = str(f.get("trade_date") or "") < trade_date
                 item = {
                     "code": c6,
                     "name": f.get("name") or c6,
                     "quantity": qty,
-                    "available_quantity": 0,
+                    "available_quantity": qty if unlocked else 0,
                     "cost_price": px,
                     "current_price": px,
                     "market_value": round(qty * px, 2),
