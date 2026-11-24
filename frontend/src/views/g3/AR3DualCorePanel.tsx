@@ -12,6 +12,7 @@ import {
   updateG3AR3Config,
   type G3AR3Config,
   type G3AR3DualCoreRadarResponse,
+  type G3AR3RebalancePlanResponse,
   type G3AR3StockCandidate,
 } from '@/api/g3'
 
@@ -27,6 +28,10 @@ interface AR3DualCorePanelProps {
   }) => void
   onAddWatchlist?: (code: string, name: string) => void
   mode?: 'desk_compact' | 'signals_full' | 'all'
+  externalRadar?: G3AR3DualCoreRadarResponse | null
+  externalRadarLoading?: boolean
+  externalPlan?: G3AR3RebalancePlanResponse | null
+  onRadarUpdated?: (radar: G3AR3DualCoreRadarResponse) => void
 }
 
 const fmtSigned = (v?: number | null, digits = 2): string => {
@@ -35,8 +40,17 @@ const fmtSigned = (v?: number | null, digits = 2): string => {
   return `${n > 0 ? '+' : ''}${n.toFixed(digits)}%`
 }
 
-export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode = 'all' }: AR3DualCorePanelProps) {
-  const [radar, setRadar] = useState<G3AR3DualCoreRadarResponse | null>(null)
+export default function AR3DualCorePanel({
+  onPrefillOrder,
+  onAddWatchlist,
+  mode = 'all',
+  externalRadar,
+  externalRadarLoading = false,
+  externalPlan,
+  onRadarUpdated,
+}: AR3DualCorePanelProps) {
+  const isExternallyManaged = externalRadar !== undefined
+  const [radar, setRadar] = useState<G3AR3DualCoreRadarResponse | null>(externalRadar ?? null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -47,23 +61,32 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
   const [showEtfUniverse, setShowEtfUniverse] = useState(mode === 'signals_full')
   const [planReloadToken, setPlanReloadToken] = useState(0)
 
+  useEffect(() => {
+    if (externalRadar !== undefined) {
+      setRadar(externalRadar)
+    }
+  }, [externalRadar])
+
   const loadRadar = useCallback(async (forceRefresh = false) => {
     setLoading(true)
     setError('')
     try {
       const res = await getG3AR3Radar(forceRefresh)
       setRadar(res)
+      onRadarUpdated?.(res)
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
       setError(err.response?.data?.detail || err.message || '加载 AR4.6 双核雷达失败')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [onRadarUpdated])
 
   useEffect(() => {
-    void loadRadar(false)
-  }, [loadRadar])
+    if (!isExternallyManaged) {
+      void loadRadar(false)
+    }
+  }, [isExternallyManaged, loadRadar])
 
   const handleSwitchConfig = async (patch: Partial<G3AR3Config>, label: string) => {
     setSaving(true)
@@ -72,6 +95,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
     try {
       const res = await updateG3AR3Config(patch)
       setRadar(res.radar)
+      onRadarUpdated?.(res.radar)
       setPlanReloadToken((n) => n + 1)
       setNotice(`已切换主引擎配置：${label}，上方最终买卖单已同步重算。`)
     } catch (e) {
@@ -89,6 +113,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
     try {
       const res = await syncG3AR3Data({ sync_etf: true, sync_financials: false })
       setRadar(res.radar)
+      onRadarUpdated?.(res.radar)
       setNotice('已完成 14 只跨资产 ETF 最新日线同步并刷新双核雷达。')
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
@@ -141,8 +166,8 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Button outline disabled={loading} onClick={() => void loadRadar(true)}>
-            {loading ? '扫描中…' : '刷新雷达'}
+          <Button outline disabled={loading || externalRadarLoading} onClick={() => void loadRadar(true)}>
+            {(loading || externalRadarLoading) ? '扫描中…' : '刷新雷达'}
           </Button>
           <Button outline disabled={syncing} onClick={() => void handleSyncEtf()}>
             {syncing ? '同步中…' : '同步ETF日线'}
@@ -173,7 +198,9 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
       {radar && cfg && (
         <div className="mt-3 space-y-4">
           {/* 0. 唯一权威：主力单账号 ct1曾 今日最终买卖执行单（仅实战交易台显示，避免与选股中心重复） */}
-          {mode !== 'signals_full' && <AR3ExecutionOrderCard reloadToken={planReloadToken} />}
+          {mode !== 'signals_full' && (
+            <AR3ExecutionOrderCard reloadToken={planReloadToken} externalPlan={externalPlan} />
+          )}
 
           {/* 0.5 国家队持仓分位 + 5日净申购 + 南向资金 + ERP 实时仪表盘（仅交易台/全量模式展示） */}
           {mode !== 'signals_full' && macro && (

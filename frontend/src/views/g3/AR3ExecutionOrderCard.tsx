@@ -30,6 +30,8 @@ interface EditableOrder {
 interface AR3ExecutionOrderCardProps {
   /** 当外部热切换了主引擎配置时传入版本号，触发调仓单同步重算 */
   reloadToken?: number
+  /** 由父组件 G3Desk 预先拉取的默认调仓单，避免挂载时重复请求 */
+  externalPlan?: G3AR3RebalancePlanResponse | null
 }
 
 const fmtYuan = (v?: number | null) =>
@@ -37,11 +39,11 @@ const fmtYuan = (v?: number | null) =>
     ? `¥${Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`
     : '—'
 
-export default function AR3ExecutionOrderCard({ reloadToken = 0 }: AR3ExecutionOrderCardProps) {
+export default function AR3ExecutionOrderCard({ reloadToken = 0, externalPlan }: AR3ExecutionOrderCardProps) {
   const [accountId, setAccountId] = useState('acct1')
   const [smoothStep, setSmoothStep] = useState(true)
   const [buyBasis, setBuyBasis] = useState<'post_sell' | 'immediate'>('post_sell')
-  const [plan, setPlan] = useState<G3AR3RebalancePlanResponse | null>(null)
+  const [plan, setPlan] = useState<G3AR3RebalancePlanResponse | null>(externalPlan ?? null)
   const [orders, setOrders] = useState<EditableOrder[]>([])
   const [shadow, setShadow] = useState<G3AR3ShadowReconcileResponse | null>(null)
   const [showShadow, setShowShadow] = useState(false)
@@ -122,8 +124,22 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0 }: AR3ExecutionO
   )
 
   useEffect(() => {
+    const canReuseExternal =
+      externalPlan !== undefined &&
+      accountId === 'acct1' &&
+      smoothStep === true &&
+      reloadToken === 0
+    if (canReuseExternal) {
+      if (externalPlan) {
+        setPlan(externalPlan)
+        void getG3AR3ShadowReconcile('acct1', 20)
+          .then((rec) => setShadow(rec))
+          .catch(() => null)
+      }
+      return
+    }
     void loadPlan(accountId, smoothStep)
-  }, [accountId, smoothStep, reloadToken, loadPlan])
+  }, [accountId, smoothStep, reloadToken, externalPlan, loadPlan])
 
   useEffect(() => {
     if (plan) {

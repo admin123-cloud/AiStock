@@ -54,7 +54,7 @@ export default function G3Desk() {
     try {
       const [deskRes, radarRes, planRes] = await Promise.allSettled([
         getG3Desk(refreshQuotes),
-        getG3AR3Radar(refreshQuotes),
+        getG3AR3Radar(false),
         getG3AR3RebalancePlan('acct1', true),
       ])
       if (deskRes.status === 'fulfilled') {
@@ -460,6 +460,10 @@ export default function G3Desk() {
       {/* 2. 绝对核心主视图：AR4.6 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，14只ETF与选股明细已迁至 /g3/signals） */}
       <AR3DualCorePanel
         mode="desk_compact"
+        externalRadar={radar}
+        externalRadarLoading={loading}
+        externalPlan={plan}
+        onRadarUpdated={(nextRadar) => setRadar(nextRadar)}
         onPrefillOrder={() => {
           navigate('/g3/accounts?tab=ttrade')
         }}

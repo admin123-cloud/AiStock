@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -81,6 +82,9 @@ ASSET_CLASS_LABELS: dict[str, str] = {
 }
 
 _RADAR_CACHE: dict[str, Any] = {"key": "", "expires_at": 0.0, "payload": None}
+_RADAR_LOCK = threading.Lock()
+_SCAN_BASE_CACHE: dict[str, Any] = {"expires_at": 0.0, "data": None}
+_SCAN_BASE_LOCK = threading.Lock()
 
 
 def _config_path() -> Path:
@@ -154,14 +158,17 @@ def save_ar3_config(
         cur["note"] = str(note).strip()
     cur["updated_at"] = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
     _config_path().write_text(json.dumps(cur, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    invalidate_ar3_radar_cache()
+    invalidate_ar3_radar_cache(clear_base=False)
     return cur
 
 
-def invalidate_ar3_radar_cache() -> None:
+def invalidate_ar3_radar_cache(*, clear_base: bool = True) -> None:
     _RADAR_CACHE["key"] = ""
     _RADAR_CACHE["expires_at"] = 0.0
     _RADAR_CACHE["payload"] = None
+    if clear_base:
+        _SCAN_BASE_CACHE["expires_at"] = 0.0
+        _SCAN_BASE_CACHE["data"] = None
 
 
 def _ch_query_df(sql: str, timeout: int = 30) -> pd.DataFrame:
@@ -409,126 +416,116 @@ def _build_etf_radar(
     }
 
 
-def _scan_f2a_f3a_and_money_effect(
-    *,
-    active_stock_mode: str,
-    max_slots: int,
-    stock_budget_cap_pct: int,
-    is_offensive: bool,
-    is_panic_ab_active: bool = False,
-) -> dict[str, Any]:
-    """实时扫描 F2A / F3A 双选股雷达，并滚动回算近 20 日赚钱效应对比。"""
-    try:
-        # 1. 拉取近 95 个自然日正常上市非 ST 股票日 K（~65 交易日，足以算 MA60 + 20日赚钱效应）
-        stocks_df = _ch_query_df(
-            """
-            SELECT code, name
-            FROM stock.stocks FINAL
-            WHERE type = 'stock'
-              AND st = 0 AND quit = 0 AND listing_status = 'active'
-              AND positionCaseInsensitive(name, 'ST') = 0
-              AND position(name, '退') = 0
-            """,
-            timeout=15,
-        )
-        valid_codes = set(stocks_df["code"].astype(str))
-        name_map = dict(zip(stocks_df["code"].astype(str), stocks_df["name"].astype(str)))
+def _compute_stock_scan_base() -> dict[str, Any]:
+    """全市场日线与 PIT 财报/预告扫描底层（与主引擎模式/仓位配置无关，可跨配置复用）。"""
+    # 1. 拉取近 95 个自然日正常上市非 ST 股票日 K（~65 交易日，足以算 MA60 + 20日赚钱效应）
+    stocks_df = _ch_query_df(
+        """
+        SELECT code, name
+        FROM stock.stocks FINAL
+        WHERE type = 'stock'
+          AND st = 0 AND quit = 0 AND listing_status = 'active'
+          AND positionCaseInsensitive(name, 'ST') = 0
+          AND position(name, '退') = 0
+        """,
+        timeout=15,
+    )
+    valid_codes = set(stocks_df["code"].astype(str))
+    name_map = dict(zip(stocks_df["code"].astype(str), stocks_df["name"].astype(str)))
 
-        ind_df = _ch_query_df(
-            """
-            SELECT ss.stock_code AS code, any(s.name) AS industry
-            FROM stock.sector_stocks ss
-            INNER JOIN stock.sectors s ON ss.sector_code = s.code
-            WHERE s.type = 'industry' AND length(s.name) > 0
-            GROUP BY ss.stock_code
-            """,
-            timeout=15,
-        )
-        ind_map = dict(zip(ind_df["code"].astype(str), ind_df["industry"].astype(str)))
+    ind_df = _ch_query_df(
+        """
+        SELECT ss.stock_code AS code, any(s.name) AS industry
+        FROM stock.sector_stocks ss
+        INNER JOIN stock.sectors s ON ss.sector_code = s.code
+        WHERE s.type = 'industry' AND length(s.name) > 0
+        GROUP BY ss.stock_code
+        """,
+        timeout=15,
+    )
+    ind_map = dict(zip(ind_df["code"].astype(str), ind_df["industry"].astype(str)))
 
-        # 确定最近 70 个交易日起始日（用沪深300索引）
-        since_160 = (datetime.now(BJ_TZ) - timedelta(days=160)).strftime("%Y-%m-%d")
-        hs_df = _ch_query_df(
-            f"""
-            SELECT toString(trade_date) AS trade_date, close AS hs300_close
-            FROM stock.kline_daily FINAL
-            WHERE code = '000300.SH' AND trade_date >= '{since_160}'
-            ORDER BY trade_date
-            """,
-            timeout=15,
-        )
-        if len(hs_df) < 25:
-            return {"available": False, "error": "沪深300日线数据不足，无法扫描双选股雷达。"}
-        hs_df = hs_df.tail(70).reset_index(drop=True)
-        hs_df["hs300_ret_20d"] = hs_df["hs300_close"].pct_change(20) * 100.0
-        start_dt = str(hs_df["trade_date"].iloc[0])
-        latest_dt = str(hs_df["trade_date"].iloc[-1])
-        start_dt_obj = datetime.strptime(start_dt, "%Y-%m-%d")
-        fin_since = (start_dt_obj - timedelta(days=210)).strftime("%Y-%m-%d")
-        fc_since = (start_dt_obj - timedelta(days=100)).strftime("%Y-%m-%d")
+    # 确定最近 70 个交易日起始日（用沪深300索引）
+    since_160 = (datetime.now(BJ_TZ) - timedelta(days=160)).strftime("%Y-%m-%d")
+    hs_df = _ch_query_df(
+        f"""
+        SELECT toString(trade_date) AS trade_date, close AS hs300_close
+        FROM stock.kline_daily FINAL
+        WHERE code = '000300.SH' AND trade_date >= '{since_160}'
+        ORDER BY trade_date
+        """,
+        timeout=15,
+    )
+    if len(hs_df) < 25:
+        return {"available": False, "error": "沪深300日线数据不足，无法扫描双选股雷达。"}
+    hs_df = hs_df.tail(70).reset_index(drop=True)
+    hs_df["hs300_ret_20d"] = hs_df["hs300_close"].pct_change(20) * 100.0
+    start_dt = str(hs_df["trade_date"].iloc[0])
+    latest_dt = str(hs_df["trade_date"].iloc[-1])
+    start_dt_obj = datetime.strptime(start_dt, "%Y-%m-%d")
+    fin_since = (start_dt_obj - timedelta(days=210)).strftime("%Y-%m-%d")
+    fc_since = (start_dt_obj - timedelta(days=100)).strftime("%Y-%m-%d")
 
-        kline = _ch_query_df(
-            f"""
-            SELECT code, toString(trade_date) AS trade_date, open, close, amount
-            FROM stock.kline_daily FINAL
-            WHERE trade_date >= '{start_dt}' AND trade_date <= '{latest_dt}'
-              AND close > 0 AND amount > 0
-            ORDER BY code, trade_date
-            """,
-            timeout=30,
-        )
-        kline = kline.loc[kline["code"].astype(str).isin(valid_codes)].reset_index(drop=True)
-        if kline.empty:
-            return {"available": False, "error": "个股日线为空。"}
+    kline = _ch_query_df(
+        f"""
+        SELECT code, toString(trade_date) AS trade_date, open, close, amount
+        FROM stock.kline_daily FINAL
+        WHERE trade_date >= '{start_dt}' AND trade_date <= '{latest_dt}'
+          AND close > 0 AND amount > 0
+        ORDER BY code, trade_date
+        """,
+        timeout=30,
+    )
+    kline = kline.loc[kline["code"].astype(str).isin(valid_codes)].reset_index(drop=True)
+    if kline.empty:
+        return {"available": False, "error": "个股日线为空。"}
 
-        # 2. 拉取 PIT 财报（notice_date <= latest_dt）与业绩预告（排雷盾）
-        fin = _ch_query_df(
-            f"""
-            SELECT
-                code,
-                toString(report_date) AS report_date,
-                toString(notice_date) AS notice_date,
-                source_type,
-                revenue_yoy_pct,
-                net_profit,
-                net_profit_yoy_pct,
-                roe_pct
-            FROM stock.stock_financial_disclosure FINAL
-            WHERE notice_date > report_date
-              AND notice_date >= '{fin_since}'
-              AND notice_date <= '{latest_dt}'
-            ORDER BY code, notice_date, report_date
-            """,
-            timeout=20,
-        )
-        fc = _ch_query_df(
-            f"""
-            SELECT
-                code,
-                toString(report_date) AS fc_report_date,
-                toString(notice_date) AS fc_notice_date,
-                predict_type AS fc_predict_type,
-                yoy_lower_pct AS fc_yoy_lower
-            FROM stock.stock_earnings_forecast FINAL
-            WHERE notice_date >= '{fc_since}'
-              AND notice_date <= '{latest_dt}'
-            ORDER BY code, notice_date, report_date
-            """,
-            timeout=20,
-        )
-    except Exception as exc:
-        return {"available": False, "error": f"扫描 F2A/F3A 雷达查询失败: {exc}"}
+    # 2. 拉取 PIT 财报（notice_date <= latest_dt）与业绩预告（排雷盾）
+    fin = _ch_query_df(
+        f"""
+        SELECT
+            code,
+            toString(report_date) AS report_date,
+            toString(notice_date) AS notice_date,
+            source_type,
+            revenue_yoy_pct,
+            net_profit,
+            net_profit_yoy_pct,
+            roe_pct
+        FROM stock.stock_financial_disclosure FINAL
+        WHERE notice_date > report_date
+          AND notice_date >= '{fin_since}'
+          AND notice_date <= '{latest_dt}'
+        ORDER BY code, notice_date, report_date
+        """,
+        timeout=20,
+    )
+    fc = _ch_query_df(
+        f"""
+        SELECT
+            code,
+            toString(report_date) AS fc_report_date,
+            toString(notice_date) AS fc_notice_date,
+            predict_type AS fc_predict_type,
+            yoy_lower_pct AS fc_yoy_lower
+        FROM stock.stock_earnings_forecast FINAL
+        WHERE notice_date >= '{fc_since}'
+          AND notice_date <= '{latest_dt}'
+        ORDER BY code, notice_date, report_date
+        """,
+        timeout=20,
+    )
 
-    # 3. 计算技术指标（严格基于当日及之前收盘，零未来函数）
+    # 3. 计算技术指标（严格基于当日及之前收盘，零未来函数；使用 Cython 原生 rolling 替代 transform(lambda)）
     g = kline.groupby("code", sort=False)
     kline["prev_close"] = g["close"].shift(1)
     kline["ret_1d_pct"] = (kline["close"] / (kline["prev_close"] + 1e-6) - 1.0) * 100.0
     kline["ret_20d_pct"] = g["close"].pct_change(20) * 100.0
-    ma5 = g["close"].transform(lambda s: s.rolling(5, min_periods=5).mean())
-    ma10 = g["close"].transform(lambda s: s.rolling(10, min_periods=10).mean())
-    ma20 = g["close"].transform(lambda s: s.rolling(20, min_periods=20).mean())
-    ma60 = g["close"].transform(lambda s: s.rolling(60, min_periods=45).mean())
-    amt20 = g["amount"].transform(lambda s: s.rolling(20, min_periods=15).mean())
+    ma5 = g["close"].rolling(5, min_periods=5).mean().reset_index(level=0, drop=True)
+    ma10 = g["close"].rolling(10, min_periods=10).mean().reset_index(level=0, drop=True)
+    ma20 = g["close"].rolling(20, min_periods=20).mean().reset_index(level=0, drop=True)
+    ma60 = g["close"].rolling(60, min_periods=45).mean().reset_index(level=0, drop=True)
+    amt20 = g["amount"].rolling(20, min_periods=15).mean().reset_index(level=0, drop=True)
 
     kline["above_ma20"] = (kline["close"] > ma20).astype(np.int8)
     kline["ma_bull_align"] = ((ma5 > ma10) & (ma10 > ma20)).astype(np.int8)
@@ -653,6 +650,110 @@ def _scan_f2a_f3a_and_money_effect(
     f2a_codes = set(f2a_df["code"].astype(str))
     f3a_codes = set(f3a_df["code"].astype(str))
 
+    # 6. 滚动回算近 20 个已验证交易日（T-25 ~ T-6）F2A vs F3A 的真实 5 日赚钱效应（严格零未来函数）
+    all_dts = sorted(kline["trade_date"].astype(str).unique())
+    eval_dts = all_dts[-26:-6] if len(all_dts) >= 26 else all_dts[:-6]
+
+    def _eval_money_effect(sel_fn) -> dict[str, Any]:
+        rets: list[float] = []
+        active_days = 0
+        for d in eval_dts:
+            sl = kline.loc[kline["trade_date"] == d]
+            cands = sel_fn(sl)
+            if cands.empty:
+                continue
+            picked_r: list[float] = []
+            seen_i: set[str] = set()
+            for r in cands.head(12).itertuples(index=False):
+                ind = str(r.industry)
+                if ind != "未分类" and ind in seen_i:
+                    continue
+                if pd.notna(r.fwd_ret_5d_pct):
+                    picked_r.append(float(r.fwd_ret_5d_pct))
+                    seen_i.add(ind)
+                if len(picked_r) >= 4:
+                    break
+            if picked_r:
+                active_days += 1
+                rets.extend(picked_r)
+        if not rets:
+            return {"samples": 0, "active_days": 0, "win_rate_pct": None, "avg_5d_ret_pct": None, "median_5d_ret_pct": None}
+        arr = np.array(rets, dtype=float)
+        return {
+            "samples": int(len(arr)),
+            "active_days": int(active_days),
+            "win_rate_pct": round(float((arr > 0).mean() * 100.0), 1),
+            "avg_5d_ret_pct": round(float(arr.mean()), 2),
+            "median_5d_ret_pct": round(float(np.median(arr)), 2),
+        }
+
+    me_f2a = _eval_money_effect(_select_f2a)
+    me_f3a = _eval_money_effect(_select_f3a)
+
+    return {
+        "available": True,
+        "latest_dt": latest_dt,
+        "f2a_df": f2a_df,
+        "f3a_df": f3a_df,
+        "f2a_codes": f2a_codes,
+        "f3a_codes": f3a_codes,
+        "eval_dts": eval_dts,
+        "me_f2a": me_f2a,
+        "me_f3a": me_f3a,
+    }
+
+
+def _get_stock_scan_base(*, force_refresh: bool = False) -> dict[str, Any]:
+    """带 Single-Flight 锁的 10 分钟全市场扫描底座缓存。"""
+    now_mono = time.monotonic()
+    if (
+        not force_refresh
+        and _SCAN_BASE_CACHE["data"] is not None
+        and now_mono < float(_SCAN_BASE_CACHE["expires_at"])
+    ):
+        return _SCAN_BASE_CACHE["data"]
+
+    with _SCAN_BASE_LOCK:
+        now_mono = time.monotonic()
+        if (
+            not force_refresh
+            and _SCAN_BASE_CACHE["data"] is not None
+            and now_mono < float(_SCAN_BASE_CACHE["expires_at"])
+        ):
+            return _SCAN_BASE_CACHE["data"]
+        try:
+            res = _compute_stock_scan_base()
+        except Exception as exc:
+            return {"available": False, "error": f"扫描 F2A/F3A 雷达查询失败: {exc}"}
+        if res.get("available"):
+            _SCAN_BASE_CACHE["data"] = res
+            _SCAN_BASE_CACHE["expires_at"] = time.monotonic() + 600.0
+        return res
+
+
+def _scan_f2a_f3a_and_money_effect(
+    *,
+    active_stock_mode: str,
+    max_slots: int,
+    stock_budget_cap_pct: int,
+    is_offensive: bool,
+    is_panic_ab_active: bool = False,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """实时扫描 F2A / F3A 双选股雷达，并滚动回算近 20 日赚钱效应对比。"""
+    base = _get_stock_scan_base(force_refresh=force_refresh)
+    if not base.get("available"):
+        return base
+
+    latest_dt = str(base["latest_dt"])
+    f2a_df: pd.DataFrame = base["f2a_df"]
+    f3a_df: pd.DataFrame = base["f3a_df"]
+    f2a_codes: set[str] = base["f2a_codes"]
+    f3a_codes: set[str] = base["f3a_codes"]
+    eval_dts: list[str] = base["eval_dts"]
+    me_f2a: dict[str, Any] = base["me_f2a"]
+    me_f3a: dict[str, Any] = base["me_f3a"]
+
     slot_w_pct = round(stock_budget_cap_pct / max(1, max_slots), 1)
 
     def _pack_rows(df: pd.DataFrame, engine_tag: str, limit: int = 12) -> list[dict[str, Any]]:
@@ -705,46 +806,6 @@ def _scan_f2a_f3a_and_money_effect(
 
     f2a_list = _pack_rows(f2a_df, "F2A", limit=12)
     f3a_list = _pack_rows(f3a_df, "F3A", limit=12)
-
-    # 6. 滚动回算近 20 个已验证交易日（T-25 ~ T-6）F2A vs F3A 的真实 5 日赚钱效应（严格零未来函数）
-    all_dts = sorted(kline["trade_date"].astype(str).unique())
-    eval_dts = all_dts[-26:-6] if len(all_dts) >= 26 else all_dts[:-6]
-
-    def _eval_money_effect(sel_fn) -> dict[str, Any]:
-        rets: list[float] = []
-        active_days = 0
-        for d in eval_dts:
-            sl = kline.loc[kline["trade_date"] == d]
-            cands = sel_fn(sl)
-            if cands.empty:
-                continue
-            picked_r: list[float] = []
-            seen_i: set[str] = set()
-            for r in cands.head(12).itertuples(index=False):
-                ind = str(r.industry)
-                if ind != "未分类" and ind in seen_i:
-                    continue
-                if pd.notna(r.fwd_ret_5d_pct):
-                    picked_r.append(float(r.fwd_ret_5d_pct))
-                    seen_i.add(ind)
-                if len(picked_r) >= 4:
-                    break
-            if picked_r:
-                active_days += 1
-                rets.extend(picked_r)
-        if not rets:
-            return {"samples": 0, "active_days": 0, "win_rate_pct": None, "avg_5d_ret_pct": None, "median_5d_ret_pct": None}
-        arr = np.array(rets, dtype=float)
-        return {
-            "samples": int(len(arr)),
-            "active_days": int(active_days),
-            "win_rate_pct": round(float((arr > 0).mean() * 100.0), 1),
-            "avg_5d_ret_pct": round(float(arr.mean()), 2),
-            "median_5d_ret_pct": round(float(np.median(arr)), 2),
-        }
-
-    me_f2a = _eval_money_effect(_select_f2a)
-    me_f3a = _eval_money_effect(_select_f3a)
 
     # 客观赚钱效应切换建议（AR4.5-L4 实证 ±1.5% 滞后实现收益差阈值）
     r_f2a = me_f2a.get("avg_5d_ret_pct")
@@ -879,67 +940,78 @@ def build_ar3_dual_core_radar(
     ):
         return _RADAR_CACHE["payload"]
 
-    macro_snap = get_ar4_macro_snapshot(
-        base_stock_cap_pct=int(cfg["stock_budget_cap_pct"]),
-        enable_dynamic=dyn_enabled,
-        force_refresh=force_refresh,
-    )
-    macro_dec = macro_snap.get("decision") or {}
-    effective_stock_cap = int(macro_dec.get("effective_stock_cap_pct", cfg["stock_budget_cap_pct"]))
-    sb_net_20d_yi = float(macro_snap.get("sb_net_20d_yi") or 0.0) if macro_snap.get("available") else 0.0
+    with _RADAR_LOCK:
+        now_mono = time.monotonic()
+        if (
+            not force_refresh
+            and _RADAR_CACHE["payload"] is not None
+            and _RADAR_CACHE["key"] == cache_key
+            and now_mono < float(_RADAR_CACHE["expires_at"])
+        ):
+            return _RADAR_CACHE["payload"]
 
-    is_offensive = regime in ("offensive", "extreme_offensive")
-    is_panic_ab_active = bool(panic_flag and not is_offensive)
-    stock_cap_for_scan = 50 if is_panic_ab_active else effective_stock_cap
+        macro_snap = get_ar4_macro_snapshot(
+            base_stock_cap_pct=int(cfg["stock_budget_cap_pct"]),
+            enable_dynamic=dyn_enabled,
+            force_refresh=force_refresh,
+        )
+        macro_dec = macro_snap.get("decision") or {}
+        effective_stock_cap = int(macro_dec.get("effective_stock_cap_pct", cfg["stock_budget_cap_pct"]))
+        sb_net_20d_yi = float(macro_snap.get("sb_net_20d_yi") or 0.0) if macro_snap.get("available") else 0.0
 
-    etf_radar = _build_etf_radar(
-        regime=regime,
-        etf_core_mode=cfg["etf_core_mode"],
-        stock_budget_cap_pct=effective_stock_cap,
-        panic_signal=panic_signal,
-        sb_net_20d_yi=sb_net_20d_yi,
-    )
-    stock_radar = _scan_f2a_f3a_and_money_effect(
-        active_stock_mode="ab_blend" if is_panic_ab_active else cfg["active_stock_mode"],
-        max_slots=cfg["max_slots"],
-        stock_budget_cap_pct=stock_cap_for_scan,
-        is_offensive=is_offensive and effective_stock_cap > 0,
-        is_panic_ab_active=is_panic_ab_active,
-    )
+        is_offensive = regime in ("offensive", "extreme_offensive")
+        is_panic_ab_active = bool(panic_flag and not is_offensive)
+        stock_cap_for_scan = 50 if is_panic_ab_active else effective_stock_cap
 
-    cfg_with_eff = dict(cfg)
-    cfg_with_eff["effective_stock_budget_cap_pct"] = stock_cap_for_scan if is_panic_ab_active else effective_stock_cap
-    cfg_with_eff["dynamic_cap_reason"] = (
-        "AR4.6 极端冰点 30m 确认：临时开放 50% 半仓切入 10 万可执行 AB_BLEND Top4 真龙 + 50% 避险 ETF"
-        if is_panic_ab_active
-        else str(macro_dec.get("cap_reason") or "")
-    )
+        etf_radar = _build_etf_radar(
+            regime=regime,
+            etf_core_mode=cfg["etf_core_mode"],
+            stock_budget_cap_pct=effective_stock_cap,
+            panic_signal=panic_signal,
+            sb_net_20d_yi=sb_net_20d_yi,
+        )
+        stock_radar = _scan_f2a_f3a_and_money_effect(
+            active_stock_mode="ab_blend" if is_panic_ab_active else cfg["active_stock_mode"],
+            max_slots=cfg["max_slots"],
+            stock_budget_cap_pct=stock_cap_for_scan,
+            is_offensive=is_offensive and effective_stock_cap > 0,
+            is_panic_ab_active=is_panic_ab_active,
+            force_refresh=force_refresh,
+        )
 
-    payload: dict[str, Any] = {
-        "version": "AR4.6",
-        "generated_at": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-        "regime": regime,
-        "is_offensive": is_offensive,
-        "is_panic_ab_active": is_panic_ab_active,
-        "config": cfg_with_eff,
-        "macro_dashboard": macro_snap,
-        "stock_mode_options": [
-            {"id": k, **v} for k, v in STOCK_MODE_META.items()
-        ],
-        "etf_mode_options": [
-            {"id": k, **v} for k, v in ETF_MODE_META.items()
-        ],
-        "evidence": {
-            "ar46": {"cum_ret_pct": 307.95, "ann_ret_pct": 43.50, "max_dd_pct": 19.07, "sharpe": 1.70, "calmar": 2.28, "oos_pct": 11.29, "oos_dd_pct": 10.68},
-            "ar45_l3b": {"cum_ret_pct": 281.55, "ann_ret_pct": 41.06, "max_dd_pct": 19.07, "sharpe": 1.64, "calmar": 2.15, "oos_pct": 8.48, "oos_dd_pct": 11.61},
-            "ar45_l4": {"cum_ret_pct": 255.91, "ann_ret_pct": 38.56, "max_dd_pct": 14.42, "sharpe": 1.63, "calmar": 2.67, "oos_pct": 7.77},
-            "ab_blend_01_ar4": {"cum_ret_pct": 243.1, "ann_ret_pct": 37.36, "max_dd_pct": 22.11, "sharpe": 1.28, "calmar": 1.69, "oos_pct": 4.71},
-            "ab_blend_01": {"cum_ret_pct": 217.64, "ann_ret_pct": 34.57, "max_dd_pct": 20.84, "sharpe": 1.25, "calmar": 1.66, "oos_pct": 3.41},
-        },
-        "etf_radar": etf_radar,
-        "stock_radar": stock_radar,
-    }
-    _RADAR_CACHE["key"] = cache_key
-    _RADAR_CACHE["expires_at"] = now_mono + 120.0
-    _RADAR_CACHE["payload"] = payload
-    return payload
+        cfg_with_eff = dict(cfg)
+        cfg_with_eff["effective_stock_budget_cap_pct"] = stock_cap_for_scan if is_panic_ab_active else effective_stock_cap
+        cfg_with_eff["dynamic_cap_reason"] = (
+            "AR4.6 极端冰点 30m 确认：临时开放 50% 半仓切入 10 万可执行 AB_BLEND Top4 真龙 + 50% 避险 ETF"
+            if is_panic_ab_active
+            else str(macro_dec.get("cap_reason") or "")
+        )
+
+        payload: dict[str, Any] = {
+            "version": "AR4.6",
+            "generated_at": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "regime": regime,
+            "is_offensive": is_offensive,
+            "is_panic_ab_active": is_panic_ab_active,
+            "config": cfg_with_eff,
+            "macro_dashboard": macro_snap,
+            "stock_mode_options": [
+                {"id": k, **v} for k, v in STOCK_MODE_META.items()
+            ],
+            "etf_mode_options": [
+                {"id": k, **v} for k, v in ETF_MODE_META.items()
+            ],
+            "evidence": {
+                "ar46": {"cum_ret_pct": 307.95, "ann_ret_pct": 43.50, "max_dd_pct": 19.07, "sharpe": 1.70, "calmar": 2.28, "oos_pct": 11.29, "oos_dd_pct": 10.68},
+                "ar45_l3b": {"cum_ret_pct": 281.55, "ann_ret_pct": 41.06, "max_dd_pct": 19.07, "sharpe": 1.64, "calmar": 2.15, "oos_pct": 8.48, "oos_dd_pct": 11.61},
+                "ar45_l4": {"cum_ret_pct": 255.91, "ann_ret_pct": 38.56, "max_dd_pct": 14.42, "sharpe": 1.63, "calmar": 2.67, "oos_pct": 7.77},
+                "ab_blend_01_ar4": {"cum_ret_pct": 243.1, "ann_ret_pct": 37.36, "max_dd_pct": 22.11, "sharpe": 1.28, "calmar": 1.69, "oos_pct": 4.71},
+                "ab_blend_01": {"cum_ret_pct": 217.64, "ann_ret_pct": 34.57, "max_dd_pct": 20.84, "sharpe": 1.25, "calmar": 1.66, "oos_pct": 3.41},
+            },
+            "etf_radar": etf_radar,
+            "stock_radar": stock_radar,
+        }
+        _RADAR_CACHE["key"] = cache_key
+        _RADAR_CACHE["expires_at"] = time.monotonic() + 300.0
+        _RADAR_CACHE["payload"] = payload
+        return payload
