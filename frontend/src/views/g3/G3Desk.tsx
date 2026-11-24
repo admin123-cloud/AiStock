@@ -385,7 +385,7 @@ export default function G3Desk() {
                             className="inline-flex items-center gap-1 rounded bg-zinc-800/90 px-2 py-0.5 font-mono text-[11px] text-zinc-100"
                           >
                             <b className="text-sky-300">{t.name}({t.code})</b>
-                            <span>{t.account_weight_pct.toFixed(1)}%</span>
+                            <span>{(t.account_weight_pct ?? 0).toFixed(1)}%</span>
                             <span className="text-[10px] text-zinc-400">
                               (20d {t.ret_20d_pct >= 0 ? '+' : ''}{t.ret_20d_pct.toFixed(1)}% · 波动 {t.vol_20d_pct.toFixed(1)}%)
                             </span>
@@ -416,7 +416,7 @@ export default function G3Desk() {
                           const tgt = etfTargetMap.get(h.code)
                           const isPanicPair = h.code === '159915' || h.code === '512100'
                           const tag = tgt
-                            ? `目标(${tgt.account_weight_pct.toFixed(0)}%)`
+                            ? `目标(${(tgt.account_weight_pct ?? 0).toFixed(0)}%)`
                             : isPanicPair
                               ? '冰点反抽仓(盯-6%止损/反抽兑现)'
                               : h.is_etf

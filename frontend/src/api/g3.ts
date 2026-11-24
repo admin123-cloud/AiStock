@@ -1467,19 +1467,6 @@ export interface G3AR3DualCoreRadarResponse {
   is_offensive: boolean
   is_panic_ab_active?: boolean
   config: G3AR3Config
-  macro_dashboard?: {
-    available?: boolean
-    erp_pct?: number | null
-    nt_ratio_pctile_250d?: number | null
-    sb_net_20d_yi?: number | null
-    decision?: {
-      phase?: string
-      phase_label?: string
-      erp_label?: string
-      cap_reason?: string
-      effective_stock_cap_pct?: number
-    }
-  }
   stock_mode_options: Array<{ id: G3AR3Config['active_stock_mode']; label: string; short_label: string; desc: string }>
   etf_mode_options: Array<{ id: G3AR3Config['etf_core_mode']; label: string; short_label: string; desc: string }>
   evidence: Record<string, { cum_ret_pct: number; ann_ret_pct: number; max_dd_pct: number; sharpe: number; calmar: number; oos_pct: number }>
