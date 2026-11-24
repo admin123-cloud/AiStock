@@ -244,9 +244,9 @@ export default function G3Desk() {
             }
           >
             {/* 顶栏：当前周期 + 核心状态徽章 */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/90 pb-2.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-white">大盘择时总闸门（AR4.6）</span>
+            <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-zinc-800/90 pb-3">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-base font-semibold text-white">大盘择时总闸门（AR4.6）</span>
                 <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
                 {isPanicAb ? (
                   <Badge color="emerald">⚡ 冰点 30m 已触发 · 半仓 50% AB 真龙 + 50% 避险 ETF</Badge>
@@ -258,18 +258,18 @@ export default function G3Desk() {
                   <Badge color="red">非进攻期 · A股个股锁 0% + 100% 跨资产逆波 ETF</Badge>
                 )}
               </div>
-              <div className="font-mono text-[11px] text-zinc-400">
+              <div className="font-mono text-xs text-zinc-300">
                 参考日 {gate.ref_date} · 宽度日 {src.breadth?.date || '—'}
               </div>
             </div>
 
             {/* 主体双栏：左 = ① 当前处于什么周期 & 判断依据；右 = ② 当前的持仓依据 */}
-            <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <div className="mt-3.5 grid grid-cols-1 gap-4 lg:grid-cols-12">
               {/* 左半区：1) 当前处于什么周期 & 判断依据 */}
-              <div className="flex flex-col gap-2.5 rounded-lg border border-zinc-800/80 bg-zinc-950/50 p-3 lg:col-span-6">
+              <div className="flex flex-col gap-3 rounded-lg border border-zinc-800/80 bg-zinc-950/55 p-4 lg:col-span-6">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-white">① 当前周期与判断依据</span>
-                  <span className="text-[11px] text-zinc-400">
+                  <span className="text-sm font-semibold text-white">① 当前周期与判断依据</span>
+                  <span className="text-xs font-medium text-zinc-300">
                     {idx?.confirmed_regime === 'up'
                       ? `上证上升连 ${idx?.streak_days ?? 0} 日`
                       : idx?.confirmed_regime === 'down'
@@ -277,69 +277,69 @@ export default function G3Desk() {
                         : '上证震荡过渡'}
                   </span>
                 </div>
-                <div className="text-xs leading-relaxed text-zinc-200">{phaseExplain}</div>
+                <div className="text-sm leading-6 text-zinc-100">{phaseExplain}</div>
 
                 {/* 4 项硬指标实测 vs 阈值 */}
-                <div className="grid grid-cols-2 gap-2 text-[11px]">
-                  <div className="rounded border border-zinc-800/80 bg-zinc-900/60 px-2.5 py-1.5">
-                    <div className="flex items-center justify-between text-zinc-400">
-                      <span>全市场宽度 (MA20占比)</span>
-                      <span className={breadthPct != null && breadthPct >= 52 ? 'font-mono font-semibold text-emerald-300' : breadthPct != null && breadthPct <= 18 ? 'font-mono font-semibold text-amber-300' : 'font-mono font-semibold text-red-300'}>
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-xs text-zinc-300">全市场宽度 (MA20占比)</span>
+                      <span className={breadthPct != null && breadthPct >= 52 ? 'font-mono text-base font-bold text-emerald-300' : breadthPct != null && breadthPct <= 18 ? 'font-mono text-base font-bold text-amber-300' : 'font-mono text-base font-bold text-red-300'}>
                         {breadthPct != null ? `${fmtNum(breadthPct)}%` : '—'}
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                    <div className="mt-1 text-xs text-zinc-400">
                       进攻 ≥52%连3日 · 防守 &lt;30% · 冰点 ≤18%
                     </div>
                   </div>
 
-                  <div className="rounded border border-zinc-800/80 bg-zinc-900/60 px-2.5 py-1.5">
-                    <div className="flex items-center justify-between text-zinc-400">
-                      <span>上证指数 vs MA20</span>
-                      <span className={idxBiasMa20 != null && idxBiasMa20 >= 0 ? 'font-mono font-semibold text-emerald-300' : 'font-mono font-semibold text-red-300'}>
+                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-xs text-zinc-300">上证指数 vs MA20</span>
+                      <span className={idxBiasMa20 != null && idxBiasMa20 >= 0 ? 'font-mono text-base font-bold text-emerald-300' : 'font-mono text-base font-bold text-red-300'}>
                         {idx?.close != null ? `${fmtNum(idx.close, 0)} (${idxBiasMa20 != null ? `${idxBiasMa20 >= 0 ? '+' : ''}${idxBiasMa20.toFixed(1)}%` : '—'})` : '—'}
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                    <div className="mt-1 text-xs text-zinc-400">
                       MA20 {idx?.ma20 != null ? fmtNum(idx.ma20, 0) : '—'} · 60日动量 {idx?.index_mom60 != null ? `${idx.index_mom60 >= 0 ? '+' : ''}${(idx.index_mom60 * 100).toFixed(1)}%` : '—'}
                     </div>
                   </div>
 
-                  <div className="rounded border border-zinc-800/80 bg-zinc-900/60 px-2.5 py-1.5">
-                    <div className="flex items-center justify-between text-zinc-400">
-                      <span>市场情绪 · 涨跌停</span>
-                      <span className="font-mono font-semibold text-zinc-100">
+                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-xs text-zinc-300">市场情绪 · 涨跌停</span>
+                      <span className="font-mono text-base font-bold text-zinc-100">
                         {mood?.mood_label || '—'} ({mood?.limit_up_count ?? '—'}/{mood?.limit_down_count ?? '—'})
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                    <div className="mt-1 text-xs text-zinc-400">
                       封板率 {sealRatePct != null ? `${sealRatePct.toFixed(1)}%` : '—'} · 炸板 {mood?.broke_count ?? '—'} · 最高 {mood?.max_streak ?? '—'} 板
                     </div>
                   </div>
 
-                  <div className="rounded border border-zinc-800/80 bg-zinc-900/60 px-2.5 py-1.5">
-                    <div className="flex items-center justify-between text-zinc-400">
-                      <span>全市场成交额</span>
-                      <span className="font-mono font-semibold text-zinc-100">
+                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-xs text-zinc-300">全市场成交额</span>
+                      <span className="font-mono text-base font-bold text-zinc-100">
                         {src.turnover_forecast?.forecast_trillion != null ? `${src.turnover_forecast.forecast_trillion.toFixed(2)} 万亿` : '—'}
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                    <div className="mt-1 text-xs text-zinc-400">
                       {src.turnover_forecast?.mode === 'intraday_forecast' ? '盘中全天预测额' : '最新全市场成交额'}
                     </div>
                   </div>
                 </div>
 
                 {/* 触发依据 + 下一周期切换条件 */}
-                <div className="space-y-1 border-t border-zinc-800/70 pt-2 text-[11px] leading-relaxed">
+                <div className="space-y-1.5 border-t border-zinc-800/70 pt-2.5 text-[13px] leading-6">
                   {gate.reasons.length > 0 && (
-                    <div className="text-zinc-200">
-                      <span className="font-semibold text-zinc-400">判定依据：</span>
+                    <div className="text-zinc-100">
+                      <span className="font-semibold text-zinc-300">判定依据：</span>
                       {gate.reasons.join('；')}
                     </div>
                   )}
-                  <div className="text-zinc-400">
-                    <span className="font-semibold text-zinc-300">切换门槛：</span>
+                  <div className="text-zinc-300">
+                    <span className="font-semibold text-zinc-200">切换门槛：</span>
                     {isOff
                       ? '宽度跌破 52% 或上证破 MA20 → 切回平衡清股；连续 2 日宽度 <30% 或单日 <25% → 切入防守。'
                       : '切平衡需宽度 ≥30% 且上证企稳；触发冰点半仓真龙需宽度 ≤18% 且 10:30~14:30 双创 30m 双收阳均涨 ≥+0.80%；升级进攻需宽度 ≥52% + 上证 > MA20 + 20d 动量 > +1% 连 3 日。'}
@@ -348,10 +348,10 @@ export default function G3Desk() {
               </div>
 
               {/* 右半区：2) 当前的持仓依据是什么（目标配比逻辑 + acct1 实盘对照） */}
-              <div className="flex flex-col gap-2.5 rounded-lg border border-zinc-800/80 bg-zinc-950/50 p-3 lg:col-span-6">
+              <div className="flex flex-col gap-3 rounded-lg border border-zinc-800/80 bg-zinc-950/55 p-4 lg:col-span-6">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-white">② 当前持仓依据（AR4.6 目标 vs acct1 实盘）</span>
-                  <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-semibold text-white">② 当前持仓依据（AR4.6 目标 vs acct1 实盘）</span>
+                  <div className="flex flex-wrap items-center gap-2">
                     <Badge color={stockCompliant ? 'emerald' : 'red'}>
                       A股个股 {actualStockPct.toFixed(1)}% / 目标 {stockTargetPct}%
                     </Badge>
@@ -362,8 +362,8 @@ export default function G3Desk() {
                 </div>
 
                 {/* 依据 1：为什么个股是这个仓位 */}
-                <div className="space-y-1.5 text-[11px] leading-relaxed">
-                  <div className="rounded border border-zinc-800/70 bg-zinc-900/50 px-2.5 py-1.5 text-zinc-200">
+                <div className="space-y-2.5 text-[13px] leading-6">
+                  <div className="rounded-md border border-zinc-800/70 bg-zinc-900/60 px-3 py-2 text-zinc-100">
                     <span className="font-semibold text-amber-300">个股仓位依据（目标 {stockTargetPct}%）：</span>
                     {isOff
                       ? `主升进攻确认，${macroDec?.cap_reason || `按国家队分位动态配 ${stockTargetPct}%`}，精选 F3A+F2A（AB_BLEND）前 4 只（同业限 1，日收盘 -10% 宽追踪）。`
@@ -373,29 +373,29 @@ export default function G3Desk() {
                   </div>
 
                   {/* 依据 2：为什么 ETF 选这几只 & 按此权重配 */}
-                  <div className="rounded border border-zinc-800/70 bg-zinc-900/50 px-2.5 py-1.5 text-zinc-200">
+                  <div className="rounded-md border border-zinc-800/70 bg-zinc-900/60 px-3 py-2 text-zinc-100">
                     <div className="font-semibold text-sky-300">
                       ETF 配置依据（目标 {etfTargetPct}% · {isOff ? 'A股宽基 20d 动量 Top2' : '非A股风险调整动量 Top2 逆波动率加权'}）：
                     </div>
                     {etfTargets.length > 0 ? (
-                      <div className="mt-1 flex flex-wrap gap-1.5">
+                      <div className="mt-1.5 flex flex-wrap gap-2">
                         {etfTargets.map((t) => (
                           <span
                             key={t.code}
-                            className="inline-flex items-center gap-1 rounded bg-zinc-800/90 px-2 py-0.5 font-mono text-[11px] text-zinc-100"
+                            className="inline-flex items-center gap-1.5 rounded-md bg-zinc-800/95 px-2.5 py-1 font-mono text-xs text-zinc-100"
                           >
                             <b className="text-sky-300">{t.name}({t.code})</b>
-                            <span>{(t.account_weight_pct ?? 0).toFixed(1)}%</span>
-                            <span className="text-[10px] text-zinc-400">
+                            <span className="font-semibold text-white">{(t.account_weight_pct ?? 0).toFixed(1)}%</span>
+                            <span className="text-zinc-300">
                               (20d {t.ret_20d_pct >= 0 ? '+' : ''}{t.ret_20d_pct.toFixed(1)}% · 波动 {t.vol_20d_pct.toFixed(1)}%)
                             </span>
                           </span>
                         ))}
                       </div>
                     ) : (
-                      <div className="mt-0.5 text-zinc-400">{radar?.etf_radar?.headline || '加载目标 ETF 依据中…'}</div>
+                      <div className="mt-1 text-xs text-zinc-300">{radar?.etf_radar?.headline || '加载目标 ETF 依据中…'}</div>
                     )}
-                    <div className="mt-1 text-[10px] text-zinc-400">
+                    <div className="mt-1.5 text-xs text-zinc-300">
                       低波动多配、高波动少配（风险平价控回撤） · 南向 20 日净流{' '}
                       {macro?.sb_net_20d_yi != null ? `${macro.sb_net_20d_yi >= 0 ? '+' : ''}${macro.sb_net_20d_yi.toFixed(0)}亿` : '—'}
                       {macro?.sb_net_20d_yi != null && macro.sb_net_20d_yi < 0 ? '（港科已拦截）' : '（港科未拦截）'}
@@ -403,14 +403,14 @@ export default function G3Desk() {
                   </div>
 
                   {/* 依据 3：acct1 当前实盘持仓逐只核对 */}
-                  <div className="rounded border border-zinc-800/70 bg-zinc-900/50 px-2.5 py-1.5">
-                    <div className="flex items-center justify-between text-zinc-300">
+                  <div className="rounded-md border border-zinc-800/70 bg-zinc-900/60 px-3 py-2">
+                    <div className="flex items-center justify-between text-zinc-200">
                       <span className="font-semibold">
                         acct1 实盘持仓核对（总仓位 {acct?.position_pct != null ? `${acct.position_pct.toFixed(1)}%` : '—'} · 现金 {actualCashPct.toFixed(1)}% / ¥{fmtNum(acct?.available_cash, 0)}）
                       </span>
                     </div>
                     {holdings.length > 0 ? (
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      <div className="mt-2 flex flex-wrap gap-2">
                         {holdings.map((h) => {
                           const wPct = totalAssets > 0 ? (h.market_value / totalAssets) * 100 : 0
                           const tgt = etfTargetMap.get(h.code)
@@ -425,17 +425,17 @@ export default function G3Desk() {
                                   ? '进攻持仓'
                                   : '非目标旧股(按步长清退)'
                           const tagCls = tgt
-                            ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-200'
+                            ? 'border-emerald-500/45 bg-emerald-950/35 text-emerald-100'
                             : isPanicPair
-                              ? 'border-amber-500/40 bg-amber-950/30 text-amber-200'
-                              : 'border-red-500/40 bg-red-950/30 text-red-200'
+                              ? 'border-amber-500/45 bg-amber-950/35 text-amber-100'
+                              : 'border-red-500/45 bg-red-950/35 text-red-100'
                           return (
                             <span
                               key={h.code}
-                              className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] ${tagCls}`}
+                              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${tagCls}`}
                             >
                               <b className="font-mono">{h.name}({h.code})</b>
-                              <span className="font-mono">{wPct.toFixed(1)}%</span>
+                              <span className="font-mono font-semibold">{wPct.toFixed(1)}%</span>
                               {h.profit_pct != null && (
                                 <span className="font-mono">
                                   ({h.profit_pct >= 0 ? '+' : ''}{h.profit_pct.toFixed(1)}%)
@@ -447,7 +447,7 @@ export default function G3Desk() {
                         })}
                       </div>
                     ) : (
-                      <div className="mt-1 text-[10px] text-zinc-500">当前空仓（100% 现金待配置）</div>
+                      <div className="mt-1 text-xs text-zinc-400">当前空仓（100% 现金待配置）</div>
                     )}
                   </div>
                 </div>
