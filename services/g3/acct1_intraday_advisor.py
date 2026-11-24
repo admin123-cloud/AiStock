@@ -65,6 +65,21 @@ def _fills_path(trade_date: str, base_dir: Optional[Path] = None) -> Path:
     return _advisor_dir(base_dir) / f"fills_{trade_date.replace('-', '')}.jsonl"
 
 
+def _policy_path(base_dir: Optional[Path] = None) -> Path:
+    return _advisor_dir(base_dir) / "push_policy.json"
+
+
+def load_push_policy(base_dir: Optional[Path] = None) -> dict[str, Any]:
+    """热读取 acct1 推送收口策略（不重启即可生效，默认关闭暂停以保持兼容）。"""
+    raw = _load_json(_policy_path(base_dir))
+    return {
+        "pause_intraday_auto_push": bool(raw.get("pause_intraday_auto_push", False)),
+        "pause_ar2_radar_broadcast": bool(raw.get("pause_ar2_radar_broadcast", False)),
+        "reason": str(raw.get("reason") or ""),
+        "updated_at": raw.get("updated_at"),
+    }
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -399,6 +414,19 @@ def run_acct1_advisor(
             "pushed": [],
         }
 
+    # 盘中推送收口开关（热读取 push_policy.json）：仅暂停盘中机械推送，保留盘前 09:15 与日终 15:15 汇总
+    policy = load_push_policy(base_dir)
+    if mode == "intraday" and policy.get("pause_intraday_auto_push") and not dry_run:
+        return {
+            "status": "paused_by_policy",
+            "mode": mode,
+            "ts": now_str,
+            "reason": policy.get("reason") or "pause_intraday_auto_push",
+            "pushed_count": 0,
+            "pushed": [],
+            "skipped": [],
+        }
+
     # 1. 拉取真实账户概览并叠加尚未入快照的手工成交
     raw_overview = dict(overview_override) if overview_override is not None else get_accounts_overview()
     eff_overview, applied_fills = apply_manual_fills_overlay(raw_overview, trade_date, base_dir=base_dir)
@@ -602,7 +630,9 @@ def run_acct1_advisor(
                 continue
 
         key = f"{c6}:SELL"
-        fp = f"SELL:{qty}:{int(s.get('available_shares') or 0)}"
+        # 用可用股数作为指纹：避免价格 1 厘波动导致 ±100 股变化而绕过 2 小时防刷屏冷却；
+        # 仅当真实持仓/可卖股数发生变化（如人工成交部分卖出）时立即解除冷却。
+        fp = f"SELL:avail{int(s.get('available_shares') or 0)}"
         ok_push, why = _can_push(key, fp)
         if not ok_push:
             skipped.append({"code": c6, "side": "SELL", "reason": why})
@@ -659,9 +689,10 @@ def run_acct1_advisor(
             continue
 
         key = f"{c6}:BUY"
-        # 用「可用现金按 2500 元分档」作为指纹：卖出回款后现金跃升会立即允许推送衔接买单
+        # 用「可用现金按 2500 元分档」作为指纹：卖出回款后现金跃升会立即允许推送衔接买单，
+        # 同时避免价格微幅波动导致 ±100 股变化而绕过 2 小时防刷屏冷却。
         cash_bucket = int(float(acct["available_cash"]) // 2500)
-        fp = f"BUY:{qty}:c{cash_bucket}"
+        fp = f"BUY:c{cash_bucket}"
         ok_push, why = _can_push(key, fp)
         if not ok_push:
             skipped.append({"code": c6, "side": "BUY", "reason": why})
@@ -742,6 +773,7 @@ def get_acct1_advisor_status(
         "in_buy_session": _in_intraday_session(now, for_buy=True),
         "sent_today": state.get("sent") or {},
         "manual_fills_today": fills,
+        "push_policy": load_push_policy(base_dir),
         "schedule": {
             "premarket": "mon-fri 09:15 (Asia/Shanghai)",
             "intraday": "mon-fri 09:35~11:25 & 13:05~14:45 每10分钟 (Asia/Shanghai)",

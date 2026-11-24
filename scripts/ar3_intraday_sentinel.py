@@ -109,20 +109,29 @@ def run_sentinel(*, force: bool = False, dry_run: bool = False) -> int:
     except Exception as exc:
         print(f"持仓巡检异常: {exc}")
 
-    # 2. 检查 AR2_2A 极端冰点企稳反抽右侧触发
+    # 2. 检查 AR2_2A 极端冰点企稳反抽右侧触发（若已收口至统一看盘会话则跳过重复广播，仅保留硬止损哨兵）
+    _suppress_ar2 = False
     try:
-        desk = _http_get("/api/g3/desk", timeout=20)
-        pr = ((desk.get("trading_command") or {}).get("panic_rebound_signal")) or {}
-        if pr.get("triggered"):
-            key = "panic_rebound_triggered"
-            if key not in sent:
-                m = pr.get("metrics") or {}
-                alerts.append((
-                    key,
-                    f"🎯 **AR2_2A 冰点企稳右侧触发**：全市场宽度 {m.get('breadth_pct')}% ≤ 18% 且 创业板+中证1000 盘中均涨 **{m.get('pair_avg_change_pct')}%** ≥ +0.50%！可打开 `/g3/desk` 一键预填 `159915` (30%) + `512100` (30%)（止损-6%/止盈+12%/持5日）。",
-                ))
-    except Exception as exc:
-        print(f"冰点雷达巡检异常: {exc}")
+        from services.g3.acct1_intraday_advisor import load_push_policy
+        _pol = load_push_policy()
+        _suppress_ar2 = bool(_pol.get("pause_ar2_radar_broadcast") or _pol.get("pause_intraday_auto_push"))
+    except Exception:
+        _suppress_ar2 = False
+
+    if not _suppress_ar2:
+        try:
+            desk = _http_get("/api/g3/desk", timeout=20)
+            pr = ((desk.get("trading_command") or {}).get("panic_rebound_signal")) or {}
+            if pr.get("triggered"):
+                key = "panic_rebound_triggered"
+                if key not in sent:
+                    m = pr.get("metrics") or {}
+                    alerts.append((
+                        key,
+                        f"🎯 **AR2_2A 冰点企稳右侧触发**：全市场宽度 {m.get('breadth_pct')}% ≤ 18% 且 创业板+中证1000 盘中均涨 **{m.get('pair_avg_change_pct')}%** ≥ +0.50%！可打开 `/g3/desk` 一键预填 `159915` (30%) + `512100` (30%)（止损-6%/止盈+12%/持5日）。",
+                    ))
+        except Exception as exc:
+            print(f"冰点雷达巡检异常: {exc}")
 
     if not alerts:
         print(f"[{now.strftime('%H:%M:%S')}] AR3 盘中哨兵巡检完成：无新增告警。")

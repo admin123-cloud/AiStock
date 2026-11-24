@@ -398,3 +398,76 @@ def test_four_regime_contract_matrix_zero_rule_conflict(tmp_path: Path):
         quotes_override={"002415": {"price": 25.10, "change_pct": 0.4}, "510300": {"price": 4.210, "change_pct": 0.2}},
     )
     assert any(p["code"] == "002415" and p["side"] == "BUY" for p in r_off["pushed"])
+
+
+def test_sell_cooldown_ignores_small_price_share_jitter_and_policy_pauses_intraday(tmp_path: Path):
+    """2026-11-24 收口补丁：
+    1) 价格波动 1 厘引起超配股数 ±100 股变化时，2 小时冷却必须持续生效，绝不隔 10 分钟重复催卖；
+    2) push_policy.json 设置 pause_intraday_auto_push=true 后，盘中机械推送立即静默，盘前/盘后仍正常放行。
+    """
+    import json
+    now1 = datetime(2026, 11, 24, 10, 55, 0, tzinfo=BJ_TZ)
+    ov1 = _mock_overview(avail_cash=1236.0, gcl_qty=0)
+    ov2 = _mock_overview(avail_cash=1236.0, gcl_qty=0)
+    for ov in (ov1, ov2):
+        for h in ov["accounts"][0]["holdings"]:
+            if h["code"] == "512890":
+                h["quantity"] = 38900
+                h["available_quantity"] = 38900
+                h["market_value"] = round(38900 * h["current_price"], 2)
+    # 模拟 10 分钟后 512890 涨 1 厘引起目标卖出股数轻微波动，但可卖股数未变
+    for h in ov2["accounts"][0]["holdings"]:
+        if h["code"] == "512890":
+            h["current_price"] = 1.258
+            h["market_value"] = round(h["quantity"] * 1.258, 2)
+
+    with patch.object(adv, "send_wechat_notification", return_value={"ok": True, "channel": "test"}):
+        r1 = adv.run_acct1_advisor(
+            mode="intraday",
+            dry_run=False,
+            now_bj=now1,
+            base_dir=tmp_path,
+            overview_override=ov1,
+            radar_override=_mock_radar(False),
+            quotes_override={"510880": {"price": 3.380, "change_pct": -0.3}, "512890": {"price": 1.251, "change_pct": -0.4}},
+        )
+        assert any(p["side"] == "SELL" for p in r1["pushed"])
+
+        r2 = adv.run_acct1_advisor(
+            mode="intraday",
+            dry_run=False,
+            now_bj=now1 + timedelta(minutes=10),
+            base_dir=tmp_path,
+            overview_override=ov2,
+            radar_override=_mock_radar(False),
+            quotes_override={"510880": {"price": 3.382, "change_pct": -0.2}, "512890": {"price": 1.258, "change_pct": 0.1}},
+        )
+        assert len(r2["pushed"]) == 0
+        assert any("cooldown_" in s["reason"] for s in r2["skipped"])
+
+        # 启用 push_policy 收口开关：盘中立即暂停，盘前仍放行
+        (tmp_path / "push_policy.json").write_text(
+            json.dumps({"pause_intraday_auto_push": True, "pause_ar2_radar_broadcast": True, "reason": "unified_watch"}),
+            encoding="utf-8",
+        )
+        r3 = adv.run_acct1_advisor(
+            mode="intraday",
+            dry_run=False,
+            now_bj=now1 + timedelta(hours=3),
+            base_dir=tmp_path,
+            overview_override=ov2,
+            radar_override=_mock_radar(False),
+        )
+        assert r3["status"] == "paused_by_policy"
+        assert r3["pushed_count"] == 0
+
+        r_pre = adv.run_acct1_advisor(
+            mode="premarket",
+            dry_run=False,
+            now_bj=datetime(2026, 11, 24, 9, 15, 0, tzinfo=BJ_TZ),
+            base_dir=tmp_path,
+            overview_override=ov2,
+            radar_override=_mock_radar(False),
+        )
+        assert r_pre["status"] == "ok"
+        assert r_pre["notify"]["ok"] is True
