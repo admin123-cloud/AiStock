@@ -440,8 +440,19 @@ def evaluate_market_regime_gate(
     ref_date = today or datetime.now(BJ_TZ).date()
     ref_date_str = ref_date.strftime("%Y-%m-%d")
 
-    # 1. 市场宽度
+    # 1. 市场宽度（生产无参调用时自动兜底读取最新 runtime/t_tracker/regime_*.json，避免各子系统口径分裂）
     b = dict(breadth or {})
+    if not b and index_fetcher is None and mood_dir is None:
+        try:
+            t_dir = runtime_path("t_tracker")
+            if t_dir.exists():
+                for rf in sorted(t_dir.glob("regime_20*.json"), reverse=True)[:3]:
+                    rdoc = _read_json_safe(rf)
+                    if isinstance(rdoc.get("breadth"), Mapping) and rdoc["breadth"].get("above_ma20_pct") is not None:
+                        b = dict(rdoc["breadth"])
+                        break
+        except Exception:  # noqa: BLE001
+            pass
     ma20_pct = _safe_float(b.get("above_ma20_pct"))
     b_level = str(b.get("level") or "unknown").lower()
     b_date = b.get("date")
