@@ -137,7 +137,7 @@ export default function AR3DualCorePanel({ onPrefillOrder, onAddWatchlist, mode 
           <span className="text-base font-bold text-white">⚡ AR4.6 终极双核作战雷达</span>
           <Badge color="amber">国家队动态股仓 + 风险调整Top2逆波 + 南向港科滤网</Badge>
           <span className="font-mono text-[11px] text-zinc-400">
-            物理单账户实证：4年 +308.0% · 年化 +43.5% · 回撤 19.1% · 卡玛 2.28 · OOS回撤 11.3%
+            物理单账户实证：4年 +308.0% · 年化 +43.5% · 回撤 19.1% · 卡玛 2.28 · 2026熊市OOS +11.3%（回撤 10.7%）
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">

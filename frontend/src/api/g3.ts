@@ -276,6 +276,7 @@ export interface G3MarketRegimeGate {
   as_of: string
   ref_date: string
   regime: 'offensive' | 'balanced' | 'defensive' | string
+  phase_5?: string
   regime_label: string
   tone: 'emerald' | 'amber' | 'red' | string
   degraded: boolean
@@ -302,6 +303,7 @@ export interface G3MarketRegimeGate {
       date?: string | null
       level?: string
       above_ma20_pct?: number | null
+      above_ma5_pct?: number | null
     }
     market_mood: {
       status: 'fresh' | 'stale' | 'missing' | string
@@ -323,6 +325,9 @@ export interface G3MarketRegimeGate {
       confirmed_regime?: string
       streak_days?: number
       close?: number | null
+      ma5?: number | null
+      ma10?: number | null
+      ma20?: number | null
       index_mom60?: number | null
     }
     turnover_forecast: {
@@ -1460,7 +1465,21 @@ export interface G3AR3DualCoreRadarResponse {
   generated_at: string
   regime: string
   is_offensive: boolean
+  is_panic_ab_active?: boolean
   config: G3AR3Config
+  macro_dashboard?: {
+    available?: boolean
+    erp_pct?: number | null
+    nt_ratio_pctile_250d?: number | null
+    sb_net_20d_yi?: number | null
+    decision?: {
+      phase?: string
+      phase_label?: string
+      erp_label?: string
+      cap_reason?: string
+      effective_stock_cap_pct?: number
+    }
+  }
   stock_mode_options: Array<{ id: G3AR3Config['active_stock_mode']; label: string; short_label: string; desc: string }>
   etf_mode_options: Array<{ id: G3AR3Config['etf_core_mode']; label: string; short_label: string; desc: string }>
   evidence: Record<string, { cum_ret_pct: number; ann_ret_pct: number; max_dd_pct: number; sharpe: number; calmar: number; oos_pct: number }>
@@ -1591,6 +1610,17 @@ export interface G3AR3RebalancePlanResponse {
     market_value: number
     position_pct: number
     snapshot_at?: string | null
+    holdings?: Array<{
+      code: string
+      name: string
+      shares: number
+      available_shares?: number
+      current_price: number
+      cost_price?: number
+      market_value: number
+      profit_pct?: number | null
+      is_etf?: boolean
+    }>
     available_accounts: Array<{
       account_id: string
       label: string
