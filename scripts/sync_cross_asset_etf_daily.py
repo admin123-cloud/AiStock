@@ -38,6 +38,49 @@ CROSS_ASSET_ETFS: list[dict[str, str]] = [
     {"code": "511090.SH", "tx": "sh511090", "name": "30年国债ETF", "asset_class": "bond"},
 ]
 
+# 扩展池：32 只主流 A 股行业/主题 ETF + 扩展商品与全球跨境 ETF（独立 asset_class 隔离，绝不污染现役 14 只核心跨资产池）
+SECTOR_AND_EXTENDED_ETFS: list[dict[str, str]] = [
+    # A. 科技成长与硬科技（8 只）
+    {"code": "512480.SH", "tx": "sh512480", "name": "半导体ETF", "asset_class": "cn_sector"},
+    {"code": "159995.SZ", "tx": "sz159995", "name": "芯片ETF", "asset_class": "cn_sector"},
+    {"code": "515070.SH", "tx": "sh515070", "name": "人工智能AIETF", "asset_class": "cn_sector"},
+    {"code": "515880.SH", "tx": "sh515880", "name": "通信ETF", "asset_class": "cn_sector"},
+    {"code": "512720.SH", "tx": "sh512720", "name": "计算机ETF", "asset_class": "cn_sector"},
+    {"code": "159732.SZ", "tx": "sz159732", "name": "消费电子ETF", "asset_class": "cn_sector"},
+    {"code": "562500.SH", "tx": "sh562500", "name": "机器人ETF", "asset_class": "cn_sector"},
+    {"code": "159869.SZ", "tx": "sz159869", "name": "游戏ETF", "asset_class": "cn_sector"},
+    # B. 新能源、高端制造与公用事业（6 只）
+    {"code": "515030.SH", "tx": "sh515030", "name": "新能源车ETF", "asset_class": "cn_sector"},
+    {"code": "515790.SH", "tx": "sh515790", "name": "光伏ETF", "asset_class": "cn_sector"},
+    {"code": "159755.SZ", "tx": "sz159755", "name": "电池ETF", "asset_class": "cn_sector"},
+    {"code": "512660.SH", "tx": "sh512660", "name": "军工ETF", "asset_class": "cn_sector"},
+    {"code": "159611.SZ", "tx": "sz159611", "name": "电力ETF", "asset_class": "cn_sector"},
+    {"code": "516970.SH", "tx": "sh516970", "name": "基建50ETF", "asset_class": "cn_sector"},
+    # C. 大金融与顺周期资源（8 只）
+    {"code": "512880.SH", "tx": "sh512880", "name": "证券ETF", "asset_class": "cn_sector"},
+    {"code": "512800.SH", "tx": "sh512800", "name": "银行ETF", "asset_class": "cn_sector"},
+    {"code": "512400.SH", "tx": "sh512400", "name": "有色金属ETF", "asset_class": "cn_sector"},
+    {"code": "516780.SH", "tx": "sh516780", "name": "稀土ETF", "asset_class": "cn_sector"},
+    {"code": "515220.SH", "tx": "sh515220", "name": "煤炭ETF", "asset_class": "cn_sector"},
+    {"code": "516020.SH", "tx": "sh516020", "name": "化工ETF", "asset_class": "cn_sector"},
+    {"code": "515210.SH", "tx": "sh515210", "name": "钢铁ETF", "asset_class": "cn_sector"},
+    {"code": "512200.SH", "tx": "sh512200", "name": "房地产ETF", "asset_class": "cn_sector"},
+    # D. 大消费、医药与农林（6 只）
+    {"code": "512690.SH", "tx": "sh512690", "name": "酒ETF", "asset_class": "cn_sector"},
+    {"code": "159928.SZ", "tx": "sz159928", "name": "消费ETF", "asset_class": "cn_sector"},
+    {"code": "512010.SH", "tx": "sh512010", "name": "医药ETF", "asset_class": "cn_sector"},
+    {"code": "159992.SZ", "tx": "sz159992", "name": "创新药ETF", "asset_class": "cn_sector"},
+    {"code": "512170.SH", "tx": "sh512170", "name": "医疗ETF", "asset_class": "cn_sector"},
+    {"code": "159865.SZ", "tx": "sz159865", "name": "养殖ETF", "asset_class": "cn_sector"},
+    # E. 扩展商品与全球跨境资产（4 只）
+    {"code": "159985.SZ", "tx": "sz159985", "name": "豆粕ETF", "asset_class": "commodity_ext"},
+    {"code": "159980.SZ", "tx": "sz159980", "name": "有色期货ETF", "asset_class": "commodity_ext"},
+    {"code": "513520.SH", "tx": "sh513520", "name": "日经ETF", "asset_class": "overseas_ext"},
+    {"code": "513030.SH", "tx": "sh513030", "name": "德国ETF", "asset_class": "overseas_ext"},
+]
+
+ALL_SYNC_ETFS: list[dict[str, str]] = CROSS_ASSET_ETFS + SECTOR_AND_EXTENDED_ETFS
+
 
 def _ch_exec(sql: str, body: bytes | None = None) -> str:
     host = (os.environ.get("AISTOCK_CLICKHOUSE_HOST") or "127.0.0.1").strip()
@@ -82,7 +125,7 @@ def ensure_etf_table() -> None:
     _ch_exec(ddl)
 
 
-def sync_all_etfs() -> dict[str, Any]:
+def sync_all_etfs(*, include_sectors: bool = True) -> dict[str, Any]:
     ensure_etf_table()
     now_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
     end_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
@@ -93,8 +136,9 @@ def sync_all_etfs() -> dict[str, Any]:
 
     summary: list[dict[str, Any]] = []
     all_lines: list[str] = []
+    target_list = ALL_SYNC_ETFS if include_sectors else CROSS_ASSET_ETFS
 
-    for item in CROSS_ASSET_ETFS:
+    for item in target_list:
         by_date: dict[str, list[Any]] = {}
         for s, e in segments:
             rows = _fetch_tx_qfq_range(item["tx"], s, e)
