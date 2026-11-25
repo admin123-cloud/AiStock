@@ -37,7 +37,10 @@ services:
       AISTOCK_ARTIFACTS_ROOT: /aistock/artifacts
       AISTOCK_LOGS_ROOT: /aistock/logs
       AISTOCK_TDX_GATEWAY_URL: http://host.docker.internal:8765
+      TDX_BASE: /d/TDX
+      AISTOCK_TDX_VIPDOC_ROOT: /d/TDX/vipdoc
     volumes:
+      - D:/TDX:/d/TDX:ro
       - F:/Aistock/code/config/settings.docker-app.yaml:/app/config/settings.local.yaml:ro
       # 只读观察栈隔离数据根
       - F:/Aistock/runtime/local_observation_preview/data:/aistock/data
