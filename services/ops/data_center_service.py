@@ -291,7 +291,13 @@ def _compute_data_overview() -> dict[str, Any]:
         min_t, max_t = None, None
         if rows_cnt > 0:
             try:
-                r = _query(f"SELECT toString(min({time_col})), toString(max({time_col})) FROM stock.{tbl}")
+                if tbl == "stocks" and time_col == "updated_at":
+                    r = _query(
+                        "SELECT toString(minIf(updated_at, updated_at > toDateTime('2000-01-01 00:00:00'))), "
+                        "toString(max(updated_at)) FROM stock.stocks FINAL"
+                    )
+                else:
+                    r = _query(f"SELECT toString(min({time_col})), toString(max({time_col})) FROM stock.{tbl}")
                 if r:
                     min_t, max_t = str(r[0][0]), str(r[0][1])
             except Exception as exc:

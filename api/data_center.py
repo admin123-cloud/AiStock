@@ -33,3 +33,11 @@ def api_kline_inspect(
     days: int = Query(10, ge=5, le=30),
 ) -> dict[str, Any]:
     return inspect_kline(raw_code=code, days=days)
+
+
+@router.post("/sync-stocks")
+def api_sync_stocks_reference(dry_run: bool = Query(False)) -> dict[str, Any]:
+    """Scoped-write：安全增量同步证券主数据（新股、pending转正、名称/ST变更、双证据退市）。"""
+    from scripts.sync_stocks_reference import sync_stocks_reference
+
+    return sync_stocks_reference(dry_run=dry_run)

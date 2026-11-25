@@ -527,6 +527,111 @@ def _sync_publication_result(
         log.warning("[publication] 同步盘后发布结果失败: %s", exc)
 
 
+def _run_tdx_sector_sync_once(log: Optional[logging.Logger] = None) -> bool:
+    """执行一次通达信标准板块主档/成分股/近10日日线增量同步。"""
+    lg = log or logger
+    cmd = [sys.executable, "-m", "pipelines.jobs.tdx_sector_sync", "--formal-write", "--recent-days", "10"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if proc.returncode == 0:
+            lg.info("[tdx_sector_sync] 盘后板块增量同步完成")
+            return True
+        lg.warning("[tdx_sector_sync] 同步失败 rc=%s stderr=%s", proc.returncode, (proc.stderr or "")[-300:])
+        return False
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[tdx_sector_sync] 执行异常: %s", exc)
+        return False
+
+
+def _run_ar46_postclose_sync_once(log: Optional[logging.Logger] = None) -> None:
+    """执行一次 AR4.6 盘后维护：46只全天候及行业ETF + 国家队份额 + 南向资金 + ERP + 明日调仓预案。"""
+    import urllib.request as _urlreq
+
+    lg = log or logger
+    now_bj = cn_now()
+    opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
+    base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
+
+    def _post(path: str, payload: dict | None = None, timeout: int = 180) -> dict:
+        data = json.dumps(payload or {}).encode("utf-8")
+        req = _urlreq.Request(
+            f"{base}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with opener.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _get(path: str, timeout: int = 90) -> dict:
+        req = _urlreq.Request(f"{base}{path}", method="GET")
+        with opener.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    is_fri = now_bj.weekday() == 4
+    try:
+        ar3_res = _post(f"/api/g3/mining/ar3/sync?sync_etf=true&sync_financials={'true' if is_fri else 'false'}", timeout=240)
+        lg.info("[ar45_postclose_sync] 46只全天候及行业ETF同步完成 (fri_fin=%s): status=%s", is_fri, ar3_res.get("status"))
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[ar45_postclose_sync] AR3 46只ETF同步异常（继续AR4同步）: %s", exc)
+
+    try:
+        ar4_res = _post("/api/g3/mining/ar4/sync", timeout=180)
+        sb = (ar4_res.get("sync") or {}).get("southbound") or {}
+        lg.info(
+            "[ar45_postclose_sync] 国家队份额+南向资金+ERP同步完成: status=%s sb20d=%s",
+            ar4_res.get("status"), sb.get("sb_net_20d_yi"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[ar45_postclose_sync] AR4 国家队/南向/ERP同步异常: %s", exc)
+
+    try:
+        stk_res = _post("/api/data-center/sync-stocks", timeout=120)
+        lg.info(
+            "[ar45_postclose_sync] 证券主数据 stock.stocks 增量同步完成: added=%s promoted=%s renamed_or_st=%s delisted=%s",
+            stk_res.get("added_count"), stk_res.get("promoted_count"),
+            stk_res.get("renamed_or_st_count"), stk_res.get("delisted_count"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[ar45_postclose_sync] 证券主数据 stock.stocks 同步异常: %s", exc)
+
+    try:
+        plan = _get("/api/g3/mining/ar3/rebalance-plan?account_id=acct1&smooth_step=true&persist=true", timeout=90)
+        _post("/api/g3/premarket-brief/generate", payload={"push_wechat": False}, timeout=90)
+        lg.info(
+            "[ar45_postclose_sync] 明日AR4.6调仓预案与简报缓存已刷新: regime=%s sells=%d buys=%d",
+            plan.get("regime"), len(plan.get("sell_orders") or []), len(plan.get("buy_orders") or []),
+        )
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[ar45_postclose_sync] 调仓预案/简报缓存刷新异常: %s", exc)
+
+
+def _run_postclose_downstream_hooks(resolved_date: date, log: Optional[logging.Logger] = None) -> None:
+    """盘后三管道认证成功后自动联动下游维护：板块同步 → 涨停生态终算 → 46只ETF/国家队/ERP同步。"""
+    lg = log or logger
+    lg.info("[postclose_cascade] 开始联动触发盘后下游维护任务（date=%s）", resolved_date.isoformat())
+
+    # 1. 通达信标准板块增量同步（依赖当日 .day 文件与 kline_daily）
+    _run_tdx_sector_sync_once(lg)
+
+    # 2. 涨停生态与连板梯队终算（依赖 CERTIFIED kline_daily）
+    mood_cmd = [
+        sys.executable, "-m", "pipelines.jobs.market_mood_update",
+        "--finalize", "--date", resolved_date.isoformat(), "--require-certified",
+    ]
+    try:
+        proc = subprocess.run(mood_cmd, capture_output=True, text=True, timeout=300)
+        if proc.returncode == 0:
+            lg.info("[postclose_cascade] market_mood 终算完成 rc=0")
+        else:
+            lg.warning("[postclose_cascade] market_mood 终算失败 rc=%s stderr=%s", proc.returncode, (proc.stderr or "")[-300:])
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[postclose_cascade] market_mood 终算异常: %s", exc)
+
+    # 3. AR4.6 46只ETF + 国家队持仓份额 + 南向资金 + 沪深300 ERP + 明日预案同步
+    _run_ar46_postclose_sync_once(lg)
+
+
 def run_postclose_pipelines(
     *,
     run_date: Optional[date] = None,
@@ -539,6 +644,7 @@ def run_postclose_pipelines(
     sleep_fn: Optional[Callable[[float], None]] = None,
     logger_: Optional[logging.Logger] = None,
     publication_store: Optional[Any] = None,
+    post_success_hooks: Optional[Sequence[Callable[[date], Any]]] = None,
 ) -> dict:
     """盘后三管道编排。返回汇总报告 dict（同时原子写入报告文件）。
 
@@ -708,6 +814,14 @@ def run_postclose_pipelines(
     )
     if status == "success":
         log.info("盘后管道完成：status=success stages=%s", list(stage_results))
+        if post_success_hooks is not None:
+            for hook in post_success_hooks:
+                try:
+                    hook(resolved_date)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("[postclose_cascade] 后置联动 hook 异常: %s", exc)
+        elif runner is None:
+            _run_postclose_downstream_hooks(resolved_date, log)
     else:
         log.error(
             "盘后管道失败：failed_stage=%s alarm=%s reason=%s", failed_stage, alarm, reason
@@ -2023,7 +2137,7 @@ def serve(
         MARKET_MOOD_FINALIZE_WINDOW_END.strftime("%H:%M"),
         mood_next.isoformat() if mood_next else "pending",
     )
-    # 每日盘后 16:45 增量同步通达信标准板块主档、成分股与近 10 日板块指数日线
+    # 每日盘后 16:45 增量同步通达信标准板块主档、成分股与近 10 日板块指数日线（兜底，主管道完成后也会自动联动）
     def _run_tdx_sector_sync_job() -> None:
         now_bj = cn_now()
         try:
@@ -2032,15 +2146,7 @@ def serve(
         except Exception as exc:
             logger.warning("[tdx_sector_sync] 交易日判断失败: %s", exc)
             return
-        cmd = [sys.executable, "-m", "pipelines.jobs.tdx_sector_sync", "--formal-write", "--recent-days", "10"]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            if proc.returncode == 0:
-                logger.info("[tdx_sector_sync] 盘后板块增量同步完成")
-            else:
-                logger.warning("[tdx_sector_sync] 同步失败 rc=%s stderr=%s", proc.returncode, (proc.stderr or "")[-300:])
-        except Exception as exc:
-            logger.warning("[tdx_sector_sync] 执行异常: %s", exc)
+        _run_tdx_sector_sync_once(logger)
 
     from apscheduler.triggers.cron import CronTrigger as _TdxSectorCronTrigger
     scheduler.add_job(
@@ -2054,7 +2160,7 @@ def serve(
     )
     logger.info("调度注册：tdx_sector_sync cron=[day_of_week=%s 16:45 Asia/Shanghai]（通达信标准板块盘后同步）", CRON_DAY_OF_WEEK)
 
-    # 每日盘后 17:15 容器级 24/7 自动喂料 AR4.6：14只跨资产ETF + 上交所国家队份额 + 南向资金 + 沪深300 ERP + 明日调仓预案
+    # 每日盘后 17:15 容器级 24/7 自动喂料 AR4.6：46只全天候及行业ETF + 上交所国家队份额 + 南向资金 + 沪深300 ERP + 明日调仓预案
     def _run_ar45_postclose_sync_job() -> None:
         now_bj = cn_now()
         try:
@@ -2063,66 +2169,19 @@ def serve(
         except Exception as exc:
             logger.warning("[ar45_postclose_sync] 交易日判断失败（fail-closed跳过）: %s", exc)
             return
-
-        import urllib.request as _urlreq
-
-        opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
-        base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
-
-        def _post(path: str, payload: dict | None = None, timeout: int = 180) -> dict:
-            data = json.dumps(payload or {}).encode("utf-8")
-            req = _urlreq.Request(
-                f"{base}{path}",
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with opener.open(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-
-        def _get(path: str, timeout: int = 90) -> dict:
-            req = _urlreq.Request(f"{base}{path}", method="GET")
-            with opener.open(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-
-        is_fri = now_bj.weekday() == 4
-        try:
-            ar3_res = _post(f"/api/g3/mining/ar3/sync?sync_etf=true&sync_financials={'true' if is_fri else 'false'}", timeout=240)
-            logger.info("[ar45_postclose_sync] 14只跨资产ETF同步完成 (fri_fin=%s): status=%s", is_fri, ar3_res.get("status"))
-        except Exception as exc:
-            logger.warning("[ar45_postclose_sync] AR3 ETF同步异常（继续AR4同步）: %s", exc)
-
-        try:
-            ar4_res = _post("/api/g3/mining/ar4/sync", timeout=180)
-            sb = (ar4_res.get("sync") or {}).get("southbound") or {}
-            logger.info(
-                "[ar45_postclose_sync] 国家队份额+南向资金+ERP同步完成: status=%s sb20d=%s",
-                ar4_res.get("status"), sb.get("sb_net_20d_yi"),
-            )
-        except Exception as exc:
-            logger.warning("[ar45_postclose_sync] AR4 国家队/南向/ERP同步异常: %s", exc)
-
-        try:
-            plan = _get("/api/g3/mining/ar3/rebalance-plan?account_id=acct1&smooth_step=true&persist=true", timeout=90)
-            _post("/api/g3/premarket-brief/generate", payload={"push_wechat": False}, timeout=90)
-            logger.info(
-                "[ar45_postclose_sync] 明日AR4.6调仓预案与简报缓存已刷新: regime=%s sells=%d buys=%d",
-                plan.get("regime"), len(plan.get("sell_orders") or []), len(plan.get("buy_orders") or []),
-            )
-        except Exception as exc:
-            logger.warning("[ar45_postclose_sync] 调仓预案/简报缓存刷新异常: %s", exc)
+        _run_ar46_postclose_sync_once(logger)
 
     from apscheduler.triggers.cron import CronTrigger as _Ar45SyncCronTrigger
     scheduler.add_job(
         _run_ar45_postclose_sync_job,
         trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=17, minute=15, timezone=BEIJING_TZ),
         id="ar45_postclose_sync",
-        name="AR4.6 跨资产ETF+国家队份额+南向资金+ERP盘后24/7自动喂料（工作日 17:15）",
+        name="AR4.6 46只ETF+国家队份额+南向资金+ERP盘后24/7自动喂料（工作日 17:15）",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
     )
-    logger.info("调度注册：ar45_postclose_sync cron=[day_of_week=%s 17:15 Asia/Shanghai]（AR4.6 跨资产ETF+国家队+南向+ERP盘后同步）", CRON_DAY_OF_WEEK)
+    logger.info("调度注册：ar45_postclose_sync cron=[day_of_week=%s 17:15 Asia/Shanghai]（AR4.6 46只ETF+国家队+南向+ERP盘后同步）", CRON_DAY_OF_WEEK)
 
     # 注册 acct1 AR4.6 专属盘前/盘中/盘后微信智能买卖提醒（对齐 acct2 同款体验，严格 AR4.6 策略驱动）
     def _run_acct1_ar45_advisor_job(mode: str) -> None:
