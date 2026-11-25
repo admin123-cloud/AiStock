@@ -37,20 +37,20 @@ export const routes: AppRoute[] = [
   page(
     '/system/tasks',
     'TaskCenter',
-    { title: '任务中心', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 1 },
+    { title: '任务中心', group: 'system', groupLabel: '系统与数据', groupOrder: 3, navOrder: 2 },
     () => import('@/views/operations/TaskCenter')
   ),
   page(
     '/data/health',
     'DataCenter',
-    { title: '数据健康与监控', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1, navLabel: '数据健康与监控' },
+    { title: '数据健康与监控', group: 'system', groupLabel: '系统与数据', groupOrder: 3, navOrder: 1, navLabel: '数据健康与监控' },
     () => import('@/views/operations/DataCenter')
   ),
   // 兼容旧书签 /kline-check -> 已合并进「数据健康与监控」单标的体检 Tab，侧边栏不再重复展示
   page(
     '/kline-check',
     'KlineCheck',
-    { title: '单标的 K 线体检', group: 'data', groupLabel: '数据', hiddenInNav: true, parentPath: '/data/health' },
+    { title: '单标的 K 线体检', group: 'system', groupLabel: '系统与数据', hiddenInNav: true, parentPath: '/data/health' },
     () => import('@/views/operations/KlineCheck')
   ),
   page(
@@ -154,13 +154,13 @@ export const routes: AppRoute[] = [
   page(
     '/data-stats',
     'DataStatsRedirect',
-    { title: '数据健康与监控', group: 'data', hiddenInNav: true },
+    { title: '数据健康与监控', group: 'system', groupLabel: '系统与数据', hiddenInNav: true },
     () => import('@/views/operations/DataCenter')
   ),
   page(
     '/system-config',
     'SystemConfig',
-    { title: '系统运行状态', group: 'system', groupLabel: '系统', groupOrder: 4, navOrder: 1, navLabel: '系统状态', icon: '⚙️' },
+    { title: '系统运行状态', group: 'system', groupLabel: '系统与数据', groupOrder: 3, navOrder: 3, navLabel: '系统状态', icon: '⚙️' },
     () => import('@/views/operations/SystemConfig')
   ),
   page(
