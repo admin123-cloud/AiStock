@@ -183,14 +183,20 @@ def _build_ar46_panic_30m_sleeve_map(
         return {}
     sc_sql = ",".join(f"'{c}'" for c in sorted(needed_codes))
     sd_sql = ",".join(f"'{d}'" for d in sorted(needed_dates))
+    d_min, d_max = min(needed_dates), max(needed_dates)
     bars_15 = _ch_query_df(
         f"""
         SELECT code, toString(datetime) AS dt_str, open, close
-        FROM stock.kline_minute_15 FINAL
-        WHERE code IN ({sc_sql}) AND toDate(datetime) IN ({sd_sql})
+        FROM stock.kline_minute_15
+        WHERE code IN ({sc_sql})
+          AND datetime >= '{d_min} 00:00:00'
+          AND datetime <= '{d_max} 23:59:59'
+          AND toDate(datetime) IN ({sd_sql})
         ORDER BY code, datetime
         """
     )
+    if not bars_15.empty:
+        bars_15 = bars_15.drop_duplicates(subset=["code", "dt_str"], keep="last")
     if bars_15.empty:
         return {}
     bars_15["d"] = bars_15["dt_str"].str.slice(0, 10)
