@@ -3,6 +3,7 @@ import request from '@/utils/request'
 export interface TableStat {
   table: string
   label: string
+  group?: 'market' | 'g3_strategy' | 'reference' | string
   rows: number
   size_mb: number
   min_time: string | null
@@ -17,6 +18,13 @@ export interface DataOverviewResponse {
     core_indices: number
     total_indices_in_catalog: number
     industry_sectors: number
+    core_etfs?: number
+    total_etfs?: number
+    national_team_etfs?: number
+    latest_etf_date?: string | null
+    latest_etf_share_date?: string | null
+    latest_macro_date?: string | null
+    latest_southbound_date?: string | null
     total_rows: number
     total_size_gb: number
   }
@@ -30,10 +38,13 @@ export interface HealthMatrixCell {
   coverage: number | null
   missing: number
   status: 'ok' | 'warn' | 'missing' | 'pending' | 'optional' | 'unknown'
+  missing_items?: string[]
 }
 
 export interface HealthMatrixDataset {
   id: string
+  group?: 'g3_strategy' | 'market' | string
+  group_label?: string
   label: string
   note: string
   cells: HealthMatrixCell[]
@@ -44,6 +55,7 @@ export interface HealthMatrixResponse {
   days: number
   dates: string[]
   core_indices: string[]
+  core_etfs?: string[]
   datasets: HealthMatrixDataset[]
 }
 
@@ -62,10 +74,11 @@ export interface KlineInspectPeriod {
 export interface KlineInspectDayRow {
   date: string
   daily: number
-  '5m': number
-  '15m': number
-  '30m': number
-  '60m': number
+  '5m'?: number
+  '15m'?: number
+  '30m'?: number
+  '60m'?: number
+  share?: number | null
   all_ok: boolean
 }
 
@@ -74,6 +87,8 @@ export interface KlineInspectResponse {
   code: string
   name: string
   type: string
+  is_etf?: boolean
+  has_share?: boolean
   days: number
   periods: KlineInspectPeriod[]
   daily_rows: KlineInspectDayRow[]

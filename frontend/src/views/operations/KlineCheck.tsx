@@ -5,17 +5,33 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Card, PageHeader, SectionTitle, StatCard } from '@/components/ui'
 import { inspectKline, type KlineInspectResponse } from '@/api/dataCenter'
 
-const QUICK_CODES = [
+const QUICK_ETF_CODES = [
+  { code: '510880.SH', label: '红利ETF' },
+  { code: '512890.SH', label: '红利低波' },
+  { code: '511260.SH', label: '十年国债' },
+  { code: '511090.SH', label: '30年国债' },
+  { code: '518880.SH', label: '黄金ETF' },
+  { code: '510300.SH', label: '沪深300ETF' },
+  { code: '513100.SH', label: '纳指ETF' },
+  { code: '513180.SH', label: '恒生科技' },
+]
+
+const QUICK_EQUITY_CODES = [
   { code: '000001.SH', label: '上证指数' },
   { code: '399006.SZ', label: '创业板指' },
   { code: '002015.SZ', label: '协鑫能科' },
   { code: '603881.SH', label: '数据港' },
-  { code: '300054.SZ', label: '鼎龙股份' },
   { code: '600519.SH', label: '贵州茅台' },
 ]
 
-export default function KlineCheck() {
-  const [inputCode, setInputCode] = useState('002015.SZ')
+interface KlineCheckProps {
+  embedded?: boolean
+  initialCode?: string
+}
+
+export default function KlineCheck({ embedded = false, initialCode }: KlineCheckProps) {
+  const defaultCode = (initialCode || '510880.SH').trim()
+  const [inputCode, setInputCode] = useState(defaultCode)
   const [days, setDays] = useState(10)
   const [data, setData] = useState<KlineInspectResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -37,16 +53,24 @@ export default function KlineCheck() {
     }
   }, [inputCode, days])
 
-  useEffect(() => { void runInspect('002015.SZ') }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const target = (initialCode || '510880.SH').trim()
+    setInputCode(target)
+    void runInspect(target)
+  }, [initialCode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const allComplete = data?.periods?.length ? data.periods.every((p) => p.complete) : false
+  const isEtf = Boolean(data?.is_etf)
+  const hasShare = Boolean(data?.has_share)
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:p-6">
-      <PageHeader
-        title="K线完整性体检"
-        subtitle="直连 ClickHouse 全周期（日线 / 5m / 15m / 30m / 60m）逐日标准槽位校验（48 / 16 / 8 / 4 根）"
-      />
+    <div className={embedded ? 'flex w-full flex-col gap-5' : 'mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:p-6'}>
+      {!embedded && (
+        <PageHeader
+          title="单标的 K 线完整性体检"
+          subtitle="支持股票/核心指数全周期（日线/5m/15m/30m/60m）及宽基/红利/国债/黄金/跨境 ETF 日线与国家队份额逐日核验"
+        />
+      )}
 
       {error && (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-200">
@@ -62,8 +86,8 @@ export default function KlineCheck() {
             value={inputCode}
             onChange={(e) => setInputCode(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void runInspect() }}
-            placeholder="输入 6 位代码如 002015 或 000001.SH"
-            className="w-60 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-mono text-sm text-white placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+            placeholder="输入 6 位代码如 510880、511260、002015 或 000001.SH"
+            className="w-72 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-mono text-sm text-white placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
           />
           <select
             value={days}
@@ -80,8 +104,22 @@ export default function KlineCheck() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-zinc-400">快捷抽检：</span>
-          {QUICK_CODES.map((q) => (
+          <span className="text-blue-400 font-medium">实战 ETF 抽检：</span>
+          {QUICK_ETF_CODES.map((q) => (
+            <button
+              key={q.code}
+              type="button"
+              onClick={() => { setInputCode(q.code); void runInspect(q.code) }}
+              className="rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-zinc-100 hover:border-blue-400/70 hover:bg-blue-500/20"
+            >
+              {q.label} <span className="font-mono text-zinc-400">{q.code}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-zinc-400">股票 / 指数抽检：</span>
+          {QUICK_EQUITY_CODES.map((q) => (
             <button
               key={q.code}
               type="button"
@@ -113,20 +151,36 @@ export default function KlineCheck() {
               value={(data.periods.find((p) => p.period === 'daily')?.total_bars ?? 0).toLocaleString()}
               hint={data.periods.find((p) => p.period === 'daily')?.max_time || '—'}
             />
-            <StatCard
-              label="5m 总根数"
-              value={(data.periods.find((p) => p.period === '5m')?.total_bars ?? 0).toLocaleString()}
-              hint={data.periods.find((p) => p.period === '5m')?.max_time || '—'}
-            />
+            {isEtf ? (
+              <StatCard
+                label={hasShare ? '国家队份额记录' : '数据表来源'}
+                value={
+                  hasShare
+                    ? (data.periods.find((p) => p.period === 'share')?.total_bars ?? 0).toLocaleString()
+                    : 'etf_kline_daily'
+                }
+                hint={
+                  hasShare
+                    ? data.periods.find((p) => p.period === 'share')?.max_time || '—'
+                    : '跨资产前复权日线'
+                }
+              />
+            ) : (
+              <StatCard
+                label="5m 总根数"
+                value={(data.periods.find((p) => p.period === '5m')?.total_bars ?? 0).toLocaleString()}
+                hint={data.periods.find((p) => p.period === '5m')?.max_time || '—'}
+              />
+            )}
           </div>
 
-          {/* 5周期汇总 */}
+          {/* 周期汇总 */}
           <Card>
-            <SectionTitle title="全周期历史覆盖与近 N 日达标率" />
+            <SectionTitle title="历史覆盖与近 N 日达标率" />
             <Table dense>
               <TableHead>
                 <TableRow>
-                  <TableHeader>周期</TableHeader>
+                  <TableHeader>周期 / 数据表</TableHeader>
                   <TableHeader className="text-right">每日标准槽</TableHeader>
                   <TableHeader className="text-right">历史总根数</TableHeader>
                   <TableHeader>最早记录</TableHeader>
@@ -165,10 +219,16 @@ export default function KlineCheck() {
                 <TableRow>
                   <TableHeader>交易日</TableHeader>
                   <TableHeader className="text-right">日线 (应1)</TableHeader>
-                  <TableHeader className="text-right">5m (应48)</TableHeader>
-                  <TableHeader className="text-right">15m (应16)</TableHeader>
-                  <TableHeader className="text-right">30m (应8)</TableHeader>
-                  <TableHeader className="text-right">60m (应4)</TableHeader>
+                  {isEtf ? (
+                    hasShare && <TableHeader className="text-right">国家队份额 (T+1 应1)</TableHeader>
+                  ) : (
+                    <>
+                      <TableHeader className="text-right">5m (应48)</TableHeader>
+                      <TableHeader className="text-right">15m (应16)</TableHeader>
+                      <TableHeader className="text-right">30m (应8)</TableHeader>
+                      <TableHeader className="text-right">60m (应4)</TableHeader>
+                    </>
+                  )}
                   <TableHeader>当日状态</TableHeader>
                 </TableRow>
               </TableHead>
@@ -177,10 +237,20 @@ export default function KlineCheck() {
                   <TableRow key={r.date}>
                     <TableCell className="font-mono text-zinc-100">{r.date}</TableCell>
                     <TableCell className="text-right font-mono text-zinc-200">{r.daily}</TableCell>
-                    <TableCell className="text-right font-mono text-zinc-200">{r['5m']}</TableCell>
-                    <TableCell className="text-right font-mono text-zinc-200">{r['15m']}</TableCell>
-                    <TableCell className="text-right font-mono text-zinc-200">{r['30m']}</TableCell>
-                    <TableCell className="text-right font-mono text-zinc-200">{r['60m']}</TableCell>
+                    {isEtf ? (
+                      hasShare && (
+                        <TableCell className="text-right font-mono text-zinc-200">
+                          {r.share ?? '—'}
+                        </TableCell>
+                      )
+                    ) : (
+                      <>
+                        <TableCell className="text-right font-mono text-zinc-200">{r['5m'] ?? 0}</TableCell>
+                        <TableCell className="text-right font-mono text-zinc-200">{r['15m'] ?? 0}</TableCell>
+                        <TableCell className="text-right font-mono text-zinc-200">{r['30m'] ?? 0}</TableCell>
+                        <TableCell className="text-right font-mono text-zinc-200">{r['60m'] ?? 0}</TableCell>
+                      </>
+                    )}
                     <TableCell>
                       <Badge color={r.all_ok ? 'emerald' : 'red'}>
                         {r.all_ok ? '闭合' : '缺槽'}

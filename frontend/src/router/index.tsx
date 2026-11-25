@@ -46,10 +46,11 @@ export const routes: AppRoute[] = [
     { title: '数据健康与监控', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 1, navLabel: '数据健康与监控' },
     () => import('@/views/operations/DataCenter')
   ),
+  // 兼容旧书签 /kline-check -> 已合并进「数据健康与监控」单标的体检 Tab，侧边栏不再重复展示
   page(
     '/kline-check',
     'KlineCheck',
-    { title: 'K线完整性检查', group: 'data', groupLabel: '数据', groupOrder: 3, navOrder: 2, navLabel: 'K线完整性', icon: '✓' },
+    { title: '单标的 K 线体检', group: 'data', groupLabel: '数据', hiddenInNav: true, parentPath: '/data/health' },
     () => import('@/views/operations/KlineCheck')
   ),
   page(

@@ -377,6 +377,8 @@ def post_ar4_macro_sync() -> dict[str, Any]:
         sync_res = sync_all()
         invalidate_ar4_macro_cache()
         invalidate_ar3_radar_cache()
+        from services.ops.data_center_service import invalidate_data_center_cache
+        invalidate_data_center_cache()
         snap = get_ar4_macro_snapshot(force_refresh=True)
         return {"status": "ok", "sync": sync_res, "latest": snap}
     except Exception as exc:
@@ -404,6 +406,8 @@ def post_ar3_sync_data(sync_etf: bool = True, sync_financials: bool = False) -> 
         raise HTTPException(status_code=500, detail=f"同步 AR3 独立数据失败: {exc}") from exc
 
     invalidate_ar3_radar_cache()
+    from services.ops.data_center_service import invalidate_data_center_cache
+    invalidate_data_center_cache()
     gate, panic = _resolve_live_gate_and_panic()
     radar = build_ar3_dual_core_radar(market_gate=gate, panic_signal=panic, force_refresh=True)
     return {"status": "ok", "sync": summary, "radar": radar}
