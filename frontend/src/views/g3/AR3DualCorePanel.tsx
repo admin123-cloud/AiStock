@@ -699,14 +699,50 @@ export default function AR3DualCorePanel({
                         <TableHeader>标的 & 行业</TableHeader>
                         <TableHeader>现价 / 当日 / 20日</TableHeader>
                         <TableHeader>公告日 & 业绩</TableHeader>
+                        <TableHeader>排雷情况</TableHeader>
                         <TableHeader>均额 / MA10乖离</TableHeader>
                         <TableHeader>硬止损(-10%)</TableHeader>
                         {onAddWatchlist && <TableHeader>操作</TableHeader>}
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {activeRows.map((row) => (
-                        <TableRow key={`${stockTab}-${row.ts_code}`}>
+                      {activeRows.map((row) => {
+                        const light = String(row.ai_risk_light || 'unknown').toLowerCase()
+                        const isBlocked = Boolean(row.ai_hard_blocked) || light === 'red'
+                        const isYellow = !isBlocked && light === 'yellow'
+                        const isGreen = !isBlocked && light === 'green'
+                        const screenLabel = isBlocked
+                          ? light === 'yellow'
+                            ? '🔴 黄灯禁买'
+                            : '🔴 红灯禁买'
+                          : isYellow
+                            ? '🟡 黄灯慎买'
+                            : isGreen
+                              ? '🟢 绿灯通过'
+                              : '⚪ 待排雷'
+                        const screenColor: 'red' | 'amber' | 'emerald' | 'zinc' = isBlocked
+                          ? 'red'
+                          : isYellow
+                            ? 'amber'
+                            : isGreen
+                              ? 'emerald'
+                              : 'zinc'
+                        const screenNote = isBlocked
+                          ? row.ai_block_reason || row.ai_risk_flags?.[0] || row.ai_thesis || 'AI排雷严格版一票否决'
+                          : isYellow
+                            ? row.ai_risk_flags?.[0] || row.ai_thesis || '存在提示项，降权排在绿灯之后'
+                            : isGreen
+                              ? row.ai_thesis || '基本面与公告无明显雷点'
+                              : '尚未覆盖深度排雷，买前请核对公告'
+                        const screenTooltip = [
+                          row.ai_block_reason,
+                          ...(row.ai_risk_flags || []),
+                          row.ai_thesis,
+                        ]
+                          .filter(Boolean)
+                          .join('\n')
+                        return (
+                        <TableRow key={`${stockTab}-${row.ts_code}`} className={isBlocked ? 'bg-red-950/15' : undefined}>
                           <TableCell className="whitespace-nowrap">
                             <div className="flex items-center gap-1.5">
                               {row.ai_hard_blocked ? (
@@ -731,12 +767,6 @@ export default function AR3DualCorePanel({
                               >
                                 {row.source_label}
                               </Badge>
-                              {!row.ai_hard_blocked && row.ai_risk_light === 'green' && (
-                                <Badge color="emerald">绿灯</Badge>
-                              )}
-                              {!row.ai_hard_blocked && row.ai_risk_light === 'yellow' && (
-                                <Badge color="amber">黄灯降权</Badge>
-                              )}
                             </div>
                           </TableCell>
                           <TableCell className="whitespace-nowrap">
@@ -764,6 +794,29 @@ export default function AR3DualCorePanel({
                               公告日 {row.notice_date}（报告期 {row.report_date}）
                             </div>
                           </TableCell>
+                          <TableCell className="max-w-xs whitespace-normal" title={screenTooltip || screenNote}>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Badge color={screenColor}>{screenLabel}</Badge>
+                              {row.ai_catalyst_score != null && (
+                                <span className="font-mono text-xs text-zinc-300">
+                                  催化 {row.ai_catalyst_score}/5
+                                </span>
+                              )}
+                            </div>
+                            <div
+                              className={`mt-1 line-clamp-2 text-xs leading-snug ${
+                                isBlocked
+                                  ? 'text-red-300'
+                                  : isYellow
+                                    ? 'text-amber-200'
+                                    : isGreen
+                                      ? 'text-zinc-300'
+                                      : 'text-zinc-400'
+                              }`}
+                            >
+                              {screenNote}
+                            </div>
+                          </TableCell>
                           <TableCell className="whitespace-nowrap font-mono text-sm text-zinc-300">
                             <div>{row.amt_20d_yi.toFixed(1)}亿/日</div>
                             <div className="text-xs text-zinc-400">
@@ -781,7 +834,8 @@ export default function AR3DualCorePanel({
                             </TableCell>
                           )}
                         </TableRow>
-                      ))}
+                        )
+                      })}
                     </TableBody>
                   </Table>
                 </div>

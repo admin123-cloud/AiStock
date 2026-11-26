@@ -962,39 +962,40 @@ def run_acct1_advisor(
             trade_date=trade_date,
             base_dir=base_dir,
         )
-        # 若 Antigravity 在线监听处于活跃状态，异步派发一条 intraday_broadcast 给 AI Bus 生成深度盘面总结（绝不推微信、不阻塞）
-        try:
-            from services.g3.ai_bus import is_session_online, submit_ai_job
+        # 若 Antigravity 在线监听处于活跃状态，异步派发一条 intraday_broadcast 给 AI Bus 生成深度盘面总结（绝不推微信、不阻塞；隔离单测传入 base_dir 时不污染生产 AI Bus）
+        if base_dir is None:
+            try:
+                from services.g3.ai_bus import is_session_online, submit_ai_job
 
-            ai_online, _ = is_session_online()
-            if ai_online:
-                ai_prompt = (
-                    f"【10分钟定时盘面播报（仅展示在 /g3/ai-live，禁止推微信）】"
-                    f"请基于 {now_str} 实时数据（大盘：{plan['regime_label']}，宽度：{b_txt}，"
-                    f"AR4.6目标：{'+'.join(etf_targets) or '现金防守'}，"
-                    f"acct1可用现金 ¥{float(acct['available_cash']):,.0f}，本轮待执行单：{len(executable_orders)} 笔），"
-                    "给出 1 句核心盘面定调（写进 summary）+ 3~4 条简明盘面/资金/纪律要点（写进 answer）。"
-                )
-                job_res = submit_ai_job(
-                    kind="intraday_broadcast",
-                    prompt=ai_prompt,
-                    context={
-                        "ts": now_str,
-                        "regime": plan["regime"],
-                        "regime_label": plan["regime_label"],
-                        "breadth_pct": breadth_pct,
-                        "etf_targets": etf_targets,
-                        "executable_orders": executable_orders,
-                        "available_cash": acct["available_cash"],
-                        "total_assets": acct["total_assets"],
-                        "no_wechat": True,
-                    },
-                    source="intraday_10m_cron",
-                    wait_timeout_sec=0.0,
-                )
-                ai_broadcast_job_id = job_res.get("job_id")
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("[acct1_advisor] 派发 AI 盘面播报跳过: %s", exc)
+                ai_online, _ = is_session_online()
+                if ai_online:
+                    ai_prompt = (
+                        f"【10分钟定时盘面播报（仅展示在 /g3/ai-live，禁止推微信）】"
+                        f"请基于 {now_str} 实时数据（大盘：{plan['regime_label']}，宽度：{b_txt}，"
+                        f"AR4.6目标：{'+'.join(etf_targets) or '现金防守'}，"
+                        f"acct1可用现金 ¥{float(acct['available_cash']):,.0f}，本轮待执行单：{len(executable_orders)} 笔），"
+                        "给出 1 句核心盘面定调（写进 summary）+ 3~4 条简明盘面/资金/纪律要点（写进 answer）。"
+                    )
+                    job_res = submit_ai_job(
+                        kind="intraday_broadcast",
+                        prompt=ai_prompt,
+                        context={
+                            "ts": now_str,
+                            "regime": plan["regime"],
+                            "regime_label": plan["regime_label"],
+                            "breadth_pct": breadth_pct,
+                            "etf_targets": etf_targets,
+                            "executable_orders": executable_orders,
+                            "available_cash": acct["available_cash"],
+                            "total_assets": acct["total_assets"],
+                            "no_wechat": True,
+                        },
+                        source="intraday_10m_cron",
+                        wait_timeout_sec=0.0,
+                    )
+                    ai_broadcast_job_id = job_res.get("job_id")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[acct1_advisor] 派发 AI 盘面播报跳过: %s", exc)
 
     if not dry_run and pushed:
         state["date"] = trade_date
