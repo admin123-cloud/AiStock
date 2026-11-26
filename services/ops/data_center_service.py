@@ -52,11 +52,12 @@ CORE_INDEX_NAMES: dict[str, str] = {
     "899050.BJ": "北证50",
 }
 
-# G3 实战（AR4.5 / AR4.6）核心跨资产 ETF 类别（宽基 / 红利 / 黄金 / 跨境 / 利率债）
+# G3 实战（AR4.5 / AR4.6）核心跨资产 ETF 类别（宽基 / 红利 / 黄金 / 豆粕商品 / 跨境 / 利率债）
 CORE_CROSS_ASSET_CLASSES: tuple[str, ...] = (
     "cn_broad",
     "cn_dividend",
     "gold",
+    "commodity",
     "overseas",
     "bond",
 )
@@ -65,14 +66,15 @@ ETF_ASSET_CLASS_LABELS: dict[str, str] = {
     "cn_broad": "A股宽基",
     "cn_dividend": "A股红利",
     "gold": "黄金避险",
+    "commodity": "商品期货",
     "overseas": "跨境QDII",
     "bond": "利率债",
     "cn_sector": "行业主题",
-    "commodity_ext": "商品期货",
+    "commodity_ext": "商品扩展",
     "overseas_ext": "全球跨境",
 }
 
-# G3 实战核心跨资产 14 只 ETF 清单（与 scripts/sync_cross_asset_etf_daily.py 对齐）
+# G3 实战核心跨资产 15 只 ETF 清单（与 scripts/sync_cross_asset_etf_daily.py 对齐）
 CORE_CROSS_ASSET_ETFS: dict[str, str] = {
     "510300.SH": "沪深300ETF",
     "510500.SH": "中证500ETF",
@@ -82,6 +84,7 @@ CORE_CROSS_ASSET_ETFS: dict[str, str] = {
     "512890.SH": "红利低波ETF",
     "510880.SH": "红利ETF",
     "518880.SH": "黄金ETF",
+    "159985.SZ": "豆粕ETF",
     "513100.SH": "纳指ETF",
     "513500.SH": "标普500ETF",
     "513180.SH": "恒生科技ETF",
@@ -669,7 +672,7 @@ def _compute_health_matrix(days: int = 10) -> dict[str, Any]:
             "group": "g3_strategy",
             "group_label": "G3 实战策略数据（宽基 / 国债 / 宏观 / 南向）",
             "label": f"全量 ETF 日线池 ({etf_all_n}只)",
-            "note": "含 14 只核心跨资产 + 28 只行业主题 + 2 只商品期货 + 10 只全球跨境 ETF（≥98% 视为完整）",
+            "note": "含 15 只核心跨资产 + 30 只行业主题 + 3 只商品扩展 + 13 只全球跨境 ETF（≥98% 视为完整）",
             "cells": _build_cells(
                 {d: len(s) for d, s in etf_all_sets.items()},
                 lambda _: etf_all_n,

@@ -29,8 +29,9 @@ CROSS_ASSET_ETFS: list[dict[str, str]] = [
     # 2. A 股高股息红利
     {"code": "512890.SH", "tx": "sh512890", "name": "红利低波ETF", "asset_class": "cn_dividend"},
     {"code": "510880.SH", "tx": "sh510880", "name": "红利ETF", "asset_class": "cn_dividend"},
-    # 3. 商品避险（黄金）
+    # 3. 商品避险（黄金 + 农产品期货，零 QDII 溢价）
     {"code": "518880.SH", "tx": "sh518880", "name": "黄金ETF", "asset_class": "gold"},
+    {"code": "159985.SZ", "tx": "sz159985", "name": "豆粕ETF", "asset_class": "commodity"},
     # 4. 跨境权益（美股 + 港股科技）
     {"code": "513100.SH", "tx": "sh513100", "name": "纳指ETF", "asset_class": "overseas"},
     {"code": "513500.SH", "tx": "sh513500", "name": "标普500ETF", "asset_class": "overseas"},
@@ -41,7 +42,7 @@ CROSS_ASSET_ETFS: list[dict[str, str]] = [
     {"code": "511090.SH", "tx": "sh511090", "name": "30年国债ETF", "asset_class": "bond"},
 ]
 
-# 扩展池：47 只主流 A 股行业/主题 ETF + 扩展商品与全球跨境 ETF（独立 asset_class 隔离，绝不污染现役 14 只核心跨资产池）
+# 扩展池：46 只主流 A 股行业/主题 ETF + 扩展商品与全球跨境 ETF（独立 asset_class 隔离，绝不污染现役 15 只核心跨资产池）
 SECTOR_AND_EXTENDED_ETFS: list[dict[str, str]] = [
     # A. 科技成长与硬科技（8 只）
     {"code": "512480.SH", "tx": "sh512480", "name": "半导体ETF", "asset_class": "cn_sector"},
@@ -77,8 +78,7 @@ SECTOR_AND_EXTENDED_ETFS: list[dict[str, str]] = [
     {"code": "159992.SZ", "tx": "sz159992", "name": "创新药ETF", "asset_class": "cn_sector"},
     {"code": "512170.SH", "tx": "sh512170", "name": "医疗ETF", "asset_class": "cn_sector"},
     {"code": "159865.SZ", "tx": "sz159865", "name": "养殖ETF", "asset_class": "cn_sector"},
-    # E. 扩展商品与全球跨境资产（17 只，asset_class=commodity_ext/overseas_ext 严格隔离于线上核心池）
-    {"code": "159985.SZ", "tx": "sz159985", "name": "豆粕ETF", "asset_class": "commodity_ext"},
+    # E. 扩展商品与全球跨境资产（16 只，asset_class=commodity_ext/overseas_ext 严格隔离于线上核心池）
     {"code": "159980.SZ", "tx": "sz159980", "name": "有色期货ETF", "asset_class": "commodity_ext"},
     {"code": "159981.SZ", "tx": "sz159981", "name": "能源化工ETF", "asset_class": "commodity_ext"},
     {"code": "513350.SH", "tx": "sh513350", "name": "标普油气ETF", "asset_class": "commodity_ext"},

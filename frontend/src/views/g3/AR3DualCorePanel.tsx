@@ -114,7 +114,7 @@ export default function AR3DualCorePanel({
       const res = await syncG3AR3Data({ sync_etf: true, sync_financials: false })
       setRadar(res.radar)
       onRadarUpdated?.(res.radar)
-      setNotice('已完成 14 只跨资产 ETF 最新日线同步并刷新双核雷达。')
+      setNotice('已完成 15 只核心跨资产 ETF 最新日线同步并刷新双核雷达。')
     } catch (e) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
       setError(err.response?.data?.detail || err.message || '同步跨资产 ETF 数据失败')
@@ -191,7 +191,7 @@ export default function AR3DualCorePanel({
 
       {!radar && loading && (
         <div className="py-8 text-center text-xs text-zinc-400">
-          正在扫描 14 只跨资产 ETF 与全市场 PIT 基本面（F2A 趋势主升 + F3A 绩优回踩）双雷达…
+          正在扫描 15 只核心跨资产 ETF 与全市场 PIT 基本面（F2A 趋势主升 + F3A 绩优回踩）双雷达…
         </div>
       )}
 
@@ -370,7 +370,7 @@ export default function AR3DualCorePanel({
               </div>
               <div className="flex items-center gap-3 shrink-0">
                 <Link to="/g3/signals" className="font-semibold text-amber-300 hover:text-amber-200">
-                  展开 14 只 ETF 全景 & F2A/F3A 选股排雷 →
+                  展开 15 只 ETF 全景 & F2A/F3A 选股排雷 →
                 </Link>
                 <Link to="/g3/accounts" className="font-medium text-sky-300 hover:text-sky-200">
                   资金账号与底仓做T →
@@ -469,7 +469,7 @@ export default function AR3DualCorePanel({
                 onClick={() => setShowEtfUniverse((v) => !v)}
                 className="text-[11px] text-cyan-300 hover:text-cyan-200"
               >
-                {showEtfUniverse ? '收起 14 只ETF全景排行 ▲' : '展开 14 只跨资产ETF动量排行 ▼'}
+                {showEtfUniverse ? '收起 15 只ETF全景排行 ▲' : '展开 15 只跨资产ETF动量排行 ▼'}
               </button>
             </div>
 

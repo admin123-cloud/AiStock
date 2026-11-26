@@ -34,7 +34,7 @@ BJ_TZ = timezone(timedelta(hours=8))
 
 SAFE_BOND_CODE = "511260.SH"
 HK_TECH_ETF_CODES = frozenset({"513180.SH", "513050.SH"})
-CORE_CROSS_ASSET_CLASSES = ("cn_broad", "cn_dividend", "gold", "overseas", "bond")
+CORE_CROSS_ASSET_CLASSES = ("cn_broad", "cn_dividend", "gold", "commodity", "overseas", "bond")
 VALID_STOCK_MODES = ("ab_blend", "auto_lag_me20", "f2a_trend", "f3a_pullback")
 VALID_ETF_MODES = ("regime_focus", "risk_adj_mom")
 
@@ -42,7 +42,7 @@ STOCK_MODE_META: dict[str, dict[str, Any]] = {
     "ab_blend": {
         "label": "AB 混合（AR4.6 冠军主力）",
         "short_label": "AB 混合（AR4.6 收益王）",
-        "desc": "进攻期日收盘宽容死拿 F3A+F2A 真龙，冰点≤18%经30m确认半仓50%切入10万可执行AB真龙(B档-6%/+5%→-3.5%)；物理单账户实证 4 年 +308.0% · 年化 +43.5% · 回撤 19.1% · 卡玛 2.28 · 2026熊市OOS +11.3%（OOS回撤仅 10.7%）",
+        "desc": "进攻期日收盘宽容死拿 F3A+F2A 真龙，冰点≤18%经30m确认半仓50%切入10万可执行AB真龙(B档-6%/+5%→-3.5%)；核心15只跨资产ETF（含豆粕商品盾）物理单账户实证 4 年 +359.6% · 年化 +47.9% · 回撤 19.1% · 卡玛 2.52 · 2026熊市OOS +16.7%",
     },
     "auto_lag_me20": {
         "label": "AR4.6-L4 赚钱效应自动热切（低回撤版）",
@@ -78,6 +78,7 @@ ASSET_CLASS_LABELS: dict[str, str] = {
     "cn_broad": "A股宽基",
     "cn_dividend": "A股红利",
     "gold": "黄金避险",
+    "commodity": "商品期货",
     "overseas": "跨境QDII",
     "bond": "利率债",
 }

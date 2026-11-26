@@ -95,7 +95,7 @@ def run_premarket(push: bool) -> int:
 
 def run_postclose() -> int:
     _log("=== 启动盘后盈利闭环作业 (17:45 · 含 AR4.6 数据喂料与 Shadow 对账) ===")
-    # 1. 自动同步 AR3 独立表：每日刷新 14 只跨资产 ETF，每周五同步增量财报/业绩预告/除权分红
+    # 1. 自动同步 AR3 独立表：每日刷新 15 只核心跨资产 ETF（及全量扩展池），每周五同步增量财报/业绩预告/除权分红
     try:
         is_fri = datetime.now(BJ_TZ).weekday() == 4
         sync_q = f"/api/g3/mining/ar3/sync?sync_etf=true&sync_financials={'true' if is_fri else 'false'}"

@@ -73,8 +73,9 @@ def test_health_matrix_includes_g3_strategy_datasets_and_missing_items(monkeypat
 
     core_1124 = next(c for c in ds_map["etf_core_daily"]["cells"] if c["date"] == "2026-11-24")
     assert core_1124["status"] == "missing"
-    assert core_1124["actual"] == 12
-    assert core_1124["expected"] == 14
+    assert core_1124["actual"] == len(core_etfs) - 2
+    assert core_1124["expected"] == len(core_etfs)
+    assert len(core_etfs) == 15
     assert "510300.SH 沪深300ETF" in core_1124["missing_items"]
     assert "511260.SH 十年国债ETF" in core_1124["missing_items"]
 

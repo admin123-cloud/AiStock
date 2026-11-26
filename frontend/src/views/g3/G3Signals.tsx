@@ -164,7 +164,7 @@ export default function G3Signals() {
     <div className="flex w-full flex-col gap-4">
       <PageHeader
         title="AR4.6 选股与排雷雷达中心"
-        subtitle="14 只跨资产全天候 ETF 深度全景 × F2A/F3A 业绩双核选股队列 × AI 红黄绿灯排雷档案与前向胜率验真"
+        subtitle="15 只跨资产全天候 ETF 深度全景（含豆粕商品盾） × F2A/F3A 业绩双核选股队列 × AI 红黄绿灯排雷档案与前向胜率验真"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button outline onClick={() => navigate('/g3/desk')}>
@@ -189,7 +189,7 @@ export default function G3Signals() {
                 : 'text-zinc-400 hover:text-zinc-100'
             }`}
           >
-            📡 AR4.6 双核雷达（14只ETF + F2A/F3A）
+            📡 AR4.6 双核雷达（15只ETF + F2A/F3A）
           </button>
           <button
             type="button"

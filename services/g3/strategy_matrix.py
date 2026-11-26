@@ -320,7 +320,7 @@ def build_strategy_matrix(
             "action_route": "/g3/mainwave",
             "action_label": "查看 AR4.6 双雷达与排雷",
             "feedback_note": (
-                "AR4.6 物理单账户实证：4年 +308.0%、年化 +43.5%、回撤 19.1%、卡玛 2.28、OOS +11.3% / OOS回撤 10.7%。"
+                "AR4.6 核心15只ETF物理单账户实证：4年 +359.6%、年化 +47.9%、回撤 19.1%、卡玛 2.52、OOS +16.7% / OOS回撤 11.0%。"
                 + (
                     " 当前处于非进攻期，个股预算锁死 0%，严禁开新个股仓。"
                     if regime != "offensive"
@@ -331,7 +331,7 @@ def build_strategy_matrix(
         {
             "leg_id": "defense_etf",
             "name": "压舱核 · AR4.6 风险调整 Top2 逆波 ETF",
-            "role": "14只5大类场内ETF（A股宽基/红利/黄金/纳指标普/恒科/国债）+ 极端冰点企稳反抽",
+            "role": "15只6大类场内ETF（A股宽基/红利/黄金/豆粕商品/纳指标普/恒科/国债）+ 极端冰点企稳反抽",
             "target_pct": effective_alloc["defense_etf_pct"],
             "base_pct": base_alloc["defense_etf_pct"],
             "status": defense_status,

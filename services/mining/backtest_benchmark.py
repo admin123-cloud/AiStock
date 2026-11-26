@@ -863,7 +863,7 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             pack_series(
                 "ar3_v3_etf01_regime_focus",
                 "历史演进 · AR3 #01 纯跨资产 ETF（RegimeFocus_Top1+Panic）",
-                "100% 真实场内14只跨资产ETF纯轮动对照基准",
+                "100% 真实场内15只跨资产ETF纯轮动对照基准",
                 "legacy_combo",
                 ar3_etf01_nav,
                 ar3_etf01_meta,
@@ -1006,7 +1006,7 @@ def build_ar1_historical_backtest_report(*, force_rebuild: bool = False) -> dict
             "id": "price_adjustment_check",
             "title": "5. 真实分红送转除权除息结算（21,703 条全市场除权事件）",
             "status": "PASS",
-            "detail": "通过 stock.stock_dividend_events 在除权除息日开盘前按真实券商口径派息入账、送转增股并同步调整参考成本与峰值价；14 只跨资产 ETF 采用前复权日线，彻底消除除权假亏损。",
+            "detail": "通过 stock.stock_dividend_events 在除权除息日开盘前按真实券商口径派息入账、送转增股并同步调整参考成本与峰值价；15 只跨资产 ETF 采用前复权日线，彻底消除除权假亏损。",
         },
         {
             "id": "disclosed_limitations",

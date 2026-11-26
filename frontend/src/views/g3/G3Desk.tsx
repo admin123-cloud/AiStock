@@ -461,7 +461,7 @@ export default function G3Desk() {
       {/* 1.5 在线 AI 参谋（Antigravity 决策总线：文件队列唤醒当前会话深度研判） */}
       <G3AiBusPanel />
 
-      {/* 2. 绝对核心主视图：AR4.6 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，14只ETF与选股明细已迁至 /g3/signals） */}
+      {/* 2. 绝对核心主视图：AR4.6 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，15只ETF与选股明细已迁至 /g3/signals） */}
       <AR3DualCorePanel
         mode="desk_compact"
         externalRadar={radar}

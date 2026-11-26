@@ -30,7 +30,7 @@ ETF_ONE_WAY_COST = 0.0006  # 场内 ETF 单边佣金+滑点（免印花税，往
 SAFE_BOND_CODE = "511260.SH"
 
 
-CORE_CROSS_ASSET_CLASSES = ("cn_broad", "cn_dividend", "gold", "overseas", "bond")
+CORE_CROSS_ASSET_CLASSES = ("cn_broad", "cn_dividend", "gold", "commodity", "overseas", "bond")
 
 
 def _load_etf_panels(*, include_sectors: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str], dict[str, str]]:

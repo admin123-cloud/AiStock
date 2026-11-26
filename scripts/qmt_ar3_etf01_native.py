@@ -42,7 +42,7 @@ MAX_SINGLE_ORDER_YUAN = 50000.0    # 单笔委托金额上限（超过时自动拆单）
 REBALANCE_TIME_HHMM = 935          # 每日主调仓触发时间（09:35，避开集合竞价剧烈滑点）
 BUY_SLIPPAGE_PCT = 0.002           # 买入保护限价上浮 +0.2%
 SELL_SLIPPAGE_PCT = 0.002          # 卖出保护限价下浮 -0.2%
-ONLY_MANAGE_ETF_UNIVERSE = True    # 仅管理下方 14 只 AR3 ETF，绝不卖出账户中其他个股
+ONLY_MANAGE_ETF_UNIVERSE = True    # 仅管理下方 15 只 AR4.6 核心跨资产 ETF，绝不卖出账户中其他个股
 ALLOW_HK_TECH = True               # AR4.6 南向滤网开关：若作战台提示南向20日净流出(<0亿)，改为 False 拦截港科
 HK_SOUTHBOUND_BOOST = False        # 若作战台提示南向20日净买>=600亿，可改为 True 享+25%动量加权
 
@@ -54,7 +54,7 @@ PANIC_TAKE_PROFIT_PCT = 12.0       # 反抽仓位止盈 +12%
 PANIC_MAX_HOLD_DAYS = 5            # 反抽仓位最长持有 5 个交易日
 
 # =============================================================================
-# 二、AR3 v3.0 14 只跨资产 ETF 标的池（与 ClickHouse stock.etf_kline_daily 100% 同步）
+# 二、AR4.6 15 只核心跨资产 ETF 标的池（含豆粕商品盾）（与 ClickHouse stock.etf_kline_daily 100% 同步）
 # =============================================================================
 SAFE_BOND_CODE = "511260.SH"
 INDEX_SH = "000001.SH"             # 上证指数（AR3 大盘五态择时锚）
@@ -64,7 +64,7 @@ PANIC_ETF_CYB = "159915.SZ"        # 创业板ETF
 PANIC_ETF_ZZ1000 = "512100.SH"     # 中证1000ETF
 
 # 格式: (QMT代码, 名称, 资产类别)
-# 类别说明: cn_broad=A股宽基, cn_dividend=A股红利, gold=黄金, overseas=跨境QDII, bond=利率债
+# 类别说明: cn_broad=A股宽基, cn_dividend=A股红利, gold=黄金, commodity=商品期货, overseas=跨境QDII, bond=利率债
 ETF_UNIVERSE = [
     ("510300.SH", "沪深300ETF",   "cn_broad"),
     ("510500.SH", "中证500ETF",   "cn_broad"),
@@ -74,6 +74,7 @@ ETF_UNIVERSE = [
     ("510880.SH", "红利ETF",      "cn_dividend"),
     ("512890.SH", "红利低波ETF",  "cn_dividend"),
     ("518880.SH", "黄金ETF",      "gold"),
+    ("159985.SZ", "豆粕ETF",      "commodity"),
     ("513100.SH", "纳指ETF",      "overseas"),
     ("513500.SH", "标普500ETF",   "overseas"),
     ("513180.SH", "恒生科技ETF",  "overseas"),
