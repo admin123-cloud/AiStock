@@ -2333,12 +2333,10 @@ def serve(
                         "- 影响说明：未同步前券商原始快照可能停留在盘中旧时点（`acct1` 聊天核销成交仍会自动叠加兜底）。",
                         "- 处理动作：请重新打开/登录同花顺远航交易面板，然后在网页 `/g3/accounts` 点击「一键同步双账号」即可立即对齐。",
                     ])
-                    wres = send_wechat_notification(alert_title, alert_body)
-                    if not wres.get("ok"):
-                        # 微信失败自动降级走 QQ 邮箱 SMTP 告警，确保必达
-                        cfg_mail = {**load_notify_config(), "channel": "qq_email"}
-                        mres = send_wechat_notification(alert_title, alert_body, config=cfg_mail)
-                        logger.info("[broker_sync_%s] 微信失败已降级邮件告警: %s", stage, mres)
+                    base_cfg = load_notify_config()
+                    wres = send_wechat_notification(alert_title, alert_body, config={**base_cfg, "channel": "ilink_bridge"})
+                    mres = send_wechat_notification(alert_title, alert_body, config={**base_cfg, "channel": "qq_email"})
+                    logger.info("[broker_sync_%s] 故障双通道告警已发: wechat=%s email=%s", stage, wres.get("ok"), mres.get("ok"))
                 except Exception as nexc:  # noqa: BLE001
                     logger.warning("[broker_sync_%s] 发送告警通知失败: %s", stage, nexc)
         except Exception as exc:  # noqa: BLE001
