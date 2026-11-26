@@ -26,6 +26,11 @@ from services.g3.order_prefill import (
     evaluate_and_build_prefill_draft,
 )
 from services.mining.ar3_dual_core_live import build_ar3_dual_core_radar
+from services.mining.panic_rebound_monitor import (
+    PANIC_MAX_LOT_YUAN,
+    PANIC_SLOT_FLEX_MULT,
+    allocate_panic_ab_pooled_flex,
+)
 from services.trading.t_daily_plan import fetch_batch_live_quotes, load_intraday_executions
 from utils.common.paths import runtime_path
 
@@ -42,7 +47,9 @@ def _plans_dir(base_dir: Optional[Path] = None) -> Path:
     return p
 
 
-def _floor_lot(shares: float) -> int:
+def _floor_lot(shares: float, code6: Optional[str] = None) -> int:
+    if code6 and str(code6).startswith("688"):
+        return int(math.floor(shares)) if shares >= 200 else 0
     if shares < 100:
         return 0
     return int(math.floor(shares / 100.0) * 100)
@@ -259,17 +266,21 @@ def compile_ar3_rebalance_plan(
         kept_inds: set[str] = set()
         slots_taken = 0
 
+        kept_codes: set[str] = set()
+        kept_spent_yuan = 0.0
         for h in acct["holdings"]:
             if h["is_etf"]:
                 continue
             cand = all_pool.get(h["code"])
             if cand and (h["profit_pct"] is None or h["profit_pct"] > hard_stop_thr) and slots_taken < max_slots:
+                cur_mv_h = float(h.get("market_value") or (h["shares"] * float(cand["close"])))
+                kept_w = round(cur_mv_h / total_assets * 100.0, 2) if (is_panic_ab_active and total_assets > 0) else round(slot_w_pct, 2)
                 target_map[h["code"]] = {
                     "code": h["code"],
                     "name": cand["name"],
                     "asset_kind": "stock",
                     "entry_rule": "panic_30m_ab_blend" if is_panic_ab_active else "offensive_ab_blend",
-                    "target_weight_pct": round(slot_w_pct, 2),
+                    "target_weight_pct": kept_w,
                     "ref_price": float(cand["close"]),
                     "stop_loss_price": round(float(cand["close"]) * stop_mult, 2),
                     "reason": (
@@ -282,45 +293,93 @@ def compile_ar3_rebalance_plan(
                     "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
                     "qdii_notice": None,
                 }
+                kept_codes.add(h["code"])
+                kept_spent_yuan += cur_mv_h
                 if cand.get("industry") and cand["industry"] != "未分类":
                     kept_inds.add(str(cand["industry"]))
                 slots_taken += 1
-                stock_used_pct += slot_w_pct
+                stock_used_pct += kept_w
 
-        for cand in stock_radar.get("exec_queue") or []:
-            if slots_taken >= max_slots:
-                break
-            c6 = str(cand["code"])
-            ind = str(cand.get("industry") or "未分类")
-            if c6 in target_map:
-                continue
-            if ind != "未分类" and ind in kept_inds:
-                continue
-            if is_panic_ab_active and cand.get("executable_10w") is False:
-                continue
-            cl_c = float(cand["close"])
-            target_map[c6] = {
-                "code": c6,
-                "name": cand["name"],
-                "asset_kind": "stock",
-                "entry_rule": "panic_30m_ab_blend" if is_panic_ab_active else "offensive_ab_blend",
-                "target_weight_pct": round(slot_w_pct, 2),
-                "ref_price": cl_c,
-                "stop_loss_price": round(cl_c * stop_mult, 2) if is_panic_ab_active else float(cand["stop_loss_price"]),
-                "reason": (
-                    f"AR4.6 冰点 30m 真龙第 {slots_taken + 1} 槽（10万可执行 · 逐票-6%止损/+5%后-3.5%追踪/≤5日 · 净利+{cand.get('net_profit_yoy_pct')}%）"
-                    if is_panic_ab_active
-                    else f"{cand['source_label']} 优先第 {slots_taken + 1} 槽（公告 {cand.get('notice_date')} · 净利+{cand.get('net_profit_yoy_pct')}%）"
-                ),
-                "source_label": cand["source_label"],
-                "notice_date": cand.get("notice_date"),
-                "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
-                "qdii_notice": None,
-            }
-            if ind != "未分类":
-                kept_inds.add(ind)
-            slots_taken += 1
-            stock_used_pct += slot_w_pct
+        if is_panic_ab_active and total_assets > 0:
+            # AR4.6 冰点 30m 固化执行层：4 槽池化弹性整手分配（pooled_flex 1.25x + 自适应单手门槛 ≤1.8万，名义总仓严守 50%）
+            # 按买单 0.2% 溢价限价测算整手，确保后续下限价单不因 +0.2% 缓冲掉手
+            flex_cands = []
+            for cand in stock_radar.get("exec_queue") or []:
+                cl_c = float(cand.get("close") or 0.0)
+                if cl_c <= 0:
+                    continue
+                lim_c = _round_px(cl_c * 1.002, False)
+                flex_cands.append({**dict(cand), "price": lim_c})
+            alloc = allocate_panic_ab_pooled_flex(
+                flex_cands,
+                total_assets=total_assets,
+                target_weight_pct=stock_cap_pct,
+                max_slots=max_slots,
+                flex_mult=PANIC_SLOT_FLEX_MULT,
+                max_lot_yuan_floor=PANIC_MAX_LOT_YUAN,
+                existing_codes=kept_codes,
+                existing_industries=kept_inds,
+                existing_spent_yuan=kept_spent_yuan,
+            )
+            for row in alloc["picked"]:
+                cand = row["raw"]
+                c6 = str(row["code"])
+                cl_c = float(cand["close"])
+                alloc_w = float(row["allocated_weight_pct"])
+                target_map[c6] = {
+                    "code": c6,
+                    "name": cand["name"],
+                    "asset_kind": "stock",
+                    "entry_rule": "panic_30m_ab_blend",
+                    "target_weight_pct": alloc_w,
+                    "ref_price": cl_c,
+                    "stop_loss_price": round(cl_c * stop_mult, 2),
+                    "reason": (
+                        f"AR4.6 冰点 30m 真龙第 {slots_taken + 1} 槽（pooled_flex 1.25x弹性 · 约{row['suggested_shares']}股 · "
+                        f"逐票-6%止损/+5%后-3.5%追踪/≤5日 · 净利+{cand.get('net_profit_yoy_pct')}%）"
+                    ),
+                    "source_label": cand["source_label"],
+                    "notice_date": cand.get("notice_date"),
+                    "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
+                    "qdii_notice": None,
+                }
+                slots_taken += 1
+                stock_used_pct += alloc_w
+        else:
+            for cand in stock_radar.get("exec_queue") or []:
+                if slots_taken >= max_slots:
+                    break
+                c6 = str(cand["code"])
+                ind = str(cand.get("industry") or "未分类")
+                if c6 in target_map:
+                    continue
+                if ind != "未分类" and ind in kept_inds:
+                    continue
+                if is_panic_ab_active and cand.get("executable_10w") is False:
+                    continue
+                cl_c = float(cand["close"])
+                target_map[c6] = {
+                    "code": c6,
+                    "name": cand["name"],
+                    "asset_kind": "stock",
+                    "entry_rule": "panic_30m_ab_blend" if is_panic_ab_active else "offensive_ab_blend",
+                    "target_weight_pct": round(slot_w_pct, 2),
+                    "ref_price": cl_c,
+                    "stop_loss_price": round(cl_c * stop_mult, 2) if is_panic_ab_active else float(cand["stop_loss_price"]),
+                    "reason": (
+                        f"AR4.6 冰点 30m 真龙第 {slots_taken + 1} 槽（10万可执行 · 逐票-6%止损/+5%后-3.5%追踪/≤5日 · 净利+{cand.get('net_profit_yoy_pct')}%）"
+                        if is_panic_ab_active
+                        else f"{cand['source_label']} 优先第 {slots_taken + 1} 槽（公告 {cand.get('notice_date')} · 净利+{cand.get('net_profit_yoy_pct')}%）"
+                    ),
+                    "source_label": cand["source_label"],
+                    "notice_date": cand.get("notice_date"),
+                    "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
+                    "qdii_notice": None,
+                }
+                if ind != "未分类":
+                    kept_inds.add(ind)
+                slots_taken += 1
+                stock_used_pct += slot_w_pct
 
     # 剩余全部预算（含股票未满槽闲置现金 + 非进攻期 100%）分配给跨资产 ETF 目标篮子
     etf_budget_pct = max(0.0, 100.0 - stock_used_pct)
@@ -514,9 +573,10 @@ def compile_ar3_rebalance_plan(
     for c6, tgt, px, gap_yuan in sorted(raw_gaps, key=lambda x: (0 if x[1]["asset_kind"] == "stock" else 1, -x[3])):
         is_etf = tgt["asset_kind"] == "etf"
         limit_px = _round_px(px * 1.002, is_etf)  # 买单溢价 0.2% 保障成交且符合 L2 0.5% 偏离限制
-        imm_sh = _floor_lot((gap_yuan * scale_imm) / limit_px)
-        post_sh = _floor_lot((gap_yuan * scale_post) / limit_px)
-        if post_sh < 100 and imm_sh < 100:
+        imm_sh = _floor_lot((gap_yuan * scale_imm) / limit_px, code6=None if is_etf else c6)
+        post_sh = _floor_lot((gap_yuan * scale_post) / limit_px, code6=None if is_etf else c6)
+        min_sh = 200 if (not is_etf and c6.startswith("688")) else 100
+        if post_sh < min_sh and imm_sh < min_sh:
             continue
         buy_orders.append({
             "code": c6,

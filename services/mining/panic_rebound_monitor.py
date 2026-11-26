@@ -4,7 +4,7 @@
 全市场 4 年（2023~2026，941 交易日，ClickHouse 真实 30m/15m 分钟线）零未来函数实证依据：
 - 触发条件：T-1 全市场站上 MA20 宽度 <= 18.0%（极端恐慌冰点）且盘中 10:30~14:30 创业板指(399006.SZ) + 中证1000(000852.SH)
   30m K线双收阳且等权日内涨幅 >= +0.80%（收盘兜底 >= +0.50%）；
-- AR4.6 核心升级标的：下根 30m 开盘半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（单手 <= 1.5 万，科创板 200 股，同业限 1）
+- AR4.6 核心升级标的：下根 30m 开盘半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（4槽池化弹性分配 pooled_flex 1.25x + 自适应单手门槛 ≤1.8万，科创板 200 股，同业限 1）
   + 50% 非 A 股逆波避险 ETF（取代旧版 60% 宽基 ETF）；
 - 熊市 B 档退出纪律：逐票硬止损 -6% / 浮盈 >= +5% 后自峰值回撤 -3.5% 移动追踪止盈 / 持满 <= 5 日或宽度 >= 38% 离场；
   严禁错过 T0 后在 T+1 次日高开 >= +2.0% 追买！
@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -28,8 +29,163 @@ PANIC_BREADTH_THRESHOLD = 18.0
 REVERSAL_MIN_AVG_CHG_PCT = 0.50
 REVERSAL_30M_MIN_AVG_CHG_PCT = 0.80
 PANIC_STOCK_BUDGET_PCT = 50
-PANIC_MAX_LOT_YUAN = 15000.0
+PANIC_SLOT_FLEX_MULT = 1.25
+PANIC_MAX_LOT_YUAN = 18000.0
 EXIT_HOLD_DAYS = 5
+
+
+def allocate_panic_ab_pooled_flex(
+    candidates: list[Mapping[str, Any]],
+    *,
+    total_assets: float,
+    target_weight_pct: float = float(PANIC_STOCK_BUDGET_PCT),
+    max_slots: int = 4,
+    flex_mult: float = PANIC_SLOT_FLEX_MULT,
+    max_lot_yuan_floor: float = PANIC_MAX_LOT_YUAN,
+    existing_codes: Optional[set[str]] = None,
+    existing_industries: Optional[set[str]] = None,
+    existing_spent_yuan: float = 0.0,
+) -> dict[str, Any]:
+    """AR4.6 极端冰点 4 槽池化弹性整手分配器（pooled_flex + 自适应单手门槛，名义总仓位严守 target_weight_pct）。
+
+    两阶段水填充（2-pass water-fill）：
+    1. Pass 1（保槽择优）：按 AB_BLEND 排序择取最多 `slots_to_fill` 只同业不重复、且单手成本在自适应弹性门槛内的标的，
+       保证不因前槽多花零头而饿死末槽；
+    2. Pass 2（零头回填）：将整手取整产生的剩余预算优先回填给当前已配金额最低的槽位，
+       但严格限制单槽总额不超过 `per_slot_budget * flex_mult`（默认 1.25x），且总花费严守 `total_budget`。
+    """
+    eff_assets = max(0.0, float(total_assets or 0.0))
+    gross_budget = eff_assets * (float(target_weight_pct) / 100.0)
+    per_slot = gross_budget / max(1, int(max_slots))
+    avail_budget = max(0.0, gross_budget - max(0.0, float(existing_spent_yuan or 0.0)))
+    used_codes = {str(c).split(".")[0].zfill(6) for c in (existing_codes or set())}
+    used_inds = {str(ind) for ind in (existing_industries or set()) if ind and ind != "未分类"}
+    slots_to_fill = max(0, int(max_slots) - len(used_codes))
+
+    topup_cap = per_slot * float(flex_mult)
+    # 自适应单手准入门槛：大资金随 1.25x 单槽上限自然放宽，10 万账户下最高放宽至 min(18000, 总冰点预算*36%)
+    admit_lot_cap = max(topup_cap, min(float(max_lot_yuan_floor), gross_budget * 0.36))
+
+    admitted: list[dict[str, Any]] = []
+    skipped_over_lot: list[dict[str, Any]] = []
+    min_sum = 0.0
+
+    for idx, raw in enumerate(candidates):
+        if len(admitted) >= slots_to_fill:
+            break
+        c6 = str(raw.get("code") or "").split(".")[0].zfill(6)
+        if not c6 or c6 in used_codes:
+            continue
+        ind = str(raw.get("industry") or "未分类")
+        if ind != "未分类" and ind in used_inds:
+            continue
+        if raw.get("near_limit"):
+            continue
+        px = float(raw.get("price") or raw.get("close") or 0.0)
+        if px <= 0:
+            continue
+        is_star = c6.startswith("688")
+        min_lot = 200 if is_star else 100
+        lot_inc = 1 if is_star else 100
+        min_lot_yuan = round(px * min_lot, 1)
+        if min_lot_yuan > admit_lot_cap + 1e-6 or (min_sum + min_lot_yuan) > avail_budget + 1e-6:
+            skipped_over_lot.append({
+                "code": c6,
+                "name": raw.get("name"),
+                "price": round(px, 3),
+                "min_lot_shares": min_lot,
+                "min_lot_yuan": min_lot_yuan,
+                "admit_lot_cap_yuan": round(admit_lot_cap, 1),
+            })
+            continue
+        admitted.append({
+            "rank": idx,
+            "code": c6,
+            "raw": dict(raw),
+            "industry": ind,
+            "price": px,
+            "min_lot": min_lot,
+            "lot_inc": lot_inc,
+            "min_lot_yuan": min_lot_yuan,
+            "shares": min_lot,
+        })
+        used_codes.add(c6)
+        if ind != "未分类":
+            used_inds.add(ind)
+        min_sum += min_lot_yuan
+
+    # Pass 1b：先按均分槽预算为每槽打底（保证 >= min_lot，且合计不超 avail_budget）
+    if admitted:
+        for item in admitted:
+            px = item["price"]
+            inc = item["lot_inc"]
+            min_lot = item["min_lot"]
+            raw_sh = int(math.floor(per_slot / (px * inc))) * inc
+            item["shares"] = max(min_lot, raw_sh)
+
+        # 若某高价单手票超过均分槽导致合计略超 avail_budget，优先压缩非底线槽（金额最大者先减 1 手）
+        while sum(it["shares"] * it["price"] for it in admitted) > avail_budget + 1e-6:
+            trimmable = [it for it in admitted if it["shares"] - it["lot_inc"] >= it["min_lot"]]
+            if not trimmable:
+                break
+            victim = max(trimmable, key=lambda x: (x["shares"] * x["price"], x["rank"]))
+            victim["shares"] -= victim["lot_inc"]
+
+        # Pass 2：水填充剩余零头——每次挑当前金额最小、加 1 手后不超 topup_cap 且不超余钱的槽位补仓
+        rem_budget = avail_budget - sum(it["shares"] * it["price"] for it in admitted)
+        while rem_budget > 1e-6:
+            eligible = [
+                it for it in admitted
+                if (it["lot_inc"] * it["price"] <= rem_budget + 1e-6)
+                and ((it["shares"] + it["lot_inc"]) * it["price"] <= topup_cap + 1e-6)
+            ]
+            if not eligible:
+                break
+            # 科创板 1 股递增按 10 股步长批量水填充（不足 10 股再按 1 股收尾），避免单票吃掉全部循环次数
+            target = min(eligible, key=lambda x: (x["shares"] * x["price"], x["rank"]))
+            step = target["lot_inc"]
+            if step == 1:
+                max_by_rem = int(math.floor(rem_budget / target["price"]))
+                max_by_cap = int(math.floor(max(0.0, topup_cap - target["shares"] * target["price"]) / target["price"]))
+                step = max(1, min(10, max_by_rem, max_by_cap))
+            target["shares"] += step
+            rem_budget -= step * target["price"]
+
+    picked: list[dict[str, Any]] = []
+    total_allocated = 0.0
+    for it in admitted:
+        est_amt = round(it["shares"] * it["price"], 2)
+        total_allocated += est_amt
+        alloc_w = round(est_amt / eff_assets * 100.0, 2) if eff_assets > 0 else 0.0
+        picked.append({
+            "code": it["code"],
+            "raw": it["raw"],
+            "industry": it["industry"],
+            "price": it["price"],
+            "min_lot_shares": it["min_lot"],
+            "min_lot_yuan": it["min_lot_yuan"],
+            "suggested_shares": int(it["shares"]),
+            "est_amount": est_amt,
+            "allocated_weight_pct": alloc_w,
+        })
+
+    util_pct = round((total_allocated / avail_budget) * 100.0, 1) if avail_budget > 0 else 0.0
+    eff_w_pct = round(((total_allocated + existing_spent_yuan) / eff_assets) * 100.0, 2) if eff_assets > 0 else 0.0
+    return {
+        "mode": "pooled_flex",
+        "flex_mult": float(flex_mult),
+        "target_weight_pct": float(target_weight_pct),
+        "total_budget_yuan": round(avail_budget, 2),
+        "per_slot_budget_yuan": round(per_slot, 2),
+        "slot_cap_yuan": round(topup_cap, 2),
+        "admit_lot_cap_yuan": round(admit_lot_cap, 2),
+        "total_allocated_yuan": round(total_allocated, 2),
+        "idle_cash_yuan": round(max(0.0, avail_budget - total_allocated), 2),
+        "utilization_pct": util_pct,
+        "effective_weight_pct": eff_w_pct,
+        "picked": picked,
+        "skipped_over_lot": skipped_over_lot,
+    }
 EXIT_STOP_LOSS_PCT = -6.0
 EXIT_TRAIL_ARM_PCT = 5.0
 EXIT_TRAIL_DD_PCT = -3.5
@@ -332,7 +488,7 @@ def evaluate_panic_rebound_signal(
         )
         headline = (
             f"AR4.6 冰点 30m 右侧触发{src_note}！宽度 {breadth_pct:.2f}% ≤ 18%，双指均涨 {pair_avg_chg:+.2f}%；"
-            f"执行半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（单手≤1.5万，逐票 -6% 硬止损 / +5%后-3.5%追踪 / ≤5日）+ 50% 非A股避险 ETF（严禁次日高开≥+2%追买）。"
+            f"执行半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（pooled_flex 1.25x 弹性分槽+自适应单手门槛≤1.8万，逐票 -6% 硬止损 / +5%后-3.5%追踪 / ≤5日）+ 50% 非A股避险 ETF（严禁次日高开≥+2%追买）。"
         )
 
     etf_plans: list[dict[str, Any]] = []
@@ -372,6 +528,8 @@ def evaluate_panic_rebound_signal(
         "headline": headline,
         "panic_stock_budget_pct": PANIC_STOCK_BUDGET_PCT if any_triggered else 0,
         "panic_max_lot_yuan": PANIC_MAX_LOT_YUAN,
+        "panic_slot_mode": "pooled_flex",
+        "panic_slot_flex_mult": PANIC_SLOT_FLEX_MULT,
         "metrics": {
             "breadth_pct": breadth_pct,
             "breadth_threshold": PANIC_BREADTH_THRESHOLD,

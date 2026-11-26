@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
+from services.mining.panic_rebound_monitor import PANIC_MAX_LOT_YUAN
 from utils.common.paths import runtime_path
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -302,6 +303,25 @@ def _build_etf_radar(
     # 计算 ETF 子篮子内部归一化权重（总和 = 100%，再按 etf_total_budget_pct 折算账户绝对权重）
     norm_targets: list[tuple[str, float, str]] = []
     decision_headline = ""
+    fallback_mode = "normal"
+    cash_defense_pct = 0
+
+    def _apply_f3_fallback(scene_label: str, bond_reason: str, bond_headline: str) -> None:
+        """F3 分层兜底：全池均不达标时，若 511260 20日动量仍 > 0 则用十年国债；否则切纯现金/逆回购/短融避险。"""
+        nonlocal decision_headline, fallback_mode, cash_defense_pct
+        bond_info = by_ts.get(SAFE_BOND_CODE)
+        bond_r20 = float(bond_info.get("ret_20d_pct") or 0.0) if bond_info else -1.0
+        if bond_info and bond_r20 > 0.0:
+            fallback_mode = "bond_fallback"
+            norm_targets.append((SAFE_BOND_CODE, 1.0, f"{bond_reason}（F3确认511260 20d {bond_r20:+.2f}%>0）"))
+            decision_headline = bond_headline
+        else:
+            fallback_mode = "cash_defense"
+            cash_defense_pct = etf_total_budget_pct
+            decision_headline = (
+                f"🛡️ {scene_label}且十年国债(511260) 20日动量亦转负（{bond_r20:+.2f}% ≤ 0），"
+                f"触发 F3 分层避险：ETF 预算 {etf_total_budget_pct}% 保持空仓现金 / 国债逆回购 / 短融货基，暂不硬买破位国债。"
+            )
 
     def _inv_vol_weights(items: list[dict[str, Any]]) -> list[float]:
         """按 20 日年化波动率倒数（1/vol20，下限 4%）计算风险平价权重。"""
@@ -321,13 +341,17 @@ def _build_etf_radar(
             for item, w in zip(def_top, ws):
                 norm_targets.append((item["ts_code"], w, "AR4.6 冰点期 50% 非A股避险底仓（护航 50% AB_BLEND 真龙）"))
             names_txt = " + ".join(f"{x['name']} {w*50:.0f}%" for x, w in zip(def_top, ws))
+            decision_headline = (
+                f"⚡ AR4.6 极端冰点 30m 确认触发：半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（逐票-6%止损/+5%后-3.5%追踪/≤5日）"
+                f" + 50% 非 A 股避险底仓「{names_txt}」（严禁 T+1 高开≥+2% 追买）。"
+            )
         else:
-            norm_targets.append((SAFE_BOND_CODE, 1.0, "AR4.6 冰点期 50% 十年国债避险底仓"))
-            names_txt = "十年国债ETF 50%"
-        decision_headline = (
-            f"⚡ AR4.6 极端冰点 30m 确认触发：半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（逐票-6%止损/+5%后-3.5%追踪/≤5日）"
-            f" + 50% 非 A 股避险底仓「{names_txt}」（严禁 T+1 高开≥+2% 追买）。"
-        )
+            _apply_f3_fallback(
+                "⚡ AR4.6 极端冰点期（半仓个股+半仓避险）全部非A股资产未达标",
+                "AR4.6 冰点期 50% 十年国债避险底仓",
+                "⚡ AR4.6 极端冰点 30m 确认触发：半仓 50% 切入 10 万可执行 AB_BLEND Top4 抗跌真龙（逐票-6%止损/+5%后-3.5%追踪/≤5日）"
+                " + 50% 十年国债ETF 避险底仓（严禁 T+1 高开≥+2% 追买）。",
+            )
     elif etf_core_mode == "regime_focus":
         # AR4.6 实证冠军：进攻期配 A股宽基 Top2；非进攻期配非A股风险调整动量 Top2 逆波动加权 + 南向港科滤网
         if is_offensive:
@@ -348,8 +372,11 @@ def _build_etf_radar(
                     names_txt = " + ".join(f"{x['name']}({w*100:.0f}%)" for x, w in zip(def_top, _inv_vol_weights(def_top)))
                     decision_headline = f"A 股宽基未达标，ETF 暂切非 A 股风险调整 Top2 逆波：{names_txt}。"
                 else:
-                    norm_targets.append((SAFE_BOND_CODE, 1.0, "全市场趋势偏弱 · 十年国债避险"))
-                    decision_headline = "A 股宽基与非 A 股资产均未站上 MA20，暂切十年国债避险。"
+                    _apply_f3_fallback(
+                        "A 股宽基与非 A 股资产均未站上 MA20",
+                        "全市场趋势偏弱 · 十年国债避险",
+                        "A 股宽基与非 A 股资产均未站上 MA20，暂切十年国债避险。",
+                    )
         else:
             def_top = _pick(non_cn, "ar45_score", 2, False)
             if def_top:
@@ -370,8 +397,11 @@ def _build_etf_radar(
                     f"100% 切入非 A 股风险调整 Top{len(def_top)} 逆波组合「{names_txt}」{sb_hint}。"
                 )
             else:
-                norm_targets.append((SAFE_BOND_CODE, 1.0, "全球权益/商品趋势全灭 · 100% 十年国债避险"))
-                decision_headline = "当前非进攻期且全部跨资产均跌破趋势线，100% 转入十年国债 ETF 避险。"
+                _apply_f3_fallback(
+                    "当前非进攻期且全部跨资产均跌破趋势线",
+                    "全球权益/商品趋势全灭 · 100% 十年国债避险",
+                    "当前非进攻期且全部跨资产均跌破趋势线，100% 转入十年国债 ETF 避险。",
+                )
     else:
         # #02 全市场5大类资产风险调整动量 Top2
         top2 = _pick(universe, "ar45_score", 2, True)
@@ -382,8 +412,11 @@ def _build_etf_radar(
             names_txt = " + ".join(f"{x['name']} {w*100:.0f}%" for x, w in zip(top2, ws))
             decision_headline = f"#02 全天候跨资产分散模式：ETF 预算 {etf_total_budget_pct}% 逆波配置「{names_txt}」。"
         else:
-            norm_targets.append((SAFE_BOND_CODE, 1.0, "全市场动量为负 · 100% 十年国债避险"))
-            decision_headline = "全市场资产均未满足动量门槛，ETF 预算 100% 转入十年国债 ETF。"
+            _apply_f3_fallback(
+                "全市场资产均未满足动量门槛",
+                "全市场动量为负 · 100% 十年国债避险",
+                "全市场资产均未满足动量门槛，ETF 预算 100% 转入十年国债 ETF。",
+            )
 
     targets: list[dict[str, Any]] = []
     for ts, nw, reason in norm_targets:
@@ -410,6 +443,8 @@ def _build_etf_radar(
         "stock_budget_active_pct": stock_budget_cap_pct if is_offensive else (50 if is_panic_ab else 0),
         "panic_triggered": panic_triggered,
         "is_panic_ab": is_panic_ab,
+        "fallback_mode": fallback_mode,
+        "cash_defense_pct": cash_defense_pct,
         "headline": decision_headline,
         "targets": targets,
         "universe": universe_sorted,
@@ -782,7 +817,7 @@ def _scan_f2a_f3a_and_money_effect(
                 "close": round(cl, 2),
                 "min_lot_shares": min_lot,
                 "min_lot_yuan": min_lot_yuan,
-                "executable_10w": bool(min_lot_yuan <= 15000.0),
+                "executable_10w": bool(min_lot_yuan <= PANIC_MAX_LOT_YUAN),
                 "stop_loss_price": round(cl * (0.94 if is_panic_ab_active else 0.90), 2),
                 "ret_1d_pct": round(float(r.ret_1d_pct), 2) if pd.notna(r.ret_1d_pct) else 0.0,
                 "ret_20d_pct": round(float(r.ret_20d_pct), 2) if pd.notna(r.ret_20d_pct) else 0.0,
