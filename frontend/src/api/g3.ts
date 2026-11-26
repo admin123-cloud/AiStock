@@ -1413,6 +1413,8 @@ export interface G3AR3EtfItem {
   above_ma20: boolean
   vol_20d_pct: number
   risk_adj_mom: number
+  sb_filtered?: boolean
+  sb_boosted?: boolean
   is_qdii: boolean
   eligible: boolean
   basket_weight_pct?: number

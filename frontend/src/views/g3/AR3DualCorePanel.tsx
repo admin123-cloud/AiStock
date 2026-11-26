@@ -58,7 +58,6 @@ export default function AR3DualCorePanel({
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [stockTab, setStockTab] = useState<'exec' | 'f2a' | 'f3a'>('exec')
-  const [showEtfUniverse, setShowEtfUniverse] = useState(mode === 'signals_full')
   const [planReloadToken, setPlanReloadToken] = useState(0)
 
   useEffect(() => {
@@ -464,128 +463,111 @@ export default function AR3DualCorePanel({
                   <span className="font-mono text-[11px] text-zinc-400">数据截止 {etf.latest_date}</span>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => setShowEtfUniverse((v) => !v)}
-                className="text-[11px] text-cyan-300 hover:text-cyan-200"
-              >
-                {showEtfUniverse ? '收起 15 只ETF全景排行 ▲' : '展开 15 只跨资产ETF动量排行 ▼'}
-              </button>
+              <span className="text-[11px] text-zinc-400">
+                合格门槛：站上 MA20 且 20日动量 &gt; 0%（港科须南向20日净流入）
+              </span>
             </div>
 
             {etf?.available ? (
               <>
                 <p className="mt-1.5 text-zinc-200">{etf.headline}</p>
-                <div className="mt-2.5 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
-                  {etf.targets.length === 0 && etf.fallback_mode === 'cash_defense' && (
-                    <div className="flex flex-col justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-950/20 p-2.5 md:col-span-2 lg:col-span-3">
-                      <div className="flex flex-wrap items-center justify-between gap-1.5">
-                        <span className="font-semibold text-amber-200">
-                          🛡️ F3 分层避险 · 现金 / 国债逆回购 / 短融货基
-                        </span>
-                        <Badge color="amber">建议现金留存 {etf.cash_defense_pct ?? etf.etf_total_budget_pct ?? 100}%</Badge>
-                      </div>
-                      <div className="text-[11px] text-amber-100/80">
-                        全池跨资产及十年国债(511260)均处于弱势（20日动量 ≤ 0），已自动拦截硬买破位国债；建议空仓持现金、做国债逆回购或配置场内短融/货币 ETF 等待趋势修复。
-                      </div>
+                {etf.targets.length === 0 && etf.fallback_mode === 'cash_defense' && (
+                  <div className="mt-2.5 flex flex-col justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-950/20 p-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <span className="font-semibold text-amber-200">
+                        🛡️ F3 分层避险 · 现金 / 国债逆回购 / 短融货基
+                      </span>
+                      <Badge color="amber">建议现金留存 {etf.cash_defense_pct ?? etf.etf_total_budget_pct ?? 100}%</Badge>
                     </div>
-                  )}
-                  {etf.targets.map((item) => (
-                    <div
-                      key={item.ts_code}
-                      className="flex flex-col justify-between gap-2 rounded-md border border-zinc-800 bg-zinc-950/80 p-2.5"
-                    >
-                      <div>
-                        <div className="flex flex-wrap items-center justify-between gap-1.5">
-                          <span className="font-semibold text-white">
-                            {item.name} <span className="font-mono text-zinc-400">{item.code}</span>
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            <Badge color="zinc">{item.asset_class_label}</Badge>
-                            <Badge color="emerald">建议配额 {item.account_weight_pct}%</Badge>
-                          </div>
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[11px] text-zinc-300">
-                          <span>现价 <b>{item.close.toFixed(3)}</b></span>
-                          <span className={item.ret_1d_pct >= 0 ? 'text-rose-300' : 'text-emerald-300'}>
-                            日 {fmtSigned(item.ret_1d_pct)}
-                          </span>
-                          <span className={item.ret_20d_pct >= 0 ? 'text-amber-300' : 'text-zinc-400'}>
-                            20日 {fmtSigned(item.ret_20d_pct)}
-                          </span>
-                          <span>{item.above_ma20 ? '站上MA20 ✅' : '低于MA20'}</span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-zinc-400">{item.reason}</div>
-                        {item.qdii_notice && (
-                          <div className="mt-1 text-[11px] text-amber-300">⚠️ {item.qdii_notice}</div>
-                        )}
-                      </div>
-                      <div className="flex justify-end">
-                        <Button
-                          outline
-                          onClick={() =>
-                            onPrefillOrder({
-                              code: item.code,
-                              name: item.name,
-                              side: 'BUY',
-                              order_type: 'base_rebalance',
-                              price: item.close.toFixed(3),
-                              shares: '1000',
-                              note: `AR4.6 跨资产ETF(${item.asset_class_label}) 目标配额${item.account_weight_pct}%`,
-                            })
-                          }
-                        >
-                          一键 L2 预填买入
-                        </Button>
-                      </div>
+                    <div className="text-[11px] text-amber-100/80">
+                      全池跨资产及十年国债(511260)均处于弱势（20日动量 ≤ 0），已自动拦截硬买破位国债；建议空仓持现金、做国债逆回购或配置场内短融/货币 ETF 等待趋势修复。
                     </div>
-                  ))}
-                </div>
-
-                {showEtfUniverse && etf.universe.length > 0 && (
-                  <div className="mt-3 overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950/70">
-                    <Table dense>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeader>标的</TableHeader>
-                          <TableHeader>大类</TableHeader>
-                          <TableHeader>收盘价</TableHeader>
-                          <TableHeader>当日</TableHeader>
-                          <TableHeader>10日</TableHeader>
-                          <TableHeader>20日动量</TableHeader>
-                          <TableHeader>20日波动</TableHeader>
-                          <TableHeader>风险调整动量</TableHeader>
-                          <TableHeader>站上MA20</TableHeader>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {etf.universe.map((u) => (
-                          <TableRow key={u.ts_code}>
-                            <TableCell className="whitespace-nowrap font-medium text-zinc-100">
-                              {u.name} <span className="font-mono text-zinc-400">{u.code}</span>
-                            </TableCell>
-                            <TableCell className="whitespace-nowrap text-zinc-300">{u.asset_class_label}</TableCell>
-                            <TableCell className="whitespace-nowrap font-mono">{u.close.toFixed(3)}</TableCell>
-                            <TableCell className={`whitespace-nowrap font-mono ${u.ret_1d_pct >= 0 ? 'text-rose-300' : 'text-emerald-300'}`}>
-                              {fmtSigned(u.ret_1d_pct)}
-                            </TableCell>
-                            <TableCell className="whitespace-nowrap font-mono">{fmtSigned(u.ret_10d_pct)}</TableCell>
-                            <TableCell className={`whitespace-nowrap font-mono font-semibold ${u.ret_20d_pct >= 0 ? 'text-amber-300' : 'text-zinc-400'}`}>
-                              {fmtSigned(u.ret_20d_pct)}
-                            </TableCell>
-                            <TableCell className="whitespace-nowrap font-mono text-zinc-400">{u.vol_20d_pct}%</TableCell>
-                            <TableCell className="whitespace-nowrap font-mono">{u.risk_adj_mom.toFixed(2)}</TableCell>
-                            <TableCell className="whitespace-nowrap">
-                              <Badge color={u.eligible ? 'emerald' : 'zinc'}>
-                                {u.eligible ? '合格趋势' : '未达标'}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
                   </div>
                 )}
+
+                {etf.universe.length > 0 && (() => {
+                  const targetWeightMap = new Map(etf.targets.map((t) => [t.ts_code, t.account_weight_pct]))
+                  return (
+                    <div className="mt-3 overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950/70">
+                      <Table dense>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeader>标的</TableHeader>
+                            <TableHeader>大类</TableHeader>
+                            <TableHeader>收盘价</TableHeader>
+                            <TableHeader>当日</TableHeader>
+                            <TableHeader>10日</TableHeader>
+                            <TableHeader>20日波动</TableHeader>
+                            <TableHeader>风险调整动量</TableHeader>
+                            <TableHeader>20日动量</TableHeader>
+                            <TableHeader>距MA20</TableHeader>
+                            <TableHeader>合格状态</TableHeader>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {etf.universe.map((u) => {
+                            const ma20GapPct = u.ma20 > 0 ? ((u.close - u.ma20) / u.ma20) * 100 : null
+                            const targetWeight = targetWeightMap.get(u.ts_code)
+                            const failReasons: string[] = []
+                            if (!u.above_ma20) failReasons.push('破MA20')
+                            if (u.ret_20d_pct <= 0) failReasons.push('20日≤0')
+                            if (u.sb_filtered) failReasons.push('南向拦截')
+
+                            let statusLabel = '合格趋势'
+                            let statusColor: 'emerald' | 'amber' | 'zinc' = 'emerald'
+                            let statusTitle = '满足站上MA20、20日动量>0且未被南向拦截'
+                            if (!u.eligible) {
+                              statusLabel = failReasons.length > 0 ? failReasons.join(' · ') : '未达标'
+                              statusColor = u.sb_filtered && failReasons.length === 1 ? 'amber' : 'zinc'
+                              statusTitle = `未达标原因：${statusLabel}`
+                            } else if (!radar.is_offensive && u.asset_class === 'cn_broad') {
+                              statusLabel = '非进攻不选宽基'
+                              statusColor = 'zinc'
+                              statusTitle = '趋势合格，但当前处于非进攻防守期，系统排除A股宽基'
+                            }
+
+                            return (
+                              <TableRow key={u.ts_code}>
+                                <TableCell className="whitespace-nowrap font-medium text-zinc-100">
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span>
+                                      {u.name} <span className="font-mono text-zinc-400">{u.code}</span>
+                                    </span>
+                                    {targetWeight != null && (
+                                      <Badge color="emerald">目标 {targetWeight}%</Badge>
+                                    )}
+                                  </span>
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap text-zinc-300">{u.asset_class_label}</TableCell>
+                                <TableCell className="whitespace-nowrap font-mono">{u.close.toFixed(3)}</TableCell>
+                                <TableCell className={`whitespace-nowrap font-mono ${u.ret_1d_pct >= 0 ? 'text-rose-300' : 'text-emerald-300'}`}>
+                                  {fmtSigned(u.ret_1d_pct)}
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap font-mono">{fmtSigned(u.ret_10d_pct)}</TableCell>
+                                <TableCell className="whitespace-nowrap font-mono text-zinc-400">{u.vol_20d_pct}%</TableCell>
+                                <TableCell className="whitespace-nowrap font-mono">{u.risk_adj_mom.toFixed(2)}</TableCell>
+                                <TableCell className={`whitespace-nowrap font-mono font-semibold ${u.ret_20d_pct > 0 ? 'text-amber-300' : 'text-zinc-400'}`}>
+                                  {fmtSigned(u.ret_20d_pct)}
+                                </TableCell>
+                                <TableCell
+                                  className={`whitespace-nowrap font-mono font-semibold ${
+                                    ma20GapPct != null && ma20GapPct > 0 ? 'text-emerald-300' : 'text-zinc-400'
+                                  }`}
+                                  title={u.ma20 > 0 ? `MA20: ${u.ma20.toFixed(3)}` : undefined}
+                                >
+                                  {fmtSigned(ma20GapPct)}
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap" title={statusTitle}>
+                                  <Badge color={statusColor}>{statusLabel}</Badge>
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )
+                })()}
               </>
             ) : (
               <div className="mt-2 text-amber-300">{etf?.error || 'ETF 雷达暂不可用'}</div>
