@@ -886,7 +886,7 @@ class AiBusAskRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=4000, description="向在线 AI 参谋提问或请求深度研判")
     kind: str = Field(default="desk_qa", description="任务类型: desk_qa / premarket_brief / panic_audit / postclose_review")
     source: str = Field(default="desk_ui", description="调用来源")
-    context: Optional[dict[str, Any]] = Field(default=None, description="附加结构化上下文")
+    context: dict[str, Any] | None = Field(default=None, description="附加结构化上下文")
     wait_timeout_sec: float = Field(default=0.0, ge=0.0, le=120.0, description=">0 时同步等待结果，超时自动降级")
 
 
