@@ -244,14 +244,22 @@ def refresh_intraday_snapshot(*, finalize_if_closed: bool = False) -> bool:
     if not using_intraday_fact:
         df = clickhouse_query_df(
         """
-        WITH minute_snapshot AS (
-            SELECT code, argMax(close, datetime) AS close, max(datetime) AS as_of,
-                sumIf(amount, isFinite(amount)) AS amount
+        WITH minute_dedup AS (
+            SELECT
+                code,
+                datetime AS bar_time,
+                argMax(close, created_at) AS close,
+                argMax(amount, created_at) AS amount
             FROM kline_minute_5
-            WHERE toDate(datetime) = ?
+            WHERE datetime >= ? AND datetime < ? + INTERVAL 1 DAY
+            GROUP BY code, datetime
+        ), minute_snapshot AS (
+            SELECT code, argMax(close, bar_time) AS close, max(bar_time) AS as_of,
+                sumIf(amount, isFinite(amount)) AS amount
+            FROM minute_dedup
             GROUP BY code
         ), previous_close AS (
-            SELECT code, argMax(close, trade_date) AS close FROM kline_daily
+            SELECT code, argMax(close, created_at) AS close FROM kline_daily
             WHERE trade_date = ? GROUP BY code
         ), base AS (
             SELECT s.market, m.close, m.as_of, p.close AS previous_close, m.amount,
@@ -270,7 +278,9 @@ def refresh_intraday_snapshot(*, finalize_if_closed: bool = False) -> bool:
             sum(pct < 0 AND pct > -3) AS bucket_down_0_3, sum(pct <= -3 AND pct > -5) AS bucket_down_3_5,
             sum(pct <= -5 AND pct > -7) AS bucket_down_5_7, sum(pct <= -7) AS bucket_down_7
         FROM base
-        """, [trade_date, previous]
+        SETTINGS optimize_aggregation_in_order = 1
+        """, [trade_date, trade_date, previous],
+        raw=True,
         )
         source = "qmt:kline_minute_5"
     if not _intraday_frame_is_complete(df, expected):

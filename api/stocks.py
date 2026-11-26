@@ -142,19 +142,32 @@ def _build_intraday_daily_bar(code: str) -> Optional[Dict[str, Any]]:
     try:
         snapshot_df = clickhouse_query_df(
             """
+            WITH dedup AS (
+                SELECT
+                    datetime AS bar_time,
+                    argMax(open, created_at) AS open,
+                    argMax(high, created_at) AS high,
+                    argMax(low, created_at) AS low,
+                    argMax(close, created_at) AS close,
+                    argMax(volume, created_at) AS volume,
+                    argMax(amount, created_at) AS amount
+                FROM kline_minute_5
+                WHERE code = ?
+                  AND datetime >= ? AND datetime < ? + INTERVAL 1 DAY
+                GROUP BY code, datetime
+            )
             SELECT
-                argMin(open, datetime) AS open,
+                argMin(open, bar_time) AS open,
                 max(high) AS high,
                 min(low) AS low,
-                argMax(close, datetime) AS close,
+                argMax(close, bar_time) AS close,
                 sum(volume) AS volume,
                 sum(amount) AS amount,
-                max(datetime) AS as_of
-            FROM kline_minute_5 FINAL
-            WHERE code = ?
-              AND toDate(datetime) = ?
+                max(bar_time) AS as_of
+            FROM dedup
             """,
-            [code, trade_date],
+            [code, trade_date, trade_date],
+            raw=True,
         )
         if snapshot_df is None or snapshot_df.empty:
             return None

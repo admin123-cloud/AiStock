@@ -121,11 +121,18 @@ def _build_ar46_panic_30m_sleeve_map(
     idx_daily["pc"] = idx_daily.groupby("code", sort=False)["close"].shift(1)
     idx_pc = {(str(c), str(d)): float(p) for c, d, p in zip(idx_daily["code"], idx_daily["d"], idx_daily["pc"]) if pd.notna(p) and float(p) > 0}
 
+    cd_min, cd_max = min(cand_dates), max(cand_dates)
     idx_30m = _ch_query_df(
         f"""
-        SELECT code, toString(datetime) AS dt_str, open, close
-        FROM stock.kline_minute_30 FINAL
-        WHERE code IN ({c_sql}) AND toDate(datetime) IN ({d_sql})
+        SELECT code, toString(datetime) AS dt_str,
+               argMax(open, created_at) AS open,
+               argMax(close, created_at) AS close
+        FROM stock.kline_minute_30
+        WHERE code IN ({c_sql})
+          AND datetime >= '{cd_min} 00:00:00'
+          AND datetime <= '{cd_max} 23:59:59'
+          AND toDate(datetime) IN ({d_sql})
+        GROUP BY code, datetime
         ORDER BY code, datetime
         """
     )

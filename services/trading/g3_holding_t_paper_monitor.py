@@ -249,6 +249,7 @@ def _warehouse_minute_metrics(codes: list[str]) -> dict[str, dict[str, Any]]:
             SELECT code, datetime, close, volume, amount
             FROM kline_minute_5 FINAL
             WHERE code IN ({quoted})
+              AND datetime >= now('Asia/Shanghai') - INTERVAL 15 DAY
             ORDER BY code, datetime DESC
             LIMIT 30 BY code
             """

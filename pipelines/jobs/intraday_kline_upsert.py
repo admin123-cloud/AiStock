@@ -316,11 +316,15 @@ def load_tdx_bars(code: str, dates: set[str]) -> dict[str, dict]:
     if not dates:
         return {}
     suffix_code = _code_with_suffix(code)
-    date_list = ",".join(f"'{d}'" for d in sorted(dates))
+    sorted_dates = sorted(dates)
+    d_min, d_max = sorted_dates[0], sorted_dates[-1]
+    date_list = ",".join(f"'{d}'" for d in sorted_dates)
     sql = (
         "SELECT toString(datetime), argMax(open, created_at), argMax(high, created_at), "
         "argMax(low, created_at), argMax(close, created_at), argMax(volume, created_at) "
         f"FROM stock.kline_minute_5 WHERE code = '{suffix_code}' "
+        f"AND datetime >= toDateTime('{d_min} 00:00:00', 'Asia/Shanghai') "
+        f"AND datetime < toDateTime('{d_max} 00:00:00', 'Asia/Shanghai') + INTERVAL 1 DAY "
         f"AND toDate(datetime) IN ({date_list}) GROUP BY datetime ORDER BY datetime "
         "FORMAT TabSeparatedWithNames"
     )
