@@ -7,8 +7,11 @@ validation/failover, not values which can be added together.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
-from typing import Any, Dict
+import logging
+import threading
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, Optional
 import time
 from zoneinfo import ZoneInfo
 
@@ -18,10 +21,14 @@ from utils.market_warehouse import clickhouse_available, clickhouse_query_df, cl
 from utils.paths import runtime_path
 
 
+logger = logging.getLogger(__name__)
 SH_TZ = ZoneInfo("Asia/Shanghai")
 MIN_HISTORY_DAYS = 20
 HISTORY_DAYS = 60
+_SUCCESS_CACHE_TTL_SECONDS = 240
+_ERROR_CACHE_TTL_SECONDS = 30
 _CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
+_REFRESH_LOCK = threading.Lock()
 _PERSISTED_FORECAST_PATH = runtime_path("market_turnover_forecast", "latest.json")
 
 
@@ -169,11 +176,25 @@ def get_intraday_turnover_forecast(
     if cached is not None and time.monotonic() < float(_CACHE.get("expires_at") or 0):
         return cached
 
+    with _REFRESH_LOCK:
+        # 进程内单飞保护：并发请求缓存过期时只允许首个线程打向 ClickHouse，
+        # 避免多个 60 日重查询叠加触发 ClickHouse total memory limit (241)。
+        cached = _CACHE.get("payload")
+        if cached is not None and time.monotonic() < float(_CACHE.get("expires_at") or 0):
+            return cached
+        return _compute_intraday_turnover_forecast(current_snapshot=current_snapshot)
+
+
+def _compute_intraday_turnover_forecast(
+    *,
+    current_snapshot: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     def finish(payload: Dict[str, Any]) -> Dict[str, Any]:
         _CACHE["payload"] = payload
-        # The minute source is refreshed on a five-minute cadence; caching avoids
-        # expensive repeated history scans when several users open the homepage.
-        _CACHE["expires_at"] = time.monotonic() + 240
+        # 成功预测缓存 4 分钟（与 5 分钟快照节奏对齐）；失败态仅短缓存 30 秒，
+        # 既防雪崩重试，也避免瞬时波动令前端长时间挂错。
+        ttl = _SUCCESS_CACHE_TTL_SECONDS if payload.get("available") else _ERROR_CACHE_TTL_SECONDS
+        _CACHE["expires_at"] = time.monotonic() + ttl
         _persist(payload)
         return payload
 
@@ -243,6 +264,7 @@ def get_intraday_turnover_forecast(
                 FROM current_rows AS r
                 CROSS JOIN latest
                 WHERE r.bar_time <= latest.as_of
+                SETTINGS max_bytes_before_external_group_by = 268435456
                 """,
                 [today, today],
                 raw=True,
@@ -267,10 +289,13 @@ def get_intraday_turnover_forecast(
         return finish(_empty("当前交易日成交额为空", as_of=as_of.strftime("%Y-%m-%d %H:%M:%S")))
 
     try:
-        # R23：同上 raw 基表直查。原版 60 日 history 经视图网关冷启 27.5GiB；
-        # 内层先按 (code, datetime) argMax(col, created_at) 去重、datetime
-        # 范围谓词裁剪到月分区；外层 toDate 仅作用于去重结果做日分组，
-        # 不再作为基表谓词。交易日下界在 Python 侧预计算。
+        # R23 + 2026-11-26 OOM 根治：
+        # 1) 保留 raw 基表直查、datetime 范围分区裁剪与 (code, datetime) argMax 去重；
+        # 2) 用 IN 子查询替代 INNER JOIN stocks，保留 kline_minute_5 的物理
+        #    ORDER BY (code, datetime) 顺序；
+        # 3) 开启 optimize_aggregation_in_order=1 流式顺序聚合 + 256MiB 外部归并兜底，
+        #    将 60 日千万行聚合内存由 >1.88GiB（并发易触发 10GiB MEMORY_LIMIT_EXCEEDED）
+        #    降至 ~300MiB 零落盘。
         start_date = today - timedelta(days=HISTORY_DAYS)
         history_df = clickhouse_query_df(
             """
@@ -286,8 +311,7 @@ def get_intraday_turnover_forecast(
                         k.datetime AS bar_time,
                         argMax(k.amount, k.created_at) AS amount
                     FROM kline_minute_5 AS k
-                    INNER JOIN stocks AS s ON s.code = k.code
-                    WHERE s.type = 'stock'
+                    WHERE k.code IN (SELECT code FROM stocks WHERE type = 'stock')
                       AND k.datetime >= ? AND k.datetime < ?
                       AND k.amount > 0
                       AND toHour(k.datetime) BETWEEN 9 AND 15
@@ -300,12 +324,15 @@ def get_intraday_turnover_forecast(
             FROM daily
             WHERE day_total > 0 AND cumulative_at_time > 0
             ORDER BY trade_date DESC
+            SETTINGS optimize_aggregation_in_order = 1, max_bytes_before_external_group_by = 268435456
             """,
             [time_text, start_date, today],
             raw=True,
         )
     except Exception as exc:
-        return finish(_empty(f"历史成交进度查询失败：{exc}", as_of=as_of.strftime("%Y-%m-%d %H:%M:%S")))
+        logger.error("历史成交进度查询失败: %s", exc, exc_info=True)
+        reason_detail = str(exc).split(" (for url ", 1)[0].strip()
+        return finish(_empty(f"历史成交进度查询失败：{reason_detail}", as_of=as_of.strftime("%Y-%m-%d %H:%M:%S")))
 
     if history_df is None or len(history_df) < MIN_HISTORY_DAYS:
         return finish(_empty(

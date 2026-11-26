@@ -653,15 +653,19 @@ export default function Home() {
               ? '首个统计日，无前日对比'
               : `较前日${change > 0 ? '放量' : change < 0 ? '缩量' : '持平'} ${(Math.abs(change) / 1000000000000).toFixed(2)} 万亿（${change > 0 ? '+' : ''}${changePercent.toFixed(2)}%）`
           const changeColor = change > 0 ? '#f87171' : change < 0 ? '#4ade80' : '#cbd5e1'
+          const formatMarketTurnover = (amountInBillion: number) =>
+            amountInBillion >= 1000
+              ? `${(amountInBillion / 10000).toFixed(2)} 万亿`
+              : `${amountInBillion.toFixed(2)} 亿`
           const markets = [
-            { label: '沪市', value: shAmounts[index], color: segmentColor(index, 0) },
-            { label: '深市', value: szAmounts[index], color: segmentColor(index, 1) },
-            { label: '北交所', value: bjAmounts[index], color: segmentColor(index, 2) }
+            { label: '沪市', value: shAmountsInBillion[index] || 0, color: segmentColor(index, 0) },
+            { label: '深市', value: szAmountsInBillion[index] || 0, color: segmentColor(index, 1) },
+            { label: '北交所', value: bjAmountsInBillion[index] || 0, color: segmentColor(index, 2) }
           ]
           const marketLines = markets
             .map(
               (market) =>
-                `<div style="display:flex;justify-content:space-between;gap:26px;margin-top:4px;"><span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${market.color};margin-right:6px;"></i>${market.label}</span><b>${(Number(market.value || 0) / 10000).toFixed(2)} 万亿</b></div>`
+                `<div style="display:flex;justify-content:space-between;gap:26px;margin-top:4px;"><span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${market.color};margin-right:6px;"></i>${market.label}</span><b>${formatMarketTurnover(Number(market.value || 0))}</b></div>`
             )
             .join('')
           const forecastLine =

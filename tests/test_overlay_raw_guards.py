@@ -311,12 +311,13 @@ def test_turnover_forecast_runtime_sql_shapes(monkeypatch, tmp_path):
     assert history_raw is True
     for token in (
         "FROM kline_minute_5 AS k",
-        "INNER JOIN stocks AS s ON s.code = k.code",
-        "s.type = 'stock'",
+        "k.code IN (SELECT code FROM stocks WHERE type = 'stock')",
         "argMax(k.amount, k.created_at)",
         "GROUP BY k.code, k.datetime",
         "k.datetime >= ? AND k.datetime < ?",
         "toDate(b.bar_time) AS trade_date",
+        "optimize_aggregation_in_order = 1",
+        "max_bytes_before_external_group_by",
     ):
         assert token in history_sql, f"60 日 history 查询丢失 token: {token}"
     assert "toDate(k.datetime)" not in history_sql
@@ -329,3 +330,66 @@ def test_turnover_forecast_runtime_sql_shapes(monkeypatch, tmp_path):
     assert payload["sample_days"] == 25
     assert mtf._PERSISTED_FORECAST_PATH.is_file()
     assert json.loads(mtf._PERSISTED_FORECAST_PATH.read_text(encoding="utf-8")) == payload
+
+
+def test_turnover_forecast_singleflight_and_short_error_cache(monkeypatch, tmp_path):
+    """并发缓存穿透只查一次 ClickHouse；异常态短缓存且不向前端暴露内部 URL。"""
+    import threading
+    import time
+    import scheduler.trading_calendar as trading_calendar
+
+    monkeypatch.setattr(mtf, "_PERSISTED_FORECAST_PATH", tmp_path / "forecast" / "latest.json")
+    monkeypatch.setattr(mtf, "_CACHE", {"payload": None, "expires_at": 0.0})
+    monkeypatch.setattr(mtf, "clickhouse_available", lambda: True)
+    monkeypatch.setattr(mtf, "clickhouse_table_exists", lambda name: True)
+    today = datetime.now(mtf.SH_TZ).date()
+    monkeypatch.setattr(
+        mtf,
+        "_now_bj",
+        lambda: datetime(today.year, today.month, today.day, 10, 45, tzinfo=mtf.SH_TZ),
+    )
+    monkeypatch.setattr(
+        trading_calendar.TradingCalendar,
+        "resolve_trading_day",
+        classmethod(lambda cls, value: trading_calendar.CalendarDayResult("trading", "mock", "ok")),
+    )
+
+    calls = 0
+
+    def _slow_error_df(sql, params=None, *, raw=False):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        raise RuntimeError(
+            "Received ClickHouse exception, code: 241 (for url http://host.docker.internal:8123)"
+        )
+
+    monkeypatch.setattr(mtf, "clickhouse_query_df", _slow_error_df)
+    snapshot = {
+        "as_of": f"{today.isoformat()} 10:45:00",
+        "total_turnover": 6.66e11,
+        "sh_amount": 3.05e11,
+        "sz_amount": 3.56e11,
+        "bj_amount": 4.68e9,
+        "covered_count": 5100,
+    }
+
+    results = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(mtf.get_intraday_turnover_forecast(current_snapshot=snapshot))
+        )
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert calls == 1, f"单飞锁应避免并发穿透，实际查询 {calls} 次"
+    assert len(results) == 4
+    for item in results:
+        assert item["available"] is False
+        assert "http://host.docker.internal" not in item["reason"]
+    remaining = float(mtf._CACHE["expires_at"]) - time.monotonic()
+    assert 0 < remaining <= mtf._ERROR_CACHE_TTL_SECONDS + 1
