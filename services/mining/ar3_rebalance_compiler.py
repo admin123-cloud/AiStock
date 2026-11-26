@@ -63,6 +63,105 @@ def _round_px(px: float, is_etf: bool) -> float:
     return round(float(px), 3 if is_etf else 2)
 
 
+_CANONICAL_NAME_CACHE: dict[str, str] = {}
+
+
+def _needs_name_fix(name: str, code6: str) -> bool:
+    s = str(name or "").strip()
+    if not s or s == code6 or len(s) < 2:
+        return True
+    if any(ch in s for ch in (":", "：", "?", "|")):
+        return True
+    return False
+
+
+def _resolve_canonical_names(codes: Sequence[str]) -> dict[str, str]:
+    """从本地 ClickHouse 证券主表与 ETF 白名单补齐标准中文名，纠正券商 OCR 错字（如 000711 '三:' -> '京蓝科技'）。"""
+    wanted = sorted({str(c).split(".")[0].strip().zfill(6) for c in codes if str(c).strip()})
+    missing = [c for c in wanted if c not in _CANONICAL_NAME_CACHE]
+    if missing:
+        try:
+            from services.mining.ar3_dual_core_live import CORE_ETF_META
+
+            for code6, meta in CORE_ETF_META.items():
+                if meta.get("name"):
+                    _CANONICAL_NAME_CACHE[str(code6).zfill(6)] = str(meta["name"])
+        except Exception:
+            pass
+        still_missing = [c for c in missing if c not in _CANONICAL_NAME_CACHE]
+        if still_missing:
+            try:
+                from utils.kline.market_warehouse import clickhouse_client
+
+                in_list = ",".join(f"'{c}'" for c in still_missing)
+                with clickhouse_client() as ch:
+                    res = ch.query(
+                        f"SELECT substring(code, 1, 6) AS code6, any(name) AS name "
+                        f"FROM stock.stocks WHERE substring(code, 1, 6) IN ({in_list}) GROUP BY code6"
+                    )
+                    for row in (res.result_rows or []):
+                        c6 = str(row[0] or "").zfill(6)
+                        nm = str(row[1] or "").strip()
+                        if c6 and nm:
+                            _CANONICAL_NAME_CACHE[c6] = nm
+            except Exception:
+                pass
+    return {c: _CANONICAL_NAME_CACHE[c] for c in wanted if c in _CANONICAL_NAME_CACHE}
+
+
+def _compute_buy_price_bounds(
+    *,
+    ref_price: float,
+    is_etf: bool,
+    entry_rule: str,
+    ma20: Optional[float] = None,
+    ma10: Optional[float] = None,
+    live_price: Optional[float] = None,
+) -> dict[str, Any]:
+    """计算买单「跌破放弃买入下限」与「不追高上限」及当前价格区间状态。"""
+    ref = float(ref_price or 0.0)
+    if ref <= 0:
+        return {
+            "min_buy_price": None,
+            "min_buy_reason": "",
+            "max_buy_price": None,
+            "max_buy_reason": "",
+            "buy_price_status": "ok",
+        }
+    rule = str(entry_rule or ("trend_above_ma20" if is_etf else "offensive_ab_blend"))
+    if rule == "trend_above_ma20":
+        min_px = _round_px(ma20 if (ma20 and ma20 > 0) else ref * 0.98, True)
+        min_reason = "跌破 MA20 放弃买入"
+        max_px = _round_px(ref * 1.015, True)
+        max_reason = "涨超 +1.5% 不追高"
+    elif rule in ("panic_30m_ab_blend", "panic_rebound_etf"):
+        min_px = _round_px(ref * 0.97, is_etf)
+        min_reason = "回撤超 -3% 放弃买入"
+        max_px = _round_px(ref * 1.03, is_etf)
+        max_reason = "涨超 +3% 不追高"
+    else:
+        ma10_floor = float(ma10) * 0.98 if (ma10 and float(ma10) > 0) else 0.0
+        min_px = _round_px(max(ma10_floor, ref * 0.96), False)
+        min_reason = "跌破 MA10/回撤 -4% 放弃买入"
+        max_px = _round_px(ref * 1.03, False)
+        max_reason = "涨超 +3% 不追高"
+
+    eff_px = float(live_price) if (live_price and float(live_price) > 0) else ref
+    if eff_px < min_px:
+        status = "below_min"
+    elif eff_px > max_px:
+        status = "above_max"
+    else:
+        status = "ok"
+    return {
+        "min_buy_price": min_px,
+        "min_buy_reason": min_reason,
+        "max_buy_price": max_px,
+        "max_buy_reason": max_reason,
+        "buy_price_status": status,
+    }
+
+
 def _extract_account_snapshot(
     overview: Mapping[str, Any],
     account_id: str = DEFAULT_PRIMARY_ACCOUNT_ID,
@@ -230,6 +329,13 @@ def compile_ar3_rebalance_plan(
             except Exception:
                 pass
     acct = _extract_account_snapshot(overview, account_id=account_id)
+    # 纠正券商 OCR 错字（如 000711 '三:' -> '京蓝科技'）
+    need_fix_codes = [h["code"] for h in acct["holdings"] if _needs_name_fix(h.get("name", ""), h["code"])]
+    if need_fix_codes:
+        canon_map = _resolve_canonical_names(need_fix_codes)
+        for h in acct["holdings"]:
+            if h["code"] in canon_map and _needs_name_fix(h.get("name", ""), h["code"]):
+                h["name"] = canon_map[h["code"]]
     radar = (
         dict(ar3_radar)
         if ar3_radar is not None
@@ -401,6 +507,8 @@ def compile_ar3_rebalance_plan(
             "is_panic_etf": is_panic_etf,
             "target_weight_pct": w_pct,
             "ref_price": cl,
+            "ma20": float(item["ma20"]) if item.get("ma20") else None,
+            "ma10": float(item["ma10"]) if item.get("ma10") else None,
             "stop_loss_price": stop_px,
             "reason": str(item.get("reason") or "AR4.6 跨资产 ETF 轮动目标"),
             "source_label": str(item.get("asset_class_label") or "跨资产ETF"),
@@ -572,7 +680,16 @@ def compile_ar3_rebalance_plan(
 
     for c6, tgt, px, gap_yuan in sorted(raw_gaps, key=lambda x: (0 if x[1]["asset_kind"] == "stock" else 1, -x[3])):
         is_etf = tgt["asset_kind"] == "etf"
+        entry_rule = str(tgt.get("entry_rule") or ("offensive_ab_blend" if not is_etf else "trend_above_ma20"))
         limit_px = _round_px(px * 1.002, is_etf)  # 买单溢价 0.2% 保障成交且符合 L2 0.5% 偏离限制
+        bounds = _compute_buy_price_bounds(
+            ref_price=float(tgt.get("ref_price") or px),
+            is_etf=is_etf,
+            entry_rule=entry_rule,
+            ma20=tgt.get("ma20"),
+            ma10=tgt.get("ma10"),
+            live_price=px,
+        )
         imm_sh = _floor_lot((gap_yuan * scale_imm) / limit_px, code6=None if is_etf else c6)
         post_sh = _floor_lot((gap_yuan * scale_post) / limit_px, code6=None if is_etf else c6)
         min_sh = 200 if (not is_etf and c6.startswith("688")) else 100
@@ -582,7 +699,7 @@ def compile_ar3_rebalance_plan(
             "code": c6,
             "name": tgt["name"],
             "asset_kind": tgt["asset_kind"],
-            "entry_rule": tgt.get("entry_rule") or ("offensive_stock" if not is_etf else "trend_above_ma20"),
+            "entry_rule": entry_rule,
             "is_panic_etf": bool(tgt.get("is_panic_etf")),
             "is_etf": is_etf,
             "side": "BUY",
@@ -592,6 +709,7 @@ def compile_ar3_rebalance_plan(
             "ref_price": _round_px(px, is_etf),
             "limit_price": limit_px,
             "stop_loss_price": tgt["stop_loss_price"],
+            **bounds,
             "immediate_shares": imm_sh,
             "est_immediate_amount": round(imm_sh * limit_px, 2),
             "post_sell_shares": post_sh,
@@ -646,6 +764,321 @@ def compile_ar3_rebalance_plan(
             })
             seq += 1
 
+    # 4.5 融合 AI 每 10 分钟盘中巡检实时判决，构建两张唯一权威决策表（表1 实盘持仓全量 + 表2 待买入清单）与持仓合规评分
+    live_orders_map: dict[str, dict[str, Any]] = {}
+    live_skipped_map: dict[str, str] = {}
+    live_poll_at: Optional[str] = None
+    if acct["account_id"] == DEFAULT_PRIMARY_ACCOUNT_ID:
+        try:
+            from services.g3.acct1_intraday_advisor import load_live_signals
+
+            ls = load_live_signals(today_str)
+            live_poll_at = ls.get("updated_at")
+            for lo in ls.get("orders") or []:
+                k = f"{str(lo.get('code') or '').zfill(6)}:{str(lo.get('side') or '').upper()}"
+                live_orders_map[k] = lo
+            for sk in ls.get("skipped_summary") or []:
+                k = f"{str(sk.get('code') or '').zfill(6)}:{str(sk.get('side') or '').upper()}"
+                live_skipped_map[k] = str(sk.get("reason") or "")
+        except Exception:
+            pass
+
+    sell_by_code = {str(s["code"]).zfill(6): s for s in sell_orders}
+    buy_by_code = {str(b["code"]).zfill(6): b for b in buy_orders}
+
+    def _humanize_skip_reason(raw_reason: str) -> str:
+        if not raw_reason:
+            return ""
+        if "panic_zone_no_floor_sell" in raw_reason:
+            return "冰点急跌暂缓地板割肉，等反抽或 14:35 确认"
+        if "etf_below_ma20" in raw_reason:
+            return "盘中跌破 MA20 趋势线，暂不买入"
+        if "below_min_buy" in raw_reason:
+            return "已跌破放弃买入红线，不适合再买"
+        if "limit_down" in raw_reason:
+            return "跌停封板，暂不可卖"
+        if "limit_up" in raw_reason:
+            return "逼近涨停，不追高买入"
+        if "smooth_step_daily_done" in raw_reason:
+            return "今日 30% 平稳减仓步长已完成"
+        if "after_1445_buy_cutoff" in raw_reason:
+            return "已过 14:45 买入截止窗"
+        if "insufficient_cash" in raw_reason:
+            return "现金不足，待卖出回款后加仓"
+        return ""
+
+    decision_holdings: list[dict[str, Any]] = []
+    unexpected_weight_pct = 0.0
+    unexpected_count = 0
+    underweight_count = 0
+    aligned_count = 0
+
+    for h in acct["holdings"]:
+        c6 = h["code"]
+        px = _eff_price(c6, h["current_price"])
+        mv = round(h["shares"] * px, 2) if px > 0 else float(h.get("market_value") or 0.0)
+        actual_w = round((mv / total_assets) * 100.0, 1) if total_assets > 0 else 0.0
+        tgt = target_map.get(c6)
+        tgt_w = round(float(tgt["target_weight_pct"]), 1) if tgt else 0.0
+        diff_w = round(actual_w - tgt_w, 1)
+        so = sell_by_code.get(c6)
+        bo = buy_by_code.get(c6)
+
+        live_sell = live_orders_map.get(f"{c6}:SELL")
+        live_buy = live_orders_map.get(f"{c6}:BUY")
+        skip_sell = live_skipped_map.get(f"{c6}:SELL", "")
+        skip_buy = live_skipped_map.get(f"{c6}:BUY", "")
+
+        alignment = "aligned"
+        action_side: Optional[str] = None
+        can_execute = False
+        action_shares = 0
+        action_price = _round_px(px, h["is_etf"])
+        action_amount = 0.0
+        ai_label = "策略预期内 · 持有"
+        ai_tone = "emerald"
+        ai_detail = "仓位与目标一致，继续持有"
+        bounds_info: dict[str, Any] = {
+            "min_buy_price": None,
+            "min_buy_reason": "",
+            "max_buy_price": None,
+            "max_buy_reason": "",
+            "buy_price_status": "ok",
+        }
+
+        if tgt is None:
+            alignment = "unexpected"
+            unexpected_weight_pct += actual_w
+            unexpected_count += 1
+            action_side = "SELL"
+            if so and so.get("blocked_t1"):
+                ai_label = "T+1 冻结 · 明日可卖"
+                ai_tone = "amber"
+                ai_detail = "非策略目标持仓，今日可用股数为 0，下一交易日优先清退"
+                can_execute = False
+            elif "panic_zone_no_floor_sell" in skip_sell or "limit_down" in skip_sell or "smooth_step_daily_done" in skip_sell:
+                ai_label = "AI 暂缓卖出"
+                ai_tone = "amber"
+                ai_detail = _humanize_skip_reason(skip_sell)
+                can_execute = False
+            elif so and int(so.get("suggested_shares") or 0) >= 100:
+                action_shares = int(live_sell["shares"]) if live_sell else int(so["suggested_shares"])
+                action_price = float(live_sell["price"]) if live_sell else float(so["limit_price"])
+                action_amount = round(action_shares * action_price, 2)
+                can_execute = True
+                ai_label = "⚡ 10m 触发 · 清退卖出" if live_sell else "预期外 · 建议清退"
+                ai_tone = "red"
+                ai_detail = str(so.get("reason") or "非 AR4.6 当前目标标的")
+            else:
+                ai_label = "零头仓 · 观察"
+                ai_tone = "zinc"
+                ai_detail = "差额较小或可用不足 1 手"
+        elif so is not None:
+            alignment = "overweight"
+            action_side = "SELL"
+            if so.get("blocked_t1"):
+                ai_label = "超配 · T+1 冻结"
+                ai_tone = "amber"
+                ai_detail = "仓位超目标，待 T+1 解冻后减仓"
+            elif int(so.get("suggested_shares") or 0) >= 100:
+                action_shares = int(live_sell["shares"]) if live_sell else int(so["suggested_shares"])
+                action_price = float(live_sell["price"]) if live_sell else float(so["limit_price"])
+                action_amount = round(action_shares * action_price, 2)
+                can_execute = True
+                ai_label = "⚡ 10m 触发 · 超配减仓" if live_sell else "超配 · 建议减仓"
+                ai_tone = "amber"
+                ai_detail = str(so.get("reason") or f"超配 {diff_w:+.1f}%")
+        elif bo is not None or (tgt_w - actual_w >= 3.0):
+            alignment = "underweight"
+            underweight_count += 1
+            action_side = "BUY"
+            entry_rule = str(tgt.get("entry_rule") or ("trend_above_ma20" if h["is_etf"] else "offensive_ab_blend"))
+            bounds_info = _compute_buy_price_bounds(
+                ref_price=float(tgt.get("ref_price") or px),
+                is_etf=h["is_etf"],
+                entry_rule=entry_rule,
+                ma20=tgt.get("ma20"),
+                ma10=tgt.get("ma10"),
+                live_price=px,
+            )
+            imm_sh = int(bo["immediate_shares"]) if bo else 0
+            post_sh = int(bo["post_sell_shares"]) if bo else 0
+            if bounds_info["buy_price_status"] == "below_min" or "etf_below_ma20" in skip_buy or "below_min_buy" in skip_buy:
+                ai_label = f"🚫 已破放弃线 ¥{bounds_info['min_buy_price']} · 不再加仓"
+                ai_tone = "red"
+                ai_detail = bounds_info["min_buy_reason"] or _humanize_skip_reason(skip_buy)
+                can_execute = False
+            elif imm_sh >= 100:
+                action_shares = int(live_buy["shares"]) if live_buy else imm_sh
+                action_price = float(live_buy["price"]) if live_buy else float(bo["limit_price"])
+                action_amount = round(action_shares * action_price, 2)
+                can_execute = True
+                if bounds_info["buy_price_status"] == "above_max":
+                    ai_label = "⚠️ 已涨离买点 · 谨慎加仓"
+                    ai_tone = "amber"
+                else:
+                    ai_label = "⚡ 10m 触发 · 可加仓" if live_buy else "欠配 · 建议加仓"
+                    ai_tone = "blue"
+                ai_detail = f"目标 {tgt_w:.0f}%，现 {actual_w:.0f}%（现金可立买 {action_shares} 股）"
+            else:
+                ai_label = "待卖出回款后加仓"
+                ai_tone = "zinc"
+                ai_detail = f"目标 {tgt_w:.0f}%，现 {actual_w:.0f}%；当前可用现金不足 1 手，清退预期外持仓后自动衔接"
+                action_shares = post_sh
+                action_price = float(bo["limit_price"]) if bo else _round_px(px * 1.002, h["is_etf"])
+                can_execute = False
+        else:
+            aligned_count += 1
+
+        decision_holdings.append({
+            "code": c6,
+            "name": h["name"],
+            "is_etf": h["is_etf"],
+            "shares": h["shares"],
+            "available_shares": h["available_shares"],
+            "current_price": _round_px(px, h["is_etf"]),
+            "cost_price": h["cost_price"],
+            "market_value": mv,
+            "profit_pct": h["profit_pct"],
+            "actual_weight_pct": actual_w,
+            "target_weight_pct": tgt_w,
+            "weight_diff_pct": diff_w,
+            "alignment": alignment,
+            "action_side": action_side,
+            "can_execute": can_execute,
+            "live_10m_triggered": bool(live_sell or live_buy),
+            "action_shares": action_shares,
+            "full_clear_shares": int(so.get("full_clear_shares") or 0) if so else 0,
+            "action_price": action_price,
+            "action_amount": action_amount,
+            "stop_loss_price": tgt.get("stop_loss_price") if tgt else None,
+            **bounds_info,
+            "ai_status_label": ai_label,
+            "ai_status_tone": ai_tone,
+            "ai_status_detail": ai_detail,
+        })
+
+    # 排序：10m实时触发 > 可执行 > 预期外/超配 > 欠配 > 已对齐
+    _align_prio = {"unexpected": 0, "overweight": 1, "underweight": 2, "aligned": 3}
+    decision_holdings.sort(
+        key=lambda r: (
+            0 if r["live_10m_triggered"] else 1,
+            0 if r["can_execute"] else 1,
+            _align_prio.get(r["alignment"], 9),
+            -abs(r["weight_diff_pct"]),
+        )
+    )
+
+    # 表 2：待买入股票 / ETF 列表（当前未持仓的策略目标标的）
+    decision_pending_buys: list[dict[str, Any]] = []
+    for c6, tgt in target_map.items():
+        if c6 in holdings_by_code:
+            continue
+        px = _eff_price(c6, tgt["ref_price"])
+        if px <= 0:
+            continue
+        is_etf = tgt["asset_kind"] == "etf"
+        entry_rule = str(tgt.get("entry_rule") or ("trend_above_ma20" if is_etf else "offensive_ab_blend"))
+        bo = buy_by_code.get(c6)
+        bounds_info = _compute_buy_price_bounds(
+            ref_price=float(tgt.get("ref_price") or px),
+            is_etf=is_etf,
+            entry_rule=entry_rule,
+            ma20=tgt.get("ma20"),
+            ma10=tgt.get("ma10"),
+            live_price=px,
+        )
+        live_buy = live_orders_map.get(f"{c6}:BUY")
+        skip_buy = live_skipped_map.get(f"{c6}:BUY", "")
+        imm_sh = int(bo["immediate_shares"]) if bo else 0
+        post_sh = int(bo["post_sell_shares"]) if bo else 0
+        lim_px = float(live_buy["price"]) if live_buy else (float(bo["limit_price"]) if bo else _round_px(px * 1.002, is_etf))
+        sug_sh = int(live_buy["shares"]) if live_buy else (imm_sh if imm_sh >= 100 else post_sh)
+
+        can_exec = False
+        if bounds_info["buy_price_status"] == "below_min" or "etf_below_ma20" in skip_buy or "below_min_buy" in skip_buy:
+            ai_label = f"🚫 已破放弃线 ¥{bounds_info['min_buy_price']} · 不再买"
+            ai_tone = "red"
+            ai_detail = bounds_info["min_buy_reason"] or _humanize_skip_reason(skip_buy)
+        elif not is_offensive and not is_etf and not is_panic_ab_active:
+            ai_label = "非进攻期锁定"
+            ai_tone = "zinc"
+            ai_detail = "大盘非进攻期，个股预算 0%"
+        elif imm_sh >= 100:
+            can_exec = True
+            if bounds_info["buy_price_status"] == "above_max":
+                ai_label = "⚠️ 已涨离买点 · 谨慎追高"
+                ai_tone = "amber"
+            else:
+                ai_label = "⚡ 10m 触发 · 可立即买入" if live_buy else "现金充足 · 可买入"
+                ai_tone = "emerald"
+            ai_detail = str(tgt.get("reason") or "AR4.6 目标配置建仓")
+        else:
+            ai_label = "待卖出回款后买入"
+            ai_tone = "zinc"
+            ai_detail = f"目标 {tgt['target_weight_pct']}%，当前现金不足 1 手，卖后预计可买 {post_sh} 股"
+
+        decision_pending_buys.append({
+            "code": c6,
+            "name": tgt["name"],
+            "is_etf": is_etf,
+            "source_label": tgt["source_label"],
+            "target_weight_pct": round(float(tgt["target_weight_pct"]), 1),
+            "ref_price": _round_px(px, is_etf),
+            "limit_price": lim_px,
+            "immediate_shares": imm_sh,
+            "post_sell_shares": post_sh,
+            "suggested_shares": sug_sh,
+            "est_amount": round(sug_sh * lim_px, 2),
+            "stop_loss_price": tgt["stop_loss_price"],
+            **bounds_info,
+            "can_execute": can_exec,
+            "live_10m_triggered": bool(live_buy),
+            "ai_status_label": ai_label,
+            "ai_status_tone": ai_tone,
+            "ai_status_detail": ai_detail,
+            "reason": tgt["reason"],
+            "qdii_notice": tgt.get("qdii_notice"),
+        })
+
+    decision_pending_buys.sort(
+        key=lambda r: (0 if r["live_10m_triggered"] else 1, 0 if r["can_execute"] else 1, -r["target_weight_pct"])
+    )
+
+    # 组合合规度评分（L1 权重重合度：100% 表示完全对齐）
+    all_codes_comp = set(target_map.keys()) | {h["code"] for h in acct["holdings"]}
+    actual_w_map = {r["code"]: r["actual_weight_pct"] for r in decision_holdings}
+    l1_diff = 0.0
+    for c6 in all_codes_comp:
+        aw = actual_w_map.get(c6, 0.0)
+        tw = float(target_map[c6]["target_weight_pct"]) if c6 in target_map else 0.0
+        l1_diff += abs(aw - tw)
+    actual_cash_w = round((avail_cash / total_assets) * 100.0, 1) if total_assets > 0 else 100.0
+    target_cash_w = max(0.0, round(100.0 - sum(float(t["target_weight_pct"]) for t in target_map.values()), 1))
+    l1_diff += abs(actual_cash_w - target_cash_w)
+    compliance_pct = round(max(0.0, 100.0 - l1_diff / 2.0), 1)
+    if unexpected_count > 0:
+        comp_headline = f"偏离策略 {round(100.0 - compliance_pct, 0):.0f}% · {unexpected_count} 只预期外持仓待清退"
+        comp_tone = "red"
+    elif underweight_count > 0 or len(decision_pending_buys) > 0:
+        comp_headline = f"合规度 {compliance_pct:.0f}% · 存在待补仓标的"
+        comp_tone = "amber"
+    else:
+        comp_headline = "持仓结构已与策略对齐"
+        comp_tone = "emerald"
+
+    portfolio_compliance = {
+        "compliance_pct": compliance_pct,
+        "unexpected_weight_pct": round(unexpected_weight_pct, 1),
+        "unexpected_count": unexpected_count,
+        "underweight_count": underweight_count,
+        "aligned_count": aligned_count,
+        "pending_buy_count": len(decision_pending_buys),
+        "live_poll_at": live_poll_at,
+        "headline": comp_headline,
+        "tone": comp_tone,
+    }
+
     plan: dict[str, Any] = {
         "schema": "ar3_rebalance_plan/1",
         "date": today_str,
@@ -668,6 +1101,9 @@ def compile_ar3_rebalance_plan(
         "sell_orders": sell_orders,
         "buy_orders": buy_orders,
         "hold_keep": hold_keep_list,
+        "decision_holdings": decision_holdings,
+        "decision_pending_buys": decision_pending_buys,
+        "portfolio_compliance": portfolio_compliance,
         "order_intents": order_intents,
         "money_effect_20d": stock_radar.get("money_effect_20d"),
         "macro_dashboard": radar.get("macro_dashboard"),

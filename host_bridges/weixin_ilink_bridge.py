@@ -110,6 +110,28 @@ def _ilink_post(base_url: str, endpoint: str, token: str, payload: dict[str, Any
     return json.loads(raw) if raw.strip() else {}
 
 
+_REF_MSG_ID_RE = re.compile(
+    r"^\s*[\[#【]?(?:id)(\d{1,6})[\]】]?\s*[:：\s]\s*(.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_LEADING_MSG_ID_RE = re.compile(r"^\s*[\[#【]?id\d{4,6}[\]】]?(?:\s|$)", re.IGNORECASE)
+
+
+def normalize_short_msg_id(raw_num: str | int) -> str:
+    """规范化短消息编号为 id0001 形式（不足 4 位左补零）。"""
+    num = int(raw_num)
+    return f"id{num:04d}"
+
+
+def parse_ref_msg_id(text: str) -> tuple[Optional[str], str]:
+    """解析用户消息前缀中的引用编号（如 'id0001:选2' / 'ID1：同意' / 'id0001 确认'）。"""
+    raw = (text or "").strip()
+    m = _REF_MSG_ID_RE.match(raw)
+    if not m:
+        return None, raw
+    return normalize_short_msg_id(m.group(1)), m.group(2).strip()
+
+
 class ILinkBridge:
     """iLink 凭证管理、单向推送与双向长轮询控制器。"""
 
@@ -122,6 +144,8 @@ class ILinkBridge:
         self.inbox_pending_dir = self.state_dir / "inbox" / "pending"
         self.inbox_done_dir = self.state_dir / "inbox" / "done"
         self.history_path = self.state_dir / "chat_history.jsonl"
+        self.msg_seq_path = self.state_dir / "inbox" / "msg_seq.json"
+        self.outbound_index_path = self.state_dir / "inbox" / "outbound_index.jsonl"
         self.inbox_pending_dir.mkdir(parents=True, exist_ok=True)
         self.inbox_done_dir.mkdir(parents=True, exist_ok=True)
         self.account_id: str = ""
@@ -179,8 +203,64 @@ class ILinkBridge:
     def _save_sync_buf(self) -> None:
         _atomic_write_json(self.state_dir / f"{self.account_id}.sync.json", {"get_updates_buf": self.sync_buf})
 
-    def send_text(self, text: str, peer: Optional[str] = None) -> dict[str, Any]:
-        """发送纯文本微信消息（超过 1800 字自动分段）。"""
+    def _next_short_msg_id(self) -> str:
+        """线程安全分配递增短消息编号（id0001, id0002, ...），持久化在 inbox/msg_seq.json。"""
+        with self._inbox_lock:
+            cur = _read_json(self.msg_seq_path)
+            seq = int(cur.get("seq", 0)) if isinstance(cur, dict) else 0
+            seq += 1
+            _atomic_write_json(self.msg_seq_path, {"seq": seq})
+            return normalize_short_msg_id(seq)
+
+    def _record_outbound_index(
+        self,
+        short_id: str,
+        text: str,
+        *,
+        source: str = "",
+        in_reply_to: str = "",
+        peer: str = "",
+    ) -> None:
+        record = {
+            "short_id": short_id,
+            "ts": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "source": source,
+            "in_reply_to": in_reply_to,
+            "peer": peer,
+            "text": text,
+        }
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with self._inbox_lock:
+            self.outbound_index_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.outbound_index_path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+
+    def lookup_outbound_message(self, short_id: str) -> Optional[dict[str, Any]]:
+        """按短消息编号（如 id0001）反查历史发出消息原文。"""
+        wanted = (short_id or "").strip().lower()
+        if not wanted or not self.outbound_index_path.is_file():
+            return None
+        with self._inbox_lock:
+            lines = self.outbound_index_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for raw_line in reversed(lines):
+            try:
+                rec = json.loads(raw_line)
+            except ValueError:
+                continue
+            if str(rec.get("short_id") or "").strip().lower() == wanted:
+                return rec
+        return None
+
+    def send_text(
+        self,
+        text: str,
+        peer: Optional[str] = None,
+        *,
+        source: str = "",
+        in_reply_to: str = "",
+        assign_id: bool = True,
+    ) -> dict[str, Any]:
+        """发送纯文本微信消息（自动附加 [idxxxx] 编号并索引，超过 1800 字自动分段）。"""
         target = (peer or self.default_peer).strip()
         if not target:
             return {"ok": False, "detail": "尚未记录接收微信用户（请先给机器人发任意一条消息）"}
@@ -188,7 +268,17 @@ class ILinkBridge:
         if not clean:
             return {"ok": False, "detail": "消息内容不能为空"}
 
-        chunks = [clean[i:i + 1800] for i in range(0, len(clean), 1800)]
+        short_id: Optional[str] = None
+        outbound_text = clean
+        if assign_id:
+            if _LEADING_MSG_ID_RE.match(clean):
+                m_lead = re.match(r"^\s*[\[#【]?(id\d{4,6})[\]】]?", clean, re.IGNORECASE)
+                short_id = m_lead.group(1).lower() if m_lead else self._next_short_msg_id()
+            else:
+                short_id = self._next_short_msg_id()
+                outbound_text = f"[{short_id}]\n{clean}"
+
+        chunks = [outbound_text[i:i + 1800] for i in range(0, len(outbound_text), 1800)]
         last_resp: dict[str, Any] = {}
         with self._lock:
             ctx_tok = self.context_tokens.get(target, "")
@@ -224,8 +314,20 @@ class ILinkBridge:
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
 
+        if short_id:
+            self._record_outbound_index(
+                short_id,
+                clean,
+                source=source,
+                in_reply_to=in_reply_to,
+                peer=target,
+            )
+
         self.last_tx_at = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        return {"ok": True, "detail": "已送达微信", "peer": target[:10] + "...", "resp": last_resp}
+        res: dict[str, Any] = {"ok": True, "detail": "已送达微信", "peer": target[:10] + "...", "resp": last_resp}
+        if short_id:
+            res["short_id"] = short_id
+        return res
 
     # ── AiStock 快捷交易指令 ────────────────────────────────────
 
@@ -366,10 +468,18 @@ class ILinkBridge:
             with self.history_path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
 
-    def _enqueue_session_question(self, sender: str, text: str) -> dict[str, Any]:
+    def _enqueue_session_question(
+        self,
+        sender: str,
+        text: str,
+        *,
+        ref_msg_id: Optional[str] = None,
+        clean_text: Optional[str] = None,
+    ) -> dict[str, Any]:
         now = datetime.now(BJ_TZ)
         msg_id = f"{now.strftime('%Y%m%d_%H%M%S_%f')}_{secrets.token_hex(3)}"
-        payload = {
+        ref_record = self.lookup_outbound_message(ref_msg_id) if ref_msg_id else None
+        payload: dict[str, Any] = {
             "id": msg_id,
             "sender": sender,
             "text": text,
@@ -377,10 +487,21 @@ class ILinkBridge:
             "created_ts": time.time(),
             "status": "pending",
         }
+        if ref_msg_id:
+            payload["ref_msg_id"] = ref_msg_id
+            payload["clean_text"] = (clean_text or text).strip()
+            payload["ref_found"] = bool(ref_record)
+            if ref_record:
+                payload["referenced_message"] = {
+                    "short_id": ref_record.get("short_id"),
+                    "ts": ref_record.get("ts"),
+                    "source": ref_record.get("source"),
+                    "text": ref_record.get("text"),
+                }
         pending_file = self.inbox_pending_dir / f"{msg_id}.json"
         _atomic_write_json(pending_file, payload)
         self._append_chat_history("user", msg_id, text, sender=sender)
-        logger.info("已将微信问题写入会话收件箱: id=%s", msg_id)
+        logger.info("已将微信问题写入会话收件箱: id=%s ref=%s", msg_id, ref_msg_id or "-")
         return payload
 
     def list_pending_inbox(self, history_limit: int = 10) -> dict[str, Any]:
@@ -424,12 +545,20 @@ class ILinkBridge:
         if isinstance(item, dict) and not target_peer:
             target_peer = str(item.get("sender") or "").strip() or None
 
-        send_res = self.send_text(clean, peer=target_peer)
+        send_res = self.send_text(
+            clean,
+            peer=target_peer,
+            source="session_reply",
+            in_reply_to=str(msg_id or ""),
+            assign_id=True,
+        )
         if not send_res.get("ok"):
             return send_res
 
         replied_id = msg_id or f"reply_{datetime.now(BJ_TZ).strftime('%Y%m%d_%H%M%S')}"
-        self._append_chat_history("assistant", replied_id, clean, sender=target_peer or "")
+        short_id = send_res.get("short_id")
+        hist_content = f"[{short_id}]\n{clean}" if short_id else clean
+        self._append_chat_history("assistant", replied_id, hist_content, sender=target_peer or "")
 
         if target_file and target_file.is_file():
             with self._inbox_lock:
@@ -437,6 +566,8 @@ class ILinkBridge:
                 done_payload["status"] = "done"
                 done_payload["replied_at"] = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
                 done_payload["reply_text"] = clean
+                if short_id:
+                    done_payload["reply_short_id"] = short_id
                 done_file = self.inbox_done_dir / target_file.name
                 _atomic_write_json(done_file, done_payload)
                 try:
@@ -448,19 +579,29 @@ class ILinkBridge:
 
     def _dispatch_incoming(self, sender: str, text: str) -> None:
         try:
-            quick = self._handle_quick_command(text)
-            if quick is not None:
-                self.send_text(quick, peer=sender)
-                return
+            ref_msg_id, clean_text = parse_ref_msg_id(text)
+            if not ref_msg_id:
+                quick = self._handle_quick_command(text)
+                if quick is not None:
+                    self.send_text(quick, peer=sender, source="quick_cmd", assign_id=True)
+                    return
 
-            item = self._enqueue_session_question(sender, text)
+            item = self._enqueue_session_question(
+                sender,
+                text,
+                ref_msg_id=ref_msg_id,
+                clean_text=clean_text,
+            )
+            ref_hint = f"（关联 {ref_msg_id}）" if ref_msg_id else ""
             self.send_text(
-                f"⏳ 已收到问题（编号 {item['id'][-6:]}），已写入本地收件箱，正在等待当前工作区会话在线解答…",
+                f"⏳ 已收到问题{ref_hint}，已写入本地收件箱，正在等待当前工作区会话在线解答…",
                 peer=sender,
+                source="inbox_ack",
+                assign_id=False,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("处理微信消息失败")
-            self.send_text(f"⚠️ 指令处理出错：{type(exc).__name__}: {exc}", peer=sender)
+            self.send_text(f"⚠️ 指令处理出错：{type(exc).__name__}: {exc}", peer=sender, source="error", assign_id=False)
 
     def poll_forever(self) -> None:
         """长轮询 iLink getupdates 接收微信消息。"""
@@ -628,7 +769,7 @@ def run_http_server(bridge: ILinkBridge, port: int) -> ThreadingHTTPServer:
                     logger.info("[policy] 已拦截旧 acct2/王账号推送（命中=%s, source=%s）: %s", suppressed_kw, source or "legacy", title or full[:60])
                     self._reply(200, {"ok": True, "suppressed": True, "detail": f"suppressed_legacy_acct2:{suppressed_kw}"})
                     return
-                res = bridge.send_text(full, peer=data.get("peer"))
+                res = bridge.send_text(full, peer=data.get("peer"), source=source or "http_send", assign_id=True)
                 self._reply(200 if res.get("ok") else 400, res)
                 return
             self._reply(404, {"ok": False, "detail": "not found"})

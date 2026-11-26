@@ -1573,6 +1573,11 @@ export interface G3AR3BuyOrder {
   ref_price: number
   limit_price: number
   stop_loss_price: number
+  min_buy_price?: number | null
+  min_buy_reason?: string
+  max_buy_price?: number | null
+  max_buy_reason?: string
+  buy_price_status?: 'ok' | 'below_min' | 'above_max' | string
   immediate_shares: number
   est_immediate_amount: number
   post_sell_shares: number
@@ -1580,6 +1585,77 @@ export interface G3AR3BuyOrder {
   suggested_shares: number
   reason: string
   qdii_notice?: string | null
+}
+
+export interface G3DecisionHoldingRow {
+  code: string
+  name: string
+  is_etf: boolean
+  shares: number
+  available_shares: number
+  current_price: number
+  cost_price?: number
+  market_value: number
+  profit_pct?: number | null
+  actual_weight_pct: number
+  target_weight_pct: number
+  weight_diff_pct: number
+  alignment: 'aligned' | 'underweight' | 'overweight' | 'unexpected' | string
+  action_side?: 'BUY' | 'SELL' | null
+  can_execute: boolean
+  live_10m_triggered: boolean
+  action_shares: number
+  full_clear_shares: number
+  action_price: number
+  action_amount: number
+  stop_loss_price?: number | null
+  min_buy_price?: number | null
+  min_buy_reason?: string
+  max_buy_price?: number | null
+  max_buy_reason?: string
+  buy_price_status?: 'ok' | 'below_min' | 'above_max' | string
+  ai_status_label: string
+  ai_status_tone: 'emerald' | 'amber' | 'red' | 'blue' | 'zinc' | string
+  ai_status_detail: string
+}
+
+export interface G3DecisionPendingBuyRow {
+  code: string
+  name: string
+  is_etf: boolean
+  source_label: string
+  target_weight_pct: number
+  ref_price: number
+  limit_price: number
+  immediate_shares: number
+  post_sell_shares: number
+  suggested_shares: number
+  est_amount: number
+  stop_loss_price?: number | null
+  min_buy_price?: number | null
+  min_buy_reason?: string
+  max_buy_price?: number | null
+  max_buy_reason?: string
+  buy_price_status?: 'ok' | 'below_min' | 'above_max' | string
+  can_execute: boolean
+  live_10m_triggered: boolean
+  ai_status_label: string
+  ai_status_tone: 'emerald' | 'amber' | 'red' | 'blue' | 'zinc' | string
+  ai_status_detail: string
+  reason: string
+  qdii_notice?: string | null
+}
+
+export interface G3PortfolioCompliance {
+  compliance_pct: number
+  unexpected_weight_pct: number
+  unexpected_count: number
+  underweight_count: number
+  aligned_count: number
+  pending_buy_count: number
+  live_poll_at?: string | null
+  headline: string
+  tone: 'emerald' | 'amber' | 'red' | string
 }
 
 export interface G3AR3RebalancePlanResponse {
@@ -1627,9 +1703,19 @@ export interface G3AR3RebalancePlanResponse {
     immediate_buy_budget: number
     post_sell_buy_budget: number
   }
+  target_allocation?: Array<{
+    code: string
+    name: string
+    asset_kind: string
+    target_weight_pct: number
+    ref_price: number
+  }>
   sell_orders: G3AR3SellOrder[]
   buy_orders: G3AR3BuyOrder[]
   hold_keep: Array<{ code: string; name: string; shares: number; market_value: number; target_weight_pct: number; action: string; reason: string }>
+  decision_holdings?: G3DecisionHoldingRow[]
+  decision_pending_buys?: G3DecisionPendingBuyRow[]
+  portfolio_compliance?: G3PortfolioCompliance
   order_intents: Array<Record<string, unknown>>
   money_effect_20d?: G3AR3DualCoreRadarResponse['stock_radar']['money_effect_20d']
   execution_adapter: {
@@ -1849,4 +1935,110 @@ export const askG3AiBus = (payload: { prompt: string; kind?: string; source?: st
   request.post<unknown, { ok: boolean; status: string; job_id?: string; session_online?: boolean; detail?: string }>(
     '/g3/ai-bus/ask',
     payload,
+  )
+
+export interface G3Acct1LiveOrder {
+  key: string
+  code: string
+  name: string
+  side: 'SELL' | 'BUY'
+  shares: number
+  price: number
+  est_amount: number
+  is_etf: boolean
+  pct_chg?: number | null
+  available_shares?: number
+  current_shares?: number
+  stop_loss_price?: number | null
+  target_weight_pct?: number | null
+  reason: string
+  triggered_at: string
+}
+
+export interface G3Acct1AdvisorStatusResponse {
+  account_id: string
+  date: string
+  in_sell_session: boolean
+  in_buy_session: boolean
+  last_poll_at?: string | null
+  live_signals?: {
+    date: string
+    updated_at?: string | null
+    regime?: string | null
+    regime_label?: string | null
+    breadth_pct?: number | null
+    available_cash?: number | null
+    total_assets?: number | null
+    orders: G3Acct1LiveOrder[]
+    skipped_summary?: Array<{ code: string; side: string; reason: string }>
+  }
+  sent_today: Record<string, { last_at?: string; count?: number }>
+  manual_fills_today: Array<{
+    ts: string
+    code: string
+    name: string
+    side: 'BUY' | 'SELL'
+    shares: number
+    price: number
+    amount: number
+  }>
+  push_policy?: {
+    pause_intraday_auto_push: boolean
+    pause_ar2_radar_broadcast: boolean
+    reason?: string
+  }
+}
+
+export const getG3Acct1AdvisorStatus = () =>
+  request.get<unknown, G3Acct1AdvisorStatusResponse>('/g3/acct1-advisor/status')
+
+export const confirmG3Acct1Fill = (payload: {
+  code: string
+  side: 'BUY' | 'SELL'
+  shares: number
+  price: number
+  name?: string
+  note?: string
+  trigger_next_intraday?: boolean
+}) =>
+  request.post<unknown, { status: string; fill?: Record<string, unknown> }>(
+    '/g3/acct1-advisor/confirm-fill',
+    payload,
+  )
+
+export interface G3AiBroadcastItem {
+  id: string
+  ts: string
+  slot: string
+  channel: 'ai_bus' | 'rule_snapshot' | string
+  channel_label: string
+  decision: string
+  regime?: string | null
+  regime_label?: string | null
+  breadth_pct?: number | null
+  headline: string
+  body: string
+  risk_flags: string[]
+  actions: string[]
+  executable_count?: number | null
+}
+
+export interface G3AiBroadcastFeedResponse {
+  ok: boolean
+  date: string
+  session_online: boolean
+  heartbeat_at?: string | null
+  pending_ai_jobs: number
+  last_poll_at?: string | null
+  live_orders_count: number
+  items: G3AiBroadcastItem[]
+}
+
+export const getG3AiBroadcasts = (limit = 50) =>
+  request.get<unknown, G3AiBroadcastFeedResponse>('/g3/ai-bus/broadcasts', { params: { limit } })
+
+export const triggerG3AiBroadcastNow = () =>
+  request.post<unknown, { status: string; ts?: string; executable_count?: number; ai_broadcast_job_id?: string | null }>(
+    '/g3/ai-bus/broadcast-now',
+    {},
   )

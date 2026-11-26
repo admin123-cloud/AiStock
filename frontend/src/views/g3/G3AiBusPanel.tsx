@@ -28,7 +28,13 @@ const QUICK_PROMPTS: Array<{ label: string; kind: string; prompt: string }> = [
   },
 ]
 
-export default function G3AiBusPanel() {
+interface G3AiBusPanelProps {
+  /** 在独立 AI 直播与参谋页固定展开，不再提供折叠条 */
+  alwaysExpanded?: boolean
+}
+
+export default function G3AiBusPanel({ alwaysExpanded = false }: G3AiBusPanelProps) {
+  const [expanded, setExpanded] = useState(alwaysExpanded)
   const [status, setStatus] = useState<G3AiBusStatusResponse | null>(null)
   const [prompt, setPrompt] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -63,6 +69,7 @@ export default function G3AiBusPanel() {
   const submitQuestion = async (text: string, kind = 'desk_qa') => {
     const clean = text.trim()
     if (!clean || submitting) return
+    setExpanded(true)
     setSubmitting(true)
     setError(null)
     try {
@@ -107,116 +114,154 @@ export default function G3AiBusPanel() {
     }
   }
 
+  const isCommunicating = submitting || Boolean(activeJobId)
+  const showBody = alwaysExpanded || expanded || isCommunicating
+
   return (
-    <Card className="border-cyan-500/30 bg-zinc-900/70 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-white">🤖 在线 AI 参谋（Antigravity 决策总线）</span>
+    <Card className={`border-cyan-500/30 bg-zinc-900/70 ${showBody ? 'p-4' : 'px-3 py-2'}`}>
+      <div
+        role={alwaysExpanded ? undefined : 'button'}
+        tabIndex={alwaysExpanded ? undefined : 0}
+        onClick={alwaysExpanded ? undefined : () => setExpanded((v) => !v)}
+        onKeyDown={
+          alwaysExpanded
+            ? undefined
+            : (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setExpanded((v) => !v)
+                }
+              }
+        }
+        className={`flex flex-wrap items-center justify-between gap-2 select-none ${alwaysExpanded ? '' : 'cursor-pointer'}`}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-xs font-semibold text-white sm:text-sm">
+            🤖 在线 AI 参谋（Antigravity 决策总线）
+          </span>
           <Badge color={status?.session_online ? 'emerald' : 'zinc'}>
-            {status?.session_online ? '🟢 会话在线待命' : '⚪ 会话离线（排队）'}
+            {status?.session_online ? '🟢 在线待命' : '⚪ 离线排队'}
           </Badge>
           {(status?.pending_count ?? 0) > 0 && (
             <Badge color="amber">排队中 {status?.pending_count}</Badge>
           )}
-        </div>
-        <span className="text-[11px] text-zinc-400">
-          仅做深度研判与风险排雷 · 严禁自动下单
-          {status?.heartbeat_at ? ` · 心跳 ${status.heartbeat_at}` : ''}
-        </span>
-      </div>
-
-      <div className="mt-2.5 flex flex-wrap gap-1.5">
-        {QUICK_PROMPTS.map((q) => (
-          <Button
-            key={q.label}
-            outline
-            disabled={submitting}
-            onClick={() => void submitQuestion(q.prompt, q.kind)}
-          >
-            {q.label}
-          </Button>
-        ))}
-      </div>
-
-      <div className="mt-2.5 flex gap-2">
-        <input
-          type="text"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              void submitQuestion(prompt)
-            }
-          }}
-          placeholder="直接向在线 Antigravity 会话提问（可查库/搜实时新闻/核查持仓与风控）..."
-          className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:border-cyan-400 focus:outline-none"
-        />
-        <Button color="cyan" disabled={submitting || !prompt.trim()} onClick={() => void submitQuestion(prompt)}>
-          {submitting ? 'AI 思考中...' : '提交研判'}
-        </Button>
-      </div>
-
-      {activeJobId && (
-        <div className="mt-2 rounded-md border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-xs text-cyan-200">
-          ⏳ 已提交至本地决策总线（<code>{activeJobId}</code>），正在等待在线 Antigravity 会话深度分析并写回...
-        </div>
-      )}
-
-      {error && (
-        <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
-          ⚠️ {error}
-        </div>
-      )}
-
-      {activeResult && (
-        <div className="mt-3 rounded-md border border-zinc-800 bg-zinc-950/80 p-3 text-xs">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-semibold text-cyan-300">
-              最新研判：{activeResult.summary || activeResult.prompt.slice(0, 48)}
+          {!showBody && activeResult && (
+            <span className="hidden max-w-md truncate text-[11px] text-zinc-400 lg:inline">
+              最近：{activeResult.completed_at.slice(5, 16)} · {activeResult.summary || activeResult.prompt}
             </span>
-            <div className="flex items-center gap-1.5">
-              <Badge color="cyan">{activeResult.decision || 'advisory'}</Badge>
-              <span className="font-mono text-[11px] text-zinc-500">{activeResult.completed_at}</span>
-            </div>
-          </div>
-          <div className="mt-1 text-[11px] text-zinc-400">问题：{activeResult.prompt}</div>
-          <div className="mt-2 whitespace-pre-wrap leading-relaxed text-zinc-100">{activeResult.answer}</div>
-          {activeResult.risk_flags.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {activeResult.risk_flags.map((r, i) => (
-                <Badge key={i} color="rose">⚠️ {r}</Badge>
-              ))}
-            </div>
-          )}
-          {activeResult.actions.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {activeResult.actions.map((a, i) => (
-                <Badge key={i} color="emerald">👉 {a}</Badge>
-              ))}
-            </div>
           )}
         </div>
-      )}
+        <div className="flex shrink-0 items-center gap-2">
+          {showBody && (
+            <span className="hidden text-[11px] text-zinc-400 sm:inline">
+              仅做深度研判与风险排雷 · 严禁自动下单
+              {status?.heartbeat_at ? ` · 心跳 ${status.heartbeat_at}` : ''}
+            </span>
+          )}
+          {!alwaysExpanded && (
+            <span className="rounded border border-cyan-500/40 bg-cyan-950/40 px-2 py-0.5 text-[11px] font-medium text-cyan-200 transition hover:bg-cyan-900/50">
+              {showBody ? '收起 ▴' : '展开沟通 ▾'}
+            </span>
+          )}
+        </div>
+      </div>
 
-      {status && status.recent_results.length > 1 && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400">
-          <span>历史记录：</span>
-          {status.recent_results.slice(0, 5).map((item) => (
-            <button
-              key={item.job_id}
-              type="button"
-              onClick={() => setActiveResult(item)}
-              className={`rounded border px-2 py-0.5 transition ${
-                activeResult?.job_id === item.job_id
-                  ? 'border-cyan-500/60 bg-cyan-950/40 text-cyan-200'
-                  : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              {item.completed_at.slice(5, 16)} · {(item.summary || item.prompt).slice(0, 14)}
-            </button>
-          ))}
-        </div>
+      {showBody && (
+        <>
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {QUICK_PROMPTS.map((q) => (
+              <Button
+                key={q.label}
+                outline
+                disabled={submitting}
+                onClick={() => void submitQuestion(q.prompt, q.kind)}
+              >
+                {q.label}
+              </Button>
+            ))}
+          </div>
+
+          <div className="mt-3 flex gap-2">
+            <input
+              type="text"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void submitQuestion(prompt)
+                }
+              }}
+              placeholder="输入你想问的盘面、板块或持仓问题…"
+              className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3.5 py-2 text-sm text-white placeholder-zinc-500 focus:border-cyan-400 focus:outline-none"
+            />
+            <Button color="cyan" disabled={submitting || !prompt.trim()} onClick={() => void submitQuestion(prompt)}>
+              {submitting ? '思考中…' : '提交'}
+            </Button>
+          </div>
+
+          {activeJobId && (
+            <div className="mt-2.5 rounded-md border border-cyan-500/30 bg-cyan-950/30 px-3.5 py-2.5 text-sm text-cyan-200">
+              ⏳ 正在深度分析中，请稍候…
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-2.5 rounded-md border border-amber-500/40 bg-amber-950/30 px-3.5 py-2.5 text-sm text-amber-200">
+              ⚠️ {error}
+            </div>
+          )}
+
+          {activeResult && (
+            <div className="mt-3 rounded-md border border-zinc-800 bg-zinc-950/80 p-3.5 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-cyan-300">
+                  {activeResult.summary || activeResult.prompt.slice(0, 48)}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <Badge color="cyan">{activeResult.decision || 'advisory'}</Badge>
+                  <span className="font-mono text-xs text-zinc-400">{activeResult.completed_at}</span>
+                </div>
+              </div>
+              <div className="mt-1.5 text-xs text-zinc-400">问题：{activeResult.prompt}</div>
+              <div className="mt-2 whitespace-pre-wrap leading-7 text-zinc-100">{activeResult.answer}</div>
+              {activeResult.risk_flags.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {activeResult.risk_flags.map((r, i) => (
+                    <Badge key={i} color="rose">⚠️ {r}</Badge>
+                  ))}
+                </div>
+              )}
+              {activeResult.actions.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {activeResult.actions.map((a, i) => (
+                    <Badge key={i} color="emerald">👉 {a}</Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {status && status.recent_results.length > 1 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400">
+              <span>历史记录：</span>
+              {status.recent_results.slice(0, 5).map((item) => (
+                <button
+                  key={item.job_id}
+                  type="button"
+                  onClick={() => setActiveResult(item)}
+                  className={`rounded border px-2 py-0.5 transition ${
+                    activeResult?.job_id === item.job_id
+                      ? 'border-cyan-500/60 bg-cyan-950/40 text-cyan-200'
+                      : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {item.completed_at.slice(5, 16)} · {(item.summary || item.prompt).slice(0, 14)}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </Card>
   )

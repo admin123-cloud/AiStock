@@ -26,7 +26,7 @@ from utils.common.paths import runtime_path
 BJ_TZ = timezone(timedelta(hours=8))
 DEFAULT_MAX_DEVIATION_PCT = 0.5
 DEFAULT_MAX_ORDER_AMOUNT = 25000.0
-NO_NEW_POS_AFTER = dtime(14, 30, 0)
+NO_NEW_POS_AFTER = dtime(14, 48, 0)
 
 # AR4.6 跨资产全天候 15 只核心 ETF 白名单（防守期允许切换至红利/黄金/豆粕商品/国债/跨境/冰点反抽 ETF，但严禁买个股）
 AR3_CROSS_ASSET_ETF_WHITELIST = frozenset({
@@ -123,16 +123,23 @@ def evaluate_and_build_prefill_draft(
         else "参数无效：需为 BUY/SELL、价格 > 0 且股数为 100 整数倍",
     )
 
-    # 2. 大盘总闸门联动（防守期严禁个股 base_rebalance 买入；AR3 跨资产避险/轮动 ETF 白名单豁免）
+    # 2. 大盘总闸门联动（防守期严禁个股 base_rebalance 买入；AR4.6 跨资产 ETF 白名单与冰点 30m 触发半仓放行）
     if isinstance(market_gate, Mapping):
         allow_new = bool(market_gate.get("allow_new_mainwave", True))
+        is_panic_ab = bool(market_gate.get("is_panic_ab_active", False))
         regime_label = str(market_gate.get("regime_label") or market_gate.get("regime") or "")
         if side_u == "BUY" and otype == "base_rebalance" and not allow_new:
             if code6 in AR3_CROSS_ASSET_ETF_WHITELIST:
                 _add(
                     "market_regime_gate",
                     True,
-                    f"AR3 v3.0 跨资产避险/轮动 ETF 白名单放行（当前：{regime_label}，仅个股禁开新仓）",
+                    f"AR4.6 跨资产避险/轮动 ETF 白名单放行（当前：{regime_label}，仅个股禁开新仓）",
+                )
+            elif is_panic_ab:
+                _add(
+                    "market_regime_gate",
+                    True,
+                    f"AR4.6 极端冰点 30m 信号激活，放行 50% 半仓个股买入（当前：{regime_label}）",
                 )
             else:
                 _add(
@@ -207,7 +214,7 @@ def evaluate_and_build_prefill_draft(
     if not in_session:
         _add("trading_session", False, f"当前非连续竞价时段（{now.strftime('%H:%M')}），本次为盘前/盘后预演校验", hard=False)
     elif side_u == "BUY" and cur_t >= NO_NEW_POS_AFTER:
-        _add("no_new_after_1430", False, "14:30 后禁开新仓/新买腿（L2 硬风控拦截）", hard=True)
+        _add("no_new_after_1448", False, "14:48 后禁开新买单（L2 硬风控拦截）", hard=True)
     else:
         _add("trading_session", True, f"处于连续竞价合规时段（{now.strftime('%H:%M')}）")
 

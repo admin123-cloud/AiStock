@@ -1,126 +1,137 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/catalyst/table'
 import {
   batchPrefillG3AR3Orders,
+  confirmG3Acct1Fill,
+  getG3Acct1AdvisorStatus,
   getG3AR3RebalancePlan,
-  getG3AR3ShadowReconcile,
+  getG3PrefillStatus,
   pushG3AR3PlanWechat,
+  type G3Acct1AdvisorStatusResponse,
   type G3AR3BatchPrefillResponse,
   type G3AR3RebalancePlanResponse,
-  type G3AR3ShadowReconcileResponse,
+  type G3DecisionHoldingRow,
+  type G3DecisionPendingBuyRow,
+  type G3PrefillStatusResponse,
 } from '@/api/g3'
 
-interface EditableOrder {
-  key: string
-  checked: boolean
-  code: string
-  name: string
-  side: 'SELL' | 'BUY'
-  price: number
-  shares: number
-  is_etf: boolean
-  stop_loss_price?: number
-  reason: string
-  badge_text: string
-  qdii_notice?: string | null
-}
-
 interface AR3ExecutionOrderCardProps {
-  /** 当外部热切换了主引擎配置时传入版本号，触发调仓单同步重算 */
   reloadToken?: number
-  /** 由父组件 G3Desk 预先拉取的默认调仓单，避免挂载时重复请求 */
   externalPlan?: G3AR3RebalancePlanResponse | null
+  onPlanUpdated?: (plan: G3AR3RebalancePlanResponse) => void
 }
 
-const fmtYuan = (v?: number | null) =>
-  v != null && Number.isFinite(Number(v))
-    ? `¥${Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`
-    : '—'
+const fmtYuan = (v?: number | null): string =>
+  v != null && Number.isFinite(Number(v)) ? `¥${Math.round(Number(v)).toLocaleString('zh-CN')}` : '—'
 
-export default function AR3ExecutionOrderCard({ reloadToken = 0, externalPlan }: AR3ExecutionOrderCardProps) {
-  const [accountId, setAccountId] = useState('acct1')
-  const [smoothStep, setSmoothStep] = useState(true)
-  const [buyBasis, setBuyBasis] = useState<'post_sell' | 'immediate'>('post_sell')
+const fmtPx = (v?: number | null, isEtf = false): string =>
+  v != null && Number.isFinite(Number(v)) ? `¥${Number(v).toFixed(isEtf ? 3 : 2)}` : '—'
+
+const toneToBadge = (tone?: string) => {
+  if (tone === 'emerald') return 'emerald' as const
+  if (tone === 'red') return 'red' as const
+  if (tone === 'amber') return 'amber' as const
+  if (tone === 'blue') return 'blue' as const
+  return 'zinc' as const
+}
+
+export default function AR3ExecutionOrderCard({
+  reloadToken = 0,
+  externalPlan,
+  onPlanUpdated,
+}: AR3ExecutionOrderCardProps) {
+  const [accountId, setAccountId] = useState<string>('acct1')
+  const [smoothStep, setSmoothStep] = useState<boolean>(true)
   const [plan, setPlan] = useState<G3AR3RebalancePlanResponse | null>(externalPlan ?? null)
-  const [orders, setOrders] = useState<EditableOrder[]>([])
-  const [shadow, setShadow] = useState<G3AR3ShadowReconcileResponse | null>(null)
-  const [showShadow, setShowShadow] = useState(false)
+  const [advisorStatus, setAdvisorStatus] = useState<G3Acct1AdvisorStatusResponse | null>(null)
+  const [edits, setEdits] = useState<Record<string, { shares: number; price: number }>>({})
   const [loading, setLoading] = useState(false)
-  const [dispatching, setDispatching] = useState(false)
+  const [singleBusyKey, setSingleBusyKey] = useState<string | null>(null)
+  const [confirmBusyKey, setConfirmBusyKey] = useState<string | null>(null)
   const [pushingWx, setPushingWx] = useState(false)
   const [batchRes, setBatchRes] = useState<G3AR3BatchPrefillResponse | null>(null)
+  const [prefillLiveMap, setPrefillLiveMap] = useState<Record<string, G3PrefillStatusResponse>>({})
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
-  const buildEditableList = useCallback(
-    (p: G3AR3RebalancePlanResponse, basis: 'post_sell' | 'immediate'): EditableOrder[] => {
-      const list: EditableOrder[] = []
-      for (const s of p.sell_orders || []) {
-        if (s.suggested_shares > 0) {
-          list.push({
-            key: `SELL-${s.code}`,
-            checked: true,
-            code: s.code,
-            name: s.name,
-            side: 'SELL',
-            price: s.limit_price,
-            shares: s.suggested_shares,
-            is_etf: s.is_etf,
-            reason: s.reason,
-            badge_text: `可用${s.available_shares}股 / 现${s.current_shares}股`,
-          })
+  const pollPrefillDrafts = useCallback(async (draftIds: string[]) => {
+    const uniqueIds = Array.from(new Set(draftIds.filter(Boolean)))
+    if (uniqueIds.length === 0) return
+    const pending = new Set(uniqueIds)
+    for (let tick = 0; tick < 95 && pending.size > 0; tick += 1) {
+      await new Promise((r) => window.setTimeout(r, tick === 0 ? 700 : 1000))
+      const results = await Promise.all(
+        Array.from(pending).map(async (id) => {
+          try {
+            const st = await getG3PrefillStatus(id)
+            return [id, st] as const
+          } catch {
+            return null
+          }
+        }),
+      )
+      let anyDone = false
+      let lastOkMsg = ''
+      let lastFailMsg = ''
+      for (const item of results) {
+        if (!item) continue
+        const [id, st] = item
+        setPrefillLiveMap((prev) => ({ ...prev, [id]: st }))
+        if (st.state === 'done') {
+          pending.delete(id)
+          anyDone = true
+          if (st.result?.ok) {
+            lastOkMsg = st.result.message || '已精准填入同花顺，请切到同花顺点击确认'
+          } else {
+            lastFailMsg = st.result?.message || st.result?.reason || '同花顺填单未成功'
+          }
         }
       }
-      for (const b of p.buy_orders || []) {
-        const sh = basis === 'immediate' ? b.immediate_shares : b.post_sell_shares
-        if (sh > 0) {
-          list.push({
-            key: `BUY-${b.code}`,
-            checked: true,
-            code: b.code,
-            name: b.name,
-            side: 'BUY',
-            price: b.limit_price,
-            shares: sh,
-            is_etf: b.is_etf,
-            stop_loss_price: b.stop_loss_price,
-            reason: b.reason,
-            badge_text:
-              basis === 'immediate'
-                ? `现有现金立买 · 目标${b.target_weight_pct}%`
-                : `卖后应买(现可先买${b.immediate_shares}股) · 目标${b.target_weight_pct}%`,
-            qdii_notice: b.qdii_notice,
-          })
+      if (anyDone && pending.size === 0) {
+        if (lastFailMsg) {
+          setMsg('')
+          setErr(`填单失败：${lastFailMsg}`)
+        } else if (lastOkMsg) {
+          setErr('')
+          setMsg(`✅ ${lastOkMsg}`)
         }
+        break
       }
-      return list
-    },
-    []
-  )
+    }
+  }, [])
+
+  const loadAdvisorStatus = useCallback(async () => {
+    try {
+      const st = await getG3Acct1AdvisorStatus()
+      setAdvisorStatus(st)
+    } catch {
+      // 静默忽略定时轮询抖动
+    }
+  }, [])
 
   const loadPlan = useCallback(
-    async (aid: string, smooth: boolean) => {
-      setLoading(true)
-      setErr('')
-      setBatchRes(null)
+    async (aid: string, smooth: boolean, silent = false) => {
+      if (!silent) {
+        setLoading(true)
+        setErr('')
+      }
       try {
-        const [p, rec] = await Promise.all([
-          getG3AR3RebalancePlan(aid, smooth),
-          getG3AR3ShadowReconcile(aid, 20).catch(() => null),
-        ])
+        const p = await getG3AR3RebalancePlan(aid, smooth)
         setPlan(p)
-        setOrders(buildEditableList(p, buyBasis))
-        if (rec) setShadow(rec)
+        if (aid === 'acct1') onPlanUpdated?.(p)
       } catch (e) {
-        const ex = e as { response?: { data?: { detail?: string } }; message?: string }
-        setErr(ex.response?.data?.detail || ex.message || '加载 AR3 每日买卖单失败')
+        if (!silent) {
+          const ex = e as { response?: { data?: { detail?: string } }; message?: string }
+          setErr(ex.response?.data?.detail || ex.message || '加载 AI 持仓与待买决策表失败')
+        }
       } finally {
-        setLoading(false)
+        if (!silent) setLoading(false)
       }
     },
-    [buildEditableList, buyBasis]
+    [onPlanUpdated],
   )
 
   useEffect(() => {
@@ -129,31 +140,46 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0, externalPlan }:
       accountId === 'acct1' &&
       smoothStep === true &&
       reloadToken === 0
-    if (canReuseExternal) {
-      if (externalPlan) {
-        setPlan(externalPlan)
-        void getG3AR3ShadowReconcile('acct1', 20)
-          .then((rec) => setShadow(rec))
-          .catch(() => null)
-      }
+    if (canReuseExternal && externalPlan) {
+      setPlan(externalPlan)
       return
     }
     void loadPlan(accountId, smoothStep)
   }, [accountId, smoothStep, reloadToken, externalPlan, loadPlan])
 
+  // 每 60 秒自动同步 AI 10 分钟巡检结果与实时决策表（无需手动刷新）
   useEffect(() => {
-    if (plan) {
-      setOrders(buildEditableList(plan, buyBasis))
-    }
-  }, [buyBasis, plan, buildEditableList])
+    void loadAdvisorStatus()
+    const timer = window.setInterval(() => {
+      void loadAdvisorStatus()
+      void loadPlan(accountId, smoothStep, true)
+    }, 60000)
+    return () => window.clearInterval(timer)
+  }, [accountId, smoothStep, loadAdvisorStatus, loadPlan])
 
-  const handleBatchPrefill = async () => {
-    const selected = orders.filter((o) => o.checked && o.shares >= 100 && o.price > 0)
-    if (selected.length === 0) {
-      setErr('请至少勾选 1 笔有效委托（股数 ≥ 100 且价格 > 0）')
+  const getRowDraft = (key: string, defaultShares: number, defaultPrice: number) =>
+    edits[key] ?? { shares: defaultShares, price: defaultPrice }
+
+  const setRowDraft = (key: string, patch: Partial<{ shares: number; price: number }>, baseShares: number, basePrice: number) => {
+    setEdits((prev) => {
+      const cur = prev[key] ?? { shares: baseShares, price: basePrice }
+      return { ...prev, [key]: { ...cur, ...patch } }
+    })
+  }
+
+  const handleSinglePrefill = async (o: {
+    key: string
+    code: string
+    name: string
+    side: 'SELL' | 'BUY'
+    price: number
+    shares: number
+  }) => {
+    if (o.shares < 100 || o.price <= 0) {
+      setErr('单笔预填要求股数 ≥ 100 且价格 > 0')
       return
     }
-    setDispatching(true)
+    setSingleBusyKey(o.key)
     setErr('')
     setMsg('')
     setBatchRes(null)
@@ -161,28 +187,63 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0, externalPlan }:
       const res = await batchPrefillG3AR3Orders({
         account_id: accountId,
         auto_split_l2: true,
-        orders: selected.map((o) => ({
-          code: o.code,
-          name: o.name,
-          side: o.side,
-          price: o.price,
-          shares: o.shares,
-          order_type: 'base_rebalance',
-        })),
+        orders: [
+          {
+            code: o.code,
+            name: o.name,
+            side: o.side,
+            price: o.price,
+            shares: o.shares,
+            order_type: 'base_rebalance',
+          },
+        ],
       })
       setBatchRes(res)
-      if (res.dispatched_count > 0) {
-        setMsg(
-          `已按「先卖后买」顺序向同花顺远航预填桥派发 ${res.dispatched_count}/${res.total_orders} 笔合规委托（严格 prefill_only，请在同花顺界面核对后确认下单）。`
-        )
+      const first = res.results[0]
+      if (res.dispatched_count > 0 && first?.draft_id) {
+        setMsg(`⏳ 已派发 ${o.side === 'SELL' ? '卖出' : '买入'} ${o.name}(${o.code}) ${o.shares}股 @ ${o.price}，正在自动唤醒同花顺填单核验…`)
+        void pollPrefillDrafts([String(first.draft_id)])
       } else {
-        setErr(`全部 ${res.total_orders} 笔委托未通过 L2 风控预检，请查看下方逐笔明细。`)
+        const reason = first?.blockers?.join('；') || '风控预检未通过'
+        setErr(`单笔填单未放行：${reason}`)
       }
     } catch (e) {
       const ex = e as { response?: { data?: { detail?: string } }; message?: string }
-      setErr(ex.response?.data?.detail || ex.message || '批量预填派发失败')
+      setErr(ex.response?.data?.detail || ex.message || '单笔预填派发失败')
     } finally {
-      setDispatching(false)
+      setSingleBusyKey(null)
+    }
+  }
+
+  const handleConfirmFill = async (o: {
+    key: string
+    code: string
+    name: string
+    side: 'SELL' | 'BUY'
+    price: number
+    shares: number
+  }) => {
+    const label = `${o.side === 'SELL' ? '卖出' : '买入'} ${o.name}(${o.code}) ${o.shares}股 @ ¥${o.price}`
+    if (!window.confirm(`确认已在同花顺成交以下委托并立即校准账本？\n\n${label}`)) return
+    setConfirmBusyKey(o.key)
+    setErr('')
+    setMsg('')
+    try {
+      await confirmG3Acct1Fill({
+        code: o.code,
+        name: o.name,
+        side: o.side,
+        shares: o.shares,
+        price: o.price,
+        note: '实战交易台一键登记成交',
+      })
+      setMsg(`✅ 已登记成交：${label}，持仓与可用现金已立即刷新。`)
+      await Promise.all([loadPlan(accountId, smoothStep), loadAdvisorStatus()])
+    } catch (e) {
+      const ex = e as { response?: { data?: { detail?: string } }; message?: string }
+      setErr(ex.response?.data?.detail || ex.message || '登记成交失败')
+    } finally {
+      setConfirmBusyKey(null)
     }
   }
 
@@ -193,7 +254,7 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0, externalPlan }:
     try {
       const res = await pushG3AR3PlanWechat(accountId, smoothStep)
       if (res.status === 'ok') {
-        setMsg(`已将 ${res.plan_date || '今日'} AR4.6 最终买卖调仓单推送到你的微信。`)
+        setMsg(`已将 ${res.plan_date || '今日'} AR4.6 调仓单推送到你的微信。`)
       } else {
         setErr(`微信推送未成功：${JSON.stringify(res.wechat)}`)
       }
@@ -205,68 +266,61 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0, externalPlan }:
     }
   }
 
-  const selectedCount = orders.filter((o) => o.checked && o.shares >= 100).length
   const acct = plan?.account
-  const cf = plan?.cash_flow
+  const decisionHoldings: G3DecisionHoldingRow[] = plan?.decision_holdings ?? []
+  const pendingBuys: G3DecisionPendingBuyRow[] = plan?.decision_pending_buys ?? []
+  const lastPollAt = advisorStatus?.last_poll_at || plan?.portfolio_compliance?.live_poll_at || null
+  const liveTriggeredCount =
+    decisionHoldings.filter((r) => r.live_10m_triggered).length +
+    pendingBuys.filter((r) => r.live_10m_triggered).length
 
   return (
-    <div className="rounded-lg border border-emerald-500/45 bg-emerald-950/15 p-3 text-xs">
-      {/* 顶栏：主力单账号 + 资金诊断 + 一键操作 */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/90 pb-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-bold text-white">📋 AR4.6 今日最终买卖执行单</span>
-          <Badge color="emerald">主力单账号：{acct?.label || 'ct1曾 (acct1)'}</Badge>
+    <div className="space-y-4 text-sm">
+      {/* 顶栏：账号状态 + AI 10 分钟巡检同步状态 + 轻量操作 */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950/75 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Badge color={liveTriggeredCount > 0 ? 'amber' : 'emerald'}>
+            {liveTriggeredCount > 0 ? `⚡ 10m 实时触发 ${liveTriggeredCount} 笔` : '⏱️ AI 每10分钟动态巡检'}
+          </Badge>
           {acct && acct.available && (
-            <span className="font-mono text-[11px] text-zinc-200">
-              总资产 <b>{fmtYuan(acct.total_assets)}</b> · 可用现金{' '}
-              <b className="text-emerald-300">{fmtYuan(acct.available_cash)}</b> · 现仓位{' '}
+            <span className="font-mono text-sm text-zinc-100">
+              总资产 <b>{fmtYuan(acct.total_assets)}</b> · 可用{' '}
+              <b className="text-emerald-300">{fmtYuan(acct.available_cash)}</b> · 仓位{' '}
               <b>{acct.position_pct}%</b>
             </span>
           )}
+          <span className="font-mono text-xs text-zinc-400">
+            上次巡检：{lastPollAt || '交易时段 09:35~14:45 自动轮询'}
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* 减仓步长切换 */}
-          <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-950 p-0.5 text-[11px]">
+          <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-900 p-0.5 text-xs">
             <button
               type="button"
               onClick={() => setSmoothStep(true)}
-              className={`rounded px-2 py-0.5 ${smoothStep ? 'bg-amber-500/25 text-amber-200' : 'text-zinc-400'}`}
+              className={`rounded px-2.5 py-1 font-medium transition ${
+                smoothStep ? 'bg-amber-500/25 text-amber-200' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
             >
-              平稳分步(≤30%/日)
+              分批卖(≤30%)
             </button>
             <button
               type="button"
               onClick={() => setSmoothStep(false)}
-              className={`rounded px-2 py-0.5 ${!smoothStep ? 'bg-rose-500/25 text-rose-200' : 'text-zinc-400'}`}
+              className={`rounded px-2.5 py-1 font-medium transition ${
+                !smoothStep ? 'bg-amber-500/25 text-amber-200' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
             >
-              一步到位清退
+              一步清仓
             </button>
           </div>
 
-          {/* 买单资金口径切换 */}
-          <div className="inline-flex rounded-md border border-zinc-700 bg-zinc-950 p-0.5 text-[11px]">
-            <button
-              type="button"
-              onClick={() => setBuyBasis('post_sell')}
-              className={`rounded px-2 py-0.5 ${buyBasis === 'post_sell' ? 'bg-blue-500/25 text-blue-200' : 'text-zinc-400'}`}
-            >
-              买单按卖后现金
-            </button>
-            <button
-              type="button"
-              onClick={() => setBuyBasis('immediate')}
-              className={`rounded px-2 py-0.5 ${buyBasis === 'immediate' ? 'bg-emerald-500/25 text-emerald-200' : 'text-zinc-400'}`}
-            >
-              买单仅按现有现金
-            </button>
-          </div>
-
-          {acct && acct.available_accounts && acct.available_accounts.length > 1 && (
+          {acct?.available_accounts && acct.available_accounts.length > 1 && (
             <select
               value={accountId}
               onChange={(e) => setAccountId(e.target.value)}
-              className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-200"
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200"
             >
               {acct.available_accounts.map((a) => (
                 <option key={a.account_id} value={a.account_id}>
@@ -276,185 +330,454 @@ export default function AR3ExecutionOrderCard({ reloadToken = 0, externalPlan }:
             </select>
           )}
 
-          <Button outline disabled={pushingWx} onClick={() => void handlePushWechat()}>
-            {pushingWx ? '推送中…' : '推送买卖单到微信'}
+          <Button outline onClick={() => void handlePushWechat()} disabled={pushingWx || loading}>
+            {pushingWx ? '推送中…' : '推微信'}
           </Button>
-          <Button disabled={dispatching || selectedCount === 0} onClick={() => void handleBatchPrefill()}>
-            {dispatching ? 'L2预检派发中…' : `一键顺序预填至同花顺 (${selectedCount}笔)`}
+          <Button outline onClick={() => void Promise.all([loadPlan(accountId, smoothStep), loadAdvisorStatus()])} disabled={loading}>
+            {loading ? '刷新中…' : '刷新'}
           </Button>
+          <Link to="/g3/ai-live" className="text-xs font-medium text-sky-300 hover:text-sky-200">
+            📡 AI 盘面直播 →
+          </Link>
         </div>
       </div>
 
-      {/* 现金守恒预览条 */}
-      {cf && (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-zinc-300">
-          <div className="flex flex-wrap items-center gap-3">
-            <span>① 现有可用：{fmtYuan(cf.current_available_cash)}</span>
-            <span>→ ② 预计卖出回款：<b className="text-amber-300">+{fmtYuan(cf.est_sell_proceeds)}</b></span>
-            <span>→ ③ 卖后可买上限：<b className="text-emerald-300">{fmtYuan(cf.post_sell_buy_budget)}</b></span>
-            <span className="text-zinc-400">（单笔超 ¥25,000 派发时自动拆 L2 合规子单 · 严格 prefill_only 不自动提交）</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowShadow((v) => !v)}
-            className="text-cyan-300 hover:text-cyan-200"
-          >
-            {showShadow ? '收起 Shadow 实盘对账 ▲' : `Shadow 实盘对账 (${shadow?.days_tracked ?? 0}日) ▼`}
-          </button>
+      {err && (
+        <div className="rounded-md border border-red-500/40 bg-red-950/30 px-4 py-2.5 text-sm text-red-200">
+          {err}
         </div>
       )}
-
-      {err && (
-        <div className="mt-2 rounded border border-red-500/40 bg-red-950/30 px-2.5 py-1.5 text-red-200">{err}</div>
-      )}
       {msg && (
-        <div className="mt-2 rounded border border-emerald-500/40 bg-emerald-950/30 px-2.5 py-1.5 text-emerald-200">
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-950/30 px-4 py-2.5 text-sm text-emerald-200">
           {msg}
         </div>
       )}
 
-      {/* 最终买卖明细表（支持人工勾选与微调股数/价格） */}
-      {loading && !plan ? (
-        <div className="py-5 text-center text-zinc-400">正在基于主力账号真实持仓计算 AR4.6 精确买卖股数…</div>
-      ) : orders.length === 0 ? (
-        <div className="py-4 text-center text-zinc-300">
-          ✅ 当前账户持仓已与 AR4.6 目标组合对齐（差额均小于 ¥1,800），今日无需调仓。
-        </div>
-      ) : (
-        <div className="mt-2.5 overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950/80">
-          <Table dense>
-            <TableHead>
-              <TableRow>
-                <TableHeader>选</TableHeader>
-                <TableHeader>顺序 / 方向</TableHeader>
-                <TableHeader>标的</TableHeader>
-                <TableHeader>建议股数 (可微调)</TableHeader>
-                <TableHeader>参考限价</TableHeader>
-                <TableHeader>预计金额</TableHeader>
-                <TableHeader>依据与风控止损</TableHeader>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {orders.map((o, idx) => (
-                <TableRow key={o.key}>
-                  <TableCell>
-                    <input
-                      type="checkbox"
-                      checked={o.checked}
-                      onChange={(e) =>
-                        setOrders((prev) =>
-                          prev.map((x) => (x.key === o.key ? { ...x, checked: e.target.checked } : x))
-                        )
-                      }
-                      className="h-3.5 w-3.5 rounded border-zinc-600 bg-zinc-900"
-                    />
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-zinc-400">#{idx + 1}</span>
-                      <Badge color={o.side === 'SELL' ? 'amber' : 'emerald'}>
-                        {o.side === 'SELL' ? '第一步·卖出' : '第二步·买入'}
-                      </Badge>
-                    </div>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <div className="font-semibold text-white">
-                      {o.name} <span className="font-mono text-zinc-400">{o.code}</span>
-                    </div>
-                    <div className="text-[11px] text-zinc-400">{o.badge_text}</div>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <input
-                      type="number"
-                      step={100}
-                      min={0}
-                      value={o.shares}
-                      onChange={(e) => {
-                        const val = Math.max(0, Math.floor(Number(e.target.value) || 0))
-                        setOrders((prev) => prev.map((x) => (x.key === o.key ? { ...x, shares: val } : x)))
-                      }}
-                      className="w-24 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 font-mono text-xs text-white"
-                    />
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <input
-                      type="number"
-                      step={o.is_etf ? 0.001 : 0.01}
-                      min={0}
-                      value={o.price}
-                      onChange={(e) => {
-                        const val = Math.max(0, Number(e.target.value) || 0)
-                        setOrders((prev) => prev.map((x) => (x.key === o.key ? { ...x, price: val } : x)))
-                      }}
-                      className="w-20 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 font-mono text-xs text-white"
-                    />
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap font-mono font-semibold text-zinc-100">
-                    {fmtYuan(o.shares * o.price)}
-                  </TableCell>
-                  <TableCell className="max-w-[420px] text-[11px] text-zinc-300">
-                    <div>{o.reason}</div>
-                    {o.stop_loss_price != null && (
-                      <div className="font-mono text-amber-300">参考止损位：¥{o.stop_loss_price}</div>
-                    )}
-                    {o.qdii_notice && <div className="text-amber-300">⚠️ {o.qdii_notice}</div>}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {/* 批量预填派发逐笔回执 */}
-      {batchRes && (
-        <div className="mt-2.5 rounded-md border border-zinc-800 bg-zinc-950/90 p-2.5 text-[11px]">
-          <div className="font-semibold text-white">
-            L2 预检与同花顺远航预填桥派发回执（已派发 {batchRes.dispatched_count}/{batchRes.total_orders} 笔 · 严格 prefill_only）：
-          </div>
-          <div className="mt-1.5 space-y-1">
-            {batchRes.results.map((r, i) => (
-              <div key={`${r.code}-${i}`} className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-900 pb-1">
-                <span className="font-mono text-zinc-200">
-                  {r.side} {r.name}({r.code}) {r.shares}股 @ ¥{r.price}
-                </span>
-                <div className="flex items-center gap-2">
-                  <Badge color={r.dispatched ? 'emerald' : 'red'}>
-                    {r.dispatched ? '已入预填队列 ✅' : 'L2拦截 ⛔'}
-                  </Badge>
-                  {r.blockers.length > 0 && <span className="text-red-300">{r.blockers.join('；')}</span>}
-                  {r.warnings.length > 0 && <span className="text-amber-300">{r.warnings.join('；')}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Shadow Ledger 近 20 日实盘执行对账 */}
-      {showShadow && shadow && (
-        <div className="mt-2.5 rounded-md border border-cyan-500/30 bg-zinc-950/85 p-2.5 text-[11px]">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-semibold text-cyan-200">
-              📊 Shadow Ledger 实盘对账（{shadow.account_label} · 已跟踪 {shadow.days_tracked} 个交易日）
+      {/* ==================== 表 1：当前实盘持仓列表（全量展示，绝不隐藏） ==================== */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/75 p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-base font-bold text-white">1. 当前实盘持仓列表（共 {decisionHoldings.length} 只）</span>
+            <span className="text-xs text-zinc-400">
+              策略预期内且已对齐的持仓不显示操作按钮；预期外或需调仓标的按 AI 10 分钟动态门禁给出买入 / 卖出按钮
             </span>
-            <div className="flex flex-wrap items-center gap-3 font-mono text-zinc-300">
-              <span>计划委托：{shadow.total_planned_orders} 笔</span>
-              <span>已执行：{shadow.total_executed_orders} 笔</span>
-              <span>完成率：<b>{shadow.overall_completion_pct != null ? `${shadow.overall_completion_pct}%` : '—'}</b></span>
-              <span>平均滑点：<b>{shadow.avg_slippage_bps != null ? `${shadow.avg_slippage_bps} bps` : '待成交累积'}</b></span>
-            </div>
           </div>
-          {shadow.daily_records.length > 0 && (
-            <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
-              {shadow.daily_records.slice(0, 7).map((d) => (
-                <div key={d.date} className="flex flex-wrap items-center justify-between border-t border-zinc-900 pt-1 font-mono text-zinc-400">
-                  <span>{d.date} ({d.regime})</span>
-                  <span>计划 {d.planned_orders} 笔 · 成交 {d.executed_orders} 笔 · 完成率 {d.completion_pct}%</span>
-                </div>
-              ))}
-            </div>
+          {plan?.cash_flow && plan.cash_flow.est_sell_proceeds > 0 && (
+            <span className="font-mono text-xs text-emerald-300">
+              预计卖回款 +{fmtYuan(plan.cash_flow.est_sell_proceeds)} → 卖后可用 {fmtYuan(plan.cash_flow.est_post_sell_cash)}
+            </span>
           )}
+        </div>
+
+        {decisionHoldings.length === 0 ? (
+          <div className="rounded-md border border-zinc-800 bg-zinc-900/50 px-4 py-4 text-center text-sm text-zinc-400">
+            当前账户空仓（100% 现金），请查看下方「待买入列表」。
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table dense>
+              <TableHead>
+                <TableRow>
+                  <TableHeader>标的</TableHeader>
+                  <TableHeader>实盘持仓 / 盈亏</TableHeader>
+                  <TableHeader>策略目标 / 差额</TableHeader>
+                  <TableHeader>AI 10分钟动态判定 & 价格红线</TableHeader>
+                  <TableHeader className="text-right">交易操作</TableHeader>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {decisionHoldings.map((row) => {
+                  const rowKey = `H-${row.code}-${row.action_side || 'HOLD'}`
+                  const draft = getRowDraft(rowKey, row.action_shares, row.action_price)
+                  const isAligned = row.alignment === 'aligned'
+                  const isUnexpected = row.alignment === 'unexpected'
+                  return (
+                    <TableRow
+                      key={row.code}
+                      className={
+                        row.live_10m_triggered
+                          ? 'bg-amber-950/20'
+                          : isUnexpected
+                            ? 'bg-red-950/10'
+                            : undefined
+                      }
+                    >
+                      <TableCell className="whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-bold text-white">{row.name}</span>
+                          <span className="font-mono text-xs text-zinc-400">{row.code}</span>
+                          <Badge color={isUnexpected ? 'red' : isAligned ? 'emerald' : 'blue'}>
+                            {isUnexpected ? '预期外' : isAligned ? '预期内' : row.alignment === 'overweight' ? '超配' : '欠配'}
+                          </Badge>
+                        </div>
+                        <div className="mt-0.5 font-mono text-xs text-zinc-400">
+                          现价 {fmtPx(row.current_price, row.is_etf)} · {row.shares}股（可用 {row.available_shares}股）
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="whitespace-nowrap font-mono">
+                        <div className="text-sm font-semibold text-white">
+                          {row.actual_weight_pct.toFixed(1)}% · {fmtYuan(row.market_value)}
+                        </div>
+                        <div
+                          className={`mt-0.5 text-xs ${
+                            row.profit_pct == null
+                              ? 'text-zinc-400'
+                              : row.profit_pct >= 0
+                                ? 'text-rose-300'
+                                : 'text-emerald-300'
+                          }`}
+                        >
+                          浮盈 {row.profit_pct != null ? `${row.profit_pct >= 0 ? '+' : ''}${row.profit_pct.toFixed(2)}%` : '—'}
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="whitespace-nowrap font-mono">
+                        <div className="text-sm text-zinc-200">
+                          目标 <b>{row.target_weight_pct.toFixed(1)}%</b>
+                        </div>
+                        <div
+                          className={`mt-0.5 text-xs font-semibold ${
+                            isAligned
+                              ? 'text-emerald-300'
+                              : row.weight_diff_pct > 0
+                                ? 'text-red-300'
+                                : 'text-sky-300'
+                          }`}
+                        >
+                          {isAligned
+                            ? '已对齐'
+                            : row.weight_diff_pct > 0
+                              ? `超目标 +${row.weight_diff_pct.toFixed(1)}%`
+                              : `欠配 ${row.weight_diff_pct.toFixed(1)}%`}
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="max-w-md whitespace-normal">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge color={toneToBadge(row.ai_status_tone)}>{row.ai_status_label}</Badge>
+                          {row.live_10m_triggered && <Badge color="amber">10m 实时信号</Badge>}
+                        </div>
+                        <div className="mt-1 text-xs leading-relaxed text-zinc-300">{row.ai_status_detail}</div>
+                        {row.action_side === 'BUY' && row.min_buy_price != null && (
+                          <div className="mt-1 font-mono text-xs text-amber-300">
+                            放弃线：跌破 {fmtPx(row.min_buy_price, row.is_etf)} 不再加仓
+                            {row.max_buy_price != null && (
+                              <span className="ml-2 text-zinc-400">
+                                · 不追高 {fmtPx(row.max_buy_price, row.is_etf)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+
+                      <TableCell className="whitespace-nowrap text-right">
+                        {isAligned || !row.action_side ? (
+                          <span className="text-xs text-zinc-500">—</span>
+                        ) : !row.can_execute ? (
+                          <span className="inline-block rounded border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs text-zinc-400">
+                            {row.ai_status_label}
+                          </span>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <input
+                              type="number"
+                              step={100}
+                              min={100}
+                              value={draft.shares}
+                              onChange={(e) =>
+                                setRowDraft(
+                                  rowKey,
+                                  { shares: Math.max(0, Number(e.target.value) || 0) },
+                                  row.action_shares,
+                                  row.action_price,
+                                )
+                              }
+                              title="委托股数"
+                              className="w-20 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-white"
+                            />
+                            <input
+                              type="number"
+                              step={row.is_etf ? 0.001 : 0.01}
+                              min={0.01}
+                              value={draft.price}
+                              onChange={(e) =>
+                                setRowDraft(
+                                  rowKey,
+                                  { price: Math.max(0, Number(e.target.value) || 0) },
+                                  row.action_shares,
+                                  row.action_price,
+                                )
+                              }
+                              title="委托限价"
+                              className="w-20 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-white"
+                            />
+                            <Button
+                              color={row.action_side === 'SELL' ? 'amber' : 'cyan'}
+                              disabled={singleBusyKey === rowKey}
+                              onClick={() =>
+                                void handleSinglePrefill({
+                                  key: rowKey,
+                                  code: row.code,
+                                  name: row.name,
+                                  side: row.action_side as 'SELL' | 'BUY',
+                                  price: draft.price,
+                                  shares: draft.shares,
+                                })
+                              }
+                            >
+                              {singleBusyKey === rowKey
+                                ? '填单中…'
+                                : row.action_side === 'SELL'
+                                  ? '⚡ 一键填单(卖)'
+                                  : '⚡ 一键填单(买)'}
+                            </Button>
+                            {accountId === 'acct1' && (
+                              <Button
+                                outline
+                                disabled={confirmBusyKey === rowKey}
+                                onClick={() =>
+                                  void handleConfirmFill({
+                                    key: rowKey,
+                                    code: row.code,
+                                    name: row.name,
+                                    side: row.action_side as 'SELL' | 'BUY',
+                                    price: draft.price,
+                                    shares: draft.shares,
+                                  })
+                                }
+                              >
+                                {confirmBusyKey === rowKey ? '核销中…' : '已成交'}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+
+      {/* ==================== 表 2：待买入股票 / ETF 列表（尚未持仓的策略新目标） ==================== */}
+      <div className="rounded-lg border border-emerald-500/35 bg-emerald-950/10 p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-base font-bold text-white">2. 待买入标的列表（共 {pendingBuys.length} 只）</span>
+            <span className="text-xs text-zinc-400">
+              当前未持仓的策略新目标；若实时价跌破放弃线将自动标红禁止买入，避免错过买点后接飞刀
+            </span>
+          </div>
+        </div>
+
+        {pendingBuys.length === 0 ? (
+          <div className="rounded-md border border-zinc-800/80 bg-zinc-950/60 px-4 py-3 text-sm text-zinc-300">
+            ✅ 当前策略目标均已在上方实盘持仓中，暂无新增待买入标的。
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table dense>
+              <TableHead>
+                <TableRow>
+                  <TableHeader>标的 & 来源</TableHeader>
+                  <TableHeader>目标仓位 / 现价</TableHeader>
+                  <TableHeader>买入红线（跌破不买 / 不追高）</TableHeader>
+                  <TableHeader>AI 10分钟动态判定</TableHeader>
+                  <TableHeader className="text-right">交易操作</TableHeader>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {pendingBuys.map((row) => {
+                  const rowKey = `B-${row.code}`
+                  const baseSh = row.immediate_shares >= 100 ? row.immediate_shares : row.suggested_shares
+                  const draft = getRowDraft(rowKey, baseSh, row.limit_price)
+                  const isBrokenMin = row.buy_price_status === 'below_min'
+                  return (
+                    <TableRow
+                      key={row.code}
+                      className={
+                        isBrokenMin
+                          ? 'bg-red-950/20'
+                          : row.live_10m_triggered
+                            ? 'bg-emerald-950/25'
+                            : undefined
+                      }
+                    >
+                      <TableCell className="whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-bold text-white">{row.name}</span>
+                          <span className="font-mono text-xs text-zinc-400">{row.code}</span>
+                          <Badge color="blue">{row.source_label}</Badge>
+                        </div>
+                        <div className="mt-0.5 text-xs text-zinc-400">
+                          {row.qdii_notice ? `⚠️ ${row.qdii_notice}` : row.reason}
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="whitespace-nowrap font-mono">
+                        <div className="text-sm font-semibold text-white">
+                          目标 {row.target_weight_pct.toFixed(1)}% · 现价 {fmtPx(row.ref_price, row.is_etf)}
+                        </div>
+                        <div className="mt-0.5 text-xs text-zinc-400">
+                          现可买 {row.immediate_shares}股 / 卖后可买 {row.post_sell_shares}股
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="whitespace-nowrap font-mono text-xs">
+                        {row.min_buy_price != null && (
+                          <div className={isBrokenMin ? 'font-bold text-red-300' : 'text-amber-300'}>
+                            跌破 {fmtPx(row.min_buy_price, row.is_etf)} 放弃（{row.min_buy_reason}）
+                          </div>
+                        )}
+                        <div className="mt-0.5 text-zinc-400">
+                          {row.max_buy_price != null && <>超 {fmtPx(row.max_buy_price, row.is_etf)} 不追高</>}
+                          {row.stop_loss_price != null && (
+                            <span className="ml-2">· 止损 {fmtPx(row.stop_loss_price, row.is_etf)}</span>
+                          )}
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="max-w-sm whitespace-normal">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge color={toneToBadge(row.ai_status_tone)}>{row.ai_status_label}</Badge>
+                          {row.live_10m_triggered && <Badge color="emerald">10m 实时触发</Badge>}
+                        </div>
+                        <div className="mt-1 text-xs text-zinc-300">{row.ai_status_detail}</div>
+                      </TableCell>
+
+                      <TableCell className="whitespace-nowrap text-right">
+                        {!row.can_execute || isBrokenMin ? (
+                          <span
+                            className={`inline-block rounded border px-2.5 py-1 text-xs ${
+                              isBrokenMin
+                                ? 'border-red-500/40 bg-red-950/40 font-semibold text-red-200'
+                                : 'border-zinc-800 bg-zinc-900/80 text-zinc-400'
+                            }`}
+                          >
+                            {isBrokenMin ? '🚫 已破放弃线，暂不买入' : row.ai_status_label}
+                          </span>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <input
+                              type="number"
+                              step={100}
+                              min={100}
+                              value={draft.shares}
+                              onChange={(e) =>
+                                setRowDraft(
+                                  rowKey,
+                                  { shares: Math.max(0, Number(e.target.value) || 0) },
+                                  baseSh,
+                                  row.limit_price,
+                                )
+                              }
+                              title="买入股数"
+                              className="w-20 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-white"
+                            />
+                            <input
+                              type="number"
+                              step={row.is_etf ? 0.001 : 0.01}
+                              min={0.01}
+                              value={draft.price}
+                              onChange={(e) =>
+                                setRowDraft(
+                                  rowKey,
+                                  { price: Math.max(0, Number(e.target.value) || 0) },
+                                  baseSh,
+                                  row.limit_price,
+                                )
+                              }
+                              title="买入限价"
+                              className="w-20 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-white"
+                            />
+                            <Button
+                              color="cyan"
+                              disabled={singleBusyKey === rowKey}
+                              onClick={() =>
+                                void handleSinglePrefill({
+                                  key: rowKey,
+                                  code: row.code,
+                                  name: row.name,
+                                  side: 'BUY',
+                                  price: draft.price,
+                                  shares: draft.shares,
+                                })
+                              }
+                            >
+                              {singleBusyKey === rowKey ? '填单中…' : '⚡ 一键填单(买)'}
+                            </Button>
+                            {accountId === 'acct1' && (
+                              <Button
+                                outline
+                                disabled={confirmBusyKey === rowKey}
+                                onClick={() =>
+                                  void handleConfirmFill({
+                                    key: rowKey,
+                                    code: row.code,
+                                    name: row.name,
+                                    side: 'BUY',
+                                    price: draft.price,
+                                    shares: draft.shares,
+                                  })
+                                }
+                              >
+                                {confirmBusyKey === rowKey ? '核销中…' : '已成交'}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+
+      {/* 同花顺预填实时回执（含宿主机真实填单结果与读回校验反馈） */}
+      {batchRes && (
+        <div className="rounded-md border border-zinc-700 bg-zinc-950/90 p-3.5 text-sm">
+          <div className="mb-1.5 font-semibold text-white">
+            同花顺预填实时回执（严格 prefill_only · 绝不自动下单）：
+          </div>
+          <div className="space-y-1.5">
+            {batchRes.results.map((r, idx) => {
+              const live = r.draft_id ? prefillLiveMap[String(r.draft_id)] : undefined
+              const doneRes = live?.state === 'done' ? live.result : undefined
+              return (
+                <div key={`${r.code}-${idx}`} className="flex flex-wrap items-center gap-2 font-mono text-xs">
+                  <Badge color={r.side === 'SELL' ? 'amber' : 'emerald'}>
+                    {r.side === 'SELL' ? '卖出' : '买入'}
+                  </Badge>
+                  <span className="font-semibold text-white">
+                    {r.name}({r.code}) {r.shares}股 @ ¥{r.price}
+                  </span>
+                  {r.dispatched ? (
+                    <Badge color={doneRes ? (doneRes.ok ? 'emerald' : 'red') : 'blue'}>
+                      {!doneRes
+                        ? '正在填入同花顺… ⏳'
+                        : doneRes.ok
+                          ? '已填入同花顺 ✅ 等待你点击确认'
+                          : '填单失败 ❌'}
+                    </Badge>
+                  ) : (
+                    <Badge color="red">预检拦截</Badge>
+                  )}
+                  {doneRes && !doneRes.ok && (
+                    <span className="text-red-300">{doneRes.message || doneRes.reason || '填单失败'}</span>
+                  )}
+                  {!r.dispatched && r.blockers.length > 0 && (
+                    <span className="text-red-300">{r.blockers.join('；')}</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>

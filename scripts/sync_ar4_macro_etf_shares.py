@@ -122,8 +122,12 @@ def sync_southbound_only(all_dates: list[str] | None = None) -> dict[str, Any]:
         print(f"[AR4-Sync] 南向资金拉取失败（保留旧表数据）: {exc}")
         return {"ok": False, "error": str(exc), "rows": 0}
 
-    if all_dates:
-        idx = sorted(set(all_dates) | set(sb.index))
+    if all_dates and not sb.empty:
+        # 仅在已公布的南向最新日期范围内按 A 股交易日补齐港股休市日（0.0），
+        # 绝不为“当日尚未公布”的日期伪造 0.0 行，避免误导健康面板或稀释 20 日净买。
+        max_sb_dt = str(sb.index.max())
+        bounded_dates = [d for d in all_dates if d <= max_sb_dt]
+        idx = sorted(set(bounded_dates) | set(sb.index))
         sb = sb.reindex(idx).fillna(0.0)
     sb["sb_net_5d_yi"] = sb["sb_net_yi"].rolling(5, min_periods=1).sum()
     sb["sb_net_20d_yi"] = sb["sb_net_yi"].rolling(20, min_periods=1).sum()
@@ -218,8 +222,10 @@ def _fetch_sse_etf_shares_one_day(trade_date: str) -> list[dict[str, Any]]:
     return []
 
 
-def _fetch_etf_close_history(code6: str, start_ymd: str = "20210101", end_ymd: str = "20261231") -> pd.DataFrame:
+def _fetch_etf_close_history(code6: str, start_ymd: str = "20210101", end_ymd: str | None = None) -> pd.DataFrame:
     """获取 ETF 不复权收盘价（优先新浪源零限流，失败回退东方财富；计算真实规模不可用前复权！）。"""
+    if end_ymd is None:
+        end_ymd = datetime.now(BJ_TZ).strftime("%Y%m%d")
     # 1. 优先新浪 ETF 日线（不复权原价、稳定无限流）
     for attempt in range(3):
         try:
@@ -263,12 +269,13 @@ def sync_all(start_date: str = "2021-01-01") -> dict[str, Any]:
     _ch_exec(DDL_ETF_SHARE)
     _ch_exec(DDL_MACRO)
 
-    # 1. 从本地 ClickHouse kline_daily 获取全部真实交易日（与回测基准 100% 对齐）
+    # 1. 从本地 ClickHouse kline_daily 获取全部真实交易日（动态截至北京时间今日，与回测基准 100% 对齐）
+    today_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
     cal_df = _ch_query_df(
         f"""
         SELECT DISTINCT toString(trade_date) AS dt
         FROM stock.kline_daily
-        WHERE trade_date >= '{start_date}' AND trade_date <= '2026-11-22'
+        WHERE trade_date >= '{start_date}' AND trade_date <= '{today_str}'
         ORDER BY dt
         """
     )

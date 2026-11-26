@@ -96,6 +96,12 @@ export const routes: AppRoute[] = [
     () => import('@/views/g3/G3Desk')
   ),
   page(
+    '/g3/ai-live',
+    'G3AiLive',
+    { title: 'AI 盘面直播与参谋', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 1.5, navLabel: 'AI 盘面直播与参谋' },
+    () => import('@/views/g3/G3AiLive')
+  ),
+  page(
     '/g3/accounts',
     'G3Accounts',
     { title: 'G3 资金账号与做T', group: 'gen3', groupLabel: 'G3 AI 交易系统', groupOrder: 2.7, navOrder: 2, navLabel: '资金账号与做T' },

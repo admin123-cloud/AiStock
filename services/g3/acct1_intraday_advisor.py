@@ -69,6 +69,112 @@ def _policy_path(base_dir: Optional[Path] = None) -> Path:
     return _advisor_dir(base_dir) / "push_policy.json"
 
 
+def _live_signals_path(trade_date: str, base_dir: Optional[Path] = None) -> Path:
+    return _advisor_dir(base_dir) / f"live_signals_{trade_date.replace('-', '')}.json"
+
+
+def _broadcasts_path(trade_date: str, base_dir: Optional[Path] = None) -> Path:
+    return _advisor_dir(base_dir) / f"broadcasts_{trade_date.replace('-', '')}.jsonl"
+
+
+def load_live_signals(trade_date: str, *, base_dir: Optional[Path] = None) -> dict[str, Any]:
+    """读取当日最近一次 10 分钟轮询产出的实时可执行待填单快照。"""
+    doc = _load_json(_live_signals_path(trade_date, base_dir))
+    if not doc:
+        return {
+            "date": trade_date,
+            "updated_at": None,
+            "regime": None,
+            "regime_label": None,
+            "breadth_pct": None,
+            "available_cash": None,
+            "total_assets": None,
+            "orders": [],
+            "skipped_summary": [],
+        }
+    return doc
+
+
+def append_intraday_broadcast(
+    entry: Mapping[str, Any],
+    *,
+    trade_date: str,
+    base_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """追加一条 10 分钟盘面总结播报（仅页面展示，绝不触发微信通知）。"""
+    fp = _broadcasts_path(trade_date, base_dir)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    rec = dict(entry)
+    with fp.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return rec
+
+
+def get_intraday_broadcast_feed(
+    *,
+    limit: int = 50,
+    now_bj: Optional[datetime] = None,
+    base_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """合并 AI Bus 深度盘面播报（kind=intraday_broadcast）与规则兜底快照，供 /g3/ai-live 滚动播放。"""
+    from services.g3.ai_bus import get_bus_status
+
+    now = now_bj or datetime.now(BJ_TZ)
+    trade_date = now.strftime("%Y-%m-%d")
+    items: list[dict[str, Any]] = []
+
+    # 1. 读取今日与昨日规则引擎 10 分钟播报流
+    for delta in (0, 1):
+        d_str = (now.date() - timedelta(days=delta)).strftime("%Y-%m-%d")
+        fp = _broadcasts_path(d_str, base_dir)
+        if not fp.exists():
+            continue
+        for line in fp.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    items.append(obj)
+            except ValueError:
+                continue
+
+    # 2. 合并 AI Bus 已完成的 intraday_broadcast 深度研判
+    bus = get_bus_status(limit=max(limit, 30))
+    for r in bus.get("recent_results") or []:
+        if not isinstance(r, dict) or str(r.get("kind") or "") != "intraday_broadcast":
+            continue
+        ts_str = str(r.get("completed_at") or r.get("created_at") or "")
+        items.append({
+            "id": str(r.get("job_id") or f"ai_{ts_str}"),
+            "ts": ts_str,
+            "slot": ts_str[:16],
+            "channel": "ai_bus",
+            "channel_label": "Antigravity AI 深度播报",
+            "decision": str(r.get("decision") or "advisory"),
+            "headline": str(r.get("summary") or "AI 盘面研判完成"),
+            "body": str(r.get("answer") or ""),
+            "risk_flags": list(r.get("risk_flags") or []),
+            "actions": list(r.get("actions") or []),
+            "executable_count": None,
+        })
+
+    # 按时间倒序排列并截断
+    items.sort(key=lambda x: str(x.get("ts") or ""), reverse=True)
+    live_sig = load_live_signals(trade_date, base_dir=base_dir)
+    return {
+        "ok": True,
+        "date": trade_date,
+        "session_online": bool(bus.get("session_online")),
+        "heartbeat_at": bus.get("heartbeat_at"),
+        "pending_ai_jobs": int(bus.get("pending_count") or 0),
+        "last_poll_at": live_sig.get("updated_at"),
+        "live_orders_count": len(live_sig.get("orders") or []),
+        "items": items[: max(1, min(int(limit), 100))],
+    }
+
+
 def load_push_policy(base_dir: Optional[Path] = None) -> dict[str, Any]:
     """热读取 acct1 推送收口策略（不重启即可生效，默认关闭暂停以保持兼容）。"""
     raw = _load_json(_policy_path(base_dir))
@@ -345,7 +451,7 @@ def _format_sell_wechat(
         f"- 时间：`{now_str}`｜当前大盘：`{plan['regime_label']}`",
         f"- 策略理由：{order.get('reason') or 'AR4.6 调仓卖出'}",
         f"- 卖后预计可用现金：`{est_cash_after:,.2f}` 元｜{next_hint}",
-        f"- 提示：请在同花顺 `acct1` 核对盘口后手动卖出（或至 `/g3/desk` 一键预填）；成交后直接回我「acct1 已卖 {code} {qty}股 @ 均价」即可实时校准账本并衔接买单。",
+        f"- 提示：打开 https://stock.aistock3.fun/g3/desk 可直接「一键填单至同花顺（prefill_only）」并点「登记已成交」校准账本；也可直接回复「acct1 已卖 {code} {qty}股 @ 均价」。",
     ]
     return title, "\n".join(lines)
 
@@ -368,6 +474,11 @@ def _format_buy_wechat(
     px_str = f"{live_px:.3f}" if is_etf else f"{live_px:.2f}"
     stop_px = order.get("stop_loss_price")
     stop_str = (f"{float(stop_px):.3f}" if is_etf else f"{float(stop_px):.2f}") if stop_px else "—"
+    min_px = order.get("min_buy_price") or (ma20 if is_etf and ma20 else None)
+    max_px = order.get("max_buy_price")
+    min_str = (f"{float(min_px):.3f}" if is_etf else f"{float(min_px):.2f}") if min_px else "—"
+    max_str = (f"{float(max_px):.3f}" if is_etf else f"{float(max_px):.2f}") if max_px else "—"
+    min_reason = str(order.get("min_buy_reason") or ("跌破 MA20 放弃" if is_etf else "跌破放弃线不买"))
     chg_str = f"（当日 {pct_chg:+.2f}%）" if pct_chg is not None else ""
     ma20_str = f"｜盘中站稳 MA20(`{ma20:.3f}`)" if (is_etf and ma20 and live_px >= ma20) else ""
 
@@ -376,10 +487,11 @@ def _format_buy_wechat(
         f"- 账号：`acct1`（{acct['label']} · AR4.6 策略驱动）",
         f"- 操作：**买入 {qty} 股** `{code}` {name}（目标占比 `{order.get('target_weight_pct', 0)}%`）",
         f"- 盘口参考：`{px_str}`{chg_str}，预计金额 `{amt:,.2f}` 元｜参考止损：`{stop_str}`",
+        f"- 买入红线：跌破 `{min_str}`（{min_reason}）｜涨超 `{max_str}` 谨慎追高",
         f"- 时间：`{now_str}`｜当前大盘：`{plan['regime_label']}`{ma20_str}",
         f"- 策略理由：{order.get('reason') or 'AR4.6 目标配置建仓'}",
         f"- 买后预计剩余现金：`{rem_cash:,.2f}` 元｜账户总资产：`{float(acct['total_assets']):,.2f}` 元",
-        f"- 提示：请在同花顺 `acct1` 核对盘口后手动买入（或至 `/g3/desk` 一键预填）；成交后直接回我「acct1 已买 {code} {qty}股 @ 均价」即可同步账本。",
+        f"- 提示：打开 https://stock.aistock3.fun/g3/desk 可直接「一键填单至同花顺（prefill_only）」并点「登记已成交」同步账本；也可直接回复「acct1 已买 {code} {qty}股 @ 均价」。",
     ]
     return title, "\n".join(lines)
 
@@ -393,6 +505,7 @@ def run_acct1_advisor(
     *,
     dry_run: bool = False,
     bypass_session: bool = False,
+    suppress_wechat: bool = False,
     now_bj: Optional[datetime] = None,
     base_dir: Optional[Path] = None,
     overview_override: Optional[Mapping[str, Any]] = None,
@@ -414,18 +527,11 @@ def run_acct1_advisor(
             "pushed": [],
         }
 
-    # 盘中推送收口开关（热读取 push_policy.json）：仅暂停盘中机械推送，保留盘前 09:15 与日终 15:15 汇总
+    # 盘中推送收口开关（热读取 push_policy.json）：
+    # 即使 pause_intraday_auto_push=True，10 分钟巡检仍照常校验实时盘口并更新页面待填单队列与盘面播报，
+    # 仅控制是否把单笔买卖单推送到微信（盘面播报本身绝不推微信）。
     policy = load_push_policy(base_dir)
-    if mode == "intraday" and policy.get("pause_intraday_auto_push") and not dry_run:
-        return {
-            "status": "paused_by_policy",
-            "mode": mode,
-            "ts": now_str,
-            "reason": policy.get("reason") or "pause_intraday_auto_push",
-            "pushed_count": 0,
-            "pushed": [],
-            "skipped": [],
-        }
+    allow_wechat_order_push = (not dry_run) and (not suppress_wechat) and (not bool(policy.get("pause_intraday_auto_push")))
 
     # 1. 拉取真实账户概览并叠加尚未入快照的手工成交
     raw_overview = dict(overview_override) if overview_override is not None else get_accounts_overview()
@@ -568,6 +674,7 @@ def run_acct1_advisor(
 
     pushed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    executable_orders: list[dict[str, Any]] = []
 
     def _can_push(key: str, fingerprint: str) -> tuple[bool, str]:
         rec = sent_map.get(key)
@@ -630,12 +737,32 @@ def run_acct1_advisor(
                 continue
 
         key = f"{c6}:SELL"
+        # 无论是否处于微信 2 小时冷却或暂停微信推送，只要此刻通过全部盘中门禁，即登记进页面「实时待填单」列表
+        executable_orders.append({
+            "key": key,
+            "code": c6,
+            "name": str(s.get("name") or c6),
+            "side": "SELL",
+            "shares": qty,
+            "price": round(live_px, 3 if is_etf_sell else 2),
+            "est_amount": round(est_amt, 2),
+            "is_etf": is_etf_sell,
+            "pct_chg": round(pct_chg, 2) if pct_chg is not None else None,
+            "available_shares": int(s.get("available_shares") or 0),
+            "current_shares": int(s.get("current_shares") or 0),
+            "reason": str(s.get("reason") or "AR4.6 调仓卖出"),
+            "triggered_at": now_str,
+        })
+
         # 用可用股数作为指纹：避免价格 1 厘波动导致 ±100 股变化而绕过 2 小时防刷屏冷却；
         # 仅当真实持仓/可卖股数发生变化（如人工成交部分卖出）时立即解除冷却。
         fp = f"SELL:avail{int(s.get('available_shares') or 0)}"
         ok_push, why = _can_push(key, fp)
         if not ok_push:
             skipped.append({"code": c6, "side": "SELL", "reason": why})
+            continue
+        if not allow_wechat_order_push and not dry_run:
+            skipped.append({"code": c6, "side": "SELL", "reason": "wechat_push_paused_page_only"})
             continue
 
         title, body = _format_sell_wechat(s, plan, live_px, pct_chg, now_str)
@@ -687,8 +814,33 @@ def run_acct1_advisor(
         if is_etf and not is_offensive and entry_rule != "panic_rebound_etf" and ma20 and live_px < ma20:
             skipped.append({"code": c6, "side": "BUY", "reason": f"etf_below_ma20_{live_px:.3f}<{ma20:.3f}"})
             continue
+        min_buy_px = b.get("min_buy_price")
+        if min_buy_px is not None and float(min_buy_px) > 0 and live_px < float(min_buy_px):
+            skipped.append({"code": c6, "side": "BUY", "reason": f"below_min_buy_{live_px:.3f}<{float(min_buy_px):.3f}"})
+            continue
 
         key = f"{c6}:BUY"
+        # 无论是否处于微信 2 小时冷却或暂停微信推送，只要此刻通过全部盘中门禁，即登记进页面「实时待填单」列表
+        executable_orders.append({
+            "key": key,
+            "code": c6,
+            "name": str(b.get("name") or c6),
+            "side": "BUY",
+            "shares": qty,
+            "price": round(live_px, 3 if is_etf else 2),
+            "est_amount": round(est_amt, 2),
+            "is_etf": is_etf,
+            "pct_chg": round(pct_chg, 2) if pct_chg is not None else None,
+            "stop_loss_price": b.get("stop_loss_price"),
+            "min_buy_price": b.get("min_buy_price"),
+            "min_buy_reason": b.get("min_buy_reason"),
+            "max_buy_price": b.get("max_buy_price"),
+            "max_buy_reason": b.get("max_buy_reason"),
+            "target_weight_pct": b.get("target_weight_pct"),
+            "reason": str(b.get("reason") or "AR4.6 目标配置建仓"),
+            "triggered_at": now_str,
+        })
+
         # 用「可用现金按 2500 元分档」作为指纹：卖出回款后现金跃升会立即允许推送衔接买单，
         # 同时避免价格微幅波动导致 ±100 股变化而绕过 2 小时防刷屏冷却。
         cash_bucket = int(float(acct["available_cash"]) // 2500)
@@ -696,6 +848,9 @@ def run_acct1_advisor(
         ok_push, why = _can_push(key, fp)
         if not ok_push:
             skipped.append({"code": c6, "side": "BUY", "reason": why})
+            continue
+        if not allow_wechat_order_push and not dry_run:
+            skipped.append({"code": c6, "side": "BUY", "reason": "wechat_push_paused_page_only"})
             continue
 
         title, body = _format_buy_wechat(b, plan, live_px, pct_chg, ma20, now_str)
@@ -708,8 +863,13 @@ def run_acct1_advisor(
         else:
             skipped.append({"code": c6, "side": "BUY", "reason": f"notify_failed:{res.get('detail')}"})
 
-    # 5C. 2026-11-23 补丁③：极端冰点右侧反抽雷达（AR2_2A）盘中实时触发播报（当日至多推 1 次）
-    if in_panic_zone and "PANIC_REBOUND:ALERT" not in sent_map:
+    # 5C. 2026-11-23 补丁③：极端冰点右侧反抽雷达（AR2_2A）盘中实时触发播报（当日至多推 1 次；受 pause_ar2_radar_broadcast 与 suppress_wechat 控制）
+    if (
+        in_panic_zone
+        and "PANIC_REBOUND:ALERT" not in sent_map
+        and not suppress_wechat
+        and not policy.get("pause_ar2_radar_broadcast")
+    ):
         try:
             from services.mining.panic_rebound_monitor import evaluate_panic_rebound_signal
 
@@ -739,6 +899,95 @@ def run_acct1_advisor(
         except Exception as exc:  # noqa: BLE001
             logger.debug("[acct1_advisor] 冰点右侧雷达检测跳过: %s", exc)
 
+    # 5D. 落盘当日实时可执行待填单队列（供 /g3/desk 一键预填）+ 写入 10 分钟页面盘面播报（绝不推微信）
+    live_payload = {
+        "date": trade_date,
+        "updated_at": now_str,
+        "regime": plan["regime"],
+        "regime_label": plan["regime_label"],
+        "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+        "available_cash": round(float(acct["available_cash"]), 2),
+        "total_assets": round(float(acct["total_assets"]), 2),
+        "orders": executable_orders,
+        "skipped_summary": skipped[:12],
+    }
+    ai_broadcast_job_id: Optional[str] = None
+    if not dry_run:
+        _save_json(_live_signals_path(trade_date, base_dir), live_payload)
+        etf_targets = [
+            f"{t.get('name')}({t.get('code')}) {t.get('account_weight_pct', t.get('weight_pct', 0))}%"
+            for t in ((radar.get("etf_radar") or {}).get("targets") or [])
+            if isinstance(t, Mapping)
+        ]
+        order_briefs = [
+            f"{'卖出' if o['side'] == 'SELL' else '买入'} {o['name']}({o['code']}) {o['shares']}股 @ ¥{o['price']}"
+            for o in executable_orders
+        ]
+        b_txt = f"{breadth_pct:.2f}%" if breadth_pct is not None else "—"
+        headline = (
+            f"{now.strftime('%H:%M')} 盘面巡检 · {plan['regime_label']}（宽度 {b_txt}）"
+            + (f" · 触发 {len(executable_orders)} 笔待填单" if executable_orders else " · 暂无触发单，稳守观望")
+        )
+        body_lines = [
+            f"• 大盘与门禁：{plan['regime_label']}（全市场站上 MA20 宽度 {b_txt}，{'进攻期放行个股' if is_offensive else '非进攻期个股硬锁 0%'}）",
+            f"• AR4.6 目标组合：{' + '.join(etf_targets) if etf_targets else '现金防守'}",
+            f"• acct1 账户现状：总资产 ¥{float(acct['total_assets']):,.0f}｜可用现金 ¥{float(acct['available_cash']):,.0f}｜仓位 {acct.get('position_pct', '—')}%",
+            f"• 本轮可执行指令：{'；'.join(order_briefs) if order_briefs else '无新增可执行单（等待盘口/门禁触发）'}",
+        ]
+        append_intraday_broadcast(
+            {
+                "id": f"rule_{now.strftime('%Y%m%d_%H%M%S')}",
+                "ts": now_str,
+                "slot": now.strftime("%Y-%m-%d %H:%M"),
+                "channel": "rule_snapshot",
+                "channel_label": "10分钟规则引擎快照",
+                "decision": "action" if executable_orders else "advisory",
+                "regime": plan["regime"],
+                "regime_label": plan["regime_label"],
+                "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+                "headline": headline,
+                "body": "\n".join(body_lines),
+                "risk_flags": ["极端冰点区（禁止早盘地板割肉）"] if in_panic_zone else [],
+                "actions": order_briefs,
+                "executable_count": len(executable_orders),
+            },
+            trade_date=trade_date,
+            base_dir=base_dir,
+        )
+        # 若 Antigravity 在线监听处于活跃状态，异步派发一条 intraday_broadcast 给 AI Bus 生成深度盘面总结（绝不推微信、不阻塞）
+        try:
+            from services.g3.ai_bus import is_session_online, submit_ai_job
+
+            ai_online, _ = is_session_online()
+            if ai_online:
+                ai_prompt = (
+                    f"【10分钟定时盘面播报（仅展示在 /g3/ai-live，禁止推微信）】"
+                    f"请基于 {now_str} 实时数据（大盘：{plan['regime_label']}，宽度：{b_txt}，"
+                    f"AR4.6目标：{'+'.join(etf_targets) or '现金防守'}，"
+                    f"acct1可用现金 ¥{float(acct['available_cash']):,.0f}，本轮待执行单：{len(executable_orders)} 笔），"
+                    "给出 1 句核心盘面定调（写进 summary）+ 3~4 条简明盘面/资金/纪律要点（写进 answer）。"
+                )
+                job_res = submit_ai_job(
+                    kind="intraday_broadcast",
+                    prompt=ai_prompt,
+                    context={
+                        "ts": now_str,
+                        "regime": plan["regime"],
+                        "regime_label": plan["regime_label"],
+                        "breadth_pct": breadth_pct,
+                        "etf_targets": etf_targets,
+                        "executable_orders": executable_orders,
+                        "available_cash": acct["available_cash"],
+                        "total_assets": acct["total_assets"],
+                        "no_wechat": True,
+                    },
+                    source="intraday_10m_cron",
+                    wait_timeout_sec=0.0,
+                )
+                ai_broadcast_job_id = job_res.get("job_id")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[acct1_advisor] 派发 AI 盘面播报跳过: %s", exc)
+
     if not dry_run and pushed:
         state["date"] = trade_date
         state["updated_at"] = now_str
@@ -752,9 +1001,12 @@ def run_acct1_advisor(
         "regime_label": plan["regime_label"],
         "available_cash": acct["available_cash"],
         "applied_manual_fills": len(applied_fills),
+        "executable_count": len(executable_orders),
+        "executable_orders": executable_orders,
         "pushed_count": len(pushed),
         "pushed": pushed,
         "skipped": skipped,
+        "ai_broadcast_job_id": ai_broadcast_job_id,
     }
 
 
@@ -767,11 +1019,14 @@ def get_acct1_advisor_status(
     trade_date = now.strftime("%Y-%m-%d")
     state = _load_json(_state_path(trade_date, base_dir))
     fills = load_manual_fills(trade_date, base_dir=base_dir)
+    live_signals = load_live_signals(trade_date, base_dir=base_dir)
     return {
         "account_id": ACCOUNT_ID,
         "date": trade_date,
         "in_sell_session": _in_intraday_session(now, for_buy=False),
         "in_buy_session": _in_intraday_session(now, for_buy=True),
+        "last_poll_at": live_signals.get("updated_at"),
+        "live_signals": live_signals,
         "sent_today": state.get("sent") or {},
         "manual_fills_today": fills,
         "push_policy": load_push_policy(base_dir),

@@ -606,6 +606,51 @@ def _run_ar46_postclose_sync_once(log: Optional[logging.Logger] = None) -> None:
         lg.warning("[ar45_postclose_sync] 调仓预案/简报缓存刷新异常: %s", exc)
 
 
+def _run_ar4_macro_late_sync_once(log: Optional[logging.Logger] = None, *, slot: str = "evening") -> None:
+    """晚间(21:30)/盘前(08:35)补齐 T+0 晚公布与 T+1 宏观/份额/南向数据，并刷新 AR4.6 预案缓存。"""
+    import urllib.request as _urlreq
+
+    lg = log or logger
+    base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
+    opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
+
+    def _post(path: str, payload: dict | None = None, timeout: int = 180) -> dict:
+        data = json.dumps(payload or {}).encode("utf-8")
+        req = _urlreq.Request(
+            f"{base}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with opener.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _get(path: str, timeout: int = 90) -> dict:
+        req = _urlreq.Request(f"{base}{path}", method="GET")
+        with opener.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    try:
+        ar4_res = _post("/api/g3/mining/ar4/sync", timeout=180)
+        sb = (ar4_res.get("sync") or {}).get("southbound") or {}
+        lg.info(
+            "[ar4_macro_%s_sync] 国家队份额+南向资金+ERP补齐完成: status=%s sb_latest=%s sb20d=%s",
+            slot, ar4_res.get("status"), sb.get("latest_date"), sb.get("sb_net_20d_yi"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[ar4_macro_%s_sync] AR4 国家队/南向/ERP补齐异常: %s", slot, exc)
+
+    try:
+        plan = _get("/api/g3/mining/ar3/rebalance-plan?account_id=acct1&smooth_step=true&persist=true", timeout=90)
+        _post("/api/g3/premarket-brief/generate", payload={"push_wechat": False}, timeout=90)
+        lg.info(
+            "[ar4_macro_%s_sync] AR4.6调仓预案与简报缓存已刷新: regime=%s sells=%d buys=%d",
+            slot, plan.get("regime"), len(plan.get("sell_orders") or []), len(plan.get("buy_orders") or []),
+        )
+    except Exception as exc:  # noqa: BLE001
+        lg.warning("[ar4_macro_%s_sync] 调仓预案/简报缓存刷新异常: %s", slot, exc)
+
+
 def _run_postclose_downstream_hooks(resolved_date: date, log: Optional[logging.Logger] = None) -> None:
     """盘后三管道认证成功后自动联动下游维护：板块同步 → 涨停生态终算 → 46只ETF/国家队/ERP同步。"""
     lg = log or logger
@@ -2182,6 +2227,42 @@ def serve(
         replace_existing=True,
     )
     logger.info("调度注册：ar45_postclose_sync cron=[day_of_week=%s 17:15 Asia/Shanghai]（AR4.6 46只ETF+国家队+南向+ERP盘后同步）", CRON_DAY_OF_WEEK)
+
+    # 晚间 21:30 + 盘前 08:35 二次补齐：覆盖上交所 ETF 份额(20:00~21:30)、南向资金(17:30~18:30)、中债10Y/PE 与隔夜美债10Y(次日07:30~08:30)
+    def _run_ar4_macro_late_job(slot: str) -> None:
+        now_bj = cn_now()
+        try:
+            if not _default_is_trading_day(now_bj.date()):
+                return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[ar4_macro_%s_sync] 交易日判断失败（fail-closed跳过）: %s", slot, exc)
+            return
+        _run_ar4_macro_late_sync_once(logger, slot=slot)
+
+    scheduler.add_job(
+        _run_ar4_macro_late_job,
+        args=["evening"],
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=21, minute=30, timezone=BEIJING_TZ),
+        id="ar4_macro_evening_sync",
+        name="AR4.6 晚间补齐国家队份额+南向资金+中债/PE（工作日 21:30）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_ar4_macro_late_job,
+        args=["premarket"],
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=8, minute=35, timezone=BEIJING_TZ),
+        id="ar4_macro_premarket_sync",
+        name="AR4.6 盘前终齐隔夜美债10Y+延迟份额/南向（工作日 08:35）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info(
+        "调度注册：ar4_macro_evening_sync@21:30 / ar4_macro_premarket_sync@08:35 (day_of_week=%s Asia/Shanghai)",
+        CRON_DAY_OF_WEEK,
+    )
 
     # 注册 acct1 AR4.6 专属盘前/盘中/盘后微信智能买卖提醒（对齐 acct2 同款体验，严格 AR4.6 策略驱动）
     def _run_acct1_ar45_advisor_job(mode: str) -> None:

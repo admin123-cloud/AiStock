@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
+import { EChart } from '@/components/EChart'
 import { Card, PageHeader } from '@/components/ui'
 import AR3DualCorePanel from '@/views/g3/AR3DualCorePanel'
-import G3AiBusPanel from '@/views/g3/G3AiBusPanel'
 import {
   generateG3PremarketBrief,
   getG3AR3Radar,
@@ -46,6 +46,8 @@ export default function G3Desk() {
   const [loading, setLoading] = useState(false)
   const [briefBusy, setBriefBusy] = useState(false)
   const [pushingBrief, setPushingBrief] = useState(false)
+  const [showGateRules, setShowGateRules] = useState(false)
+  const [showBriefBody, setShowBriefBody] = useState(false)
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
 
@@ -124,20 +126,20 @@ export default function G3Desk() {
     <div className="flex w-full flex-col gap-4">
       <PageHeader
         title="G3 AR4.6 实战交易台"
-        subtitle={`主力账号 ct1曾 · 今日一键调仓与风险总览（极简执行动线 · 规划日 ${data?.trade_date || '—'} · 严格 prefill_only 不自动下单）`}
+        subtitle={`主力账号 ct1曾 · 交易日 ${data?.trade_date || '—'}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button outline onClick={() => void load(true)} disabled={loading}>
               {loading ? '刷新中…' : '刷新行情'}
             </Button>
+            <Link to="/g3/ai-live">
+              <Button outline>📡 AI 盘面直播 →</Button>
+            </Link>
             <Link to="/g3/accounts?tab=ttrade">
-              <Button outline>底仓做T与资金 →</Button>
+              <Button outline>资金与做T →</Button>
             </Link>
             <Link to="/g3/signals">
-              <Button outline>选股与ETF雷达 →</Button>
-            </Link>
-            <Link to="/g3/lab?tab=settings">
-              <Button plain>通知与风控设置</Button>
+              <Button outline>选股雷达 →</Button>
             </Link>
           </div>
         }
@@ -244,230 +246,317 @@ export default function G3Desk() {
                   : 'border-amber-500/40 bg-amber-950/10'
             }
           >
-            {/* 顶栏：当前周期 + 核心状态徽章 */}
-            <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-zinc-800/90 pb-3">
+            {/* 顶栏：大盘状态 + 目标配比 + 规则折叠开关 */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/90 pb-3">
               <div className="flex flex-wrap items-center gap-2.5">
-                <span className="text-base font-semibold text-white">大盘择时总闸门（AR4.6）</span>
+                <span className="text-lg font-bold text-white">大盘择时总闸门</span>
                 <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
                 {isPanicAb ? (
-                  <Badge color="emerald">⚡ 冰点 30m 已触发 · 半仓 50% AB 真龙 + 50% 避险 ETF</Badge>
+                  <Badge color="emerald">⚡ 冰点半仓已触发</Badge>
                 ) : inPanicWatch ? (
-                  <Badge color="amber">🧊 宽度 {fmtNum(breadthPct)}% ≤ 18% · 冰点戒备（待 30m 阳线 ≥+0.80%）</Badge>
+                  <Badge color="amber">🧊 冰点戒备（宽度 {fmtNum(breadthPct)}%）</Badge>
                 ) : isOff ? (
-                  <Badge color="emerald">主升进攻开放 · 个股目标 {stockTargetPct}% + 宽基 ETF {etfTargetPct}%</Badge>
+                  <Badge color="emerald">进攻开放 · 个股 {stockTargetPct}%</Badge>
                 ) : (
-                  <Badge color="red">非进攻期 · A股个股锁 0% + 100% 跨资产逆波 ETF</Badge>
+                  <Badge color="red">个股 0% · 100% 避险 ETF</Badge>
                 )}
               </div>
-              <div className="font-mono text-xs text-zinc-300">
-                参考日 {gate.ref_date} · 宽度日 {src.breadth?.date || '—'}
+              <div className="flex items-center gap-3 text-sm text-zinc-300">
+                <span className="font-mono">{gate.ref_date}</span>
+                <button
+                  type="button"
+                  onClick={() => setShowGateRules((v) => !v)}
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200 hover:border-zinc-500"
+                >
+                  {showGateRules ? '收起判定规则 ▴' : '判定规则 ▾'}
+                </button>
               </div>
             </div>
 
-            {/* 主体双栏：左 = ① 当前处于什么周期 & 判断依据；右 = ② 当前的持仓依据 */}
-            <div className="mt-3.5 grid grid-cols-1 gap-4 lg:grid-cols-12">
-              {/* 左半区：1) 当前处于什么周期 & 判断依据 */}
-              <div className="flex flex-col gap-3 rounded-lg border border-zinc-800/80 bg-zinc-950/55 p-4 lg:col-span-6">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-white">① 当前周期与判断依据</span>
-                  <span className="text-xs font-medium text-zinc-300">
+            {/* 主体双栏：左 = 4 项大号核心指标；右 = 目标配比 vs 实盘持仓 */}
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
+              <div className="grid grid-cols-2 gap-3 lg:col-span-6">
+                <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/65 px-4 py-3">
+                  <div className="text-sm text-zinc-300">全市场宽度 (MA20)</div>
+                  <div
+                    className={`mt-1 font-mono text-2xl font-bold ${
+                      breadthPct != null && breadthPct >= 52
+                        ? 'text-emerald-300'
+                        : breadthPct != null && breadthPct <= 18
+                          ? 'text-amber-300'
+                          : 'text-red-300'
+                    }`}
+                  >
+                    {breadthPct != null ? `${fmtNum(breadthPct)}%` : '—'}
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">进攻 ≥52% · 冰点 ≤18%</div>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/65 px-4 py-3">
+                  <div className="text-sm text-zinc-300">上证指数 vs MA20</div>
+                  <div
+                    className={`mt-1 font-mono text-2xl font-bold ${
+                      idxBiasMa20 != null && idxBiasMa20 >= 0 ? 'text-emerald-300' : 'text-red-300'
+                    }`}
+                  >
+                    {idx?.close != null ? fmtNum(idx.close, 0) : '—'}
+                    <span className="ml-1.5 text-base">
+                      ({idxBiasMa20 != null ? `${idxBiasMa20 >= 0 ? '+' : ''}${idxBiasMa20.toFixed(1)}%` : '—'})
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">
+                    MA20 {idx?.ma20 != null ? fmtNum(idx.ma20, 0) : '—'} ·{' '}
                     {idx?.confirmed_regime === 'up'
-                      ? `上证上升连 ${idx?.streak_days ?? 0} 日`
+                      ? `连涨 ${idx?.streak_days ?? 0} 日`
                       : idx?.confirmed_regime === 'down'
-                        ? `上证下降连 ${idx?.streak_days ?? 0} 日`
-                        : '上证震荡过渡'}
-                  </span>
-                </div>
-                <div className="text-sm leading-6 text-zinc-100">{phaseExplain}</div>
-
-                {/* 4 项硬指标实测 vs 阈值 */}
-                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-xs text-zinc-300">全市场宽度 (MA20占比)</span>
-                      <span className={breadthPct != null && breadthPct >= 52 ? 'font-mono text-base font-bold text-emerald-300' : breadthPct != null && breadthPct <= 18 ? 'font-mono text-base font-bold text-amber-300' : 'font-mono text-base font-bold text-red-300'}>
-                        {breadthPct != null ? `${fmtNum(breadthPct)}%` : '—'}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-zinc-400">
-                      进攻 ≥52%连3日 · 防守 &lt;30% · 冰点 ≤18%
-                    </div>
-                  </div>
-
-                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-xs text-zinc-300">上证指数 vs MA20</span>
-                      <span className={idxBiasMa20 != null && idxBiasMa20 >= 0 ? 'font-mono text-base font-bold text-emerald-300' : 'font-mono text-base font-bold text-red-300'}>
-                        {idx?.close != null ? `${fmtNum(idx.close, 0)} (${idxBiasMa20 != null ? `${idxBiasMa20 >= 0 ? '+' : ''}${idxBiasMa20.toFixed(1)}%` : '—'})` : '—'}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-zinc-400">
-                      MA20 {idx?.ma20 != null ? fmtNum(idx.ma20, 0) : '—'} · 60日动量 {idx?.index_mom60 != null ? `${idx.index_mom60 >= 0 ? '+' : ''}${(idx.index_mom60 * 100).toFixed(1)}%` : '—'}
-                    </div>
-                  </div>
-
-                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-xs text-zinc-300">市场情绪 · 涨跌停</span>
-                      <span className="font-mono text-base font-bold text-zinc-100">
-                        {mood?.mood_label || '—'} ({mood?.limit_up_count ?? '—'}/{mood?.limit_down_count ?? '—'})
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-zinc-400">
-                      封板率 {sealRatePct != null ? `${sealRatePct.toFixed(1)}%` : '—'} · 炸板 {mood?.broke_count ?? '—'} · 最高 {mood?.max_streak ?? '—'} 板
-                    </div>
-                  </div>
-
-                  <div className="rounded-md border border-zinc-800/80 bg-zinc-900/70 px-3 py-2.5">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-xs text-zinc-300">全市场成交额</span>
-                      <span className="font-mono text-base font-bold text-zinc-100">
-                        {src.turnover_forecast?.forecast_trillion != null ? `${src.turnover_forecast.forecast_trillion.toFixed(2)} 万亿` : '—'}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-zinc-400">
-                      {src.turnover_forecast?.mode === 'intraday_forecast' ? '盘中全天预测额' : '最新全市场成交额'}
-                    </div>
+                        ? `连跌 ${idx?.streak_days ?? 0} 日`
+                        : '震荡'}
                   </div>
                 </div>
 
-                {/* 触发依据 + 下一周期切换条件 */}
-                <div className="space-y-1.5 border-t border-zinc-800/70 pt-2.5 text-[13px] leading-6">
-                  {gate.reasons.length > 0 && (
-                    <div className="text-zinc-100">
-                      <span className="font-semibold text-zinc-300">判定依据：</span>
-                      {gate.reasons.join('；')}
-                    </div>
-                  )}
-                  <div className="text-zinc-300">
-                    <span className="font-semibold text-zinc-200">切换门槛：</span>
-                    {isOff
-                      ? '宽度跌破 52% 或上证破 MA20 → 切回平衡清股；连续 2 日宽度 <30% 或单日 <25% → 切入防守。'
-                      : '切平衡需宽度 ≥30% 且上证企稳；触发冰点半仓真龙需宽度 ≤18% 且 10:30~14:30 任一根 30m K线，创业板+中证1000双收阳且日内均涨 ≥+0.80%（首次达标即刻触发，无需等尾盘）；升级进攻需宽度 ≥52% + 上证 > MA20 + 20d 动量 > +1% 连 3 日。'}
+                <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/65 px-4 py-3">
+                  <div className="text-sm text-zinc-300">市场情绪 · 涨跌停</div>
+                  <div className="mt-1 font-mono text-xl font-bold text-white">
+                    {mood?.mood_label || '—'} ({mood?.limit_up_count ?? '—'}/{mood?.limit_down_count ?? '—'})
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">
+                    封板率 {sealRatePct != null ? `${sealRatePct.toFixed(0)}%` : '—'} · 最高 {mood?.max_streak ?? '—'} 板
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/65 px-4 py-3">
+                  <div className="text-sm text-zinc-300">全市场成交额</div>
+                  <div className="mt-1 font-mono text-2xl font-bold text-white">
+                    {src.turnover_forecast?.forecast_trillion != null
+                      ? `${src.turnover_forecast.forecast_trillion.toFixed(2)} 万亿`
+                      : '—'}
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">
+                    {src.turnover_forecast?.mode === 'intraday_forecast'
+                      ? '盘中预测'
+                      : src.turnover_forecast?.mode === 'daily_actual'
+                        ? `正式收盘${src.turnover_forecast?.vol_ratio_5d != null ? ` · 5日量比 ${src.turnover_forecast.vol_ratio_5d.toFixed(2)}x` : ''}`
+                        : '最新成交额'}
                   </div>
                 </div>
               </div>
 
-              {/* 右半区：2) 当前的持仓依据是什么（目标配比逻辑 + acct1 实盘对照） */}
-              <div className="flex flex-col gap-3 rounded-lg border border-zinc-800/80 bg-zinc-950/55 p-4 lg:col-span-6">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-white">② 当前持仓依据（AR4.6 目标 vs acct1 实盘）</span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge color={stockCompliant ? 'emerald' : 'red'}>
-                      A股个股 {actualStockPct.toFixed(1)}% / 目标 {stockTargetPct}%
-                    </Badge>
-                    <Badge color="blue">
-                      ETF {actualEtfPct.toFixed(1)}% / 目标 {etfTargetPct}%
-                    </Badge>
-                  </div>
-                </div>
+              {/* 右半区（红框升级）：策略目标 vs 实盘持仓 双环形图 + 合规体检结论 */}
+              <div className="flex flex-col justify-between gap-2 rounded-lg border border-zinc-800/80 bg-zinc-950/65 p-4 lg:col-span-6">
+                {(() => {
+                  const comp = plan?.portfolio_compliance
+                  const targetPalette = ['#38bdf8', '#10b981', '#a78bfa', '#f59e0b', '#ec4899']
+                  const targetCodeColor = new Map<string, string>()
+                  const targetPieData: Array<{ name: string; value: number; itemStyle: { color: string } }> = []
+                  const allocList =
+                    plan?.target_allocation && plan.target_allocation.length > 0
+                      ? plan.target_allocation
+                      : etfTargets.map((t) => ({
+                          code: t.code,
+                          name: t.name,
+                          asset_kind: 'etf',
+                          target_weight_pct: Number(t.account_weight_pct ?? 0),
+                          ref_price: t.close,
+                        }))
+                  allocList.forEach((t, idx) => {
+                    const color = targetPalette[idx % targetPalette.length]
+                    targetCodeColor.set(t.code, color)
+                    if (t.target_weight_pct > 0.5) {
+                      targetPieData.push({
+                        name: t.name,
+                        value: Number(t.target_weight_pct.toFixed(1)),
+                        itemStyle: { color },
+                      })
+                    }
+                  })
+                  const tgtSum = targetPieData.reduce((s, d) => s + d.value, 0)
+                  if (tgtSum < 99) {
+                    targetPieData.push({
+                      name: '现金',
+                      value: Number((100 - tgtSum).toFixed(1)),
+                      itemStyle: { color: '#52525b' },
+                    })
+                  }
 
-                {/* 依据 1：为什么个股是这个仓位 */}
-                <div className="space-y-2.5 text-[13px] leading-6">
-                  <div className="rounded-md border border-zinc-800/70 bg-zinc-900/60 px-3 py-2 text-zinc-100">
-                    <span className="font-semibold text-amber-300">个股仓位依据（目标 {stockTargetPct}%）：</span>
-                    {isOff
-                      ? `主升进攻确认，${macroDec?.cap_reason || `按国家队分位动态配 ${stockTargetPct}%`}，精选 F3A+F2A（AB_BLEND）前 4 只（同业限 1，日收盘 -10% 宽追踪）。`
-                      : isPanicAb
-                        ? '极端冰点 30m 创业板+中证1000右侧确认，临时开放 50% 半仓切入 10 万可执行 AB_BLEND Top4 真龙（单手 ≤1.5 万，逐票 -6% 止损 / +5% 后 -3.5% 追踪 / ≤5 日）。'
-                        : `当前非进攻期（4 年实证 18%~52% 与下跌期买个股全亏），个股硬锁 0%；宏观底托参考：国家队 250 日分位 ${macro?.nt_ratio_pctile_250d != null ? `${macro.nt_ratio_pctile_250d.toFixed(1)}%` : '—'}（${macroDec?.phase_label || '—'}）· ERP ${macro?.erp_pct != null ? `${macro.erp_pct.toFixed(2)}%` : '—'}，等右侧确认再放大进攻股仓。`}
-                  </div>
+                  const unexpectedColors = ['#ef4444', '#f97316', '#f43f5e', '#fb7185', '#dc2626']
+                  let unexpIdx = 0
+                  const actualPieData: Array<{ name: string; value: number; itemStyle: { color: string } }> = []
+                  const dHoldings = plan?.decision_holdings
+                  if (dHoldings && dHoldings.length > 0) {
+                    for (const h of dHoldings) {
+                      if (h.actual_weight_pct <= 0.2) continue
+                      const inTarget = targetCodeColor.get(h.code)
+                      const color =
+                        inTarget ??
+                        (h.alignment === 'unexpected'
+                          ? unexpectedColors[unexpIdx++ % unexpectedColors.length]
+                          : '#34d399')
+                      actualPieData.push({
+                        name: h.alignment === 'unexpected' ? `${h.name}(预期外)` : h.name,
+                        value: h.actual_weight_pct,
+                        itemStyle: { color },
+                      })
+                    }
+                  } else {
+                    for (const h of holdings) {
+                      const wPct = totalAssets > 0 ? Number(((h.market_value / totalAssets) * 100).toFixed(1)) : 0
+                      if (wPct <= 0.2) continue
+                      const inTarget = targetCodeColor.get(h.code)
+                      actualPieData.push({
+                        name: inTarget ? h.name : `${h.name}(预期外)`,
+                        value: wPct,
+                        itemStyle: { color: inTarget ?? unexpectedColors[unexpIdx++ % unexpectedColors.length] },
+                      })
+                    }
+                  }
+                  if (actualCashPct > 0.5 || actualPieData.length === 0) {
+                    actualPieData.push({
+                      name: '可用现金',
+                      value: Number(actualCashPct.toFixed(1)),
+                      itemStyle: { color: '#52525b' },
+                    })
+                  }
 
-                  {/* 依据 2：为什么 ETF 选这几只 & 按此权重配 */}
-                  <div className="rounded-md border border-zinc-800/70 bg-zinc-900/60 px-3 py-2 text-zinc-100">
-                    <div className="font-semibold text-sky-300">
-                      ETF 配置依据（目标 {etfTargetPct}% · {isOff ? 'A股宽基 20d 动量 Top2' : '非A股风险调整动量 Top2 逆波动率加权'}）：
-                    </div>
-                    {etfTargets.length > 0 ? (
-                      <div className="mt-1.5 flex flex-wrap gap-2">
-                        {etfTargets.map((t) => (
-                          <span
-                            key={t.code}
-                            className="inline-flex items-center gap-1.5 rounded-md bg-zinc-800/95 px-2.5 py-1 font-mono text-xs text-zinc-100"
-                          >
-                            <b className="text-sky-300">{t.name}({t.code})</b>
-                            <span className="font-semibold text-white">{(t.account_weight_pct ?? 0).toFixed(1)}%</span>
-                            <span className="text-zinc-300">
-                              (20d {t.ret_20d_pct >= 0 ? '+' : ''}{t.ret_20d_pct.toFixed(1)}% · 波动 {t.vol_20d_pct.toFixed(1)}%)
-                            </span>
+                  const dualPieOption = {
+                    tooltip: {
+                      trigger: 'item',
+                      backgroundColor: '#18181b',
+                      borderColor: '#3f3f46',
+                      textStyle: { color: '#f4f4f5', fontSize: 13 },
+                      formatter: '{a}<br/>{b}: <b>{c}%</b>',
+                    },
+                    title: [
+                      {
+                        text: '策略目标结构',
+                        left: '24%',
+                        top: '2%',
+                        textAlign: 'center',
+                        textStyle: { color: '#93c5fd', fontSize: 13, fontWeight: 600 },
+                      },
+                      {
+                        text: '实盘持仓结构',
+                        left: '74%',
+                        top: '2%',
+                        textAlign: 'center',
+                        textStyle: { color: '#e4e4e7', fontSize: 13, fontWeight: 600 },
+                      },
+                    ],
+                    series: [
+                      {
+                        name: 'AR4.6 策略目标',
+                        type: 'pie',
+                        radius: ['42%', '70%'],
+                        center: ['25%', '56%'],
+                        avoidLabelOverlap: true,
+                        itemStyle: { borderColor: '#09090b', borderWidth: 2 },
+                        label: {
+                          show: true,
+                          color: '#e4e4e7',
+                          fontSize: 11,
+                          formatter: '{b}\n{c}%',
+                        },
+                        labelLine: { length: 8, length2: 6 },
+                        data: targetPieData,
+                      },
+                      {
+                        name: 'acct1 实盘持仓',
+                        type: 'pie',
+                        radius: ['42%', '70%'],
+                        center: ['75%', '56%'],
+                        avoidLabelOverlap: true,
+                        itemStyle: { borderColor: '#09090b', borderWidth: 2 },
+                        label: {
+                          show: true,
+                          color: '#e4e4e7',
+                          fontSize: 11,
+                          formatter: '{b}\n{c}%',
+                        },
+                        labelLine: { length: 8, length2: 6 },
+                        data: actualPieData,
+                      },
+                    ],
+                  }
+
+                  const complianceBadgeColor =
+                    comp?.tone === 'emerald' ? 'emerald' : comp?.tone === 'amber' ? 'amber' : stockCompliant ? 'emerald' : 'red'
+
+                  return (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-base font-bold text-white">持仓结构合规对比</span>
+                          <Badge color={complianceBadgeColor}>
+                            {comp?.headline || (stockCompliant ? '结构合规' : `个股超配 ${actualStockPct.toFixed(0)}%`)}
+                          </Badge>
+                        </div>
+                        <span className="font-mono text-sm text-zinc-300">
+                          合规度 <b className="text-white">{comp ? `${comp.compliance_pct.toFixed(0)}%` : '—'}</b> · 总资产{' '}
+                          <b className="text-white">¥{fmtNum(totalAssets, 0)}</b>
+                        </span>
+                      </div>
+
+                      <div className="w-full">
+                        <EChart option={dualPieOption} height={195} />
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800/80 pt-2 text-xs text-zinc-300">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="h-2.5 w-2.5 rounded-full bg-sky-400" />
+                            策略内 ETF <b>{actualEtfPct.toFixed(0)}%</b>（目标 {etfTargetPct}%）
                           </span>
-                        ))}
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
+                            个股 <b>{actualStockPct.toFixed(0)}%</b>（目标 {stockTargetPct}%）
+                          </span>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="h-2.5 w-2.5 rounded-full bg-zinc-500" />
+                            现金 <b>{actualCashPct.toFixed(0)}%</b>（¥{fmtNum(acct?.available_cash, 0)}）
+                          </span>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="mt-1 text-xs text-zinc-300">{radar?.etf_radar?.headline || '加载目标 ETF 依据中…'}</div>
-                    )}
-                    <div className="mt-1.5 text-xs text-zinc-300">
-                      低波动多配、高波动少配（风险平价控回撤） · 南向 20 日净流{' '}
-                      {macro?.sb_net_20d_yi != null ? `${macro.sb_net_20d_yi >= 0 ? '+' : ''}${macro.sb_net_20d_yi.toFixed(0)}亿` : '—'}
-                      {macro?.sb_net_20d_yi != null && macro.sb_net_20d_yi < 0 ? '（港科已拦截）' : '（港科未拦截）'}
-                    </div>
-                  </div>
-
-                  {/* 依据 3：acct1 当前实盘持仓逐只核对 */}
-                  <div className="rounded-md border border-zinc-800/70 bg-zinc-900/60 px-3 py-2">
-                    <div className="flex items-center justify-between text-zinc-200">
-                      <span className="font-semibold">
-                        acct1 实盘持仓核对（总仓位 {acct?.position_pct != null ? `${acct.position_pct.toFixed(1)}%` : '—'} · 现金 {actualCashPct.toFixed(1)}% / ¥{fmtNum(acct?.available_cash, 0)}）
-                      </span>
-                    </div>
-                    {holdings.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {holdings.map((h) => {
-                          const wPct = totalAssets > 0 ? (h.market_value / totalAssets) * 100 : 0
-                          const tgt = etfTargetMap.get(h.code)
-                          const isPanicPair = h.code === '159915' || h.code === '512100'
-                          const tag = tgt
-                            ? `目标(${(tgt.account_weight_pct ?? 0).toFixed(0)}%)`
-                            : isPanicPair
-                              ? '冰点反抽仓(盯-6%止损/反抽兑现)'
-                              : h.is_etf
-                                ? '非目标ETF(择机切目标)'
-                                : isOff
-                                  ? '进攻持仓'
-                                  : '非目标旧股(按步长清退)'
-                          const tagCls = tgt
-                            ? 'border-emerald-500/45 bg-emerald-950/35 text-emerald-100'
-                            : isPanicPair
-                              ? 'border-amber-500/45 bg-amber-950/35 text-amber-100'
-                              : 'border-red-500/45 bg-red-950/35 text-red-100'
-                          return (
-                            <span
-                              key={h.code}
-                              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${tagCls}`}
-                            >
-                              <b className="font-mono">{h.name}({h.code})</b>
-                              <span className="font-mono font-semibold">{wPct.toFixed(1)}%</span>
-                              {h.profit_pct != null && (
-                                <span className="font-mono">
-                                  ({h.profit_pct >= 0 ? '+' : ''}{h.profit_pct.toFixed(1)}%)
-                                </span>
-                              )}
-                              <span>· {tag}</span>
-                            </span>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <div className="mt-1 text-xs text-zinc-400">当前空仓（100% 现金待配置）</div>
-                    )}
-                  </div>
-                </div>
+                    </>
+                  )
+                })()}
               </div>
             </div>
+
+            {/* 折叠的详细规则说明（默认隐藏，避免文字堆砌） */}
+            {showGateRules && (
+              <div className="mt-3 space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/75 p-3.5 text-sm leading-6 text-zinc-200">
+                <div>{phaseExplain}</div>
+                {gate.reasons.length > 0 && (
+                  <div>
+                    <span className="font-semibold text-zinc-300">判定依据：</span>
+                    {gate.reasons.join('；')}
+                  </div>
+                )}
+                <div className="text-zinc-300">
+                  <span className="font-semibold text-zinc-200">切换门槛：</span>
+                  {isOff
+                    ? '宽度 <52% 或上证破 MA20 → 切回平衡；连续 2 日宽度 <30% 或单日 <25% → 切入防守。'
+                    : '平衡需宽度 ≥30% 且上证企稳；冰点半仓需宽度 ≤18% 且 10:30~14:30 30m 创业板+中证1000双阳均涨 ≥+0.80%；进攻需宽度 ≥52% + 上证 > MA20 + 20日动量 >+1% 连 3 日。'}
+                </div>
+                <div className="text-zinc-300">
+                  <span className="font-semibold text-zinc-200">宏观参考：</span>
+                  国家队 250 日分位 {macro?.nt_ratio_pctile_250d != null ? `${macro.nt_ratio_pctile_250d.toFixed(1)}%` : '—'}（
+                  {macroDec?.phase_label || '—'}）· ERP {macro?.erp_pct != null ? `${macro.erp_pct.toFixed(2)}%` : '—'} · 南向 20 日{' '}
+                  {macro?.sb_net_20d_yi != null ? `${macro.sb_net_20d_yi >= 0 ? '+' : ''}${macro.sb_net_20d_yi.toFixed(0)}亿` : '—'}
+                </div>
+              </div>
+            )}
           </Card>
         )
       })()}
 
-      {/* 1.5 在线 AI 参谋（Antigravity 决策总线：文件队列唤醒当前会话深度研判） */}
-      <G3AiBusPanel />
-
-      {/* 2. 绝对核心主视图：AR4.6 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，15只ETF与选股明细已迁至 /g3/signals） */}
+      {/* 2. 绝对核心主视图：AR4.6 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，15只ETF与选股明细已迁至 /g3/signals，AI 10m 直播与参谋已独立至 /g3/ai-live） */}
       <AR3DualCorePanel
         mode="desk_compact"
         externalRadar={radar}
         externalRadarLoading={loading}
         externalPlan={plan}
         onRadarUpdated={(nextRadar) => setRadar(nextRadar)}
+        onPlanUpdated={(nextPlan) => setPlan(nextPlan)}
         onPrefillOrder={() => {
           navigate('/g3/accounts?tab=ttrade')
         }}
@@ -484,59 +573,59 @@ export default function G3Desk() {
         }}
       />
 
-      {/* 3. 底部紧凑卡：盘前 AI 晨会核心研判（AR4.6 单一口径） */}
+      {/* 3. 底部折叠卡：盘前晨会简报（默认收起，减少主界面文字干扰） */}
       <Card>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-white">盘前 AI 晨会简报（AR4.6 单一口径）</span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-base font-semibold text-white">盘前晨会简报</span>
             {data?.premarket_brief ? (
-              <>
-                <Badge color={data.premarket_brief.source === 'agent_enriched' ? 'emerald' : 'blue'}>
-                  {data.premarket_brief.source === 'agent_enriched' ? 'Agent 增强版' : 'AR4.6 自动基线版'}
-                </Badge>
-                <span className="font-mono text-xs text-zinc-400">
-                  {data.premarket_brief.date} · {fmtTimeOnly(data.premarket_brief.generated_at)}
-                </span>
-              </>
+              <span className="font-mono text-sm text-zinc-300">
+                {data.premarket_brief.date} · {fmtTimeOnly(data.premarket_brief.generated_at)}
+              </span>
             ) : (
-              <Badge color="zinc">尚未生成今日简报</Badge>
+              <Badge color="zinc">尚未生成</Badge>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button outline onClick={() => setShowBriefBody((v) => !v)}>
+              {showBriefBody ? '收起简报 ▴' : '展开简报 ▾'}
+            </Button>
             <Button outline onClick={() => void handleGenerateBrief()} disabled={briefBusy}>
-              {briefBusy ? '生成中…' : '生成/刷新简报'}
+              {briefBusy ? '生成中…' : '刷新简报'}
             </Button>
             <Button outline onClick={() => void handlePushBriefWechat()} disabled={pushingBrief}>
-              {pushingBrief ? '推送中…' : '一键推微信'}
+              {pushingBrief ? '推送中…' : '推送微信'}
             </Button>
           </div>
         </div>
 
-        {data?.premarket_brief ? (
-          <div className="mt-3 space-y-2 text-xs">
-            {data.premarket_brief.agent_thesis && (
-              <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-blue-200">
-                <b>AI 盘面研判：</b>
-                {data.premarket_brief.agent_thesis}
-              </div>
-            )}
-            <div className="grid grid-cols-1 gap-1.5 text-zinc-200 md:grid-cols-2">
-              {data.premarket_brief.action_checklist.map((line, i) => (
-                <div key={i} className="rounded border border-zinc-800/70 bg-zinc-950/50 px-2.5 py-1.5 leading-relaxed">
-                  {i + 1}. {line}
+        {showBriefBody && (
+          data?.premarket_brief ? (
+            <div className="mt-3 space-y-2.5 border-t border-zinc-800 pt-3 text-sm">
+              {data.premarket_brief.agent_thesis && (
+                <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-blue-100">
+                  <b>盘面研判：</b>
+                  {data.premarket_brief.agent_thesis}
                 </div>
-              ))}
-            </div>
-            {data.premarket_brief.overnight_notes.length > 0 && (
-              <div className="text-zinc-400">
-                隔夜要点：{data.premarket_brief.overnight_notes.join('；')}
+              )}
+              <div className="grid grid-cols-1 gap-2 text-zinc-100 md:grid-cols-2">
+                {data.premarket_brief.action_checklist.map((line, i) => (
+                  <div key={i} className="rounded border border-zinc-800/70 bg-zinc-950/50 px-3 py-2 leading-relaxed">
+                    {i + 1}. {line}
+                  </div>
+                ))}
               </div>
-            )}
-          </div>
-        ) : (
-          <p className="mt-2.5 text-xs text-zinc-400">
-            点击右上角「生成/刷新简报」或等待每日 09:10 盘前 Agent 自动生成 AR4.6 晨会简报并推送微信。
-          </p>
+              {data.premarket_brief.overnight_notes.length > 0 && (
+                <div className="text-zinc-300">
+                  隔夜要点：{data.premarket_brief.overnight_notes.join('；')}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="mt-3 border-t border-zinc-800 pt-3 text-sm text-zinc-400">
+              暂无今日简报，点击「刷新简报」可立即生成。
+            </p>
+          )
         )}
       </Card>
     </div>

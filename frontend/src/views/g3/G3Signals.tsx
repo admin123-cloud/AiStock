@@ -164,11 +164,11 @@ export default function G3Signals() {
     <div className="flex w-full flex-col gap-4">
       <PageHeader
         title="AR4.6 选股与排雷雷达中心"
-        subtitle="15 只跨资产全天候 ETF 深度全景（含豆粕商品盾） × F2A/F3A 业绩双核选股队列 × AI 红黄绿灯排雷档案与前向胜率验真"
+        subtitle="15 只跨资产 ETF 动量全景 · F2A/F3A 候选股队列 · AI 排雷档案（本页只做选股研究，统一在实战交易台下单）"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button outline onClick={() => navigate('/g3/desk')}>
-              ⚡ 前往实战交易台预填 →
+              ⚡ 前往实战交易台下单 →
             </Button>
             <Link to="/g3/backtest">
               <Button plain>📈 历史回测验真</Button>
@@ -183,7 +183,7 @@ export default function G3Signals() {
           <button
             type="button"
             onClick={() => switchTab('radar')}
-            className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${
+            className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${
               activeTab === 'radar'
                 ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-zinc-400 hover:text-zinc-100'
@@ -194,7 +194,7 @@ export default function G3Signals() {
           <button
             type="button"
             onClick={() => switchTab('screening')}
-            className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${
+            className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${
               activeTab === 'screening'
                 ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-zinc-400 hover:text-zinc-100'
@@ -212,12 +212,7 @@ export default function G3Signals() {
       </div>
 
       {activeTab === 'radar' ? (
-        <AR3DualCorePanel
-          mode="signals_full"
-          onPrefillOrder={() => {
-            navigate('/g3/desk')
-          }}
-        />
+        <AR3DualCorePanel mode="signals_full" />
       ) : (
         <div className="flex flex-col gap-5">
           {error && (

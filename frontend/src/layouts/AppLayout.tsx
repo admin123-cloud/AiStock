@@ -44,6 +44,7 @@ const NAV_ICONS: Record<string, ComponentType> = {
   '/stocks': ChartBarIcon,
   '/sectors': Squares2X2Icon,
   '/g3/desk': ComputerDesktopIcon,
+  '/g3/ai-live': ArrowTrendingUpIcon,
   '/g3/review': ClockIcon,
   '/g3/mainwave': ArrowTrendingUpIcon,
   '/g3/mining': MagnifyingGlassIcon,

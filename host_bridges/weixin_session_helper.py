@@ -37,6 +37,8 @@ def _fetch_live_strategy_constitution(api_base: str = DEFAULT_API_BASE) -> dict[
     grounding_rule = (
         "【SSOT 铁律】严禁凭历史对话压缩记忆回答现役策略版本或参数；"
         "一切策略/持仓/交易结论必须严格以本 live_strategy_constitution 在线运行态及源码/H:\\Agent-Memory-System\\projects\\aistock 为准。"
+        "【微信消息ID规范】weixin_ilink_bridge 已自动为每条发往微信的消息前置 [idxxxx] 编号；"
+        "若收到的微信消息含 ref_msg_id / referenced_message，必须严格围绕对应原消息回复，并在首行标注「回复 idxxxx：」以防串线。"
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     base = api_base.rstrip("/")

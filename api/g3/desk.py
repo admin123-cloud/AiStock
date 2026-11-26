@@ -930,3 +930,20 @@ def post_g3_ai_bus_ask(req: AiBusAskRequest) -> dict[str, Any]:
         source=req.source,
         wait_timeout_sec=req.wait_timeout_sec,
     )
+
+
+@router.get("/ai-bus/broadcasts")
+def get_g3_ai_bus_broadcasts(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
+    """获取每 10 分钟盘面总结播报流（AI 深度播报 + 规则引擎快照，供 /g3/ai-live 滚动播放，绝不推微信）。"""
+    from services.g3.acct1_intraday_advisor import get_intraday_broadcast_feed
+
+    return get_intraday_broadcast_feed(limit=limit)
+
+
+@router.post("/ai-bus/broadcast-now")
+def post_g3_ai_bus_broadcast_now() -> dict[str, Any]:
+    """手动触发一次即时盘面总结播报（仅写入页面播报流与 AI Bus，绝不触发微信通知）。"""
+    from services.g3.acct1_intraday_advisor import run_acct1_advisor
+
+    # 强制 suppress_wechat=True 绝不向微信发播报，仅立即产出规则快照 + 异步 AI 播报
+    return run_acct1_advisor(mode="intraday", dry_run=False, bypass_session=True, suppress_wechat=True)

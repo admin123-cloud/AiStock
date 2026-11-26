@@ -110,6 +110,25 @@ def _match_known(label: str, known_hints: list[tuple[str, str]]) -> Optional[str
     return None
 
 
+def _read_value_pattern_text(vp: Any) -> str:
+    """安全读取 IUIAutomationValuePattern 文本：兼容仅暴露 CurrentValue 属性的 COM 包装对象。"""
+    if vp is None:
+        return ""
+    value = ""
+    try:
+        getter = getattr(vp, "GetValue", None)
+        if callable(getter):
+            value = str(getter() or "")
+    except Exception:  # noqa: BLE001
+        value = ""
+    if not value.strip():
+        try:
+            value = str(getattr(vp, "CurrentValue", "") or "")
+        except Exception:  # noqa: BLE001
+            value = ""
+    return value
+
+
 def _combo_anchor_text(name: str, value: str) -> str:
     """ComboBox 备用锚取文（纯函数，可测）：Value（账号文本）优先于 Name；
     R51 旧语义 (name or value) 会被空白 Name（实机实证为单个空格）占位
@@ -167,12 +186,7 @@ def read_identity_from_combobox(window: Any) -> str:
                 unk = _safe(elem.GetCurrentPattern, UIAC.UIA_ValuePatternId)
                 if unk is not None:
                     vp = _safe(unk.QueryInterface, UIAC.IUIAutomationValuePattern)
-                    if vp is not None:
-                        # R52：GetValue 是方法（R51 原代码漏调用取到的是
-                        # 绑定方法对象）；CurrentValue 属性兜底。
-                        value = str(_safe(lambda: vp.GetValue()) or "")
-                        if not value.strip():
-                            value = str(_safe(lambda: vp.CurrentValue) or "")
+                    value = _read_value_pattern_text(vp)
                 # R52：Value 优先于 Name——实机实证 Name 是单个空格
                 # （" " 真值使 R51 的 (name or value) 恒取空白锚 → 恒空）。
                 return _combo_anchor_text(name, value)
@@ -221,8 +235,13 @@ def input_idle_seconds() -> float:
         lii.cbSize = ctypes.sizeof(lii)
         if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
             return float("inf")
-        return max(0.0, (ctypes.windll.kernel32.GetTickCount()
-                         - lii.dwTime) / 1000.0)
+        get_tick = ctypes.windll.kernel32.GetTickCount
+        try:
+            get_tick.restype = ctypes.c_uint
+        except Exception:  # noqa: BLE001
+            pass
+        now = int(get_tick()) & 0xFFFFFFFF
+        return max(0.0, ((now - int(lii.dwTime)) & 0xFFFFFFFF) / 1000.0)
     except Exception:  # noqa: BLE001 - 守卫失效方向=fail-safe 不切
         return float("inf")
 
@@ -235,8 +254,12 @@ def note_self_injection() -> None:
     try:
         import ctypes
 
-        _LAST_SELF_INJECT_TICK = float(
-            ctypes.windll.kernel32.GetTickCount())
+        get_tick = ctypes.windll.kernel32.GetTickCount
+        try:
+            get_tick.restype = ctypes.c_uint
+        except Exception:  # noqa: BLE001
+            pass
+        _LAST_SELF_INJECT_TICK = float(int(get_tick()) & 0xFFFFFFFF)
     except Exception:  # noqa: BLE001 - 标记失败只影响判定精度，不阻断
         pass
 
@@ -266,9 +289,14 @@ def _owner_idle_seconds() -> float:
         try:
             import ctypes
 
+            get_tick = ctypes.windll.kernel32.GetTickCount
+            try:
+                get_tick.restype = ctypes.c_uint
+            except Exception:  # noqa: BLE001
+                pass
+            now_tick = int(get_tick()) & 0xFFFFFFFF
             since_self = max(
-                0.0, (ctypes.windll.kernel32.GetTickCount()
-                      - _LAST_SELF_INJECT_TICK) / 1000.0)
+                0.0, ((now_tick - int(_LAST_SELF_INJECT_TICK)) & 0xFFFFFFFF) / 1000.0)
             if idle < since_self - 0.3:
                 return idle          # 注入后有真实输入 → Owner 的
             return float("inf")      # 最后一次输入是我们自己 → 视作无 Owner 输入
@@ -417,7 +445,8 @@ def match_account_item_names(names: list[str],
     return hits[0], ""
 
 
-def _uia_select_account(hwnd: int, expect_hint: str) -> dict[str, Any]:
+def _uia_select_account(hwnd: int, expect_hint: str, *,
+                        min_idle_seconds: Optional[float] = None) -> dict[str, Any]:
     """真机路径：UIA 定位账号切换器 ComboBox(aid=2322) → 展开下拉 →
     按文本唯一匹配目标账号列表项 → SelectionItem.Select()。
 
@@ -471,7 +500,7 @@ def _uia_select_account(hwnd: int, expect_hint: str) -> dict[str, Any]:
         if unk is None:
             return ""
         vp = _safe(unk.QueryInterface, UIAC.IUIAutomationValuePattern)
-        return str(_safe(vp.GetValue) or "") if vp is not None else ""
+        return _read_value_pattern_text(vp)
 
     def _find_combobox_multi(root_elem):
         """R52 多锚：aid=2322 主锚（R50 契约）→ Value 含「证券」的 ComboBox
@@ -485,7 +514,10 @@ def _uia_select_account(hwnd: int, expect_hint: str) -> dict[str, Any]:
             if int(_prop(elem, "CurrentControlType", 0) or 0) \
                     != COMBOBOX_CONTROL_TYPE:
                 continue
-            text = str(_prop(elem, "CurrentName", "") or "") or _combo_value(elem)
+            text = _combo_anchor_text(
+                str(_prop(elem, "CurrentName", "") or ""),
+                _combo_value(elem),
+            )
             if "证券" in text:
                 return elem, f"value:{text.strip()[:16]}"
         return None, ""
@@ -678,6 +710,11 @@ def _uia_select_account(hwnd: int, expect_hint: str) -> dict[str, Any]:
                 return True
         return False
 
+    _eff_idle_s = (
+        OWNER_ACTIVE_IDLE_S if min_idle_seconds is None
+        else max(1.0, float(min_idle_seconds))
+    )
+
     def _owner_active() -> bool:
         try:
             import ctypes
@@ -686,7 +723,7 @@ def _uia_select_account(hwnd: int, expect_hint: str) -> dict[str, Any]:
                 return False
         except Exception:  # noqa: BLE001 - 判不了按有人在用处理
             return True
-        return _owner_idle_seconds() < OWNER_ACTIVE_IDLE_S
+        return _owner_idle_seconds() < _eff_idle_s
 
     def _item_invoke(elem) -> bool:
         unk = _safe(elem.GetCurrentPattern, UIAC.UIA_InvokePatternId)
@@ -885,10 +922,12 @@ def ensure_target_account(window: Any, cfg: dict[str, Any]) -> Optional[dict[str
     """
     _ensure_restored(window)
     label, png = read_window_identity(window)
+    if not label:
+        label = read_identity_from_combobox(window)
     target = str(cfg.get("target_hint") or "")
     if target and target in label:
         return None  # 已在目标账号：零切换零交互
-    if owner_using_panel(window):
+    if not cfg.get("allow_foreground") and owner_using_panel(window):
         return {"status": STATUS_SKIPPED_FOREGROUND, "identity_label": label,
                 "identity_hint": target, "screenshot": png,
                 "note": "面板在前台且用户活跃（Owner 手在面板上），绝不切换"}
