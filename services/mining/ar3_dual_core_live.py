@@ -274,6 +274,7 @@ def _build_etf_radar(
             "ar45_score": round(ar45_score, 3),
             "sb_filtered": sb_filtered,
             "sb_boosted": sb_boosted,
+            "is_hk_tech": is_hk,
             "is_qdii": cls == "overseas",
             "eligible": bool(above and r20 > 0.0 and not sb_filtered),
         })
@@ -434,6 +435,7 @@ def _build_etf_radar(
 
     # 全景表按 AR4.5 风险调整综合得分排序
     universe_sorted = sorted(universe, key=lambda x: float(x.get("ar45_score", x["risk_adj_mom"])), reverse=True)
+    sb_hk_status = "blocked" if sb_net_20d_yi < 0.0 else ("boosted" if sb_net_20d_yi >= 600.0 else "pass")
 
     return {
         "available": True,
@@ -444,6 +446,8 @@ def _build_etf_radar(
         "stock_budget_active_pct": stock_budget_cap_pct if is_offensive else (50 if is_panic_ab else 0),
         "panic_triggered": panic_triggered,
         "is_panic_ab": is_panic_ab,
+        "sb_net_20d_yi": round(sb_net_20d_yi, 1),
+        "sb_hk_status": sb_hk_status,
         "fallback_mode": fallback_mode,
         "cash_defense_pct": cash_defense_pct,
         "headline": decision_headline,
@@ -790,6 +794,17 @@ def _scan_f2a_f3a_and_money_effect(
     me_f2a: dict[str, Any] = base["me_f2a"]
     me_f3a: dict[str, Any] = base["me_f3a"]
 
+    from services.g3.ai_screening import (
+        evaluate_buy_risk_gate,
+        get_screening_freshness,
+        load_recent_st_alias_map,
+        load_saved_screening,
+    )
+
+    saved_screening_doc = load_saved_screening()
+    screening_freshness = get_screening_freshness(saved_screening_doc)
+    recent_st_map = load_recent_st_alias_map()
+
     slot_w_pct = round(stock_budget_cap_pct / max(1, max_slots), 1)
 
     def _pack_rows(df: pd.DataFrame, engine_tag: str, limit: int = 12) -> list[dict[str, Any]]:
@@ -799,19 +814,28 @@ def _scan_f2a_f3a_and_money_effect(
         for r in df.head(limit * 2).itertuples(index=False):
             code = str(r.code)
             ind = str(r.industry)
-            ind_dup = (ind != "未分类") and (ind in seen_inds)
-            if not ind_dup:
+            c6 = code.split(".")[0]
+            nm = str(r.name)
+            ai_gate = evaluate_buy_risk_gate(
+                c6,
+                name=nm,
+                is_etf=False,
+                saved_doc=saved_screening_doc,
+                recent_st_map=recent_st_map,
+            )
+            hard_blocked = bool(ai_gate["hard_blocked"])
+            ind_dup = (not hard_blocked) and (ind != "未分类") and (ind in seen_inds)
+            if not hard_blocked and not ind_dup:
                 seen_inds.add(ind)
                 slot_idx += 1
             both = (code in f2a_codes) and (code in f3a_codes)
             cl = float(r.close)
-            c6 = code.split(".")[0]
             min_lot = 200 if c6.startswith("688") else 100
             min_lot_yuan = round(cl * min_lot, 1)
             out.append({
                 "code": c6,
                 "ts_code": code,
-                "name": str(r.name),
+                "name": nm,
                 "industry": ind,
                 "source_engine": "BOTH" if both else engine_tag,
                 "source_label": "F2A+F3A双共振" if both else ("F2A业绩趋势" if engine_tag == "F2A" else "F3A绩优回踩"),
@@ -833,8 +857,15 @@ def _scan_f2a_f3a_and_money_effect(
                 "roe_pct": round(float(r.roe_pct), 1) if pd.notna(r.roe_pct) else None,
                 "score": round(float(r.score) * 100.0, 1),
                 "industry_duplicate": ind_dup,
-                "slot_rank": None if ind_dup else slot_idx,
-                "suggested_weight_pct": (slot_w_pct if (not ind_dup and slot_idx <= max_slots and is_offensive) else 0.0),
+                "slot_rank": None if (hard_blocked or ind_dup) else slot_idx,
+                "suggested_weight_pct": (slot_w_pct if (not hard_blocked and not ind_dup and slot_idx <= max_slots and is_offensive) else 0.0),
+                "ai_risk_light": ai_gate["risk_light"],
+                "ai_catalyst_score": ai_gate["catalyst_score"],
+                "ai_risk_flags": ai_gate["risk_flags"],
+                "ai_thesis": ai_gate["one_line_thesis"],
+                "ai_buy_action": ai_gate["buy_action"],
+                "ai_hard_blocked": hard_blocked,
+                "ai_block_reason": ai_gate["reason"] if hard_blocked else "",
             })
             if len(out) >= limit:
                 break
@@ -907,10 +938,34 @@ def _scan_f2a_f3a_and_money_effect(
                 seen_c.add(f2a_list[idx]["ts_code"])
 
     stock_open = is_offensive or is_panic_ab_active
+    # 严格版 AI 排雷排序与硬拦截：
+    # - 红灯 / 黄灯且催化分<=2 / 近12个月刚摘帽：直接剔除出 exec_queue，自动顺延合规标的补槽；
+    # - 黄灯且催化分>=3（demote_warn）：降权排在所有绿灯（allow）和未排雷（unscreened_warn）之后。
+    ai_blocked_candidates: list[dict[str, Any]] = []
+    eligible_raw_exec: list[tuple[int, int, dict[str, Any]]] = []
+    for orig_idx, item in enumerate(raw_exec):
+        if item.get("ai_hard_blocked"):
+            ai_blocked_candidates.append({
+                "code": item["code"],
+                "ts_code": item["ts_code"],
+                "name": item["name"],
+                "industry": item["industry"],
+                "score": item["score"],
+                "ai_risk_light": item.get("ai_risk_light"),
+                "ai_catalyst_score": item.get("ai_catalyst_score"),
+                "reason": item.get("ai_block_reason") or "AI排雷严格版禁买",
+            })
+            continue
+        act = str(item.get("ai_buy_action") or "unscreened_warn")
+        prio = 0 if act == "allow" else (1 if act == "unscreened_warn" else 2)
+        eligible_raw_exec.append((prio, orig_idx, item))
+
+    eligible_raw_exec.sort(key=lambda t: (t[0], t[1]))
+
     exec_queue: list[dict[str, Any]] = []
     seen_inds_exec: set[str] = set()
     rank_exec = 0
-    for item in raw_exec:
+    for _, _, item in eligible_raw_exec:
         ind = item["industry"]
         if is_panic_ab_active and not item.get("executable_10w", True):
             continue
@@ -942,6 +997,12 @@ def _scan_f2a_f3a_and_money_effect(
         "exec_queue": exec_queue,
         "f2a_candidates": f2a_list,
         "f3a_candidates": f3a_list,
+        "ai_blocked_candidates": ai_blocked_candidates,
+        "ai_screening_meta": {
+            **screening_freshness,
+            "policy": "strict_yellow_le2_block",
+            "blocked_count": len(ai_blocked_candidates),
+        },
         "money_effect_20d": {
             "window": f"{eval_dts[0]} ~ {eval_dts[-1]}" if eval_dts else "",
             "f2a": me_f2a,

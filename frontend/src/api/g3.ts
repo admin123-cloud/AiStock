@@ -587,6 +587,7 @@ export interface G3TradingCommandHoldingAction {
   broken_stop: boolean
   ai_risk_light: string
   ai_catalyst_score?: number | null
+  ai_risk_flags?: string[]
   ai_thesis: string
   verdict: string
   verdict_label: string
@@ -696,6 +697,16 @@ export interface G3DeskResponse {
   }
   market_directive?: G3MarketDirective
   market_regime_gate?: G3MarketRegimeGate
+  ai_screening_meta?: {
+    decision_date?: string | null
+    generated_at?: string | null
+    items_count?: number
+    age_days?: number | null
+    is_stale?: boolean
+    stale_notice?: string
+    policy?: string
+    blocked_count?: number
+  }
   strategy_allocation?: {
     allocation?: G3StrategyMatrix['allocation']
     defense_auto_cash?: boolean
@@ -1415,6 +1426,7 @@ export interface G3AR3EtfItem {
   risk_adj_mom: number
   sb_filtered?: boolean
   sb_boosted?: boolean
+  is_hk_tech?: boolean
   is_qdii: boolean
   eligible: boolean
   basket_weight_pct?: number
@@ -1451,6 +1463,9 @@ export interface G3AR3StockCandidate {
   ai_catalyst_score?: number | null
   ai_risk_flags?: string[]
   ai_thesis?: string
+  ai_buy_action?: string
+  ai_hard_blocked?: boolean
+  ai_block_reason?: string
 }
 
 export interface G3AR3MoneyEffectStats {
@@ -1480,6 +1495,9 @@ export interface G3AR3DualCoreRadarResponse {
     etf_total_budget_pct?: number
     stock_budget_active_pct?: number
     panic_triggered?: boolean
+    is_panic_ab?: boolean
+    sb_net_20d_yi?: number
+    sb_hk_status?: 'blocked' | 'boosted' | 'pass' | string
     fallback_mode?: 'normal' | 'bond_fallback' | 'cash_defense' | string
     cash_defense_pct?: number
     headline?: string
@@ -1499,6 +1517,26 @@ export interface G3AR3DualCoreRadarResponse {
     exec_queue?: G3AR3StockCandidate[]
     f2a_candidates?: G3AR3StockCandidate[]
     f3a_candidates?: G3AR3StockCandidate[]
+    ai_blocked_candidates?: Array<{
+      code: string
+      ts_code: string
+      name: string
+      industry: string
+      score: number
+      ai_risk_light?: string
+      ai_catalyst_score?: number | null
+      reason: string
+    }>
+    ai_screening_meta?: {
+      decision_date?: string | null
+      generated_at?: string | null
+      items_count?: number
+      age_days?: number | null
+      is_stale?: boolean
+      stale_notice?: string
+      policy?: string
+      blocked_count?: number
+    }
     money_effect_20d?: {
       window: string
       f2a: G3AR3MoneyEffectStats

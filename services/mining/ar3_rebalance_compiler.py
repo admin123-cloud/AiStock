@@ -406,13 +406,34 @@ def compile_ar3_rebalance_plan(
                 slots_taken += 1
                 stock_used_pct += kept_w
 
+        from services.g3.ai_screening import (
+            evaluate_buy_risk_gate,
+            load_recent_st_alias_map,
+            load_saved_screening,
+        )
+
+        _saved_sc_doc = load_saved_screening()
+        _recent_st_map = load_recent_st_alias_map()
+
+        def _gate_stock_buy(cand_obj: Mapping[str, Any]) -> dict[str, Any]:
+            c6_g = str(cand_obj.get("code") or "").split(".")[0].zfill(6)
+            return evaluate_buy_risk_gate(
+                c6_g,
+                name=str(cand_obj.get("name") or c6_g),
+                is_etf=False,
+                saved_doc=_saved_sc_doc,
+                recent_st_map=_recent_st_map,
+            )
+
         if is_panic_ab_active and total_assets > 0:
             # AR4.6 冰点 30m 固化执行层：4 槽池化弹性整手分配（pooled_flex 1.25x + 自适应单手门槛 ≤1.8万，名义总仓严守 50%）
-            # 按买单 0.2% 溢价限价测算整手，确保后续下限价单不因 +0.2% 缓冲掉手
+            # 按买单 0.2% 溢价限价测算整手，确保后续下限价单不因 +0.2% 缓冲掉手；同时二次校验 AI 排雷严格版硬门禁
             flex_cands = []
             for cand in stock_radar.get("exec_queue") or []:
                 cl_c = float(cand.get("close") or 0.0)
                 if cl_c <= 0:
+                    continue
+                if cand.get("ai_hard_blocked") or _gate_stock_buy(cand)["hard_blocked"]:
                     continue
                 lim_c = _round_px(cl_c * 1.002, False)
                 flex_cands.append({**dict(cand), "price": lim_c})
@@ -432,6 +453,7 @@ def compile_ar3_rebalance_plan(
                 c6 = str(row["code"])
                 cl_c = float(cand["close"])
                 alloc_w = float(row["allocated_weight_pct"])
+                ai_g = _gate_stock_buy(cand)
                 target_map[c6] = {
                     "code": c6,
                     "name": cand["name"],
@@ -448,6 +470,9 @@ def compile_ar3_rebalance_plan(
                     "notice_date": cand.get("notice_date"),
                     "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
                     "qdii_notice": None,
+                    "ai_risk_light": ai_g["risk_light"],
+                    "ai_catalyst_score": ai_g["catalyst_score"],
+                    "ai_risk_warning": ai_g["reason"] if ai_g["buy_action"] in ("demote_warn", "unscreened_warn") else None,
                 }
                 slots_taken += 1
                 stock_used_pct += alloc_w
@@ -462,6 +487,9 @@ def compile_ar3_rebalance_plan(
                 if ind != "未分类" and ind in kept_inds:
                     continue
                 if is_panic_ab_active and cand.get("executable_10w") is False:
+                    continue
+                ai_g = _gate_stock_buy(cand)
+                if cand.get("ai_hard_blocked") or ai_g["hard_blocked"]:
                     continue
                 cl_c = float(cand["close"])
                 target_map[c6] = {
@@ -481,6 +509,9 @@ def compile_ar3_rebalance_plan(
                     "notice_date": cand.get("notice_date"),
                     "net_profit_yoy_pct": cand.get("net_profit_yoy_pct"),
                     "qdii_notice": None,
+                    "ai_risk_light": ai_g["risk_light"],
+                    "ai_catalyst_score": ai_g["catalyst_score"],
+                    "ai_risk_warning": ai_g["reason"] if ai_g["buy_action"] in ("demote_warn", "unscreened_warn") else None,
                 }
                 if ind != "未分类":
                     kept_inds.add(ind)
@@ -717,6 +748,9 @@ def compile_ar3_rebalance_plan(
             "suggested_shares": post_sh if est_total_sell_proceeds > 0 else imm_sh,
             "reason": tgt["reason"],
             "qdii_notice": tgt.get("qdii_notice"),
+            "ai_risk_light": tgt.get("ai_risk_light"),
+            "ai_catalyst_score": tgt.get("ai_catalyst_score"),
+            "ai_risk_warning": tgt.get("ai_risk_warning"),
             "suborders_immediate": _split_l2_suborders(
                 code=c6, name=tgt["name"], side="BUY", price=limit_px, total_shares=imm_sh
             ),

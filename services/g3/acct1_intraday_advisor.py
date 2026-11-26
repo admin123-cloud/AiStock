@@ -788,6 +788,14 @@ def run_acct1_advisor(
         if not is_offensive and not is_etf:
             skipped.append({"code": c6, "side": "BUY", "reason": "ar45_defensive_block_a_stock"})
             continue
+        # AI 排雷严格版硬门禁：个股买单红灯 / 黄灯≤2 / ST / 近12月刚摘帽禁止入待填单与推微信
+        if not is_etf:
+            from services.g3.ai_screening import evaluate_buy_risk_gate
+
+            ai_gate = evaluate_buy_risk_gate(c6, name=str(b.get("name") or c6), is_etf=False, now_bj=now)
+            if ai_gate["hard_blocked"]:
+                skipped.append({"code": c6, "side": "BUY", "reason": f"ai_screening_blocked:{ai_gate['reason']}"})
+                continue
         if qty < 100:
             skipped.append({"code": c6, "side": "BUY", "reason": "insufficient_cash_wait_sell"})
             continue

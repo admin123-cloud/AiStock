@@ -138,8 +138,6 @@ def compile_daily_trading_command(
             reasons.append("个股处于下降周期（严禁正T低吸）")
         if ai_light == "yellow":
             reasons.append("AI哨兵黄灯（" + (ai_flags[0] if ai_flags else "存在减持或业绩压力") + "）")
-        if need_reduce_pct > 0:
-            reasons.append(f"双账号水位 {actual_pct:.1f}% 超配 {gap_pct:.1f}%，须执行 AR1 果断分步减仓（≤{max_step_pct:.0f}%/日）")
 
         suggested_reduce_shares = 0
         verdict = "HOLD_T"
@@ -203,6 +201,7 @@ def compile_daily_trading_command(
                 "broken_stop": broken_stop,
                 "ai_risk_light": ai_light,
                 "ai_catalyst_score": ai_cat,
+                "ai_risk_flags": ai_flags,
                 "ai_thesis": ai_thesis,
                 "verdict": verdict,
                 "verdict_label": verdict_label,

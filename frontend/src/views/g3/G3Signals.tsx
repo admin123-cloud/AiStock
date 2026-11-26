@@ -25,15 +25,27 @@ interface UnifiedScreeningRow {
   industry: string
   risk_light: string
   catalyst_score: number | null
+  ai_hard_blocked?: boolean
   risk_flags: string[]
   thesis: string
   extraMetric: string
 }
 
-const lightBadge = (light?: string) => {
-  if (light === 'red') return { label: '红灯禁买', color: 'red' as const }
-  if (light === 'yellow') return { label: '黄灯慎买', color: 'amber' as const }
-  if (light === 'green') return { label: '绿灯通过', color: 'emerald' as const }
+const lightBadge = (light?: string, opts?: { isHolding?: boolean; hardBlocked?: boolean; catalystScore?: number | null }) => {
+  const isHolding = Boolean(opts?.isHolding)
+  if (light === 'red') {
+    return { label: isHolding ? '红灯高危（已持仓）' : '红灯禁买', color: 'red' as const }
+  }
+  if (light === 'yellow') {
+    if (isHolding) return { label: '黄灯预警（已持仓）', color: 'amber' as const }
+    const strictBlocked = Boolean(opts?.hardBlocked || (opts?.catalystScore != null && opts.catalystScore <= 2))
+    return strictBlocked
+      ? { label: '黄灯禁买(≤2)', color: 'red' as const }
+      : { label: '黄灯降权', color: 'amber' as const }
+  }
+  if (light === 'green') {
+    return { label: isHolding ? '绿灯安全（已持仓）' : '绿灯通过', color: 'emerald' as const }
+  }
   return { label: '待评估', color: 'zinc' as const }
 }
 
@@ -100,6 +112,13 @@ export default function G3Signals() {
       const key = `holding_${h.code}`
       if (seen.has(key)) continue
       seen.add(key)
+      const mergedFlags = Array.from(
+        new Set([
+          ...(h.broken_stop ? ['已破止损'] : []),
+          ...(h.ai_risk_flags || []),
+          ...(h.reasons || []),
+        ])
+      ).slice(0, 3)
       rows.push({
         code: h.code,
         name: h.name,
@@ -108,7 +127,10 @@ export default function G3Signals() {
         industry: '—',
         risk_light: h.ai_risk_light || 'unknown',
         catalyst_score: h.ai_catalyst_score ?? null,
-        risk_flags: h.broken_stop ? ['已破止损', ...h.reasons.slice(0, 2)] : h.reasons.slice(0, 2),
+        ai_hard_blocked:
+          h.ai_risk_light === 'red' ||
+          (h.ai_risk_light === 'yellow' && h.ai_catalyst_score != null && h.ai_catalyst_score <= 2),
+        risk_flags: mergedFlags,
         thesis: h.ai_thesis || h.verdict_label || '—',
         extraMetric: h.profit_pct != null ? `浮盈 ${fmtSignedPct(h.profit_pct)}` : '—',
       })
@@ -128,6 +150,7 @@ export default function G3Signals() {
           industry: s.industry || '—',
           risk_light: s.ai_risk_light || 'unknown',
           catalyst_score: s.ai_catalyst_score ?? null,
+          ai_hard_blocked: Boolean(s.ai_hard_blocked),
           risk_flags: s.ai_risk_flags || [],
           thesis: s.ai_thesis || `综合分 ${s.score ?? '—'}`,
           extraMetric: s.net_profit_yoy_pct != null ? `净利同比 ${fmtSignedPct(s.net_profit_yoy_pct)}` : `评分 ${s.score ?? '—'}`,
@@ -159,6 +182,7 @@ export default function G3Signals() {
   }, [screeningRows])
 
   const fwd = forwardEval?.ai_screening_forward
+  const screeningMeta = radar?.stock_radar?.ai_screening_meta ?? desk?.ai_screening_meta
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -218,6 +242,25 @@ export default function G3Signals() {
           {error && (
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-200">
               {error}
+            </div>
+          )}
+
+          {screeningMeta && (
+            <div
+              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-xs ${
+                screeningMeta.is_stale
+                  ? 'border-amber-500/40 bg-amber-950/25 text-amber-200'
+                  : 'border-emerald-500/30 bg-emerald-950/15 text-emerald-200'
+              }`}
+            >
+              <span>
+                {screeningMeta.is_stale ? '⚠️ ' : '🛡️ '}
+                {screeningMeta.stale_notice || `AI 排雷档案日期：${screeningMeta.decision_date || '—'}`}
+              </span>
+              <span className="font-mono text-[11px] opacity-85">
+                买前严格门禁生效中：红灯 / 黄灯≤2 / 近12月刚摘帽自动禁买
+                {screeningMeta.blocked_count ? `（已拦截 ${screeningMeta.blocked_count} 只）` : ''}
+              </span>
             </div>
           )}
 
@@ -296,7 +339,11 @@ export default function G3Signals() {
                   </TableHead>
                   <TableBody>
                     {filteredRows.map((row) => {
-                      const badge = lightBadge(row.risk_light)
+                      const badge = lightBadge(row.risk_light, {
+                        isHolding: row.group === 'holding',
+                        hardBlocked: row.ai_hard_blocked,
+                        catalystScore: row.catalyst_score,
+                      })
                       return (
                         <TableRow key={`${row.group}_${row.code}`}>
                           <TableCell className="text-xs">

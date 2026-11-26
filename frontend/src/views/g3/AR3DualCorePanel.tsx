@@ -458,9 +458,34 @@ export default function AR3DualCorePanel({
                 {etf?.latest_date && (
                   <span className="font-mono text-[11px] text-zinc-400">数据截止 {etf.latest_date}</span>
                 )}
+                {(() => {
+                  const sbVal = etf?.sb_net_20d_yi ?? macro?.sb_net_20d_yi
+                  const sbStatus = etf?.sb_hk_status ?? macro?.sb_hk_status
+                  if (sbVal == null) return null
+                  const sbTxt = `${sbVal >= 0 ? '+' : ''}${sbVal.toFixed(1)}亿`
+                  if (sbStatus === 'blocked') {
+                    return (
+                      <Badge color="red">
+                        南向20日 {sbTxt} · 港科(513180/513050)拦截中
+                      </Badge>
+                    )
+                  }
+                  if (sbStatus === 'boosted') {
+                    return (
+                      <Badge color="amber">
+                        南向20日 {sbTxt} · 港科+25%加权
+                      </Badge>
+                    )
+                  }
+                  return (
+                    <Badge color="zinc">
+                      南向20日 {sbTxt} · 港科放行
+                    </Badge>
+                  )
+                })()}
               </div>
               <span className="text-[11px] text-zinc-400">
-                合格门槛：站上 MA20 且 20日动量 &gt; 0%（港科须南向20日净流入）
+                合格门槛：站上 MA20 且 20日动量 &gt; 0%（恒生科技/中概互联另须南向20日 ≥ 0）
               </span>
             </div>
 
@@ -504,17 +529,19 @@ export default function AR3DualCorePanel({
                           {etf.universe.map((u) => {
                             const ma20GapPct = u.ma20 > 0 ? ((u.close - u.ma20) / u.ma20) * 100 : null
                             const targetWeight = targetWeightMap.get(u.ts_code)
+                            const isHkTech = Boolean(u.is_hk_tech || u.code === '513180' || u.code === '513050')
+                            const sbVal = etf?.sb_net_20d_yi ?? macro?.sb_net_20d_yi
                             const failReasons: string[] = []
                             if (!u.above_ma20) failReasons.push('破MA20')
                             if (u.ret_20d_pct <= 0) failReasons.push('20日≤0')
                             if (u.sb_filtered) failReasons.push('南向拦截')
 
                             let statusLabel = '合格趋势'
-                            let statusColor: 'emerald' | 'amber' | 'zinc' = 'emerald'
+                            let statusColor: 'emerald' | 'amber' | 'red' | 'zinc' = 'emerald'
                             let statusTitle = '满足站上MA20、20日动量>0且未被南向拦截'
                             if (!u.eligible) {
                               statusLabel = failReasons.length > 0 ? failReasons.join(' · ') : '未达标'
-                              statusColor = u.sb_filtered && failReasons.length === 1 ? 'amber' : 'zinc'
+                              statusColor = u.sb_filtered ? 'red' : 'zinc'
                               statusTitle = `未达标原因：${statusLabel}`
                             } else if (!radar.is_offensive && u.asset_class === 'cn_broad') {
                               statusLabel = '非进攻不选宽基'
@@ -554,7 +581,33 @@ export default function AR3DualCorePanel({
                                   {fmtSigned(ma20GapPct)}
                                 </TableCell>
                                 <TableCell className="whitespace-nowrap" title={statusTitle}>
-                                  <Badge color={statusColor}>{statusLabel}</Badge>
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <Badge color={statusColor}>{statusLabel}</Badge>
+                                    {isHkTech && (
+                                      u.sb_filtered ? (
+                                        <span
+                                          className="rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-200 ring-1 ring-red-500/40"
+                                          title={`南向20日净买 ${sbVal != null ? `${sbVal.toFixed(1)}亿` : '<0'}，已硬拦截港科买入`}
+                                        >
+                                          南向拦截
+                                        </span>
+                                      ) : u.sb_boosted ? (
+                                        <span
+                                          className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200 ring-1 ring-amber-500/40"
+                                          title={`南向20日净买 ${sbVal != null ? `+${sbVal.toFixed(1)}亿` : '≥600亿'}，港科得分享 +25% 加权`}
+                                        >
+                                          南向+25%
+                                        </span>
+                                      ) : (
+                                        <span
+                                          className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-200 ring-1 ring-sky-500/30"
+                                          title={`南向20日净买 ${sbVal != null ? `${sbVal >= 0 ? '+' : ''}${sbVal.toFixed(1)}亿` : '≥0'}，未触发南向拦截`}
+                                        >
+                                          南向放行
+                                        </span>
+                                      )
+                                    )}
+                                  </div>
                                 </TableCell>
                               </TableRow>
                             )
@@ -656,7 +709,11 @@ export default function AR3DualCorePanel({
                         <TableRow key={`${stockTab}-${row.ts_code}`}>
                           <TableCell className="whitespace-nowrap">
                             <div className="flex items-center gap-1.5">
-                              {row.industry_duplicate ? (
+                              {row.ai_hard_blocked ? (
+                                <Badge color="red" title={row.ai_block_reason || 'AI排雷严格版禁买'}>
+                                  AI禁买
+                                </Badge>
+                              ) : row.industry_duplicate ? (
                                 <Badge color="zinc">同业跳过</Badge>
                               ) : row.slot_rank && row.slot_rank <= cfg.max_slots ? (
                                 <Badge color={radar.is_offensive ? 'emerald' : 'amber'}>#{row.slot_rank}槽</Badge>
@@ -674,6 +731,12 @@ export default function AR3DualCorePanel({
                               >
                                 {row.source_label}
                               </Badge>
+                              {!row.ai_hard_blocked && row.ai_risk_light === 'green' && (
+                                <Badge color="emerald">绿灯</Badge>
+                              )}
+                              {!row.ai_hard_blocked && row.ai_risk_light === 'yellow' && (
+                                <Badge color="amber">黄灯降权</Badge>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell className="whitespace-nowrap">

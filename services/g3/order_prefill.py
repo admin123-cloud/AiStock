@@ -76,6 +76,8 @@ def evaluate_and_build_prefill_draft(
     tracker_dir: Optional[Path] = None,
     draft_dir: Optional[Path] = None,
     persist: bool = True,
+    screening_doc: Optional[Mapping[str, Any]] = None,
+    recent_st_map: Optional[Mapping[str, Mapping[str, str]]] = None,
 ) -> dict[str, Any]:
     """执行 L2 风控预检并生成半自动合规预填单草案（零自动下单）。"""
     now = now_bj or datetime.now(BJ_TZ)
@@ -217,6 +219,29 @@ def evaluate_and_build_prefill_draft(
         _add("no_new_after_1448", False, "14:48 后禁开新买单（L2 硬风控拦截）", hard=True)
     else:
         _add("trading_session", True, f"处于连续竞价合规时段（{now.strftime('%H:%M')}）")
+
+    # 7. AI 排雷与底线硬门禁（严格版：个股 BUY 单红灯 / 黄灯≤2 / ST / 近12月刚摘帽一律硬阻断）
+    is_etf_code = code6 in AR3_CROSS_ASSET_ETF_WHITELIST or code6.startswith(("51", "56", "58", "159", "16"))
+    if side_u == "BUY" and not is_etf_code:
+        from services.g3.ai_screening import evaluate_buy_risk_gate
+
+        ai_gate = evaluate_buy_risk_gate(
+            code6,
+            name=name,
+            is_etf=False,
+            saved_doc=screening_doc,
+            recent_st_map=recent_st_map,
+            now_bj=now,
+        )
+        if ai_gate["hard_blocked"]:
+            _add("ai_screening_gate", False, f"AI排雷硬拦截：{ai_gate['reason']}", hard=True)
+        elif ai_gate["buy_action"] == "demote_warn":
+            _add("ai_screening_gate", False, f"AI排雷黄灯警示：{ai_gate['reason']}（须人工复核公告）", hard=False)
+        elif ai_gate["buy_action"] == "unscreened_warn":
+            _add("ai_screening_gate", False, f"AI排雷缺失提示：{ai_gate['reason']}", hard=False)
+        else:
+            stale_tail = "（档案偏旧，建议同步最新公告）" if ai_gate.get("is_stale") else ""
+            _add("ai_screening_gate", True, f"{ai_gate['reason']}{stale_tail}")
 
     approved = len(blockers) == 0
     draft_id = f"PF{now.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"

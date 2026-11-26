@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -23,6 +25,274 @@ from utils.common.paths import runtime_path
 BJ_TZ = timezone(timedelta(hours=8))
 VALID_LIGHTS = ("green", "yellow", "red")
 LIGHT_RANK = {"green": 0, "yellow": 1, "red": 2}
+STRICT_YELLOW_BLOCK_MAX_CATALYST = 2  # 严格版：黄灯且催化分 <= 2 等同红灯禁买
+SCREENING_STALE_CALENDAR_DAYS = 3  # 排雷档案超 3 个自然日视为滞后过期
+
+_RECENT_ST_CACHE: dict[str, Any] = {"expires_at": 0.0, "data": None}
+_RECENT_ST_LOCK = threading.Lock()
+
+
+def load_recent_st_alias_map(
+    *,
+    lookback_days: int = 365,
+    force_refresh: bool = False,
+) -> dict[str, dict[str, str]]:
+    """从 ClickHouse stock.source_instrument_alias 识别近 12 个月曾带 ST/*ST 的刚摘帽股票（带 1h 内存缓存）。"""
+    now_mono = time.monotonic()
+    if (
+        not force_refresh
+        and _RECENT_ST_CACHE["data"] is not None
+        and now_mono < float(_RECENT_ST_CACHE["expires_at"])
+    ):
+        return _RECENT_ST_CACHE["data"]
+
+    with _RECENT_ST_LOCK:
+        now_mono = time.monotonic()
+        if (
+            not force_refresh
+            and _RECENT_ST_CACHE["data"] is not None
+            and now_mono < float(_RECENT_ST_CACHE["expires_at"])
+        ):
+            return _RECENT_ST_CACHE["data"]
+        result: dict[str, dict[str, str]] = {}
+        try:
+            from utils.kline.market_warehouse import clickhouse_client
+
+            days = max(30, int(lookback_days))
+            with clickhouse_client() as ch:
+                res = ch.query(
+                    f"""
+                    SELECT
+                        substring(canonical_code, 1, 6) AS code6,
+                        any(if(positionCaseInsensitive(source_name, 'ST') > 0, source_name, canonical_name)) AS st_name,
+                        toString(max(updated_at)) AS last_st_at
+                    FROM stock.source_instrument_alias
+                    WHERE (
+                        positionCaseInsensitive(source_name, 'ST') > 0
+                        OR positionCaseInsensitive(canonical_name, 'ST') > 0
+                    )
+                      AND updated_at >= now() - INTERVAL {days} DAY
+                    GROUP BY code6
+                    """
+                )
+                for row in (res.result_rows or []):
+                    c6 = _norm_code6(row[0])
+                    if c6 and c6 != "000000":
+                        result[c6] = {
+                            "old_name": str(row[1] or "ST"),
+                            "last_st_at": str(row[2] or "")[:10],
+                        }
+        except Exception:
+            # ClickHouse 不可达时静默降级，绝不阻断主流程
+            result = {}
+        _RECENT_ST_CACHE["data"] = result
+        _RECENT_ST_CACHE["expires_at"] = time.monotonic() + (3600.0 if result else 120.0)
+        return result
+
+
+def get_screening_freshness(
+    saved_doc: Optional[Mapping[str, Any]],
+    *,
+    now_bj: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """计算当前 AI 排雷档案的时效状态（供页面顶栏与下单警告显式提示是否滞后）。"""
+    now = now_bj or datetime.now(BJ_TZ)
+    if not isinstance(saved_doc, Mapping) or not saved_doc.get("decision_date"):
+        return {
+            "decision_date": None,
+            "generated_at": None,
+            "items_count": 0,
+            "age_days": None,
+            "is_stale": True,
+            "stale_notice": "尚未生成 AI 排雷档案，当前仅由确定性底线规则兜底。",
+        }
+    d_str = _norm_date(saved_doc.get("decision_date"))
+    try:
+        d_date = datetime.strptime(d_str, "%Y-%m-%d").date()
+        age_days = max(0, (now.date() - d_date).days)
+    except ValueError:
+        age_days = None
+    is_stale = age_days is not None and age_days >= SCREENING_STALE_CALENDAR_DAYS
+    items_cnt = len(saved_doc.get("items_by_code") or {})
+    stale_notice = (
+        f"AI 排雷档案停留于 {d_str}（已滞后 {age_days} 天），新增候选股暂由底线规则兜底，请执行盘后深度排雷。"
+        if is_stale
+        else f"AI 排雷档案最新日期 {d_str}（覆盖 {items_cnt} 只标的）"
+    )
+    return {
+        "decision_date": d_str,
+        "generated_at": saved_doc.get("generated_at"),
+        "items_count": items_cnt,
+        "age_days": age_days,
+        "is_stale": is_stale,
+        "stale_notice": stale_notice,
+    }
+
+
+def evaluate_buy_risk_gate(
+    code: str,
+    *,
+    name: str = "",
+    is_etf: bool = False,
+    saved_doc: Optional[Mapping[str, Any]] = None,
+    recent_st_map: Optional[Mapping[str, Mapping[str, str]]] = None,
+    base_dir: Optional[Path] = None,
+    now_bj: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """AR4.6 全链路唯一权威「买前 AI 排雷严格版风控门禁」。
+
+    严格版规则：
+    - ETF 豁免个股 AI 排雷；
+    - 现役 ST/*ST/退市警示：红灯一票否决（hard_blocked=True）；
+    - AI 排雷红灯（red）：硬禁买（hard_blocked=True）；
+    - AI 排雷黄灯（yellow）且催化分 <= 2：等同红灯硬禁买（hard_blocked=True）；
+    - 近 12 个月曾 ST 刚摘帽（source_instrument_alias 命中）且未经 AI 明确洗白为绿灯：
+      自动按黄灯低催化（<=2）硬禁买（hard_blocked=True）；
+    - AI 排雷黄灯（yellow）且催化分 >= 3：不硬阻断，但降权排在绿灯之后并强制风险警告（demote_warn）；
+    - AI 排雷绿灯（green）：放行（allow）；
+    - 暂无 AI 深度排雷档案（unknown）：放行但提示人工核对公告（unscreened_warn）。
+    """
+    code6 = _norm_code6(code)
+    if is_etf or code6.startswith(("51", "56", "58", "159", "16")):
+        return {
+            "code6": code6,
+            "risk_light": "green",
+            "catalyst_score": None,
+            "risk_flags": [],
+            "one_line_thesis": "",
+            "decision_date": None,
+            "is_stale": False,
+            "source": "etf_exempt",
+            "buy_action": "allow",
+            "hard_blocked": False,
+            "reason": "ETF 标的豁免个股排雷",
+        }
+
+    doc = saved_doc if saved_doc is not None else load_saved_screening(base_dir=base_dir)
+    fresh = get_screening_freshness(doc, now_bj=now_bj)
+    sentinel = lookup_stock_ai_sentinel(code6, saved_doc=doc, base_dir=base_dir)
+    st_map = recent_st_map if recent_st_map is not None else load_recent_st_alias_map()
+    st_hit = st_map.get(code6) if isinstance(st_map, Mapping) else None
+
+    flags: list[str] = []
+    name_upper = str(name or "").upper()
+    if "ST" in name_upper or "退" in str(name or ""):
+        return {
+            "code6": code6,
+            "risk_light": "red",
+            "catalyst_score": 1,
+            "risk_flags": ["ST/退市风险股（红灯一票否决）"],
+            "one_line_thesis": "触发确定性底线红灯：ST/退市风险股禁止买入。",
+            "decision_date": fresh["decision_date"],
+            "is_stale": fresh["is_stale"],
+            "source": "rule_baseline",
+            "buy_action": "block",
+            "hard_blocked": True,
+            "reason": "ST/退市风险股（红灯一票否决）",
+        }
+
+    if st_hit:
+        old_nm = str(st_hit.get("old_name") or "ST")
+        last_at = str(st_hit.get("last_st_at") or "")
+        flags.append(f"近12个月曾ST刚摘帽（曾用名 {old_nm}{f'，{last_at}' if last_at else ''}）")
+
+    if isinstance(sentinel, Mapping):
+        light = str(sentinel.get("risk_light") or "yellow").lower()
+        cat_score = int(_safe_float(sentinel.get("catalyst_score")) or 3)
+        merged_flags = list(dict.fromkeys([*flags, *(sentinel.get("risk_flags") or [])]))
+        thesis = str(sentinel.get("one_line_thesis") or "")
+        src = str(sentinel.get("source") or "agent_enriched")
+        first_flag = merged_flags[0] if merged_flags else thesis[:60]
+
+        if light == "red":
+            return {
+                "code6": code6,
+                "risk_light": "red",
+                "catalyst_score": cat_score,
+                "risk_flags": merged_flags,
+                "one_line_thesis": thesis,
+                "decision_date": sentinel.get("decision_date") or fresh["decision_date"],
+                "is_stale": fresh["is_stale"],
+                "source": src,
+                "buy_action": "block",
+                "hard_blocked": True,
+                "reason": f"AI排雷红灯一票否决（{first_flag or '重大风险'}）",
+            }
+        if light == "yellow":
+            if cat_score <= STRICT_YELLOW_BLOCK_MAX_CATALYST or st_hit:
+                return {
+                    "code6": code6,
+                    "risk_light": "yellow",
+                    "catalyst_score": min(cat_score, STRICT_YELLOW_BLOCK_MAX_CATALYST),
+                    "risk_flags": merged_flags,
+                    "one_line_thesis": thesis,
+                    "decision_date": sentinel.get("decision_date") or fresh["decision_date"],
+                    "is_stale": fresh["is_stale"],
+                    "source": src,
+                    "buy_action": "block",
+                    "hard_blocked": True,
+                    "reason": f"AI排雷黄灯低催化({cat_score}/5，严格版禁买：{first_flag or '高危隐患'})",
+                }
+            return {
+                "code6": code6,
+                "risk_light": "yellow",
+                "catalyst_score": cat_score,
+                "risk_flags": merged_flags,
+                "one_line_thesis": thesis,
+                "decision_date": sentinel.get("decision_date") or fresh["decision_date"],
+                "is_stale": fresh["is_stale"],
+                "source": src,
+                "buy_action": "demote_warn",
+                "hard_blocked": False,
+                "reason": f"AI排雷黄灯警示({cat_score}/5，已降权：{first_flag or '需核对公告'})",
+            }
+        # green：若同时命中近12个月刚摘帽但 AI 已明确深度核查判绿灯，保留提示但不硬拦
+        return {
+            "code6": code6,
+            "risk_light": "green",
+            "catalyst_score": cat_score,
+            "risk_flags": merged_flags,
+            "one_line_thesis": thesis,
+            "decision_date": sentinel.get("decision_date") or fresh["decision_date"],
+            "is_stale": fresh["is_stale"],
+            "source": src,
+            "buy_action": "allow",
+            "hard_blocked": False,
+            "reason": f"AI排雷绿灯通过（催化 {cat_score}/5）",
+        }
+
+    # 无 AI 深度排雷记录，但命中近 12 个月刚摘帽底线 -> 严格版硬拦截！
+    if st_hit:
+        old_nm = str(st_hit.get("old_name") or "ST")
+        return {
+            "code6": code6,
+            "risk_light": "yellow",
+            "catalyst_score": 2,
+            "risk_flags": flags,
+            "one_line_thesis": f"底线规则命中：近12个月曾带ST（{old_nm}），未经AI深度排雷洗白前严禁自动买入。",
+            "decision_date": fresh["decision_date"],
+            "is_stale": fresh["is_stale"],
+            "source": "rule_baseline_recent_st",
+            "buy_action": "block",
+            "hard_blocked": True,
+            "reason": f"近12个月曾ST刚摘帽（{old_nm}，严格版禁买）",
+        }
+
+    return {
+        "code6": code6,
+        "risk_light": "unknown",
+        "catalyst_score": None,
+        "risk_flags": [],
+        "one_line_thesis": "",
+        "decision_date": fresh["decision_date"],
+        "is_stale": fresh["is_stale"],
+        "source": "unscreened",
+        "buy_action": "unscreened_warn",
+        "hard_blocked": False,
+        "reason": (
+            f"暂无该股AI深度排雷档案（最新档案 {fresh['decision_date'] or '缺失'}），请人工核对近期公告与减持"
+        ),
+    }
 
 
 def _screening_dir(base_dir: Optional[Path] = None) -> Path:

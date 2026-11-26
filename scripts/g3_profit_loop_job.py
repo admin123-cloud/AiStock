@@ -187,6 +187,71 @@ def run_postclose() -> int:
     EXPORT_PATH.write_text(json.dumps(export_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _log(f"AR3-F (F2A+F3A) 候选池已刷新并导出: date={sr_data.get('latest_date')} count={len(ar3_cands)} -> {EXPORT_PATH}")
 
+    # 3.5 自动检测 AI 排雷档案是否过期或存在新增未排雷标的，自动派发 AI Bus 异步深度排雷任务
+    try:
+        saved_sc = _http_json("/api/g3/ai-screening", method="GET", timeout=15)
+        saved_date = str(saved_sc.get("decision_date") or "")
+        saved_items = saved_sc.get("items_by_code") if isinstance(saved_sc.get("items_by_code"), dict) else {}
+        latest_dt = str(sr_data.get("latest_date") or datetime.now(BJ_TZ).strftime("%Y-%m-%d"))
+
+        target_stocks: list[str] = []
+        missing_stocks: list[str] = []
+        seen_c6: set[str] = set()
+        for h in export_payload.get("desk_holdings") or []:
+            c6 = str(h.get("code") or "").split(".")[0].zfill(6)
+            if not c6 or c6 in seen_c6 or c6.startswith(("51", "56", "58", "159", "16")):
+                continue
+            seen_c6.add(c6)
+            lbl = f"{c6}({h.get('name') or c6})"
+            target_stocks.append(lbl)
+            if c6 not in saved_items:
+                missing_stocks.append(lbl)
+        for c in ar3_cands:
+            c6 = str(c.get("code") or "").split(".")[0].zfill(6)
+            if not c6 or c6 in seen_c6:
+                continue
+            seen_c6.add(c6)
+            lbl = f"{c6}({c.get('name') or c6})"
+            target_stocks.append(lbl)
+            if c6 not in saved_items:
+                missing_stocks.append(lbl)
+
+        need_refresh = (saved_date != latest_dt) or bool(missing_stocks)
+        if need_refresh and target_stocks:
+            prompt = (
+                f"请执行 {latest_dt} 盘后 AR4.6 深度 AI 排雷并回写 POST /api/g3/ai-screening/ingest："
+                f"读取 {EXPORT_PATH}，重点覆盖实盘持仓与全部 F2A/F3A 候选股共 {len(target_stocks)} 只"
+                f"（当前档案日期={saved_date or '无'}，新增未评估 {len(missing_stocks)} 只：{', '.join(missing_stocks[:10])}）。"
+                f"严格核查近期公告、减持、摘帽/ST 历史、监管处罚、业绩真伪与质押风险，产出 green/yellow/red + catalyst_score(1-5) 并落盘。"
+            )
+            bus_res = _http_json(
+                "/api/g3/ai-bus/submit",
+                method="POST",
+                body={
+                    "kind": "postclose_ai_screening",
+                    "source": "g3_profit_loop_postclose",
+                    "prompt": prompt,
+                    "wait_timeout_sec": 0,
+                    "context": {
+                        "decision_date": latest_dt,
+                        "previous_screening_date": saved_date,
+                        "export_path": str(EXPORT_PATH),
+                        "missing_count": len(missing_stocks),
+                        "missing_stocks": missing_stocks[:20],
+                        "total_targets": len(target_stocks),
+                    },
+                },
+                timeout=20,
+            )
+            _log(
+                f"AI 排雷闭环已自动派发 AI Bus: status={bus_res.get('status')} "
+                f"job_id={bus_res.get('job_id')} missing={len(missing_stocks)} prev_date={saved_date or 'none'}"
+            )
+        else:
+            _log(f"AI 排雷档案已是最新（date={saved_date}，无新增未评估标的），跳过重复派发。")
+    except Exception as exc:
+        _log(f"WARN AI 排雷闭环自动派发跳过（不影响盘后主流程）: {exc}")
+
     attr = _http_json("/api/g3/review/attribution?days=30", method="GET", timeout=30)
     s = attr.get("summary") or {}
     _log(

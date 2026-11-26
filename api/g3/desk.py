@@ -312,6 +312,28 @@ def get_g3_desk(
 
     cards: list[dict[str, Any]] = []
     saved_screening_doc = load_saved_screening()
+    from services.g3.ai_screening import (
+        evaluate_buy_risk_gate,
+        get_screening_freshness,
+        load_recent_st_alias_map,
+    )
+    from services.mining.ar3_rebalance_compiler import _needs_name_fix, _resolve_canonical_names
+
+    ai_screening_meta = get_screening_freshness(saved_screening_doc)
+    recent_st_map = load_recent_st_alias_map()
+    raw_names_by_code: dict[str, str] = {}
+    for code in all_codes:
+        h_list = holding_by_code.get(code, [])
+        w_item = watch_by_code.get(code)
+        r_info = regime_codes.get(code) or {}
+        raw_names_by_code[code] = (
+            r_info.get("name")
+            or (h_list[0].get("name") if h_list else "")
+            or (w_item.get("name") if w_item else "")
+            or code
+        )
+    need_fix_codes = [c for c, nm in raw_names_by_code.items() if _needs_name_fix(nm, c)]
+    canon_name_map = _resolve_canonical_names(need_fix_codes) if need_fix_codes else {}
     eligible_count = 0
     ineligible_count = 0
     stale_param_count = 0
@@ -325,12 +347,10 @@ def get_g3_desk(
         total_shares = sum(int(x.get("shares") or 0) for x in h_list)
         available_shares = sum(int(x.get("available_shares") or 0) for x in h_list)
         t_lot_cap = (total_shares // 3 // 100) * 100 if total_shares >= 300 else 0
-        name = (
-            r_info.get("name")
-            or (h_list[0].get("name") if h_list else "")
-            or (w_item.get("name") if w_item else "")
-            or code
-        )
+        raw_nm = raw_names_by_code.get(code, code)
+        name = canon_name_map.get(code, raw_nm) if _needs_name_fix(raw_nm, code) else raw_nm
+        if name != raw_nm and h_list:
+            h_list = [{**h, "name": name} for h in h_list]
 
         # 实时行情 + 实时 RSI（来自前置批量并发结果）
         q = dict(live_quotes.get(code) or {})
@@ -420,7 +440,33 @@ def get_g3_desk(
             "open_t_exposure": exposure_by_code.get(code),
             "armed_sides": s_info.get("sides") or {},
             "hard_stop": contract_stop.get(code),
-            "ai_sentinel": lookup_stock_ai_sentinel(code, saved_doc=saved_screening_doc),
+            "ai_sentinel": (
+                lookup_stock_ai_sentinel(code, saved_doc=saved_screening_doc)
+                or (
+                    lambda g: {
+                        "code6": code,
+                        "risk_light": g["risk_light"],
+                        "forbid_forward_t": g["risk_light"] == "red",
+                        "catalyst_score": g["catalyst_score"],
+                        "catalyst_type": "底线排雷",
+                        "risk_flags": g["risk_flags"],
+                        "one_line_thesis": g["one_line_thesis"],
+                        "source": g["source"],
+                        "decision_date": g["decision_date"],
+                        "updated_at": None,
+                    }
+                    if g["risk_light"] != "unknown"
+                    else None
+                )(
+                    evaluate_buy_risk_gate(
+                        code,
+                        name=name,
+                        is_etf=code.startswith(("51", "56", "58", "159", "16")),
+                        saved_doc=saved_screening_doc,
+                        recent_st_map=recent_st_map,
+                    )
+                )
+            ),
         })
 
     # 按实战优先级排序：可做T & 风险/机会高优先排前，不可做T零股排后
@@ -478,6 +524,7 @@ def get_g3_desk(
         },
         "market_directive": market_directive,
         "market_regime_gate": market_regime_gate,
+        "ai_screening_meta": ai_screening_meta,
         "strategy_allocation": strategy_allocation,
         "strategy_router": strategy_router,
         "trading_command": trading_command,
