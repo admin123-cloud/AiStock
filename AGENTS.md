@@ -41,6 +41,16 @@ This repository is the unified AiStock application source under `F:\Aistock\code
 - Do not commit `.env`, `.env.local`, or `config/settings.local.yaml`.
 - Keep `config/settings.yaml` safe for version control: no real SMTP passwords, tokens, API keys, or account credentials.
 
+## Production Operations & Communication Guardrails
+
+- **故障告警双通道铁律**：所有生产故障、任务失败、桥接/AI Bus 离线超时等 Bug 类告警，必须**同时推送微信（iLink Bridge）与 QQ 邮箱**（双发直达，不以单通道成功跳过另一通道）；日常成功回执维持微信单通道。
+- **现役策略防压缩漂移（SSOT Grounding）**：严禁凭历史聊天压缩记忆回答现役策略版本、仓位或买卖参数；所有策略与实盘问答必须实时核对在线接口（`/api/g3/market-gate`、`/api/g3/mining/ar3/radar`）、`live_strategy_constitution` 及源码。
+- **微信消息短编号规范（`[idxxxx]`）**：`weixin_ilink_bridge.py` 自动为所有发往微信的正文前置递增短编号 `[idxxxx]`，计数与索引存于 `F:\Aistock\runtime\weixin_ilink\inbox\`（严禁放回根目录以免干扰 `*.json` 账号凭证发现）。收到含 `ref_msg_id` / `referenced_message` 的回复时，必须严格围绕对应原消息应答。
+- **Windows 宿主后台与 GUI 自动化铁律**：
+  - 严禁在同步命令中用 `Start-Process` 启动常驻守护进程（Windows Job Object 会在命令退出时杀死子进程）；会话内托管守护用 `IsDaemon=True`，系统级常驻桥接用 `schtasks /Run`。
+  - 通达信/同花顺 GUI 自动化不得只依赖物理鼠标 `SetCursorPos`（RDP 最小化或锁屏会返回 `ERROR_ACCESS_DENIED=5`）或冷启动单帧截图；必须保留防遮挡校验 + 短重试 + 安全兜底（如 `PostMessageW` 窗口消息点击、渲染轮询、白名单升级弹窗关闭）。
+- **容器代码核验铁律**：生产容器（`aistock-backend`、`aistock-pipeline-runner`、`aistock-frontend`）运行镜像内代码而非宿主机 bind mount；排查或修复线上问题时必须通过 `docker exec` 核验容器内实际生效代码，并在热更新后验证健康接口与调度注册日志。
+
 ## Migration Notes
 
 - API/runtime modules should be migrated to external paths first.
@@ -53,3 +63,11 @@ The canonical project knowledge base is `H:\Agent-Memory-System\projects\aistock
 Before any AiStock startup, investigation, new requirement, fix or refactor, read its `README.md`, `AGENTS.md`, `CURRENT.md`, `LEARNINGS.md`, then the relevant design/requirements/operations pages. Verify the actual checkout and deployment against that record.
 At completion update the knowledge base's current state, affected topic, change record and reusable lessons, linking the code commit and validation. Do not declare the task complete before that writeback. If unavailable, report it and continue only independent read-only work.
 Keep code, tests, executable configuration and this short pointer here. Do not add project design notes, incident experiences or scattered docs to the code repository. Historical documents are preserved in the knowledge base archives. Machine strategy contracts remain in code; knowledge changes do not automatically change runtime behavior.
+
+## Quant Strategy, ClickHouse & Live Discipline Guardrails (AR4.6)
+
+- **全账户物理验真门禁（反单腿幻觉）**：任何策略参数、止损、轮动频率或卫星仓改动，严禁凭隔离单腿回测上线；必须合入完整物理单账户 `AR4.6`（`simulate_ar45_physical`）通过 `IS / Val / 2026 熊市 OOS` 与滑点/极值压力测试，并获 Owner 批准后方可固化。
+- **执行工程与风险预算解耦**：整手资金利用率优化（如 `pooled_flex` 1.25x 弹性分槽、自适应单手门槛）与提高名义风险仓位（如 `50% → 60%~65%`）必须拆分归因、独立决策；严禁借工程优化暗升名义杠杆，名义仓位上调必须先满足实盘滑点门禁。
+- **ClickHouse 分钟表查询铁律**：查询 `kline_minute_5` / `kline_minute_15` 必须显式携带 `datetime >= ... AND datetime <= ...` 分区裁剪；禁用无分区裁剪的 `FINAL` 或大表聚合前置 `INNER JOIN stocks`（改用 `IN (SELECT ...)` + `optimize_aggregation_in_order = 1` 或 Pandas `drop_duplicates(keep='last')` 防 HTTP 500/OOM）。
+- **多会话脏工作区安全提交**：提交前仅 `git add` 本次精确修改文件，严禁 `git add -A` 混入其他会话改动；生产发布一律走官方 `infra/deploy.sh` 并确认 `DEPLOY_OK`。
+- **实盘交易纪律（acct1）**：严格按已验证策略执行、不临时改规则；冰点 30m 触发后严守 `i+6` 冷却锁（期间不续期、不加仓、不补买换股）；微信告警仅在可执行动作或真实风控触发时推送，标题统一 `【acct1·择时看盘】`，正文逐行 `- ` 列表并强制带去重键。
