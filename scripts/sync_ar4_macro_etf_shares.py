@@ -388,28 +388,7 @@ def sync_all(start_date: str = "2021-01-01") -> dict[str, Any]:
     if hs300_px.empty:
         hs300_px = pe_df[["hs300_close_lg"]].rename(columns={"hs300_close_lg": "hs300_close"})
 
-    # 两融余额（沪 + 深 + 本地 market_margin_sentiment 最新补齐）
-    m_sh = ak.macro_china_market_margin_sh()
-    m_sz = ak.macro_china_market_margin_sz()
-    m_sh_s = pd.Series(
-        pd.to_numeric(m_sh["融资余额"], errors="coerce").values + pd.to_numeric(m_sh["融券余额"], errors="coerce").values,
-        index=pd.to_datetime(m_sh["日期"]).dt.strftime("%Y-%m-%d"),
-    )
-    m_sz_s = pd.Series(
-        pd.to_numeric(m_sz["融资余额"], errors="coerce").values + pd.to_numeric(m_sz["融券余额"], errors="coerce").values,
-        index=pd.to_datetime(m_sz["日期"]).dt.strftime("%Y-%m-%d"),
-    )
-    margin_yi = (m_sh_s.add(m_sz_s, fill_value=np.nan) / 1e8).dropna()
-    # 合并本地最新两融
-    loc_m = _ch_query_df("SELECT toString(trade_date) AS dt, margin_balance FROM stock.market_margin_sentiment FINAL")
-    if not loc_m.empty:
-        for _, row in loc_m.iterrows():
-            val = float(row["margin_balance"] or 0.0)
-            if val > 1e8:
-                val = val / 1e8
-            if val > 1000:
-                margin_yi.loc[str(row["dt"])] = val
-    margin_yi = margin_yi.sort_index()
+    # 两融情绪数据已按 2026-11-26 决策下线，不再拉取外部两融或依赖 market_margin_sentiment
 
     # 全市场成交额与前 5% 抱团拥挤度（只读聚合 stock.kline_daily）
     crowd_df = _ch_query_df(
@@ -458,15 +437,15 @@ def sync_all(start_date: str = "2021-01-01") -> dict[str, Any]:
     panel = panel.join(hs300_px[["hs300_close"]], how="left")
     panel = panel.join(pe_df[["hs300_pe_ttm"]], how="left")
     panel = panel.join(bond_df[["cn_bond_10y", "cn_bond_2y", "us_bond_10y"]], how="left")
-    panel["margin_balance_yi"] = margin_yi.reindex(panel.index)
+    panel["margin_balance_yi"] = 0.0
     panel = panel.join(hs300_agg, how="left")
     panel = panel.join(broad6_agg, how="left")
     panel = panel.join(crowd_df, how="left")
     panel["broad6_net_inflow_5d_yi"] = broad6_net_inflow_5d_yi.reindex(panel.index)
 
-    # 前向填充低频/节假日字段（PE_TTM、国债收益率、两融、份额）
+    # 前向填充低频/节假日字段（PE_TTM、国债收益率、份额）
     for col in ("hs300_close", "hs300_pe_ttm", "cn_bond_10y", "cn_bond_2y", "us_bond_10y",
-                "margin_balance_yi", "hs300_top3_shares_yi", "hs300_top3_scale_yi",
+                "hs300_top3_shares_yi", "hs300_top3_scale_yi",
                 "broad6_shares_yi", "broad6_scale_yi"):
         panel[col] = panel[col].ffill()
 
@@ -520,7 +499,7 @@ def sync_all(start_date: str = "2021-01-01") -> dict[str, Any]:
     print(f"[AR4-Sync] 全部完成！ar4_macro_daily 写入 {len(macro_lines)} 天，耗时 {elapsed}s")
     print("[AR4-Sync] 最新 5 日宏观 & 国家队切片：")
     cols_show = ["hs300_close", "erp_pct", "hs300_top3_scale_yi", "nt_ratio_pctile_250d",
-                 "nt_share_chg_5d_pct", "broad6_net_inflow_5d_yi", "margin_balance_yi", "top5pct_amt_share"]
+                 "nt_share_chg_5d_pct", "broad6_net_inflow_5d_yi", "top5pct_amt_share"]
     print(panel[cols_show].tail(5).to_string())
     return {"macro_days": len(macro_lines), "southbound": sb_res, "elapsed_sec": elapsed}
 

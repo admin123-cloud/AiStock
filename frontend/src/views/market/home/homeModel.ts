@@ -134,13 +134,6 @@ export const formatTrendDateCompact = (dateStr?: string | null) => {
   return `${parts[0]}${parts[1]}${parts[2]}`
 }
 
-export const formatMarginTrillion = (amount?: number | null) => `${(Number(amount || 0) / 1_000_000_000_000).toFixed(2)} 万亿`
-
-export const formatMarginBillions = (amount?: number | null) => {
-  const value = Number(amount || 0) / 100_000_000
-  return `${value >= 0 ? '+' : ''}${value.toFixed(1)} 亿`
-}
-
 export const formatTurnoverTrillion = (amount?: number | null) => `${(Number(amount || 0) / 1_000_000_000_000).toFixed(2)} 万亿`
 
 export const getEmotionScoreBand = (value: number | null | undefined) => {
@@ -252,44 +245,4 @@ export const resolveEmotionPhaseDetail = (
     data_status: dataStatus || undefined
   }
 }
-
-export const marginBalancePoints = (values: number[]) => {
-  if (!values.length) return ''
-  const minimum = Math.min(...values)
-  const maximum = Math.max(...values)
-  const range = Math.max(maximum - minimum, 1)
-  const width = 746
-  return values
-    .map((value, index) => {
-      const x = 36 + (values.length === 1 ? width / 2 : (index * width) / (values.length - 1))
-      const y = 118 - ((Number(value || 0) - minimum) / range) * 94
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
-}
-
-export interface MarginBar {
-  index: number
-  value: number
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
-export const marginChangeBars = (values: number[], offset: number): MarginBar[] => {
-  if (!values.length) return []
-  const maxAbs = Math.max(...values.map((value) => Math.abs(Number(value || 0))), 1)
-  const step = 746 / values.length
-  const width = Math.max(2, Math.min(8, step * 0.32))
-  return values.map((value, index) => {
-    const amount = Number(value || 0)
-    const height = (Math.abs(amount) / maxAbs) * 57
-    return { index, value: amount, x: 36 + index * step + offset * width, y: amount >= 0 ? 75 - height : 75, width, height }
-  })
-}
-
-/* ------------------------------------------------------------------ */
-/* 组件                                                                 */
-/* ------------------------------------------------------------------ */
 

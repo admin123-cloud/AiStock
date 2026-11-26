@@ -84,11 +84,6 @@ export function getMarketEmotionTrend(params?: Record<string, unknown>) {
   return request({ url: '/market/emotion-trend', method: 'get', params })
 }
 
-/** 获取融资融券情绪数据 */
-export function getMarketMarginSentiment(params?: Record<string, unknown>) {
-  return request({ url: '/market/margin-sentiment', method: 'get', params })
-}
-
 /** 获取盘后数据发布控制面状态 */
 export function getMarketPublicationStatus() {
   return request({ url: '/market/publication-status', method: 'get' })

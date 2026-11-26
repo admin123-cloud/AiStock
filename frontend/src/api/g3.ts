@@ -1320,7 +1320,6 @@ export interface G3AR4MacroSnapshot {
   cn_bond_10y?: number
   us_bond_10y?: number
   erp_pct?: number
-  margin_balance_yi?: number
   hs300_top3_shares_yi?: number
   hs300_top3_scale_yi?: number
   broad6_scale_yi?: number

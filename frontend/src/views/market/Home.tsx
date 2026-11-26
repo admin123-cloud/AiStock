@@ -26,19 +26,14 @@ import {
   formatAmount,
   formatTrendDate,
   formatTrendDateCompact,
-  formatMarginTrillion,
-  formatMarginBillions,
   formatTurnoverTrillion,
   getEmotionScoreBand,
   buildSmoothPath,
   resolveEmotionPhaseCode,
   resolveEmotionPhaseDetail,
-  marginBalancePoints,
-  marginChangeBars,
   type EmotionSeriesMeta,
   type EmotionPoint,
   type EmotionPhaseDetail,
-  type MarginBar,
 } from './home/homeModel'
 
 export default function Home() {
@@ -49,7 +44,6 @@ export default function Home() {
   const [tradingDate, setTradingDate] = useState<string | null>(null)
   const [sentiment, setSentiment] = useState<any>(null)
   const [publicationStatus, setPublicationStatus] = useState<any>(null)
-  const [marginSentiment, setMarginSentiment] = useState<any>({ available: false, dates: [], latest: null })
   const [emotionCycleData, setEmotionCycleData] = useState<any>(null)
   const [emotionGranularity, setEmotionGranularity] = useState<'daily' | 'hourly'>('daily')
   const [showAllIndices, setShowAllIndices] = useState(false)
@@ -58,14 +52,11 @@ export default function Home() {
   )
   const [hoveredEmotionIndex, setHoveredEmotionIndex] = useState<number | null>(null)
   const [selectedSentimentIndex, setSelectedSentimentIndex] = useState<number | null>(null)
-  const [hoveredMarginIndex, setHoveredMarginIndex] = useState<number | null>(null)
-  const [marginHoverPosition, setMarginHoverPosition] = useState({ x: 12, y: 12 })
   const [dark, setDark] = useState<boolean>(() => document.documentElement.classList.contains('dark'))
 
   const granularityRef = useRef(emotionGranularity)
   granularityRef.current = emotionGranularity
   const retryTimerRef = useRef<number | null>(null)
-  const marginCardRef = useRef<HTMLDivElement | null>(null)
 
   /* ---------------- 暗色监听 ---------------- */
   useEffect(() => {
@@ -95,14 +86,12 @@ export default function Home() {
       try {
         const refreshParams = { _ts: Date.now() }
         const emotionPromise = loadEmotionCycle()
-        const [indicesRes, sentimentRes, marginRes, pubRes] = (await Promise.all([
+        const [indicesRes, sentimentRes, pubRes] = (await Promise.all([
           request.get('/market/indices', { params: { all: true, ...refreshParams }, skipErrorHandler: true }),
           request.get('/market/sentiment', { params: refreshParams, skipErrorHandler: true }),
-          request.get('/market/margin-sentiment', { params: { days: 30, ...refreshParams }, skipErrorHandler: true }),
           request.get('/market/publication-status', { params: refreshParams, skipErrorHandler: true }).catch(() => null)
         ])) as any[]
 
-        setMarginSentiment(marginRes || { available: false, dates: [], latest: null })
         setAllIndices(indicesRes?.indices || [])
         setTradingDate(indicesRes?.trading_date || null)
         setSentiment(sentimentRes?.error ? null : sentimentRes)
@@ -415,56 +404,6 @@ export default function Home() {
     if (!list.length) return { start: '--', end: '--' }
     return { start: list[0].dateLabel, end: list[list.length - 1].dateLabel }
   }, [emotionPhaseTimeline])
-
-  /* ---------------- 两融派生 ---------------- */
-  const financingBalancePoints = useMemo(
-    () => marginBalancePoints((marginSentiment?.financing_balance || []).map(Number)),
-    [marginSentiment]
-  )
-  const securitiesLendingBalancePoints = useMemo(
-    () => marginBalancePoints((marginSentiment?.securities_lending_balance || []).map(Number)),
-    [marginSentiment]
-  )
-  const financingChangeBars = useMemo(() => marginChangeBars(marginSentiment?.financing_net_buy || [], 0), [marginSentiment])
-  const securitiesLendingChangeBars = useMemo(
-    () => marginChangeBars(marginSentiment?.securities_lending_balance_change || [], 1.15),
-    [marginSentiment]
-  )
-  const marginHoverX = useMemo(() => {
-    const count = marginSentiment?.dates?.length || 0
-    if (hoveredMarginIndex === null || !count) return 36
-    return 36 + (count === 1 ? 373 : (hoveredMarginIndex * 746) / (count - 1))
-  }, [hoveredMarginIndex, marginSentiment])
-
-  const marginHoverData = useMemo(() => {
-    const index = hoveredMarginIndex
-    const dates = marginSentiment?.dates || []
-    if (!Number.isInteger(index) || index === null || !dates[index]) return null
-    const value = (key: string) => Number(marginSentiment?.[key]?.[index] || 0)
-    return {
-      date: dates[index],
-      financingBalance: value('financing_balance'),
-      securitiesLendingBalance: value('securities_lending_balance'),
-      financingChange: value('financing_net_buy'),
-      securitiesLendingChange: value('securities_lending_balance_change'),
-      marginBalance: value('margin_balance'),
-      financingBuy: value('financing_buy')
-    }
-  }, [hoveredMarginIndex, marginSentiment])
-
-  const updateMarginHover = (event: React.MouseEvent<SVGSVGElement>) => {
-    const dates = marginSentiment?.dates || []
-    if (!dates.length) return
-    const svgRect = event.currentTarget.getBoundingClientRect()
-    const chartRatio = Math.max(0, Math.min(1, (event.clientX - svgRect.left - svgRect.width * 0.045) / (svgRect.width * 0.9325)))
-    setHoveredMarginIndex(Math.round(chartRatio * (dates.length - 1)))
-    const cardRect = marginCardRef.current?.getBoundingClientRect()
-    if (!cardRect) return
-    setMarginHoverPosition({
-      x: Math.max(8, Math.min(cardRect.width - 262, event.clientX - cardRect.left + 14)),
-      y: Math.max(8, Math.min(cardRect.height - 142, event.clientY - cardRect.top + 14))
-    })
-  }
 
   /* ---------------- 涨跌分布 ---------------- */
   const getUpWidth = (s: any) => {
@@ -1014,130 +953,6 @@ export default function Home() {
             <SectionTitle title="盘中监测" />
           </div>
           <R56MarketDashboardBlocks />
-        </section>
-
-        {/* 融资客情绪 */}
-        <section className="mb-6">
-          <div className="mb-4">
-            <SectionTitle
-              title="融资客情绪"
-              actions={
-                marginSentiment?.available ? (
-                  <span className="whitespace-nowrap text-[13px] text-zinc-400 tabular-nums dark:text-zinc-300">{marginSentiment.latest?.date}</span>
-                ) : undefined
-              }
-            />
-            <p className="-mt-1 text-xs text-zinc-500 dark:text-zinc-400">交易所盘后确认数据，统计沪深两市融资余额与融资净买入</p>
-          </div>
-          {marginSentiment?.available ? (
-            <div ref={marginCardRef} className="relative rounded-lg border border-zinc-200 bg-zinc-50 px-4 pb-2.5 pt-3.5 dark:border-slate-600/60 dark:bg-slate-900">
-              <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4 max-[900px]:grid-cols-2">
-                <div className="grid gap-1">
-                  <span className="text-xs text-zinc-500 dark:text-slate-400">融资余额</span>
-                  <strong className="text-xl tabular-nums text-zinc-900 dark:text-white">{formatMarginTrillion(marginSentiment.latest?.financing_balance)}</strong>
-                </div>
-                <div className="grid gap-1">
-                  <span className="text-xs text-zinc-500 dark:text-slate-400">融券余额</span>
-                  <strong className="text-xl tabular-nums text-zinc-900 dark:text-white">{formatMarginBillions(marginSentiment.latest?.securities_lending_balance)}</strong>
-                </div>
-                <div className="grid gap-1">
-                  <span className="text-xs text-zinc-500 dark:text-slate-400">融资余额日变动</span>
-                  <strong className={`text-xl tabular-nums ${Number(marginSentiment.latest?.financing_net_buy || 0) >= 0 ? 'text-rose-600 dark:text-rose-400' : 'text-green-600 dark:text-green-400'}`}>
-                    {formatMarginBillions(marginSentiment.latest?.financing_net_buy)}
-                  </strong>
-                </div>
-                <div className="grid gap-1">
-                  <span className="text-xs text-zinc-500 dark:text-slate-400">融券余额日变动</span>
-                  <strong className={`text-xl tabular-nums ${Number(marginSentiment.latest?.securities_lending_balance_change || 0) >= 0 ? 'text-rose-600 dark:text-rose-400' : 'text-green-600 dark:text-green-400'}`}>
-                    {formatMarginBillions(marginSentiment.latest?.securities_lending_balance_change)}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="mt-3.5 flex justify-between gap-2.5 text-xs text-zinc-600 dark:text-slate-300">
-                <span>余额趋势</span>
-                <span className="text-zinc-400 dark:text-slate-400">融资余额 / 融券余额</span>
-              </div>
-              <svg
-                className="mt-1 block h-[150px] w-full"
-                viewBox="0 0 800 150"
-                preserveAspectRatio="none"
-                role="img"
-                aria-label="近30日融资余额和融券余额趋势"
-                onMouseMove={updateMarginHover}
-                onMouseLeave={() => setHoveredMarginIndex(null)}
-              >
-                <line x1={36} x2={782} y1={126} y2={126} className="stroke-zinc-300 dark:stroke-slate-500" />
-                <polyline points={financingBalancePoints} fill="none" className="stroke-rose-500 dark:stroke-rose-400" strokeWidth={2.4} style={{ vectorEffect: 'non-scaling-stroke' }} />
-                <polyline points={securitiesLendingBalancePoints} fill="none" className="stroke-sky-500 dark:stroke-sky-400" strokeWidth={2.2} style={{ vectorEffect: 'non-scaling-stroke' }} />
-                {hoveredMarginIndex !== null && <line x1={marginHoverX} x2={marginHoverX} y1={12} y2={126} className="stroke-zinc-900/40 dark:stroke-white/70" strokeWidth={1} strokeDasharray="3 3" pointerEvents="none" />}
-                <rect x={36} y={12} width={746} height={114} fill="transparent" className="cursor-crosshair" />
-                <text x={4} y={22} className="fill-zinc-500 dark:fill-slate-400 text-[11px]">融资</text>
-                <text x={764} y={22} className="fill-zinc-500 dark:fill-slate-400 text-[11px]">融券</text>
-              </svg>
-              <div className="flex gap-4 text-[11px] text-zinc-500 dark:text-slate-400">
-                <span className="before:mr-1.5 before:inline-block before:h-2 before:w-2 before:bg-rose-500 dark:before:bg-rose-400">融资余额</span>
-                <span className="before:mr-1.5 before:inline-block before:h-2 before:w-2 before:bg-sky-500 dark:before:bg-sky-400">融券余额</span>
-              </div>
-
-              <div className="mt-3.5 flex justify-between gap-2.5 text-xs text-zinc-600 dark:text-slate-300">
-                <span>每日余额变动</span>
-                <span className="text-zinc-400 dark:text-slate-400">柱体向上为增加，向下为减少</span>
-              </div>
-              <svg
-                className="mt-1 block h-[150px] w-full"
-                viewBox="0 0 800 150"
-                preserveAspectRatio="none"
-                role="img"
-                aria-label="近30日融资和融券余额每日变动"
-                onMouseMove={updateMarginHover}
-                onMouseLeave={() => setHoveredMarginIndex(null)}
-              >
-                <line x1={36} x2={782} y1={75} y2={75} className="stroke-zinc-300 dark:stroke-slate-500" strokeDasharray="4 4" />
-                {financingChangeBars.map((bar) => (
-                  <rect key={`financing-${bar.index}`} x={bar.x} y={bar.y} width={bar.width} height={bar.height} className={bar.value >= 0 ? 'fill-rose-500 dark:fill-rose-400' : 'fill-green-500 dark:fill-green-400'} />
-                ))}
-                {securitiesLendingChangeBars.map((bar) => (
-                  <rect key={`lending-${bar.index}`} x={bar.x} y={bar.y} width={bar.width} height={bar.height} className={bar.value >= 0 ? 'fill-sky-500 dark:fill-sky-400' : 'fill-violet-500 dark:fill-violet-400'} />
-                ))}
-                {hoveredMarginIndex !== null && <line x1={marginHoverX} x2={marginHoverX} y1={12} y2={138} className="stroke-zinc-900/40 dark:stroke-white/70" strokeWidth={1} strokeDasharray="3 3" pointerEvents="none" />}
-                <rect x={36} y={12} width={746} height={126} fill="transparent" className="cursor-crosshair" />
-                <text x={4} y={22} className="fill-zinc-500 dark:fill-slate-400 text-[11px]">增加</text>
-                <text x={4} y={142} className="fill-zinc-500 dark:fill-slate-400 text-[11px]">减少</text>
-              </svg>
-              <div className="flex gap-4 text-[11px] text-zinc-500 dark:text-slate-400">
-                <span className="before:mr-1.5 before:inline-block before:h-2 before:w-2 before:bg-rose-500 dark:before:bg-rose-400">融资变动</span>
-                <span className="before:mr-1.5 before:inline-block before:h-2 before:w-2 before:bg-sky-500 dark:before:bg-sky-400">融券变动</span>
-              </div>
-              <div className="flex justify-between text-[11px] text-zinc-500 dark:text-slate-400 tabular-nums">
-                <span>{marginSentiment.dates?.[0]}</span>
-                <span>{marginSentiment.dates?.[marginSentiment.dates.length - 1]}</span>
-              </div>
-
-              {marginHoverData && (
-                <div
-                  className="pointer-events-none absolute z-10 w-[250px] rounded-md border border-zinc-200 bg-white/95 p-2.5 text-xs leading-relaxed text-zinc-700 shadow-lg dark:border-slate-400/50 dark:bg-slate-900/95 dark:text-blue-100"
-                  style={{ left: marginHoverPosition.x, top: marginHoverPosition.y }}
-                >
-                  <div className="mb-1.5 font-bold text-zinc-900 dark:text-slate-50">{marginHoverData.date} 当日两融明细</div>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                    <span className="flex flex-col text-zinc-500 dark:text-slate-400">融资余额 <b className="text-[13px] text-zinc-900 dark:text-slate-50">{formatMarginTrillion(marginHoverData.financingBalance)}</b></span>
-                    <span className="flex flex-col text-zinc-500 dark:text-slate-400">融券余额 <b className="text-[13px] text-zinc-900 dark:text-slate-50">{formatMarginBillions(marginHoverData.securitiesLendingBalance)}</b></span>
-                    <span className={`flex flex-col ${marginHoverData.financingChange >= 0 ? 'text-rose-600 dark:text-rose-300' : 'text-green-600 dark:text-green-300'}`}>
-                      融资日变动 <b className="text-[13px]">{formatMarginBillions(marginHoverData.financingChange)}</b>
-                    </span>
-                    <span className={`flex flex-col ${marginHoverData.securitiesLendingChange >= 0 ? 'text-rose-600 dark:text-rose-300' : 'text-green-600 dark:text-green-300'}`}>
-                      融券日变动 <b className="text-[13px]">{formatMarginBillions(marginHoverData.securitiesLendingChange)}</b>
-                    </span>
-                    <span className="flex flex-col text-zinc-500 dark:text-slate-400">两融余额 <b className="text-[13px] text-zinc-900 dark:text-slate-50">{formatMarginTrillion(marginHoverData.marginBalance)}</b></span>
-                    <span className="flex flex-col text-zinc-500 dark:text-slate-400">融资买入额 <b className="text-[13px] text-zinc-900 dark:text-slate-50">{formatMarginBillions(marginHoverData.financingBuy)}</b></span>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <EmptyState text="两融汇总数据等待收盘后同步" />
-          )}
         </section>
 
         {/* 情绪周期 */}

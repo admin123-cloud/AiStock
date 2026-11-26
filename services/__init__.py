@@ -17,7 +17,6 @@ _LEGACY_MODULE_MAP: dict[str, str] = {
     "intraday_market_snapshot": "services.market.intraday_market_snapshot",
     "intraday_phase_gate": "services.market.intraday_phase_gate",
     "intraday_price_feed": "services.market.intraday_price_feed",
-    "margin_sentiment": "services.market.margin_sentiment",
     "market_breadth": "services.market.market_breadth",
     "market_mood": "services.market.market_mood",
     "market_sentiment_cache": "services.market.market_sentiment_cache",

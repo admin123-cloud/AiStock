@@ -168,7 +168,7 @@ def get_ar4_macro_snapshot(
                 SELECT
                     toString(trade_date) AS trade_date,
                     hs300_close, hs300_pe_ttm, cn_bond_10y, us_bond_10y, erp_pct,
-                    margin_balance_yi, hs300_top3_shares_yi, hs300_top3_scale_yi,
+                    hs300_top3_shares_yi, hs300_top3_scale_yi,
                     broad6_shares_yi, broad6_scale_yi, market_total_amt_yi, top5pct_amt_share,
                     nt_ratio_proxy, nt_ratio_pctile_250d, nt_share_chg_5d_pct,
                     nt_share_chg_20d_pct, broad6_net_inflow_5d_yi
@@ -253,7 +253,6 @@ def get_ar4_macro_snapshot(
         "cn_bond_10y": round(float(raw_latest.get("cn_bond_10y") or 0.0), 3),
         "us_bond_10y": round(float(raw_latest.get("us_bond_10y") or 0.0), 3),
         "erp_pct": round(float(raw_latest.get("erp_pct") or 0.0), 2),
-        "margin_balance_yi": round(float(raw_latest.get("margin_balance_yi") or 0.0), 1),
         "hs300_top3_shares_yi": round(float(raw_latest.get("hs300_top3_shares_yi") or 0.0), 2),
         "hs300_top3_scale_yi": round(float(raw_latest.get("hs300_top3_scale_yi") or 0.0), 1),
         "broad6_scale_yi": round(float(raw_latest.get("broad6_scale_yi") or 0.0), 1),
@@ -313,7 +312,7 @@ def get_national_team_cycle_report(years: int = 3) -> dict[str, Any]:
             SELECT
                 toString(trade_date) AS trade_date,
                 hs300_close, hs300_pe_ttm, cn_bond_10y, erp_pct,
-                margin_balance_yi, hs300_top3_shares_yi, hs300_top3_scale_yi,
+                hs300_top3_shares_yi, hs300_top3_scale_yi,
                 broad6_scale_yi, nt_ratio_proxy, nt_ratio_pctile_250d,
                 nt_share_chg_5d_pct, nt_share_chg_20d_pct, broad6_net_inflow_5d_yi,
                 top5pct_amt_share

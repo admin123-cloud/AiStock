@@ -22,7 +22,6 @@ from services.market_turnover_forecast import (
     get_cached_intraday_turnover_forecast,
     get_intraday_turnover_forecast,
 )
-from services.margin_sentiment import load_margin_sentiment
 from services.intraday_market_snapshot import (
     emotion_live_point,
     latest_index_quotes,
@@ -69,12 +68,10 @@ _MARKET_INDICES_REFRESHING: set[str] = set()
 # 停在 2026-10-30），缓存分档：盘中（Asia/Shanghai 交易日 09:15~15:00）TTL=300s
 # 每 5 分钟重算一次；盘后/非交易时段缓存键绑定 kline_daily 的 max(trade_date)
 # （raw 轻量查询、免 FINAL），数据日期不变即命中，当天补数完成后首个请求触发
-# 重算一次。/market/margin-sentiment（60 秒，键 days）、/market/emotion-trend
-# （60 秒，键 days|granularity）维持 R15 的 TTL 缓存不变；error 载荷不缓存。
+# 重算一次。/market/emotion-trend（60 秒，键 days|granularity）维持 R15 的 TTL
+# 缓存不变；error 载荷不缓存。
 _MARKET_SENTIMENT_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
 _SENTIMENT_INTRADAY_TTL_SECONDS = 300.0
-_MARGIN_SENTIMENT_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
-_MARGIN_SENTIMENT_RESULT_CACHE_TTL_SECONDS = 60.0
 _EMOTION_TREND_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
 _EMOTION_TREND_RESULT_CACHE_TTL_SECONDS = 60.0
 
@@ -1722,28 +1719,6 @@ def _load_market_sentiment_from_clickhouse() -> Optional[Dict[str, Any]]:
             "daily_close_date": latest_date_text,
         }
     )
-    return payload
-
-
-@router.get("/margin-sentiment")
-def get_margin_sentiment(days: int = 30):
-    """Return confirmed exchange-published daily margin-financing sentiment.
-
-    R15（2026-11-09）：进程内 TTL 结果缓存（60 秒，monotonic 时钟，键 days），
-    与 R13/R14 缓存同风格；数据源 market_margin_sentiment 为官方交易所日度摘要
-    的预计算落库事实（本就快），TTL 仅防首页轮询重复查询；available=False 载荷
-    照常缓存（无 "error" 键）。
-    """
-    cache_key = str(int(days))
-    now = time.monotonic()
-    cached = _MARGIN_SENTIMENT_RESULT_CACHE.get(cache_key)
-    if cached is not None and now < float(cached.get("expires_at") or 0.0):
-        return cached["payload"]
-    payload = load_margin_sentiment(days=days)
-    _MARGIN_SENTIMENT_RESULT_CACHE[cache_key] = {
-        "expires_at": now + _MARGIN_SENTIMENT_RESULT_CACHE_TTL_SECONDS,
-        "payload": payload,
-    }
     return payload
 
 

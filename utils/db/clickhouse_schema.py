@@ -246,21 +246,6 @@ MARKET_TABLE_DDL = [
     ORDER BY (trade_date, is_provisional)
     """,
     """
-    CREATE TABLE IF NOT EXISTS market_margin_sentiment
-    (
-        trade_date Date,
-        financing_balance Float64,
-        securities_lending_balance Float64,
-        margin_balance Float64,
-        financing_buy Float64,
-        financing_net_buy Float64,
-        source String,
-        updated_at DateTime('Asia/Shanghai')
-    )
-    ENGINE = ReplacingMergeTree(updated_at)
-    ORDER BY trade_date
-    """,
-    """
     CREATE TABLE IF NOT EXISTS source_sectors
     (
         source String,
