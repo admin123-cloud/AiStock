@@ -358,10 +358,34 @@ def _load_turnover_forecast(
     forecast_dir: Optional[Path] = None,
     turnover_fetcher: Optional[Callable[[str], Optional[dict[str, Any]]]] = None,
 ) -> dict[str, Any]:
+    ref_date_str = ref_date.strftime("%Y-%m-%d")
+    fetcher = turnover_fetcher if turnover_fetcher is not None else _fetch_daily_market_turnover_from_ch
+    daily = fetcher(ref_date_str)
+
+    # 1. 最高优先级：若 ClickHouse 已有当日正式收盘成交额，绝不让上午盘中预测覆盖正式收盘！
+    if daily and daily.get("amount") and str(daily.get("trade_date") or "")[:10] == ref_date_str:
+        return {
+            "status": "fresh",
+            "mode": "daily_actual",
+            "trade_date": ref_date_str,
+            "as_of": None,
+            "lag_days": 0,
+            "forecast_amount": daily["amount"],
+            "forecast_trillion": daily["trillion"],
+            "ma5_trillion": daily.get("ma5_trillion"),
+            "vol_ratio_5d": daily.get("vol_ratio_5d"),
+            "stock_count": daily.get("stock_count"),
+            "confidence": 1.0,
+            "note": None,
+        }
+
+    # 2. 盘中窗口：仅当尚未过今日 15:05 盘后截断（或回放历史 ref_date）且当日预测新鲜时采用盘中预测
+    now_bj = datetime.now(BJ_TZ)
+    is_today_postclose = ref_date == now_bj.date() and (now_bj.hour, now_bj.minute) >= (15, 5)
     directory = forecast_dir or runtime_path("market_turnover_forecast")
     latest_file = directory / "latest.json"
     doc = _read_json_safe(latest_file)
-    if doc and doc.get("available"):
+    if doc and doc.get("available") and not is_today_postclose:
         td = doc.get("trade_date") or doc.get("as_of")
         # 仅当日盘中预测视为 fresh（滞后 0 天）
         fresh, lag = _is_date_fresh(td, ref_date, max_calendar_lag_days=0)
@@ -381,9 +405,7 @@ def _load_turnover_forecast(
                 "note": None,
             }
 
-    # 盘后或盘中预测未刷新时，自动回退 ClickHouse 最新交易日全市场真实收盘成交额
-    fetcher = turnover_fetcher if turnover_fetcher is not None else _fetch_daily_market_turnover_from_ch
-    daily = fetcher(ref_date.strftime("%Y-%m-%d"))
+    # 3. 盘后或盘中预测未刷新时，自动回退 ClickHouse 最新交易日全市场真实收盘成交额
     if daily and daily.get("amount"):
         fresh, lag = _is_date_fresh(daily.get("trade_date"), ref_date, max_calendar_lag_days=4)
         return {

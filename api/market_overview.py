@@ -1570,24 +1570,35 @@ def _load_market_sentiment_from_clickhouse() -> Optional[Dict[str, Any]]:
         "up_5_count": up_5_count,
         "down_5_count": down_5_count,
     }
-    intraday = _load_qmt_intraday_market_sentiment()
-    # R28（2026-11-10）：盘中优先东财实时快照（intraday_market_snapshot，5min 采集）；
-    # 旧 QMT 5m 路径保留为次级兜底。快照不新鲜/覆盖不足时服务内部返回 None
-    # （fail-closed），本载荷保持 kline_daily 昨收口径并经 date/data_date 明示。
-    if intraday is None:
-        intraday = latest_market_sentiment_intraday()
-    # R20b：成交额预测的重查询只允许在「盘中且 overlay 命中」分支同步执行
-    # （endpoint TTL=300s 吸收，且其结果仅盘中有意义）；该服务内部走非 raw
-    # 通道（视图重写 + toDate 谓词不裁剪），query_log 实证冷启动可达
-    # 126~223 秒 / 27.5~55GiB 全表扫描。盘后/非交易时段/overlay 未命中一律
-    # 改读同日持久化缓存（get_cached，读文件零查询、重启即恢复），杜绝部署
-    # 后首个请求被拖垮。服务本体的 raw 化留待后续任务（涉及其他文件）。
-    if intraday is not None and _is_sentiment_intraday_session(
-        datetime.now(ZoneInfo("Asia/Shanghai"))
-    ):
-        turnover_forecast = get_intraday_turnover_forecast(current_snapshot=intraday)
+    now_sh = datetime.now(ZoneInfo("Asia/Shanghai"))
+    today_iso = now_sh.date().isoformat()
+    in_intraday_session = _is_sentiment_intraday_session(now_sh)
+    # 若正式日线 kline_daily 已包含当日（latest_date_text >= today_iso），则以正式收盘数据为唯一真相，
+    # 严禁再用盘中 5m 临时聚合（provisional_5m）覆盖正式收盘成交额，也绝不返回盘中预测。
+    daily_confirmed_today = bool(latest_date_text and latest_date_text >= today_iso)
+    if daily_confirmed_today:
+        intraday = None
+        turnover_forecast = {
+            "available": False,
+            "reason": "今日已收盘，以正式收盘成交额为准",
+            "as_of": None,
+            "source": "kline_daily",
+            "refresh_interval_minutes": 5,
+            "aggregation_scope": "全市场股票成交额（非券商账户成交额）",
+        }
     else:
-        turnover_forecast = get_cached_intraday_turnover_forecast()
+        intraday = _load_qmt_intraday_market_sentiment()
+        # R28（2026-11-10）：盘中优先东财实时快照（intraday_market_snapshot，5min 采集）；
+        # 旧 QMT 5m 路径保留为次级兜底。快照不新鲜/覆盖不足时服务内部返回 None
+        # （fail-closed），本载荷保持 kline_daily 昨收口径并经 date/data_date 明示。
+        if intraday is None:
+            intraday = latest_market_sentiment_intraday()
+        # R20b：成交额预测的重查询只允许在「盘中且 overlay 命中」分支同步执行；
+        # 盘后/非交易时段/overlay 未命中改走 get_cached（15:05 起自动截断为 available=False）。
+        if intraday is not None and in_intraday_session:
+            turnover_forecast = get_intraday_turnover_forecast(current_snapshot=intraday)
+        else:
+            turnover_forecast = get_cached_intraday_turnover_forecast()
 
     payload = {
         "date": latest_date_text,

@@ -393,3 +393,31 @@ def test_turnover_forecast_singleflight_and_short_error_cache(monkeypatch, tmp_p
         assert "http://host.docker.internal" not in item["reason"]
     remaining = float(mtf._CACHE["expires_at"]) - time.monotonic()
     assert 0 < remaining <= mtf._ERROR_CACHE_TTL_SECONDS + 1
+
+
+def test_cached_turnover_forecast_disabled_after_postclose_cutoff(monkeypatch, tmp_path):
+    """盘后（>= 15:05）即使磁盘仍有当日 11:35 的 latest.json，也不得复活为盘中预测。"""
+    from datetime import datetime, timedelta, timezone
+    from services import market_turnover_forecast as mtf
+
+    persisted = tmp_path / "forecast" / "latest.json"
+    persisted.parent.mkdir(parents=True, exist_ok=True)
+    persisted.write_text(
+        json.dumps({
+            "available": True,
+            "trade_date": "2026-11-26",
+            "as_of": "2026-11-26 11:35:00",
+            "forecast_amount": 1.29e12,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mtf, "_PERSISTED_FORECAST_PATH", persisted)
+    monkeypatch.setattr(mtf, "_CACHE", {"payload": None, "expires_at": 0.0})
+    monkeypatch.setattr(
+        mtf,
+        "_now_bj",
+        lambda: datetime(2026, 11, 26, 23, 50, tzinfo=timezone(timedelta(hours=8))),
+    )
+    res = mtf.get_cached_intraday_turnover_forecast()
+    assert res["available"] is False
+    assert "正式收盘" in res["reason"]

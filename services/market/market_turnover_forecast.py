@@ -44,16 +44,21 @@ def _is_current_trading_day(payload: Any) -> bool:
     )
 
 
-def _persist(payload: Dict[str, Any]) -> None:
-    if not _is_current_trading_day(payload):
-        return
+def _is_before_postclose_cutoff(now_bj: datetime | None = None) -> bool:
     try:
         from services.intraday_phase_gate import is_before_postclose_cutoff
 
-        if not is_before_postclose_cutoff(_now_bj()):
-            # S4 硬截断：15:05:00 起禁止再把盘中成交额预测落盘为当天缓存
-            return
+        return bool(is_before_postclose_cutoff(now_bj or _now_bj()))
     except Exception:
+        cur = now_bj or _now_bj()
+        return (cur.hour, cur.minute) < (15, 5)
+
+
+def _persist(payload: Dict[str, Any]) -> None:
+    if not _is_current_trading_day(payload):
+        return
+    if not _is_before_postclose_cutoff(_now_bj()):
+        # S4 硬截断：15:05:00 起禁止再把盘中成交额预测落盘为当天缓存
         return
     try:
         _PERSISTED_FORECAST_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +71,9 @@ def _persist(payload: Dict[str, Any]) -> None:
 
 
 def _load_persisted() -> Dict[str, Any] | None:
+    if not _is_before_postclose_cutoff(_now_bj()):
+        # 已过收盘截断（>= 15:05）：绝不复活盘中陈旧预测覆盖盘后正式收盘口径
+        return None
     try:
         payload = json.loads(_PERSISTED_FORECAST_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -75,6 +83,9 @@ def _load_persisted() -> Dict[str, Any] | None:
 
 def get_cached_intraday_turnover_forecast() -> Dict[str, Any]:
     """Return a fresh forecast, or the last same-day value while a refresh runs."""
+    now_bj = _now_bj()
+    if not _is_before_postclose_cutoff(now_bj):
+        return _empty("今日已收盘，以正式收盘成交额为准")
     payload = _CACHE.get("payload")
     if payload is not None and time.monotonic() < float(_CACHE.get("expires_at") or 0):
         return payload

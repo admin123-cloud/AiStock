@@ -281,3 +281,52 @@ def test_four_dim_attribution_manual_t_fallback_and_honest_nulls(tmp_path: Path)
     assert s["total_pnl"] is None
     assert s["beta_pnl"] is None
     assert s["alpha_pnl"] is None
+
+
+def test_market_gate_prefers_same_day_daily_actual_over_intraday_forecast(tmp_path: Path):
+    """ClickHouse 当日正式收盘日线已入库时，实战台全市场成交额必须取正式收盘而非上午盘中预测。"""
+    mood_dir = tmp_path / "market_mood"
+    forecast_dir = tmp_path / "market_turnover_forecast"
+    _write_json(
+        forecast_dir / "latest.json",
+        {
+            "available": True,
+            "trade_date": "2026-11-26",
+            "as_of": "2026-11-26 11:35:00",
+            "forecast_amount": 1.291e12,
+            "confidence": 0.96,
+        },
+    )
+    _write_json(
+        mood_dir / "20261126.json",
+        {
+            "date": "2026-11-26",
+            "final": {
+                "limit_up_count": 72,
+                "limit_down_count": 31,
+                "broke_count": 46,
+                "seal_rate": 0.61,
+                "max_streak": 5,
+            },
+        },
+    )
+    res = evaluate_market_regime_gate(
+        breadth={"date": "2026-11-26", "level": "weak", "above_ma20_pct": 6.49},
+        today=date(2026, 11, 26),
+        mood_dir=mood_dir,
+        forecast_dir=forecast_dir,
+        index_fetcher=lambda _: ("2026-11-26", [3500.0 - i * 1.0 for i in range(65)]),
+        turnover_fetcher=lambda _: {
+            "trade_date": "2026-11-26",
+            "amount": 1.326e12,
+            "trillion": 1.33,
+            "ma5_trillion": 1.48,
+            "vol_ratio_5d": 0.90,
+            "stock_count": 5578,
+        },
+    )
+    tf = res["sources"]["turnover_forecast"]
+    assert tf["mode"] == "daily_actual"
+    assert tf["status"] == "fresh"
+    assert tf["forecast_trillion"] == 1.33
+    assert tf["vol_ratio_5d"] == 0.90

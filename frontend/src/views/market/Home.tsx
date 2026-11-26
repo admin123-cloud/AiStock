@@ -542,7 +542,8 @@ export default function Home() {
     const bjAmountsInBillion = bjAmounts.map((value) => value / 100_000_000)
     const thresholdInBillion = threshold / 100_000_000
     const forecast = intradayTurnoverForecast
-    const forecastAmountInBillion = forecast.available ? Number(forecast.forecast_amount || 0) / 100_000_000 : 0
+    const showForecast = turnoverTrend.latestIsProvisional && Boolean(forecast.available)
+    const forecastAmountInBillion = showForecast ? Number(forecast.forecast_amount || 0) / 100_000_000 : 0
     const forecastRemainingInBillion = amounts.map((amount, index) =>
       index === amounts.length - 1 && forecastAmountInBillion > amount / 100_000_000
         ? forecastAmountInBillion - amount / 100_000_000
@@ -608,7 +609,7 @@ export default function Home() {
             )
             .join('')
           const forecastLine =
-            index === days.length - 1 && forecast.available
+            index === days.length - 1 && showForecast
               ? `<div style="display:flex;justify-content:space-between;gap:26px;margin-top:4px;color:#fef08a;"><span>预计全天</span><b>${(forecastAmountInBillion / 10000).toFixed(2)} 万亿</b></div>`
               : ''
           return `<div style="font-weight:700;margin-bottom:6px;">${formatTrendDate(days[index])}</div><div style="display:flex;justify-content:space-between;gap:26px;border-bottom:1px solid #334155;padding-bottom:6px;"><span>三市合计</span><b>${(value / 10000).toFixed(2)} 万亿</b></div>${marketLines}${forecastLine}<div style="margin-top:7px;color:${changeColor};">${changeText}</div><div style="margin-top:4px;color:${active ? '#86efac' : '#fda4af'};">${active ? '交易活跃，可交易环境' : '低于 2 万亿：交易冷清，赚钱难度极大'}</div>`
@@ -1211,7 +1212,7 @@ export default function Home() {
               {latestTurnoverText}
             </div>
           </div>
-          {intradayTurnoverForecast.available ? (
+          {turnoverTrend.latestIsProvisional && intradayTurnoverForecast.available ? (
             <div className="mb-2.5 flex flex-wrap gap-x-4 gap-y-2 rounded-lg border border-sky-500/40 bg-sky-50 px-2.5 py-2 text-xs text-sky-800 dark:border-sky-500/30 dark:bg-blue-900/15 dark:text-blue-200">
               <span>盘中累计 {formatTurnoverTrillion(intradayTurnoverForecast.current_amounts?.total)}（截至 {intradayTurnoverForecast.time_bucket}）</span>
               <strong className="text-amber-700 dark:text-yellow-200">预计全天 {formatTurnoverTrillion(intradayTurnoverForecast.forecast_amount)}</strong>
@@ -1223,7 +1224,7 @@ export default function Home() {
               <span>浅黄虚线段＝预计剩余成交额</span>
             </div>
           ) : (
-            intradayTurnoverForecast.reason && (
+            turnoverTrend.latestIsProvisional && intradayTurnoverForecast.reason && (
               <div className="mb-2.5 flex flex-wrap gap-x-4 gap-y-2 rounded-lg border border-zinc-300 bg-zinc-100 px-2.5 py-2 text-xs text-zinc-600 dark:border-slate-400/25 dark:bg-slate-500/10 dark:text-slate-300">
                 盘中全天成交额预测：{intradayTurnoverForecast.reason}
               </div>
