@@ -117,7 +117,13 @@ class ILinkBridge:
         self.state_dir = state_dir
         self.api_base = api_base.rstrip("/")
         self._lock = threading.Lock()
+        self._inbox_lock = threading.Lock()
         self._seen_msg_ids: dict[str, float] = {}
+        self.inbox_pending_dir = self.state_dir / "inbox" / "pending"
+        self.inbox_done_dir = self.state_dir / "inbox" / "done"
+        self.history_path = self.state_dir / "chat_history.jsonl"
+        self.inbox_pending_dir.mkdir(parents=True, exist_ok=True)
+        self.inbox_done_dir.mkdir(parents=True, exist_ok=True)
         self.account_id: str = ""
         self.token: str = ""
         self.base_url: str = "https://ilinkai.weixin.qq.com"
@@ -244,7 +250,8 @@ class ILinkBridge:
                 "4. 刷新 ：立即重算今日做T规划\n"
                 "5. 发股票代码或名称（如 002015 / 协鑫能科）：查单票做T剧本\n"
                 "6. 记卖 002015 12.20 1000 ：登记卖出T成交\n"
-                "7. 记买 002015 11.90 1000 ：登记买入T成交"
+                "7. 记买 002015 11.90 1000 ：登记买入T成交\n"
+                "8. 直接发送任意问题/追问 ：转交当前工作区会话在线解答"
             )
 
         if low in ("任务", "运行任务", "状态", "tasks"):
@@ -345,6 +352,100 @@ class ILinkBridge:
 
         return None
 
+    def _append_chat_history(self, role: str, msg_id: str, content: str, sender: str = "") -> None:
+        record = {
+            "ts": datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "id": msg_id,
+            "role": role,
+            "sender": sender,
+            "content": content,
+        }
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with self._inbox_lock:
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.history_path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+
+    def _enqueue_session_question(self, sender: str, text: str) -> dict[str, Any]:
+        now = datetime.now(BJ_TZ)
+        msg_id = f"{now.strftime('%Y%m%d_%H%M%S_%f')}_{secrets.token_hex(3)}"
+        payload = {
+            "id": msg_id,
+            "sender": sender,
+            "text": text,
+            "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "created_ts": time.time(),
+            "status": "pending",
+        }
+        pending_file = self.inbox_pending_dir / f"{msg_id}.json"
+        _atomic_write_json(pending_file, payload)
+        self._append_chat_history("user", msg_id, text, sender=sender)
+        logger.info("已将微信问题写入会话收件箱: id=%s", msg_id)
+        return payload
+
+    def list_pending_inbox(self, history_limit: int = 10) -> dict[str, Any]:
+        pending = []
+        for f in sorted(self.inbox_pending_dir.glob("*.json")):
+            item = _read_json(f)
+            if isinstance(item, dict):
+                pending.append(item)
+        history: list[dict[str, Any]] = []
+        if self.history_path.is_file() and history_limit > 0:
+            with self._inbox_lock:
+                lines = self.history_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for raw_line in lines[-history_limit:]:
+                try:
+                    history.append(json.loads(raw_line))
+                except ValueError:
+                    continue
+        return {"ok": True, "pending": pending, "history": history}
+
+    def reply_inbox_question(self, text: str, msg_id: Optional[str] = None, peer: Optional[str] = None) -> dict[str, Any]:
+        clean = (text or "").strip()
+        if not clean:
+            return {"ok": False, "detail": "回复内容不能为空"}
+
+        target_peer = peer
+        target_file: Optional[Path] = None
+        item: Optional[dict[str, Any]] = None
+        with self._inbox_lock:
+            if msg_id:
+                candidate = self.inbox_pending_dir / f"{msg_id}.json"
+                if candidate.is_file():
+                    target_file = candidate
+                    item = _read_json(candidate)
+            else:
+                files = sorted(self.inbox_pending_dir.glob("*.json"))
+                if files:
+                    target_file = files[0]
+                    item = _read_json(target_file)
+                    msg_id = target_file.stem
+
+        if isinstance(item, dict) and not target_peer:
+            target_peer = str(item.get("sender") or "").strip() or None
+
+        send_res = self.send_text(clean, peer=target_peer)
+        if not send_res.get("ok"):
+            return send_res
+
+        replied_id = msg_id or f"reply_{datetime.now(BJ_TZ).strftime('%Y%m%d_%H%M%S')}"
+        self._append_chat_history("assistant", replied_id, clean, sender=target_peer or "")
+
+        if target_file and target_file.is_file():
+            with self._inbox_lock:
+                done_payload = dict(item) if isinstance(item, dict) else {"id": replied_id}
+                done_payload["status"] = "done"
+                done_payload["replied_at"] = datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                done_payload["reply_text"] = clean
+                done_file = self.inbox_done_dir / target_file.name
+                _atomic_write_json(done_file, done_payload)
+                try:
+                    target_file.unlink()
+                except FileNotFoundError:
+                    pass
+
+        return {**send_res, "replied_id": replied_id, "archived": bool(target_file)}
+
     def _dispatch_incoming(self, sender: str, text: str) -> None:
         try:
             quick = self._handle_quick_command(text)
@@ -352,14 +453,9 @@ class ILinkBridge:
                 self.send_text(quick, peer=sender)
                 return
 
+            item = self._enqueue_session_question(sender, text)
             self.send_text(
-                "未识别指令。可用指令：\n"
-                "• 规划 / 做T ：今日大盘定调与各票买卖带\n"
-                "• 持仓 / 敞口 ：资金与日内T仓敞口\n"
-                "• 任务 ：当前运行任务\n"
-                "• 刷新 ：重算今日做T规划\n"
-                "• 发股票代码或简称（如 002015 / 协鑫能科）：单票剧本\n"
-                "• 记卖/记买 代码 价格 股数 ：登记做T成交",
+                f"⏳ 已收到问题（编号 {item['id'][-6:]}），已写入本地收件箱，正在等待当前工作区会话在线解答…",
                 peer=sender,
             )
         except Exception as exc:  # noqa: BLE001
@@ -447,6 +543,30 @@ class ILinkBridge:
                 time.sleep(5)
 
 
+PUSH_POLICY_PATH = Path(r"F:\Aistock\runtime\acct2_managed\push_routing_policy.json")
+
+
+def _match_suppressed_legacy_acct2(full_text: str, source: str) -> Optional[str]:
+    """热读取推送收口策略：暂停旧系统关于 acct2/王账号 的推送，仅放行 allowed_sources。"""
+    if not PUSH_POLICY_PATH.exists():
+        return None
+    try:
+        policy = json.loads(PUSH_POLICY_PATH.read_text(encoding="utf-8"))
+        if not policy.get("pause_legacy_acct2_push"):
+            return None
+        allowed = {str(s).strip() for s in (policy.get("allowed_sources") or []) if str(s).strip()}
+        if source and source in allowed:
+            return None
+        haystack = (full_text or "").lower()
+        for kw in policy.get("legacy_acct2_keywords") or []:
+            k = str(kw).strip()
+            if k and k.lower() in haystack:
+                return k
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[policy] 读取推送策略失败（放行）: %s", exc)
+    return None
+
+
 def run_http_server(bridge: ILinkBridge, port: int) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A002
@@ -470,9 +590,27 @@ def run_http_server(bridge: ILinkBridge, port: int) -> ThreadingHTTPServer:
                     "last_tx_at": bridge.last_tx_at,
                 })
                 return
+            if self.path.startswith("/inbox"):
+                self._reply(200, bridge.list_pending_inbox())
+                return
             self._reply(404, {"ok": False, "detail": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.path.startswith("/reply"):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length).decode("utf-8", errors="replace")
+                try:
+                    data = json.loads(raw) if raw.strip() else {}
+                except ValueError:
+                    self._reply(400, {"ok": False, "detail": "invalid json"})
+                    return
+                res = bridge.reply_inbox_question(
+                    text=str(data.get("text") or data.get("content") or ""),
+                    msg_id=data.get("id"),
+                    peer=data.get("peer"),
+                )
+                self._reply(200 if res.get("ok") else 400, res)
+                return
             if self.path.startswith("/send"):
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length).decode("utf-8", errors="replace")
@@ -484,6 +622,12 @@ def run_http_server(bridge: ILinkBridge, port: int) -> ThreadingHTTPServer:
                 title = str(data.get("title") or "").strip()
                 text = str(data.get("text") or data.get("content") or "").strip()
                 full = f"{title}\n{text}".strip() if title else text
+                source = str(data.get("source") or "").strip()
+                suppressed_kw = _match_suppressed_legacy_acct2(full, source)
+                if suppressed_kw is not None:
+                    logger.info("[policy] 已拦截旧 acct2/王账号推送（命中=%s, source=%s）: %s", suppressed_kw, source or "legacy", title or full[:60])
+                    self._reply(200, {"ok": True, "suppressed": True, "detail": f"suppressed_legacy_acct2:{suppressed_kw}"})
+                    return
                 res = bridge.send_text(full, peer=data.get("peer"))
                 self._reply(200 if res.get("ok") else 400, res)
                 return

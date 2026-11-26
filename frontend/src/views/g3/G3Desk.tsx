@@ -4,6 +4,7 @@ import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Card, PageHeader } from '@/components/ui'
 import AR3DualCorePanel from '@/views/g3/AR3DualCorePanel'
+import G3AiBusPanel from '@/views/g3/G3AiBusPanel'
 import {
   generateG3PremarketBrief,
   getG3AR3Radar,
@@ -456,6 +457,9 @@ export default function G3Desk() {
           </Card>
         )
       })()}
+
+      {/* 1.5 在线 AI 参谋（Antigravity 决策总线：文件队列唤醒当前会话深度研判） */}
+      <G3AiBusPanel />
 
       {/* 2. 绝对核心主视图：AR4.6 今日买卖执行单 + 宏观 5 卡仪表盘（精简模式，14只ETF与选股明细已迁至 /g3/signals） */}
       <AR3DualCorePanel

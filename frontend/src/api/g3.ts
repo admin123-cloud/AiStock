@@ -1478,6 +1478,8 @@ export interface G3AR3DualCoreRadarResponse {
     etf_total_budget_pct?: number
     stock_budget_active_pct?: number
     panic_triggered?: boolean
+    fallback_mode?: 'normal' | 'bond_fallback' | 'cash_defense' | string
+    cash_defense_pct?: number
     headline?: string
     targets: G3AR3EtfItem[]
     universe: G3AR3EtfItem[]
@@ -1803,3 +1805,46 @@ export const getG3AR45Review = (days = 30, accountId = 'acct1') =>
     params: { days, account_id: accountId },
     timeout: 60000,
   })
+
+export interface G3AiBusJobResult {
+  job_id: string
+  kind: string
+  source: string
+  prompt: string
+  status: string
+  decision: string
+  summary: string
+  answer: string
+  risk_flags: string[]
+  actions: string[]
+  created_at: string
+  completed_at: string
+}
+
+export interface G3AiBusStatusResponse {
+  ok: boolean
+  session_online: boolean
+  heartbeat_at?: string | null
+  pending_count: number
+  pending: Array<{
+    job_id: string
+    kind: string
+    prompt: string
+    created_at: string
+  }>
+  recent_results: G3AiBusJobResult[]
+}
+
+export const getG3AiBusStatus = (limit = 10) =>
+  request.get<unknown, G3AiBusStatusResponse>('/g3/ai-bus/status', { params: { limit } })
+
+export const getG3AiBusJob = (jobId: string) =>
+  request.get<unknown, { ok: boolean; status: string; job_id: string; result?: G3AiBusJobResult }>(
+    `/g3/ai-bus/jobs/${encodeURIComponent(jobId)}`,
+  )
+
+export const askG3AiBus = (payload: { prompt: string; kind?: string; source?: string; context?: Record<string, unknown> }) =>
+  request.post<unknown, { ok: boolean; status: string; job_id?: string; session_online?: boolean; detail?: string }>(
+    '/g3/ai-bus/ask',
+    payload,
+  )

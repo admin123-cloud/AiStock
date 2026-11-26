@@ -877,3 +877,56 @@ def post_g3_acct1_advisor_confirm_fill(req: Acct1ConfirmFillRequest) -> dict[str
         except Exception as exc:  # noqa: BLE001
             followup = {"status": "error", "detail": str(exc)}
     return {"status": "ok", "fill": fill, "followup_intraday": followup}
+
+
+# ── AiStock <-> Antigravity 异步 AI 决策总线（AI Bus） ────────────────────────
+
+
+class AiBusAskRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000, description="向在线 AI 参谋提问或请求深度研判")
+    kind: str = Field(default="desk_qa", description="任务类型: desk_qa / premarket_brief / panic_audit / postclose_review")
+    source: str = Field(default="desk_ui", description="调用来源")
+    context: Optional[dict[str, Any]] = Field(default=None, description="附加结构化上下文")
+    wait_timeout_sec: float = Field(default=0.0, ge=0.0, le=120.0, description=">0 时同步等待结果，超时自动降级")
+
+
+@router.get("/ai-bus/status")
+def get_g3_ai_bus_status(limit: int = Query(default=12, ge=1, le=50)) -> dict[str, Any]:
+    """查询 Antigravity 会话在线心跳、排队任务与最近 AI 参谋思考记录。"""
+    from services.g3.ai_bus import get_bus_status
+
+    return get_bus_status(limit=limit)
+
+
+@router.get("/ai-bus/jobs/{job_id}")
+def get_g3_ai_bus_job(job_id: str) -> dict[str, Any]:
+    """轮询单个 AI 决策总线任务状态与思考结果。"""
+    from services.g3.ai_bus import get_ai_job
+
+    return get_ai_job(job_id)
+
+
+@router.post("/ai-bus/ask")
+def post_g3_ai_bus_ask(req: AiBusAskRequest) -> dict[str, Any]:
+    """向本地 AI 决策总线提交思考任务（自动附带大盘闸门与双账号概览上下文，严禁自动下单）。"""
+    from services.g3.ai_bus import submit_ai_job
+
+    ctx: dict[str, Any] = dict(req.context or {})
+    if "market_gate" not in ctx:
+        try:
+            gate = evaluate_market_regime_gate()
+            ctx["market_gate"] = {
+                "regime": gate.get("regime"),
+                "regime_label": gate.get("regime_label"),
+                "breadth_above_ma20_pct": gate.get("breadth_above_ma20_pct") or gate.get("above_ma20_pct"),
+            }
+        except Exception:  # noqa: BLE001
+            pass
+
+    return submit_ai_job(
+        kind=req.kind,
+        prompt=req.prompt,
+        context=ctx,
+        source=req.source,
+        wait_timeout_sec=req.wait_timeout_sec,
+    )

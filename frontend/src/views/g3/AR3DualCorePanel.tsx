@@ -477,6 +477,19 @@ export default function AR3DualCorePanel({
               <>
                 <p className="mt-1.5 text-zinc-200">{etf.headline}</p>
                 <div className="mt-2.5 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+                  {etf.targets.length === 0 && etf.fallback_mode === 'cash_defense' && (
+                    <div className="flex flex-col justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-950/20 p-2.5 md:col-span-2 lg:col-span-3">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="font-semibold text-amber-200">
+                          🛡️ F3 分层避险 · 现金 / 国债逆回购 / 短融货基
+                        </span>
+                        <Badge color="amber">建议现金留存 {etf.cash_defense_pct ?? etf.etf_total_budget_pct ?? 100}%</Badge>
+                      </div>
+                      <div className="text-[11px] text-amber-100/80">
+                        全池跨资产及十年国债(511260)均处于弱势（20日动量 ≤ 0），已自动拦截硬买破位国债；建议空仓持现金、做国债逆回购或配置场内短融/货币 ETF 等待趋势修复。
+                      </div>
+                    </div>
+                  )}
                   {etf.targets.map((item) => (
                     <div
                       key={item.ts_code}

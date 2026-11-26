@@ -2363,6 +2363,145 @@ def serve(
         replace_existing=True,
     )
     logger.info("调度注册：broker_snapshot_sync (close=15:08 / evening_check=20:00 Asia/Shanghai)")
+
+    # ── G3 早盘 09:40 成交核销与实盘持仓确认简报（收编原 Windows 计划任务） ──
+    def _run_g3_postopen_brief_0940_job() -> None:
+        try:
+            import urllib.request as _urlreq
+            import json as _json
+            from scripts.g3_postopen_brief_0940 import run_postopen_brief
+
+            api_base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:8077").rstrip("/")
+
+            def _local_http(path: str, *, method: str = "GET", body=None, timeout: int = 60):
+                data = _json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
+                headers = {"Content-Type": "application/json; charset=utf-8"} if data is not None else {}
+                req = _urlreq.Request(f"{api_base}{path}", data=data, headers=headers, method=method)
+                with _urlreq.urlopen(req, timeout=timeout) as resp:
+                    return _json.loads(resp.read().decode("utf-8"))
+
+            rc = run_postopen_brief(http_fn=_local_http)
+            logger.info("[g3_postopen_brief_0940] 完成: rc=%s", rc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[g3_postopen_brief_0940] 执行异常: %s", exc)
+
+    scheduler.add_job(
+        _run_g3_postopen_brief_0940_job,
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=9, minute=40, timezone=BEIJING_TZ),
+        id="g3_postopen_brief_0940",
+        name="早盘 09:40 持仓同步与实盘确认简报推送（工作日 09:40）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：g3_postopen_brief_0940 (cron=09:40 mon-fri Asia/Shanghai)")
+
+    # ── AI Bus 会话在线心跳巡检（交易时段离线立即微信 + QQ邮箱双通道告警） ──
+    def _run_ai_bus_heartbeat_watch_job() -> None:
+        try:
+            now_bj = datetime.now(BEIJING_TZ)
+            # 仅工作日 09:05~15:05 交易时段巡检，夜间休市不打扰
+            if now_bj.time() < dt_time(9, 5) or now_bj.time() > dt_time(15, 5):
+                return
+            from scripts.g3_profit_loop_job import _is_trading_day
+            ok_td, _ = _is_trading_day(now_bj.strftime("%Y-%m-%d"))
+            if not ok_td:
+                return
+            from services.g3.ai_bus import check_session_and_alert
+
+            res = check_session_and_alert(cooldown_sec=1800.0)
+            if not res.get("online"):
+                logger.warning("[ai_bus_heartbeat_watch] Antigravity 会话离线: alerted=%s", res.get("alerted"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[ai_bus_heartbeat_watch] 巡检异常: %s", exc)
+
+    scheduler.add_job(
+        _run_ai_bus_heartbeat_watch_job,
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour="9-15", minute="*/5", timezone=BEIJING_TZ),
+        id="ai_bus_heartbeat_watch",
+        name="AI 参谋会话心跳巡检（离线即时微信+邮箱双告警）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：ai_bus_heartbeat_watch (cron=09:05~15:05 每5m mon-fri Asia/Shanghai)")
+
+    # ── AR3/AR4.6 盘中哨兵（收编原 Windows 任务 AiStock_AR3_IntradaySentinel） ──
+    def _run_ar3_intraday_sentinel_job() -> None:
+        try:
+            now_bj = datetime.now(BEIJING_TZ)
+            t = now_bj.time()
+            if not (dt_time(9, 40) <= t <= dt_time(11, 30) or dt_time(13, 0) <= t <= dt_time(14, 55)):
+                return
+            from scripts.ar3_intraday_sentinel import run_sentinel
+
+            rc = run_sentinel()
+            logger.info("[ar3_intraday_sentinel] 完成: rc=%s", rc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[ar3_intraday_sentinel] 执行异常: %s", exc)
+
+    scheduler.add_job(
+        _run_ar3_intraday_sentinel_job,
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour="9-14", minute="10,25,40,55", timezone=BEIJING_TZ),
+        id="ar3_intraday_sentinel",
+        name="AR4.6 盘中哨兵（09:40~14:55 每15m）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：ar3_intraday_sentinel (cron=09:40~14:55 每15m mon-fri Asia/Shanghai)")
+
+    # ── Acct2 托管纸面演练引擎（收编原 4 个 Windows 任务 AiStock_Acct2_DryRun_*） ──
+    def _run_acct2_dryrun_job(mode: str, window_start: Optional[dt_time] = None, window_end: Optional[dt_time] = None) -> None:
+        try:
+            now_bj = datetime.now(BEIJING_TZ)
+            if window_start is not None and window_end is not None:
+                if not (window_start <= now_bj.time() <= window_end):
+                    return
+            from scripts.acct2_dryrun_runner import run_mode
+
+            rc = run_mode(mode)
+            logger.info("[acct2_dryrun_%s] 完成: rc=%s", mode, rc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[acct2_dryrun_%s] 执行异常: %s", mode, exc)
+
+    scheduler.add_job(
+        lambda: _run_acct2_dryrun_job("premarket"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=9, minute=15, timezone=BEIJING_TZ),
+        id="acct2_dryrun_premarket",
+        name="Acct2 托管演练盘前计划（工作日 09:15）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_acct2_dryrun_job("intraday", dt_time(9, 35), dt_time(11, 30)),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour="9-11", minute="5,15,25,35,45,55", timezone=BEIJING_TZ),
+        id="acct2_dryrun_intraday_am",
+        name="Acct2 托管演练早盘巡检（09:35~11:30 每10m）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_acct2_dryrun_job("intraday", dt_time(13, 5), dt_time(15, 0)),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour="13-14", minute="5,15,25,35,45,55", timezone=BEIJING_TZ),
+        id="acct2_dryrun_intraday_pm",
+        name="Acct2 托管演练午盘巡检（13:05~15:00 每10m）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_acct2_dryrun_job("eod"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=15, minute=10, timezone=BEIJING_TZ),
+        id="acct2_dryrun_eod",
+        name="Acct2 托管演练盘后结算（工作日 15:10）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    logger.info("调度注册：acct2_dryrun (premarket=09:15 / am=09:35~11:30每10m / pm=13:05~15:00每10m / eod=15:10)")
     try:
         scheduler.start()  # BlockingScheduler：阻塞直至 shutdown
     except (KeyboardInterrupt, SystemExit):

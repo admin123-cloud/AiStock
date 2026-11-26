@@ -83,6 +83,7 @@ services:
       - "127.0.0.1:3000:80"
     volumes:
       - F:/Aistock/code/infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - F:/Aistock/runtime/nginx/htpasswd:/etc/nginx/htpasswd:ro
 
   pipeline-runner:
     image: aistock-worker:${AISTOCK_MAIN_VERSION:?必须经部署脚本注入}
