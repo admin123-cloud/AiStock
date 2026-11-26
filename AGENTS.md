@@ -71,3 +71,5 @@ Keep code, tests, executable configuration and this short pointer here. Do not a
 - **ClickHouse 分钟表查询铁律**：查询 `kline_minute_5` / `kline_minute_15` 必须显式携带 `datetime >= ... AND datetime <= ...` 分区裁剪；禁用无分区裁剪的 `FINAL` 或大表聚合前置 `INNER JOIN stocks`（改用 `IN (SELECT ...)` + `optimize_aggregation_in_order = 1` 或 Pandas `drop_duplicates(keep='last')` 防 HTTP 500/OOM）。
 - **多会话脏工作区安全提交**：提交前仅 `git add` 本次精确修改文件，严禁 `git add -A` 混入其他会话改动；生产发布一律走官方 `infra/deploy.sh` 并确认 `DEPLOY_OK`。
 - **实盘交易纪律（acct1）**：严格按已验证策略执行、不临时改规则；冰点 30m 触发后严守 `i+6` 冷却锁（期间不续期、不加仓、不补买换股）；微信告警仅在可执行动作或真实风控触发时推送，标题统一 `【acct1·择时看盘】`，正文逐行 `- ` 列表并强制带去重键。
+- **核心跨资产 ETF 池 5 层准入门禁（反事后挑赢家偏差）**：严禁仅凭近 4 年涨幅或单腿回测将扩展 ETF 晋级核心池（Top 2 动量池扩容过多必然引发坑位稀释与假突破磨损）；候选标的必须同时通过 ① 宏观象限正交且无长期 QDII 高溢价失真 ② 近 60 日流动性充沛（拒绝千万级以下僵尸盘）③ 完整物理单账户 AR4.6 消融胜出 ④ `rebal=3/5/7/10d` 参数高原全胜 ⑤ 跨反周期远古盲测（含 `2020~2022` 通胀/股债双杀）不拖累，方可获批晋级。
+- **正式日线表盘中未收盘拦截铁律**：交易日收盘前（`15:05 Asia/Shanghai` 前）执行任何日线同步脚本（如 `sync_cross_asset_etf_daily.py`），必须显式过滤 `trade_date >= today` 的未收盘半日 bar，严禁写入正式日线表造成核心池日期割裂。
