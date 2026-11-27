@@ -382,10 +382,12 @@ def apply_manual_fills_overlay(
                 cur_q = int(float(by_code[c6].get("quantity") or 0))
                 new_q = cur_q + qty
                 by_code[c6]["quantity"] = new_q
-                # 跨日已解锁：若成交日 < 今日，则 T+1 自动解冻进 available_quantity
+                # 跨日已解锁：若成交日 < 今日，则 T+1 自动解冻进 available_quantity；当日新买计入 today_locked_shares
                 if str(f.get("trade_date") or "") < trade_date:
                     cur_av = int(float(by_code[c6].get("available_quantity") or 0))
                     by_code[c6]["available_quantity"] = min(new_q, cur_av + qty)
+                else:
+                    by_code[c6]["today_locked_shares"] = int(float(by_code[c6].get("today_locked_shares") or 0)) + qty
                 by_code[c6]["current_price"] = px
                 by_code[c6]["market_value"] = round(new_q * px, 2)
             else:
@@ -395,6 +397,7 @@ def apply_manual_fills_overlay(
                     "name": f.get("name") or c6,
                     "quantity": qty,
                     "available_quantity": qty if unlocked else 0,
+                    "today_locked_shares": 0 if unlocked else qty,
                     "cost_price": px,
                     "current_price": px,
                     "market_value": round(qty * px, 2),
@@ -611,6 +614,8 @@ def run_acct1_advisor(
         persist=False,
         ar3_radar=radar,
         accounts_overview=eff_overview,
+        panic_campaign_dir=_advisor_dir(base_dir),
+        now_bj=now,
     )
     acct = plan["account"]
     is_offensive = bool(plan.get("is_offensive"))
@@ -723,9 +728,11 @@ def run_acct1_advisor(
         # 当全市场宽度 <= 18% 且拟卖为 A 股非 ETF 个股、且时间早于 14:35 尾盘确认时：
         # 若盘中急跌 <= -2.5%（或明显跌破分时均价线 VWAP 且跌幅 < -1%），禁止早盘恐慌地板割肉，
         # 改等盘中反抽修复或 14:35 尾盘确认！
+        # 注意：若已触及冰点 B 档硬止损(-6%)/追踪止盈/时间止损（bypass_panic_floor_guard=True），严禁延迟，必须立即放行！
         is_etf_sell = bool(s.get("is_etf") or _is_etf(c6))
+        bypass_floor_guard = bool(s.get("bypass_panic_floor_guard"))
         vwap_px = float(q["vwap"]) if q.get("vwap") else 0.0
-        if in_panic_zone and not is_etf_sell and now.time() < PANIC_TAIL_CONFIRM_TIME:
+        if in_panic_zone and not is_etf_sell and not bypass_floor_guard and now.time() < PANIC_TAIL_CONFIRM_TIME:
             is_sharp_drop = pct_chg is not None and pct_chg <= PANIC_SHARP_DROP_PCT
             is_weak_below_vwap = (vwap_px > 0 and live_px < vwap_px * 0.992 and pct_chg is not None and pct_chg < -1.0)
             if is_sharp_drop or is_weak_below_vwap:

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Badge } from '@/components/catalyst/badge'
 import { Button } from '@/components/catalyst/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/catalyst/table'
+import { triggerAccountsSync } from '@/api/accounts'
 import {
   batchPrefillG3AR3Orders,
   confirmG3Acct1Fill,
@@ -52,6 +53,7 @@ export default function AR3ExecutionOrderCard({
   const [singleBusyKey, setSingleBusyKey] = useState<string | null>(null)
   const [confirmBusyKey, setConfirmBusyKey] = useState<string | null>(null)
   const [pushingWx, setPushingWx] = useState(false)
+  const [syncingBroker, setSyncingBroker] = useState(false)
   const [batchRes, setBatchRes] = useState<G3AR3BatchPrefillResponse | null>(null)
   const [prefillLiveMap, setPrefillLiveMap] = useState<Record<string, G3PrefillStatusResponse>>({})
   const [msg, setMsg] = useState('')
@@ -247,6 +249,28 @@ export default function AR3ExecutionOrderCard({
     }
   }
 
+  const handleSyncBroker = async () => {
+    setSyncingBroker(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await triggerAccountsSync([accountId], true)
+      if (!res.bridge?.online) {
+        setErr('同花顺桌面桥当前离线，请检查宿主机 AiStock_THSDesktopBridge 任务。')
+      } else {
+        setMsg(`⏳ 已派发同花顺只读同步（${res.request_id}），约 30~60 秒完成，页面将自动刷新实盘持仓…`)
+        window.setTimeout(() => void loadPlan(accountId, smoothStep, true), 15000)
+        window.setTimeout(() => void loadPlan(accountId, smoothStep, true), 40000)
+        window.setTimeout(() => void loadPlan(accountId, smoothStep, true), 65000)
+      }
+    } catch (e) {
+      const ex = e as { response?: { data?: { detail?: string } }; message?: string }
+      setErr(ex.response?.data?.detail || ex.message || '触发同花顺实盘同步失败')
+    } finally {
+      setSyncingBroker(false)
+    }
+  }
+
   const handlePushWechat = async () => {
     setPushingWx(true)
     setErr('')
@@ -292,6 +316,14 @@ export default function AR3ExecutionOrderCard({
           <span className="font-mono text-xs text-zinc-400">
             上次巡检：{lastPollAt || '交易时段 09:35~14:45 自动轮询'}
           </span>
+          {acct?.snapshot_at_bj && (
+            <span className="font-mono text-xs text-zinc-400">
+              · 快照：{acct.snapshot_at_bj.slice(5, 16)}
+            </span>
+          )}
+          {acct?.snapshot_stale_prev_day && (
+            <Badge color="amber">昨日快照 · T+1已自动推算解冻</Badge>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -330,6 +362,9 @@ export default function AR3ExecutionOrderCard({
             </select>
           )}
 
+          <Button outline onClick={() => void handleSyncBroker()} disabled={syncingBroker || loading}>
+            {syncingBroker ? '同步中…' : '同步实盘'}
+          </Button>
           <Button outline onClick={() => void handlePushWechat()} disabled={pushingWx || loading}>
             {pushingWx ? '推送中…' : '推微信'}
           </Button>
@@ -350,6 +385,16 @@ export default function AR3ExecutionOrderCard({
       {msg && (
         <div className="rounded-md border border-emerald-500/40 bg-emerald-950/30 px-4 py-2.5 text-sm text-emerald-200">
           {msg}
+        </div>
+      )}
+
+      {plan?.panic_campaign?.active && plan.panic_campaign.summary && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-500/40 bg-sky-950/25 px-4 py-2.5 text-xs text-sky-100">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge color="blue">🧊 AR4.6 冰点战役进行中</Badge>
+            <span>{plan.panic_campaign.summary}</span>
+          </div>
+          <span className="text-sky-300/90">B 档退出：-6% 硬止损 / +5% 后回撤 -3.5% / 宽度 ≥38% / T+5 尾盘</span>
         </div>
       )}
 
@@ -411,7 +456,8 @@ export default function AR3ExecutionOrderCard({
                           </Badge>
                         </div>
                         <div className="mt-0.5 font-mono text-xs text-zinc-400">
-                          现价 {fmtPx(row.current_price, row.is_etf)} · {row.shares}股（可用 {row.available_shares}股）
+                          现价 {fmtPx(row.current_price, row.is_etf)} · {row.shares}股（可用 {row.available_shares}股
+                          {row.t1_inferred_unlocked ? '·跨日解冻' : ''}）
                         </div>
                       </TableCell>
 

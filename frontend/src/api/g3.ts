@@ -1631,6 +1631,7 @@ export interface G3DecisionHoldingRow {
   is_etf: boolean
   shares: number
   available_shares: number
+  t1_inferred_unlocked?: boolean
   current_price: number
   cost_price?: number
   market_value: number
@@ -1647,6 +1648,9 @@ export interface G3DecisionHoldingRow {
   action_price: number
   action_amount: number
   stop_loss_price?: number | null
+  trail_arm_price?: number | null
+  trail_stop_price?: number | null
+  panic_action?: string | null
   min_buy_price?: number | null
   min_buy_reason?: string
   max_buy_price?: number | null
@@ -1696,6 +1700,21 @@ export interface G3PortfolioCompliance {
   tone: 'emerald' | 'amber' | 'red' | string
 }
 
+export interface G3PanicCampaignState {
+  active: boolean
+  status?: string
+  in_cooldown: boolean
+  held_days: number
+  max_hold_days: number
+  cooldown_days: number
+  entry_date?: string | null
+  exit_deadline_date?: string | null
+  cooldown_until_date?: string | null
+  still_held_count?: number
+  compliant_hold_codes?: string[]
+  summary?: string | null
+}
+
 export interface G3AR3RebalancePlanResponse {
   schema: string
   date: string
@@ -1703,6 +1722,7 @@ export interface G3AR3RebalancePlanResponse {
   regime: string
   regime_label: string
   is_offensive: boolean
+  panic_campaign?: G3PanicCampaignState | null
   smooth_step: boolean
   config: G3AR3Config
   account: {
@@ -1714,6 +1734,9 @@ export interface G3AR3RebalancePlanResponse {
     market_value: number
     position_pct: number
     snapshot_at?: string | null
+    snapshot_at_bj?: string | null
+    snapshot_stale_prev_day?: boolean
+    t1_inferred_unlocked_count?: number
     holdings?: Array<{
       code: string
       name: string

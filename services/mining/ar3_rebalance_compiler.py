@@ -162,11 +162,32 @@ def _compute_buy_price_bounds(
     }
 
 
+def _parse_snapshot_bj(raw: Any) -> Optional[datetime]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BJ_TZ)
+        return dt.astimezone(BJ_TZ)
+    except ValueError:
+        return None
+
+
 def _extract_account_snapshot(
     overview: Mapping[str, Any],
     account_id: str = DEFAULT_PRIMARY_ACCOUNT_ID,
+    *,
+    today_str: Optional[str] = None,
 ) -> dict[str, Any]:
-    """从双账号采集结果中精准提取目标单账号（默认 acct1 / ct1曾）的资金与持仓。"""
+    """从双账号采集结果中精准提取目标单账号（默认 acct1 / ct1曾）的资金与持仓。
+
+    跨交易日 T+1 自动解冻规则：
+    若券商快照采集日期（北京时间）早于今日交易日（`snapshot_date_bj < today_str`），
+    昨日快照里尚未清算的 `available_quantity=0` 在今日已自动解冻为可卖（仅保留今日手工核销新买入的 `today_locked_shares` 锁仓）。
+    """
+    eff_today = today_str or datetime.now(BJ_TZ).strftime("%Y-%m-%d")
     accounts = overview.get("accounts") or []
     chosen: Optional[Mapping[str, Any]] = None
     available_accounts: list[dict[str, Any]] = []
@@ -204,7 +225,15 @@ def _extract_account_snapshot(
             "fills": [],
             "available_accounts": available_accounts,
             "snapshot_at": None,
+            "snapshot_at_bj": None,
+            "snapshot_stale_prev_day": False,
+            "t1_inferred_unlocked_count": 0,
         }
+
+    snap_dt_bj = _parse_snapshot_bj(chosen.get("generated_at"))
+    snap_date_bj = snap_dt_bj.strftime("%Y-%m-%d") if snap_dt_bj is not None else None
+    snapshot_stale_prev_day = bool(snap_date_bj and snap_date_bj < eff_today)
+    t1_inferred_unlocked_count = 0
 
     funds = chosen.get("funds") if isinstance(chosen.get("funds"), Mapping) else {}
     holdings_out: list[dict[str, Any]] = []
@@ -216,7 +245,17 @@ def _extract_account_snapshot(
         qty = int(float(h.get("quantity") or h.get("shares") or h.get("qty") or 0))
         if qty <= 0:
             continue
-        avail = int(float(h.get("available_quantity") if h.get("available_quantity") is not None else qty))
+        raw_avail = int(float(h.get("available_quantity") if h.get("available_quantity") is not None else qty))
+        today_locked = max(0, int(float(h.get("today_locked_shares") or 0)))
+        inferred_unlocked = False
+        if snapshot_stale_prev_day:
+            # 昨日（或更早）收盘快照的持仓在今日已完成清算解冻，仅扣减今日新买入的 T+1 锁仓股数
+            eff_avail = max(raw_avail, max(0, qty - today_locked))
+            if eff_avail > raw_avail:
+                inferred_unlocked = True
+                t1_inferred_unlocked_count += 1
+        else:
+            eff_avail = raw_avail
         px = float(h.get("current_price") or h.get("price") or 0.0)
         cost = float(h.get("cost_price") or 0.0)
         mv = float(h.get("market_value") or 0.0)
@@ -228,7 +267,9 @@ def _extract_account_snapshot(
             "code": code6,
             "name": str(h.get("name") or code6),
             "shares": qty,
-            "available_shares": max(0, min(qty, avail)),
+            "available_shares": max(0, min(qty, eff_avail)),
+            "raw_available_shares": max(0, min(qty, raw_avail)),
+            "t1_inferred_unlocked": inferred_unlocked,
             "current_price": px,
             "cost_price": cost,
             "market_value": round(mv, 2),
@@ -253,6 +294,9 @@ def _extract_account_snapshot(
         "fills": list(chosen.get("fills") or []),
         "available_accounts": available_accounts,
         "snapshot_at": chosen.get("generated_at"),
+        "snapshot_at_bj": snap_dt_bj.strftime("%Y-%m-%d %H:%M:%S") if snap_dt_bj else None,
+        "snapshot_stale_prev_day": snapshot_stale_prev_day,
+        "t1_inferred_unlocked_count": t1_inferred_unlocked_count,
     }
 
 
@@ -311,9 +355,13 @@ def compile_ar3_rebalance_plan(
     accounts_overview: Optional[Mapping[str, Any]] = None,
     ar3_radar: Optional[Mapping[str, Any]] = None,
     base_dir: Optional[Path] = None,
+    panic_campaign_dir: Optional[Path] = None,
+    now_bj: Optional[datetime] = None,
 ) -> dict[str, Any]:
     """编译唯一权威「AR3 v3.0 今日精确买卖调仓单（主力单账号 ct1曾）」。"""
-    now = datetime.now(BJ_TZ)
+    now = now_bj or datetime.now(BJ_TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BJ_TZ)
     today_str = now.strftime("%Y-%m-%d")
     ymd = now.strftime("%Y%m%d")
 
@@ -328,7 +376,7 @@ def compile_ar3_rebalance_plan(
                 overview, _ = apply_manual_fills_overlay(overview, today_str)
             except Exception:
                 pass
-    acct = _extract_account_snapshot(overview, account_id=account_id)
+    acct = _extract_account_snapshot(overview, account_id=account_id, today_str=today_str)
     # 纠正券商 OCR 错字（如 000711 '三:' -> '京蓝科技'）
     need_fix_codes = [h["code"] for h in acct["holdings"] if _needs_name_fix(h.get("name", ""), h["code"])]
     if need_fix_codes:
@@ -358,11 +406,102 @@ def compile_ar3_rebalance_plan(
     avail_cash = float(acct["available_cash"])
     holdings_by_code = {h["code"]: h for h in acct["holdings"]}
 
+    # 预先拉取当前持仓实时行情，供活跃冰点战役 B 档止损/追踪止盈即时评估
+    holding_live_quotes: dict[str, dict[str, Any]] = {}
+    try:
+        if holdings_by_code:
+            holding_live_quotes = fetch_batch_live_quotes(sorted(holdings_by_code.keys()))
+    except Exception:
+        holding_live_quotes = {}
+
+    _b_src_gate = ((market_gate.get("sources") or {}).get("breadth") or {}) if isinstance(market_gate, Mapping) else {}
+    try:
+        _breadth_val: Optional[float] = (
+            float(_b_src_gate["above_ma20_pct"]) if _b_src_gate.get("above_ma20_pct") is not None else None
+        )
+    except (TypeError, ValueError):
+        _breadth_val = None
+
+    panic_campaign: dict[str, Any] = {
+        "active": False,
+        "in_cooldown": False,
+        "held_days": 0,
+        "max_hold_days": 5,
+        "cooldown_days": 6,
+        "entry_date": None,
+        "exit_deadline_date": None,
+        "cooldown_until_date": None,
+        "positions": {},
+        "compliant_hold_codes": [],
+        "exit_signals": {},
+        "summary": None,
+    }
+    # 仅在读取真实实盘账户（accounts_overview is None）或显式指定 panic_campaign_dir 时加载生产冰点战役档案，
+    # 避免外部传入模拟 accounts_overview 的单测/推演误读宿主机实盘战役状态
+    if acct["account_id"] == DEFAULT_PRIMARY_ACCOUNT_ID and not is_offensive and (
+        panic_campaign_dir is not None or accounts_overview is None
+    ):
+        try:
+            from services.g3.panic_campaign import evaluate_panic_campaign_state
+
+            holding_px_map = {
+                c6: float((holding_live_quotes.get(c6) or {}).get("price") or h["current_price"] or 0.0)
+                for c6, h in holdings_by_code.items()
+            }
+            panic_campaign = evaluate_panic_campaign_state(
+                holdings=acct["holdings"],
+                live_prices=holding_px_map,
+                breadth_pct=_breadth_val,
+                now_bj=now,
+                account_id=acct["account_id"],
+                base_dir=panic_campaign_dir,
+                persist_updates=bool(persist),
+            )
+        except Exception:
+            pass
+
+    panic_positions_map: dict[str, dict[str, Any]] = dict(panic_campaign.get("positions") or {})
+    panic_exit_map: dict[str, dict[str, Any]] = dict(panic_campaign.get("exit_signals") or {})
+    panic_in_cooldown = bool(panic_campaign.get("in_cooldown"))
+
     # 1. 构建 AR4.6 物理单账户目标权重表（总和硬锁死 <= 100.0%）
     target_map: dict[str, dict[str, Any]] = {}
     stock_used_pct = 0.0
 
-    if (is_offensive or is_panic_ab_active) and stock_cap_pct > 0 and stock_radar.get("available"):
+    # 1A. 若存在未结束的 AR4.6 冰点战役（T0~T0+5）且未触发 B 档退出，合规冰点真龙归入策略预期内保留槽位
+    if panic_campaign.get("active") and not is_offensive and total_assets > 0:
+        for c6 in panic_campaign.get("compliant_hold_codes") or []:
+            h = holdings_by_code.get(c6)
+            p_info = panic_positions_map.get(c6)
+            if not h or not p_info:
+                continue
+            live_px = float(p_info.get("live_price") or h["current_price"] or 0.0)
+            cur_mv_h = (h["shares"] * live_px) if live_px > 0 else float(h.get("market_value") or 0.0)
+            kept_w = round(cur_mv_h / total_assets * 100.0, 2)
+            target_map[c6] = {
+                "code": c6,
+                "name": h["name"],
+                "asset_kind": "stock",
+                "entry_rule": "panic_btier_hold",
+                "target_weight_pct": kept_w,
+                "ref_price": live_px,
+                "stop_loss_price": p_info.get("stop_loss_price"),
+                "trail_arm_price": p_info.get("trail_arm_price"),
+                "trail_stop_price": p_info.get("trail_stop_price"),
+                "reason": (
+                    f"AR4.6 冰点真龙 B 档持有（T+{p_info['held_days']}/{p_info['max_hold_days']} · "
+                    f"硬止损 ¥{p_info['stop_loss_price']} · 追踪激活 ¥{p_info['trail_arm_price']} · 最晚 {p_info['exit_deadline_date']}）"
+                ),
+                "source_label": f"冰点战役 T+{p_info['held_days']}/{p_info['max_hold_days']}",
+                "notice_date": p_info.get("entry_date"),
+                "net_profit_yoy_pct": None,
+                "qdii_notice": None,
+            }
+            stock_used_pct += kept_w
+
+    # 冷却锁 i+6 期内（panic_in_cooldown 且非主升进攻期）严禁新开/补买/换股个股槽位
+    allow_stock_new_entries = is_offensive or (is_panic_ab_active and not panic_in_cooldown)
+    if allow_stock_new_entries and stock_cap_pct > 0 and stock_radar.get("available"):
         # 防频繁换手：若现有持仓已在 F2A/F3A 候选池内且未触发硬止损，优先保留槽位
         hard_stop_thr = -6.0 if is_panic_ab_active else -10.0
         stop_mult = 0.94 if is_panic_ab_active else 0.90
@@ -548,14 +687,14 @@ def compile_ar3_rebalance_plan(
             "qdii_notice": item.get("qdii_notice"),
         }
 
-    # 尝试补充最新实时行情价（盘中更准，盘后静默回退收盘价）
-    all_need_codes = sorted(set(holdings_by_code.keys()) | set(target_map.keys()))
-    live_quotes: dict[str, dict[str, Any]] = {}
+    # 尝试补充最新实时行情价（复用意图拉取的持仓行情，再补拉目标池其余标的）
+    missing_quote_codes = sorted(set(target_map.keys()) - set(holding_live_quotes.keys()))
+    live_quotes: dict[str, dict[str, Any]] = dict(holding_live_quotes)
     try:
-        if all_need_codes:
-            live_quotes = fetch_batch_live_quotes(all_need_codes)
+        if missing_quote_codes:
+            live_quotes.update(fetch_batch_live_quotes(missing_quote_codes))
     except Exception:
-        live_quotes = {}
+        pass
 
     def _eff_price(code6: str, fallback_px: float) -> float:
         q = live_quotes.get(code6) or {}
@@ -655,8 +794,11 @@ def compile_ar3_rebalance_plan(
             rem_smooth_yuan = max(0.0, rem_smooth_yuan - est_amt)
 
         limit_px = _round_px(px * 0.998, h["is_etf"])  # 卖单让价 0.2% 保障成交
+        p_exit = panic_exit_map.get(c6)
         why_parts: list[str] = []
-        if tgt is None:
+        if p_exit is not None:
+            why_parts.append(str(p_exit.get("exit_reason") or "触及冰点 B 档退出条件"))
+        elif tgt is None:
             why_parts.append("非 AR4.6 当前目标标的")
         else:
             why_parts.append(f"超配（现 {round(cur_mv / total_assets * 100, 1)}% > 目标 {tgt['target_weight_pct']}%）")
@@ -681,6 +823,8 @@ def compile_ar3_rebalance_plan(
             "profit_pct": h["profit_pct"],
             "reason": "；".join(why_parts),
             "blocked_t1": False,
+            "panic_action": p_exit.get("action") if p_exit else None,
+            "bypass_panic_floor_guard": bool(p_exit.get("bypass_floor_guard")) if p_exit else False,
             "suborders": _split_l2_suborders(
                 code=c6, name=h["name"], side="SELL", price=limit_px, total_shares=sug_sh
             ),
@@ -880,6 +1024,8 @@ def compile_ar3_rebalance_plan(
             "buy_price_status": "ok",
         }
 
+        p_pos = panic_positions_map.get(c6)
+        p_exit = panic_exit_map.get(c6)
         if tgt is None:
             alignment = "unexpected"
             unexpected_weight_pct += actual_w
@@ -890,7 +1036,10 @@ def compile_ar3_rebalance_plan(
                 ai_tone = "amber"
                 ai_detail = "非策略目标持仓，今日可用股数为 0，下一交易日优先清退"
                 can_execute = False
-            elif "panic_zone_no_floor_sell" in skip_sell or "limit_down" in skip_sell or "smooth_step_daily_done" in skip_sell:
+            elif (
+                (not (p_exit and p_exit.get("bypass_floor_guard")))
+                and ("panic_zone_no_floor_sell" in skip_sell or "limit_down" in skip_sell or "smooth_step_daily_done" in skip_sell)
+            ):
                 ai_label = "AI 暂缓卖出"
                 ai_tone = "amber"
                 ai_detail = _humanize_skip_reason(skip_sell)
@@ -900,7 +1049,22 @@ def compile_ar3_rebalance_plan(
                 action_price = float(live_sell["price"]) if live_sell else float(so["limit_price"])
                 action_amount = round(action_shares * action_price, 2)
                 can_execute = True
-                ai_label = "⚡ 10m 触发 · 清退卖出" if live_sell else "预期外 · 建议清退"
+                if p_exit is not None:
+                    p_act = str(p_exit.get("action") or "")
+                    if p_act == "EXIT_HARD_STOP":
+                        ai_label = "🚨 触发 -6% 硬止损 · 立即卖出"
+                    elif p_act == "EXIT_TRAILING_STOP":
+                        ai_label = "🎯 触发追踪止盈 · 建议卖出"
+                    elif p_act == "EXIT_BREADTH_RECOVERY":
+                        ai_label = "📈 宽度修复 ≥38% · 清退回防"
+                    elif p_act == "EXIT_TIME_STOP":
+                        ai_label = "⏰ T0+5 尾盘到期 · 时间止损"
+                    elif p_act == "SELL_VIOLATION_STOP":
+                        ai_label = "🚨 排雷违规+破-6% · 立即清退"
+                    else:
+                        ai_label = "🔴 排雷违规 · 逢反抽优先处置"
+                else:
+                    ai_label = "⚡ 10m 触发 · 清退卖出" if live_sell else "预期外 · 建议清退"
                 ai_tone = "red"
                 ai_detail = str(so.get("reason") or "非 AR4.6 当前目标标的")
             else:
@@ -963,6 +1127,18 @@ def compile_ar3_rebalance_plan(
                 can_execute = False
         else:
             aligned_count += 1
+            if tgt is not None and tgt.get("entry_rule") == "panic_btier_hold" and p_pos is not None:
+                ai_label = f"冰点 B 档持有 (T+{p_pos['held_days']}/{p_pos['max_hold_days']})"
+                ai_tone = "emerald"
+                trail_txt = (
+                    f"追踪止盈已激活（峰值 +{p_pos['peak_gain_pct']:.1f}%，跌破 ¥{p_pos['trail_stop_price']:.2f} 止盈）"
+                    if p_pos.get("trail_armed") and p_pos.get("trail_stop_price")
+                    else f"追踪激活 ¥{p_pos['trail_arm_price']:.2f}(+5%)"
+                )
+                ai_detail = (
+                    f"成本 ¥{p_pos['entry_price']:.2f} · 硬止损 ¥{p_pos['stop_loss_price']:.2f}(-6%) · "
+                    f"{trail_txt} · 最晚 {p_pos['exit_deadline_date']} 尾盘"
+                )
 
         decision_holdings.append({
             "code": c6,
@@ -970,6 +1146,7 @@ def compile_ar3_rebalance_plan(
             "is_etf": h["is_etf"],
             "shares": h["shares"],
             "available_shares": h["available_shares"],
+            "t1_inferred_unlocked": bool(h.get("t1_inferred_unlocked")),
             "current_price": _round_px(px, h["is_etf"]),
             "cost_price": h["cost_price"],
             "market_value": mv,
@@ -985,7 +1162,10 @@ def compile_ar3_rebalance_plan(
             "full_clear_shares": int(so.get("full_clear_shares") or 0) if so else 0,
             "action_price": action_price,
             "action_amount": action_amount,
-            "stop_loss_price": tgt.get("stop_loss_price") if tgt else None,
+            "stop_loss_price": tgt.get("stop_loss_price") if tgt else (p_pos.get("stop_loss_price") if p_pos else None),
+            "trail_arm_price": p_pos.get("trail_arm_price") if p_pos else None,
+            "trail_stop_price": p_pos.get("trail_stop_price") if p_pos else None,
+            "panic_action": p_pos.get("action") if p_pos else None,
             **bounds_info,
             "ai_status_label": ai_label,
             "ai_status_tone": ai_tone,
@@ -1121,6 +1301,7 @@ def compile_ar3_rebalance_plan(
         "regime_label": str(market_gate.get("regime_label") or regime),
         "is_offensive": is_offensive,
         "panic_triggered": bool(etf_radar.get("panic_triggered")),
+        "panic_campaign": panic_campaign,
         "smooth_step": smooth_step,
         "config": cfg,
         "account": {k: v for k, v in acct.items() if k != "fills"},

@@ -2322,7 +2322,7 @@ def serve(
     )
     logger.info("调度注册：acct1_ar45_advisor (premarket=09:15 / intraday=09:35~14:50每10m / eod=15:15 Asia/Shanghai)")
 
-    # 注册每日 15:08 收盘同花顺双账号自动只读快照同步 + 20:00 晚间快照时效自检（根治快照停在上午）
+    # 注册盘前 09:05 / 09:20 + 收盘 15:08 + 晚间 20:00 同花顺双账号自动只读快照同步（根治跨日 T+1 未刷新与盘中停滞）
     def _run_eod_broker_snapshot_sync_job(stage: str) -> None:
         import urllib.request as _urlreq
 
@@ -2339,25 +2339,25 @@ def serve(
         base = os.getenv("AISTOCK_LOCAL_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
         opener = _urlreq.build_opener(_urlreq.ProxyHandler({}))
         try:
-            if stage == "evening_check":
+            if stage in ("evening_check", "premarket_check_0920"):
                 with opener.open(_urlreq.Request(f"{base}/api/accounts/overview", method="GET"), timeout=15) as r:
                     ov = json.loads(r.read().decode("utf-8"))
                 a1 = next((a for a in (ov.get("accounts") or []) if a.get("account_id") == "acct1"), None)
                 gen_at = str((a1 or {}).get("generated_at") or "")
-                # 判断快照是否已覆盖今日 15:00 后（UTC 07:00+ 或北京时间 15:00+）
                 today_s = today_d.isoformat()
-                is_fresh_eod = False
-                if gen_at.startswith(today_s):
+                is_fresh = False
+                if gen_at:
                     try:
                         dt_snap = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
                         dt_bj = dt_snap.astimezone(BEIJING_TZ) if dt_snap.tzinfo else dt_snap.replace(tzinfo=BEIJING_TZ)
-                        is_fresh_eod = dt_bj.hour >= 15
+                        if dt_bj.date().isoformat() == today_s:
+                            is_fresh = (dt_bj.hour >= 15) if stage == "evening_check" else True
                     except ValueError:
                         pass
-                if is_fresh_eod:
-                    logger.info("[broker_sync_evening_check] acct1 今日盘后快照已新鲜 (%s)，无需补采", gen_at)
+                if is_fresh:
+                    logger.info("[broker_sync_%s] acct1 今日快照已新鲜 (%s)，无需补采", stage, gen_at)
                     return
-                logger.warning("[broker_sync_evening_check] acct1 快照仍停留在盘中 (%s)，立即触发补采", gen_at)
+                logger.warning("[broker_sync_%s] acct1 快照未覆盖当前阶段 (%s)，立即触发补采", stage, gen_at)
 
             payload = json.dumps({"accounts": ["acct1", "acct2"], "minimize_after": True}).encode("utf-8")
             req = _urlreq.Request(
@@ -2399,20 +2399,26 @@ def serve(
                     elif st_done != "ok" or (rc_done is not None and int(rc_done) != 0):
                         fail_reason = f"双账号同步未成功（status={st_done}, rc={rc_done}）"
                     else:
-                        logger.info("[broker_sync_%s] 双账号收盘快照已成功对齐 (req=%s)", stage, req_id)
+                        logger.info("[broker_sync_%s] 双账号快照已成功对齐 (req=%s)", stage, req_id)
 
             if fail_reason:
                 logger.warning("[broker_sync_%s] 触发人工介入告警: %s", stage, fail_reason)
                 try:
                     from services.trading.t_notify import load_notify_config, send_wechat_notification
 
-                    stage_label = "15:08 收盘快照同步" if stage == "close_1508" else "20:00 晚间复盘快照自检"
+                    stage_label_map = {
+                        "premarket_0905": "09:05 盘前清算快照同步",
+                        "premarket_check_0920": "09:20 盘前快照时效复核",
+                        "close_1508": "15:08 收盘快照同步",
+                        "evening_check": "20:00 晚间复盘快照自检",
+                    }
+                    stage_label = stage_label_map.get(stage, stage)
                     alert_title = f"【⚠️ 同花顺快照同步需要人工处理】{stage_label}"
                     alert_body = "\n".join([
                         f"- 触发节点：`{stage_label}`（`{now_bj.strftime('%Y-%m-%d %H:%M')}`）",
                         f"- 失败原因：{fail_reason}",
-                        "- 影响说明：未同步前券商原始快照可能停留在盘中旧时点（`acct1` 聊天核销成交仍会自动叠加兜底）。",
-                        "- 处理动作：请重新打开/登录同花顺远航交易面板，然后在网页 `/g3/accounts` 点击「一键同步双账号」即可立即对齐。",
+                        "- 影响说明：未同步前系统已按跨交易日规则自动推算 T+1 解冻，建议尽快刷新同花顺实盘快照对齐真实可卖股数与可用现金。",
+                        "- 处理动作：请重新打开/登录同花顺远航交易面板，然后在网页 `/g3/desk` 或 `/g3/accounts` 点击「同步实盘」即可立即对齐。",
                     ])
                     base_cfg = load_notify_config()
                     wres = send_wechat_notification(alert_title, alert_body, config={**base_cfg, "channel": "ilink_bridge"})
@@ -2423,6 +2429,24 @@ def serve(
         except Exception as exc:  # noqa: BLE001
             logger.warning("[broker_sync_%s] 触发双账号同步异常: %s", stage, exc)
 
+    scheduler.add_job(
+        lambda: _run_eod_broker_snapshot_sync_job("premarket_0905"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=9, minute=5, timezone=BEIJING_TZ),
+        id="broker_snapshot_sync_0905",
+        name="盘前 09:05 双账号同花顺自动只读快照同步（工作日 09:05）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        lambda: _run_eod_broker_snapshot_sync_job("premarket_check_0920"),
+        trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=9, minute=20, timezone=BEIJING_TZ),
+        id="broker_snapshot_check_0920",
+        name="盘前 09:20 开盘前快照时效复核与补采（工作日 09:20）",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     scheduler.add_job(
         lambda: _run_eod_broker_snapshot_sync_job("close_1508"),
         trigger=_Ar45SyncCronTrigger(day_of_week=CRON_DAY_OF_WEEK, hour=15, minute=8, timezone=BEIJING_TZ),
@@ -2441,7 +2465,7 @@ def serve(
         coalesce=True,
         replace_existing=True,
     )
-    logger.info("调度注册：broker_snapshot_sync (close=15:08 / evening_check=20:00 Asia/Shanghai)")
+    logger.info("调度注册：broker_snapshot_sync (premarket=09:05/09:20 / close=15:08 / evening_check=20:00 Asia/Shanghai)")
 
     # ── G3 早盘 09:40 成交核销与实盘持仓确认简报（收编原 Windows 计划任务） ──
     def _run_g3_postopen_brief_0940_job() -> None:

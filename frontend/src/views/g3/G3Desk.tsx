@@ -203,10 +203,12 @@ export default function G3Desk() {
         const sealRatePct = mood?.seal_rate != null ? mood.seal_rate * 100 : null
 
         const isOff = Boolean(radar?.is_offensive ?? (gate.regime === 'offensive' || gate.phase_5 === 'extreme_offensive'))
+        const panicCamp = plan?.panic_campaign
+        const isPanicCampActive = Boolean(panicCamp?.active && !isOff)
         const isPanicAb = Boolean(radar?.is_panic_ab_active || (panicSignal?.triggered && !isOff))
         const stockTargetPct = isOff
           ? Number(radar?.etf_radar?.stock_budget_active_pct ?? radar?.config?.effective_stock_budget_cap_pct ?? 50)
-          : isPanicAb
+          : isPanicAb || isPanicCampActive
             ? 50
             : 0
         const etfTargetPct = Math.max(0, 100 - stockTargetPct)
@@ -251,7 +253,11 @@ export default function G3Desk() {
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="text-lg font-bold text-white">大盘择时总闸门</span>
                 <Badge color={toneToBadgeColor(gate.tone)}>{gate.regime_label}</Badge>
-                {isPanicAb ? (
+                {isPanicCampActive ? (
+                  <Badge color="emerald">
+                    🧊 冰点战役 T+{panicCamp?.held_days ?? 0}/{panicCamp?.max_hold_days ?? 5} · B档监控中
+                  </Badge>
+                ) : isPanicAb ? (
                   <Badge color="emerald">⚡ 冰点半仓已触发</Badge>
                 ) : inPanicWatch ? (
                   <Badge color="amber">🧊 冰点戒备（宽度 {fmtNum(breadthPct)}%）</Badge>
