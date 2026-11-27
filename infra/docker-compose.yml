@@ -57,6 +57,7 @@ services:
       - F:/Aistock/runtime/g3_ai_coach:/aistock/data/runtime/g3_ai_coach
       - F:/Aistock/runtime/g3_prefill_drafts:/aistock/data/runtime/g3_prefill_drafts
       - F:/Aistock/runtime/g3_etf_shadow:/aistock/data/runtime/g3_etf_shadow
+      - F:/Aistock/runtime/acct1_advisor:/aistock/data/runtime/acct1_advisor
       - F:/Aistock/runtime/mining_cache:/aistock/data/runtime/mining_cache
       - F:/Aistock/runtime/mining_runs:/aistock/data/runtime/mining_runs
       - F:/Aistock/runtime/mining_contracts:/aistock/data/runtime/mining_contracts
@@ -83,7 +84,6 @@ services:
       - "127.0.0.1:3000:80"
     volumes:
       - F:/Aistock/code/infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - F:/Aistock/runtime/nginx/htpasswd:/etc/nginx/htpasswd:ro
 
   pipeline-runner:
     image: aistock-worker:${AISTOCK_MAIN_VERSION:?必须经部署脚本注入}
